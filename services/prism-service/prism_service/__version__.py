@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.32"
+PRISM_VERSION = "7.13.33"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5620,4 +5620,25 @@ PRISM_VERSION_NOTES += (
     "confirmed-safe reload replaces it. New test_reconnect_never_goes_"
     "white.py pins that the reload call is unreachable outside the "
     "probe's success branch."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.33: owner QA finding, live remote-assist session, "
+    "2026-08-24. On task 3baadd19's Evidence tab, the three collapsible "
+    "sections ('Acceptance criteria', 'how a pass could still be wrong', "
+    "'audit detail (machine text)') rendered their body content visibly "
+    "EXPANDED on a genuinely fresh page load -- confirmed reproducible "
+    "across a full route unmount/remount (navigate away, navigate back), "
+    "not a stale-state or screenshot-timing artifact -- garbled/"
+    "overlapping with the Decision packet box below them, despite "
+    "carrying no `open` attribute in the actual rendered HTML. "
+    "DecisionPacket.tsx's own Row component, right next to this content "
+    "on the same page, uses controlled useState + conditional rendering "
+    "and collapsed correctly the whole time. Root cause in the live tab's "
+    "native <details> handling wasn't pinned down after extensive live "
+    "investigation; rather than keep relying on an element behaving "
+    "inconsistently, TaskDetailPage.tsx: all three now use a new small "
+    "Disclosure component (controlled useState, same pattern already "
+    "proven correct in DecisionPacket.tsx) instead of native <details>/"
+    "<summary>. New test_evidence_disclosures_controlled_not_native.py "
+    "pins that no native <details> remains in the file."
 )

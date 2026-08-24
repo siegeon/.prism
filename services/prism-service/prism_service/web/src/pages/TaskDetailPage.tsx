@@ -241,6 +241,38 @@ type TaskTrace = {
 // Staggered Card-stack wrapper: each card fades + rises into place with a
 // capped per-index delay, so the detail page assembles top-to-bottom on mount
 // instead of snapping in all at once. Collapses to opacity-only when reduced.
+// Controlled disclosure, replacing native <details>/<summary> (owner QA
+// finding, 2026-08-24: on the Evidence tab, "Acceptance criteria", "how a
+// pass could still be wrong" and "audit detail" all rendered their body
+// content visibly EXPANDED on a genuinely fresh page load — confirmed
+// reproducible across full remounts, not a stale-state or screenshot-
+// timing artifact, and confirmed NOT present in DecisionPacket.tsx's own
+// Row component next to it on the same page, which uses this exact
+// controlled-state pattern and collapses correctly. Root cause in the
+// live tab's native <details> handling wasn't pinned down; this sidesteps
+// it with the pattern already proven correct elsewhere on this page,
+// rather than continuing to rely on an element behaving inconsistently.
+function Disclosure({ summary, summaryClassName, summaryStyle, className, children }: {
+  summary: React.ReactNode; summaryClassName?: string; summaryStyle?: React.CSSProperties;
+  className?: string; children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={className}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`cursor-pointer text-left ${summaryClassName ?? ""}`}
+        style={summaryStyle}
+        aria-expanded={open}
+      >
+        {summary}
+      </button>
+      {open && children}
+    </div>
+  );
+}
+
 function Stagger({ i, reduced, children }: { i: number; reduced: boolean | null; children: React.ReactNode }) {
   return (
     <motion.div
@@ -1885,10 +1917,11 @@ export default function TaskDetailPage() {
                     <>
                       <div className="text-[13px] leading-relaxed text-[color:var(--text-secondary)]">{leadNode}</div>
                       {(rest || pinTests.length > 0) && (
-                        <details className="text-[12.5px]">
-                          <summary className="cursor-pointer" style={{ color: "var(--text-muted)" }}>
-                            Acceptance criteria{pinTests.length > 0 ? ` (${pinTests.length} assertions)` : ""}
-                          </summary>
+                        <Disclosure
+                          className="text-[12.5px]"
+                          summaryStyle={{ color: "var(--text-muted)" }}
+                          summary={<>Acceptance criteria{pinTests.length > 0 ? ` (${pinTests.length} assertions)` : ""}</>}
+                        >
                           <div className="mt-1.5 space-y-1.5 text-[color:var(--text-secondary)] leading-relaxed">
                             {rest && <div>{rest}</div>}
                             {pinTests.length > 0 && (
@@ -1897,7 +1930,7 @@ export default function TaskDetailPage() {
                               </button>
                             )}
                           </div>
-                        </details>
+                        </Disclosure>
                       )}
                     </>
                   );
@@ -1906,12 +1939,14 @@ export default function TaskDetailPage() {
                     it qualifies — not only in the Tests tab the judge would
                     have to go hunting for. */}
                 {task.likely_misfire && (
-                  <details className="text-[12.5px]">
-                    <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--accent-amber-fg)" }}>
-                      how a pass could still be wrong
-                    </summary>
+                  <Disclosure
+                    className="text-[12.5px]"
+                    summaryClassName="text-2xs uppercase tracking-wider"
+                    summaryStyle={{ color: "var(--accent-amber-fg)" }}
+                    summary="how a pass could still be wrong"
+                  >
                     <div className="mt-1.5 leading-relaxed text-[color:var(--text-secondary)]">{task.likely_misfire}</div>
-                  </details>
+                  </Disclosure>
                 )}
               </div>
 
@@ -2134,8 +2169,12 @@ export default function TaskDetailPage() {
                     actively refusing — the collapsed block must consult it
                     too, not just render the stale string unconditionally. */}
                 {(task.gate_reason || gateEvidenceLines(history).length > 0) && (
-                  <details className="text-[12px]">
-                    <summary className="cursor-pointer text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>audit detail (machine text)</summary>
+                  <Disclosure
+                    className="text-[12px]"
+                    summaryClassName="text-2xs uppercase tracking-wider"
+                    summaryStyle={{ color: "var(--text-muted)" }}
+                    summary="audit detail (machine text)"
+                  >
                     <div className="mt-1.5 space-y-1">
                       {task.gate_reason && gateReadiness?.receipt_ok !== false && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
                       {gateReadiness?.receipt_ok === false && gateReadiness?.receipt_refusal && (
@@ -2145,7 +2184,7 @@ export default function TaskDetailPage() {
                         <div key={i} className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>• {l}</div>
                       ))}
                     </div>
-                  </details>
+                  </Disclosure>
                 )}
               </div>
 
