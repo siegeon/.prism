@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.23"
+PRISM_VERSION = "7.13.24"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5456,7 +5456,7 @@ PRISM_VERSION_NOTES += (
 )
 
 PRISM_VERSION_NOTES += (
-    "\n\n7.13.23: agent_bridge_command had ZERO observability (no console/"
+    "\n\n7.13.24: agent_bridge_command had ZERO observability (no console/"
     "network visibility into the tab it's driving) and only 5 interaction "
     "verbs, well short of a real browser-automation toolset. Added console/"
     "network (a ring buffer installed at module load, so history exists "
