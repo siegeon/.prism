@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.37"
+PRISM_VERSION = "7.13.38"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5753,4 +5753,39 @@ PRISM_VERSION_NOTES += (
     "leaving the ui-tag-gated teeth clean; a narrow fake conductor_svc "
     "missing _unshipped_gate_reason degrades that one check to ok=True "
     "instead of crashing the whole report."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.38: the green-gate-status Workflows page DIAGRAM now shows "
+    "a real node per check, not just an enriched response body inside "
+    "one opaque callback (7.13.37's own choice, kept the JSON at 1 step, "
+    "matching every other status/check behavior's established "
+    "convention) -- owner, live, looking at the still-3-node diagram: "
+    "'I do not see what you are talking about, if there are 5 [sic; 7] "
+    "steps in the green gate behavior than you should show them, here so "
+    "we can see the right?' Refactored the check computation into ONE "
+    "ordered registry (_green_gate_check_registry, in api/workflows.py) "
+    "shared by both endpoints -- no duplicated logic between the "
+    "aggregate view and the per-check view. New POST /api/workflows/"
+    "steps/green-gate-check (task_id, check) returns ONE named tooth's "
+    "{id, label, ok, reason}, always HTTP 200 regardless of ok (a "
+    "refused tooth is a REPORTED fact, not a callback failure, so the "
+    "chain reaches every subsequent step and Complete regardless of any "
+    "single tooth's verdict -- matching the pre-existing aggregate "
+    "endpoint's own exit_code==0-always contract). .prism/behaviors/"
+    "conductor/green-gate-status.json restructured (version 2) from 1 "
+    "step to 8: candidate_controls, reachability, ui_artifact, "
+    "screen_claim, shipped_ness, demo_evidence, oracle_receipt, then the "
+    "original 'status' aggregate rollup last -- this file is git-tracked "
+    "and read by _behavior_file() straight from the project's checkout "
+    "root, so the Workflows page's own step COUNT (the sidebar '1' next "
+    "to GREEN GATE EVIDENCE STATUS) and diagram now reflect the real "
+    "shape, not a placeholder. 4 new tests in test_api_workflows.py: the "
+    "per-check endpoint reports one named tooth honestly (replays "
+    "3baadd19's own shape again); all 7 registry entries are "
+    "individually reachable through it; an unknown check id reports "
+    "rather than crashes; and a DISK-READ test pins the actual on-disk "
+    "JSON file's 8-step shape (the file the owner was looking at), not "
+    "just a mocked stand-in. Full unit suite: 2583 passed (6 "
+    "pre-existing unrelated failures in csharp-analyzer/wheel-packaging/"
+    "sqlite-WAL tests, untouched by this change)."
 )
