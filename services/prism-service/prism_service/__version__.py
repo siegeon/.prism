@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.22"
+PRISM_VERSION = "7.13.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5440,4 +5440,32 @@ PRISM_VERSION_NOTES += (
     "must produce a genuine assert-based failure and must not import a "
     "not-yet-existing module directly. New test in test_api_workflows.py "
     "pins that the prompt names rc==1 and the .index() pitfall explicitly."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.23: agent_bridge_command had ZERO observability (no console/"
+    "network visibility into the tab it's driving) and only 5 interaction "
+    "verbs, well short of a real browser-automation toolset. Added console/"
+    "network (a ring buffer installed at module load, so history exists "
+    "before the action is first called or a session even enables -- not "
+    "gated on either), and hover/drag/select_option/file_upload/press_key/"
+    "handle_dialog/wait_for/tabs/navigate_back/find. handle_dialog matters "
+    "most: native confirm()/alert()/prompt() BLOCK the page's JS thread, "
+    "which would freeze this exact bridge (no further SSE command could "
+    "ever be delivered while blocked) -- so the override never lets one "
+    "actually block, resolving immediately from a pre-armed policy or a "
+    "safe default and always recording what happened. Large console/"
+    "network dumps persist to disk and return a path, same convention as "
+    "screenshots (agent_bridge_dump_dir, api/agent_bridge.py's "
+    "_persist_large_dump_if_present). Known gaps, deliberately not solved "
+    "here: a pure-CSS :hover tooltip (no JS listener) can't be triggered by "
+    "a dispatched event; `tabs` can list/foreground a child window this tab "
+    "opened but cannot route further commands into it (a second tab needs "
+    "its own Remote Assist session); canvas-rendered elements (the graph "
+    "viewer) aren't normal DOM nodes `find`/`hover` can see. This app's SPA "
+    "has no JS test runner, so the new actions are pinned by source-reading "
+    "tests (test_agent_bridge_new_actions_ui.py) plus real end-to-end "
+    "MCP-dispatch tests (test_agent_bridge_flow.py) proving each new field "
+    "reaches the browser-side command and that large-payload persistence "
+    "behaves like screenshot's."
 )

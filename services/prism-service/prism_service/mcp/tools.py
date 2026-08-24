@@ -1691,7 +1691,28 @@ TOOLS: list[Tool] = [
             "an `image_path` on disk (never the raw image inline) for you "
             "to open with your own file-reading tool. A closed/expired/"
             "revoked session, or a session owned by a different user, is "
-            "rejected — never silently a no-op."
+            "rejected — never silently a no-op. Also available: `console`/"
+            "`network` (recent console messages / network requests, "
+            "captured since the tab enabled Remote Assist, not just from "
+            "when first called — 4xx/5xx flagged; a large dump returns an "
+            "`entries_path` on disk, same convention as screenshot), "
+            "`hover` (real pointer/mouse events), `drag` (real HTML5 drag/"
+            "drop from `selector` to `target_selector`), `select_option` "
+            "(a native <select>, by option value OR visible label), "
+            "`file_upload` (place `files` — [{name, type, content_base64}] "
+            "— on an <input type=file>), `press_key` (dispatch a real "
+            "keydown/keypress/keyup for `value`, e.g. 'Enter'/'Escape'), "
+            "`handle_dialog` (native confirm/alert/prompt never actually "
+            "block this tab — pre-arm the next one's `accept`/`value` "
+            "before triggering it, and read back the last one resolved), "
+            "`wait_for` (poll `selector` — and optional `text` — with a "
+            "real timeout via `timeout_ms`, never a fixed sleep), `tabs` "
+            "(list/focus a child window this tab opened — see the tool's "
+            "own limitation note: it cannot route further commands into a "
+            "different tab, which needs its own Remote Assist session), "
+            "`navigate_back` (browser back via the SPA's own router), and "
+            "`find` (locate elements by `role`/`name`/`text` instead of "
+            "requiring a hand-written CSS selector up front)."
         ),
         inputSchema={
             "type": "object",
@@ -1699,15 +1720,65 @@ TOOLS: list[Tool] = [
                 "session_id": {"type": "string",
                     "description": "The bridge session id the user's tab is showing."},
                 "action": {"type": "string",
-                    "enum": ["navigate", "click", "fill", "read", "screenshot"],
+                    "enum": ["navigate", "click", "fill", "read", "screenshot",
+                              "console", "network", "hover", "drag",
+                              "select_option", "file_upload", "press_key",
+                              "handle_dialog", "wait_for", "tabs",
+                              "navigate_back", "find"],
                     "description": "What to do in the tab."},
                 "path": {"type": "string",
                     "description": "navigate: the in-app route to go to, e.g. '/tasks'."},
                 "selector": {"type": "string",
-                    "description": "click/fill/read/screenshot: a CSS selector for the "
-                        "target element (screenshot defaults to the whole page)."},
+                    "description": "click/fill/read/screenshot/hover/select_option/"
+                        "file_upload/press_key/wait_for/find: a CSS selector for the "
+                        "target element (screenshot defaults to the whole page; "
+                        "press_key defaults to the currently focused element; "
+                        "find defaults to the whole document as the search scope). "
+                        "drag: the DRAG SOURCE element (see target_selector). "
+                        "tabs: the tracked tab name to switch to."},
+                "target_selector": {"type": "string",
+                    "description": "drag: the drop-target element's CSS selector."},
                 "value": {"type": "string",
-                    "description": "fill: the value to set on the matched input/textarea, or the option value to select on a <select>."},
+                    "description": "fill/select_option: the value to set, or the "
+                        "option value/visible label to select on a <select>. "
+                        "press_key: the key name (e.g. 'Enter', 'Escape', 'Tab', "
+                        "'ArrowDown'). handle_dialog: the text to answer a "
+                        "prompt() with. tabs: pass 'switch' to focus the tab "
+                        "named by `selector`; omit/anything else to list tracked tabs."},
+                "files": {"type": "array",
+                    "description": "file_upload: files to place on the matched "
+                        "<input type=file>.",
+                    "items": {"type": "object", "properties": {
+                        "name": {"type": "string"},
+                        "type": {"type": "string"},
+                        "content_base64": {"type": "string"},
+                    }, "required": ["name", "content_base64"]}},
+                "accept": {"type": "boolean",
+                    "description": "handle_dialog: true to accept/confirm the next "
+                        "native dialog, false to dismiss/cancel it. Defaults to "
+                        "true when omitted (a dialog never actually blocks the "
+                        "tab either way — see the tool description)."},
+                "limit": {"type": "integer",
+                    "description": "console/network: max ring-buffer entries to "
+                        "return (most recent first is NOT guaranteed order — "
+                        "entries come back oldest-to-newest, capped to this count)."},
+                "timeout_ms": {"type": "number",
+                    "description": "wait_for: how long to poll before giving up "
+                        "(clamped 100-15000ms). Keep it comfortably under "
+                        "timeout_s (below) or the SERVER's own wait times out "
+                        "first with a less useful 'browser never responded' error."},
+                "role": {"type": "string",
+                    "description": "find: an ARIA role to filter by, e.g. 'button', "
+                        "'link', 'textbox', 'heading'."},
+                "name": {"type": "string",
+                    "description": "find: a case-insensitive substring of the "
+                        "element's accessible name (aria-label, associated "
+                        "<label>, placeholder, or its own text)."},
+                "text": {"type": "string",
+                    "description": "find: a case-insensitive substring of the "
+                        "element's rendered text. wait_for: wait until `selector`'s "
+                        "textContent contains this substring (omit to just wait "
+                        "for the selector to exist)."},
                 "timeout_s": {"type": "number", "default": 20,
                     "description": "How long to wait for the tab's result before giving up."},
             },
@@ -4852,13 +4923,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             request_ctx = get_request_context()
             session_id = str(arguments.get("session_id") or "").strip()
             action = str(arguments.get("action") or "").strip()
-            if not session_id or action not in {
+            _KNOWN_ACTIONS = {
                 "navigate", "click", "fill", "read", "screenshot",
-            }:
+                "console", "network", "hover", "drag", "select_option",
+                "file_upload", "press_key", "handle_dialog", "wait_for",
+                "tabs", "navigate_back", "find",
+            }
+            if not session_id or action not in _KNOWN_ACTIONS:
                 return [TextContent(type="text", text=_json({
                     "ok": False,
-                    "error": "session_id and action (navigate|click|fill|read|"
-                             "screenshot) are required",
+                    "error": "session_id and a known action are required "
+                             f"({'|'.join(sorted(_KNOWN_ACTIONS))})",
                 }))]
 
             service = get_agent_bridge_service()
@@ -4878,14 +4953,54 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             fields: dict = {}
             if action == "navigate":
                 fields["path"] = str(arguments.get("path") or "")
-            elif action in ("click", "read", "screenshot"):
-                # screenshot's selector is OPTIONAL -- an empty string is
-                # falsy client-side (agentBridge.tsx) and defaults the
-                # capture to the whole page, not a click/read failure.
+            elif action in ("click", "read", "screenshot", "hover"):
+                # screenshot/hover's selector is OPTIONAL for screenshot (an
+                # empty string is falsy client-side and defaults the
+                # capture to the whole page); hover requires one and the
+                # browser side reports that failure itself.
                 fields["selector"] = str(arguments.get("selector") or "")
-            elif action == "fill":
+            elif action in ("fill", "select_option"):
                 fields["selector"] = str(arguments.get("selector") or "")
                 fields["value"] = str(arguments.get("value") or "")
+            elif action == "drag":
+                fields["selector"] = str(arguments.get("selector") or "")
+                fields["target_selector"] = str(arguments.get("target_selector") or "")
+            elif action == "file_upload":
+                fields["selector"] = str(arguments.get("selector") or "")
+                files = arguments.get("files")
+                fields["files"] = files if isinstance(files, list) else []
+            elif action == "press_key":
+                fields["selector"] = str(arguments.get("selector") or "")
+                fields["value"] = str(arguments.get("value") or "Enter")
+            elif action == "handle_dialog":
+                if "accept" in arguments:
+                    fields["accept"] = bool(arguments.get("accept"))
+                if "value" in arguments and arguments.get("value") is not None:
+                    fields["value"] = str(arguments.get("value") or "")
+            elif action == "wait_for":
+                fields["selector"] = str(arguments.get("selector") or "")
+                if arguments.get("text"):
+                    fields["text"] = str(arguments.get("text"))
+                try:
+                    if arguments.get("timeout_ms") is not None:
+                        fields["timeout_ms"] = float(arguments.get("timeout_ms"))
+                except (TypeError, ValueError):
+                    pass
+            elif action == "tabs":
+                fields["value"] = str(arguments.get("value") or "")
+                fields["selector"] = str(arguments.get("selector") or "")
+            elif action == "find":
+                fields["selector"] = str(arguments.get("selector") or "")
+                for key in ("role", "name", "text"):
+                    if arguments.get(key):
+                        fields[key] = str(arguments.get(key))
+            elif action in ("console", "network"):
+                try:
+                    if arguments.get("limit") is not None:
+                        fields["limit"] = int(arguments.get("limit"))
+                except (TypeError, ValueError):
+                    pass
+            # navigate_back carries no extra fields.
 
             command_id = service.publish_command(session, action, fields)
             try:

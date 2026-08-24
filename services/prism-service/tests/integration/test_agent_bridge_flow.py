@@ -557,3 +557,254 @@ def test_fill_action_supports_select_elements_not_just_input_textarea():
     assert "HTMLSelectElement" in fill_branch, (
         "the fill action's element-type guard must accept <select>, or a "
         "correct selector still throws 'no input/textarea matches selector'")
+
+
+# ---------------------------------------------------------------------------
+# New actions (v7.14): observability (console/network) + interaction parity
+# (hover/drag/select_option/file_upload/press_key/handle_dialog/wait_for/
+# tabs/navigate_back/find). These drive the REAL MCP dispatch path
+# end-to-end (handle_tool -> publish_command -> a stand-in "browser" reads
+# the real bus event), pinning that each new field the tool schema exposes
+# actually reaches the browser-side command, not just that the action name
+# is accepted.
+# ---------------------------------------------------------------------------
+
+def _capture_one_event(session, action: str, extra_arguments: dict) -> dict:
+    """Runs one agent_bridge_command call for real and returns the RAW bus
+    event a browser tab would receive -- the same "stand-in browser thread"
+    pattern as test_screenshot_action_is_forwarded_with_an_optional_selector."""
+    import json as _json
+
+    from prism_service.events import bus
+    from prism_service.mcp.request_context import PrismRequestContext, use_request_context
+    from prism_service.mcp.tools import handle_tool
+
+    alice = _principal("alice")
+    subscribed = threading.Event()
+    seen: dict = {}
+
+    def _browser():
+        async def _inner():
+            q = bus.subscribe()
+            subscribed.set()
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=5.0)
+                seen.update(event)
+            finally:
+                bus.unsubscribe(q)
+        asyncio.run(_inner())
+
+    t = threading.Thread(target=_browser, daemon=True)
+    t.start()
+    assert subscribed.wait(timeout=2.0)
+
+    with use_request_context(PrismRequestContext(project_id="prism", principal=alice)):
+        result = asyncio.run(handle_tool(
+            "agent_bridge_command",
+            # timeout_s kept short -- this helper only proves the outbound
+            # event reached the bus with the right fields; nothing ever
+            # calls submit_result, so without a short timeout the MCP call
+            # would block for the full default 20s waiting on a result that
+            # never comes.
+            {"session_id": session["id"], "action": action, "timeout_s": 0.3,
+             **extra_arguments},
+            project_id="prism",
+        ))
+    t.join(timeout=2.0)
+    payload = _json.loads(result[0].text)
+    assert payload.get("session_id") == session["id"] or "error" not in payload
+    return seen
+
+
+def test_new_actions_are_all_advertised_in_the_tool_schema():
+    from prism_service.mcp.tools import TOOLS
+
+    tool = next(t for t in TOOLS if t.name == "agent_bridge_command")
+    enum = tool.inputSchema["properties"]["action"]["enum"]
+    for action in (
+        "console", "network", "hover", "drag", "select_option", "file_upload",
+        "press_key", "handle_dialog", "wait_for", "tabs", "navigate_back", "find",
+    ):
+        assert action in enum, f"{action} must be in the advertised action enum"
+
+
+def test_drag_action_forwards_selector_and_target_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "drag", {
+        "selector": "#src", "target_selector": "#dst",
+    })
+    assert seen["action"] == "drag"
+    assert seen["selector"] == "#src"
+    assert seen["target_selector"] == "#dst"
+
+
+def test_wait_for_action_forwards_text_and_timeout_ms_as_a_number():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "wait_for", {
+        "selector": "#toast", "text": "Saved", "timeout_ms": 2500,
+    })
+    assert seen["action"] == "wait_for"
+    assert seen["selector"] == "#toast"
+    assert seen["text"] == "Saved"
+    assert seen["timeout_ms"] == 2500.0
+
+
+def test_file_upload_action_forwards_the_files_list():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    files = [{"name": "a.txt", "type": "text/plain", "content_base64": "aGk="}]
+    seen = _capture_one_event(session, "file_upload", {
+        "selector": "#upload", "files": files,
+    })
+    assert seen["action"] == "file_upload"
+    assert seen["files"] == files
+
+
+def test_handle_dialog_action_forwards_accept_and_value():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "handle_dialog", {
+        "accept": False, "value": "custom answer",
+    })
+    assert seen["action"] == "handle_dialog"
+    assert seen["accept"] is False
+    assert seen["value"] == "custom answer"
+
+
+def test_console_and_network_actions_forward_limit_as_an_int():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "console", {"limit": "25"})
+    assert seen["action"] == "console"
+    assert seen["limit"] == 25
+
+    session2 = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen2 = _capture_one_event(session2, "network", {"limit": 10})
+    assert seen2["action"] == "network"
+    assert seen2["limit"] == 10
+
+
+def test_find_action_forwards_role_name_and_text_filters():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "find", {
+        "role": "button", "name": "Save", "text": "Save changes",
+    })
+    assert seen["action"] == "find"
+    assert seen["role"] == "button"
+    assert seen["name"] == "Save"
+    assert seen["text"] == "Save changes"
+
+
+def test_tabs_action_forwards_value_and_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "tabs", {"value": "switch", "selector": "tab-2"})
+    assert seen["action"] == "tabs"
+    assert seen["value"] == "switch"
+    assert seen["selector"] == "tab-2"
+
+
+def test_navigate_back_action_carries_no_extra_fields():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "navigate_back", {})
+    assert seen["action"] == "navigate_back"
+
+
+def test_hover_action_forwards_selector():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "hover", {"selector": ".tooltip-target"})
+    assert seen["action"] == "hover"
+    assert seen["selector"] == ".tooltip-target"
+
+
+def test_select_option_action_forwards_selector_and_value():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "select_option", {"selector": "#kind", "value": "bug"})
+    assert seen["action"] == "select_option"
+    assert seen["selector"] == "#kind"
+    assert seen["value"] == "bug"
+
+
+def test_press_key_action_forwards_selector_and_key_value():
+    from prism_service.api.agent_bridge import create_session, CreateSessionBody
+
+    session = create_session(CreateSessionBody(project="prism"), principal=_principal("alice"))
+    seen = _capture_one_event(session, "press_key", {"selector": "#search", "value": "Enter"})
+    assert seen["action"] == "press_key"
+    assert seen["value"] == "Enter"
+
+
+# ---------------------------------------------------------------------------
+# Large console/network dumps persist to disk (same convention as
+# screenshots), small ones stay inline.
+# ---------------------------------------------------------------------------
+
+def test_large_console_dump_persists_to_disk_and_returns_a_path(tmp_path, monkeypatch):
+    import prism_service.data_dir as data_dir_module
+    from prism_service.api.agent_bridge import create_session, submit_result, CreateSessionBody, ResultBody
+    from prism_service.services.agent_bridge import get_agent_bridge_service
+
+    monkeypatch.setattr(data_dir_module, "resolve_data_dir", lambda: tmp_path)
+
+    alice = _principal("alice")
+    session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    svc = get_agent_bridge_service()
+    command_id = svc.publish_command(svc._get_live(session["id"]), "console", {})
+
+    big_entries = [{"level": "log", "message": "x" * 200, "ts": i} for i in range(200)]
+    submit_result(session["id"], ResultBody(
+        token=session["token"], command_id=command_id, ok=True,
+        data={"entries": big_entries, "total_captured": 200},
+    ))
+
+    result = svc.wait_for_result(command_id, timeout=2.0)
+    assert result["ok"] is True
+    assert "entries" not in result["data"], "a large entries list must not survive into the MCP result"
+    entries_path = result["data"]["entries_path"]
+    from pathlib import Path
+    p = Path(entries_path)
+    assert p.is_file()
+    assert str(tmp_path) in str(p)
+    import json as _json
+    assert _json.loads(p.read_text()) == big_entries
+    assert result["data"]["entries_count"] == 200
+
+
+def test_small_network_dump_stays_inline_not_persisted(tmp_path, monkeypatch):
+    import prism_service.data_dir as data_dir_module
+    from prism_service.api.agent_bridge import create_session, submit_result, CreateSessionBody, ResultBody
+    from prism_service.services.agent_bridge import get_agent_bridge_service
+
+    monkeypatch.setattr(data_dir_module, "resolve_data_dir", lambda: tmp_path)
+
+    alice = _principal("alice")
+    session = create_session(CreateSessionBody(project="prism"), principal=alice)
+    svc = get_agent_bridge_service()
+    command_id = svc.publish_command(svc._get_live(session["id"]), "network", {})
+
+    small_entries = [{"method": "GET", "url": "/api/tasks", "status": 200, "ok": True}]
+    submit_result(session["id"], ResultBody(
+        token=session["token"], command_id=command_id, ok=True,
+        data={"entries": small_entries, "total_captured": 1, "failed_count": 0},
+    ))
+
+    result = svc.wait_for_result(command_id, timeout=2.0)
+    assert result["ok"] is True
+    assert result["data"]["entries"] == small_entries
+    assert "entries_path" not in result["data"]
