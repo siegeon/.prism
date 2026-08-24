@@ -1049,11 +1049,86 @@ class GreenGateStatusRequest(BaseModel):
     task_id: str = Field(min_length=1)
 
 
+class GateCheckStatus(BaseModel):
+    id: str
+    label: str
+    ok: bool
+    reason: str
+
+
 class GreenGateStatusResponse(BaseModel):
     has_fresh_passing_receipt: bool
     reason: str
     latest_receipt_status: str
     latest_receipt_reason: str
+    checks: list[GateCheckStatus] = []
+
+
+# Every PRE-FLIGHT tooth that can refuse a green_gate approve or the
+# verify_green_state advance into it (owner directive, task 3baadd19,
+# 2026-08-24: "make this real... make sure that it is a part of the flows
+# and enforces our rules" -- the Workflows page's green-gate-status view
+# was a single opaque oracle-receipt check while FIVE other real teeth
+# governed the same gate invisibly). Each entry calls the EXACT function
+# the real enforcement path calls -- never a reimplementation -- so this
+# list can never show a different answer than what actually happens.
+# try/except per-tooth (matching this module's existing pre-flight
+# convention, e.g. ConductorService.adjudicate_green_gate's own
+# reachability_check/candidate_controls_judge calls): a tooth that cannot
+# be evaluated for this task/environment reports ok=True with an empty
+# reason (not-yet-applicable), never crashes the whole status check.
+def _green_gate_checks(ctx, task, project: str) -> list["GateCheckStatus"]:
+    from prism_service.services import conductor_service as _cs
+
+    checks: list[GateCheckStatus] = []
+
+    def _add(check_id: str, label: str, reason: str) -> None:
+        checks.append(GateCheckStatus(id=check_id, label=label,
+                                      ok=not reason, reason=reason or ""))
+
+    try:
+        from prism_service.services import control_plane as _cp
+        _add("candidate_controls", "Judge integrity (no dirty policy files)",
+             _cp.candidate_controls_judge_reason(task) or "")
+    except Exception:
+        _add("candidate_controls", "Judge integrity (no dirty policy files)", "")
+
+    try:
+        from prism_service.services import reachability_check as _rc
+        _add("reachability", "New entry points have a real production caller",
+             _rc.unreachable_entry_point_reason(task) or "")
+    except Exception:
+        _add("reachability", "New entry points have a real production caller", "")
+
+    try:
+        _add("ui_artifact", "Demo/screenshot artifact cited (ui-tagged tasks)",
+             _cs.ui_artifact_gate_reason(
+                 getattr(task, "tags", None), getattr(task, "proof_type", ""),
+                 getattr(task, "completion_proof", "")) or "")
+    except Exception:
+        _add("ui_artifact", "Demo/screenshot artifact cited (ui-tagged tasks)", "")
+
+    try:
+        _add("screen_claim", "A test-proof ticket does not claim a screen",
+             _cs._screen_claim_gate_reason(
+                 getattr(task, "tags", None), getattr(task, "proof_type", ""),
+                 getattr(task, "oracle", "")) or "")
+    except Exception:
+        _add("screen_claim", "A test-proof ticket does not claim a screen", "")
+
+    try:
+        _add("shipped_ness", "This task's own commit trailer reached origin/main",
+             ctx.conductor_svc._unshipped_gate_reason(task) or "")
+    except Exception:
+        _add("shipped_ness", "This task's own commit trailer reached origin/main", "")
+
+    try:
+        _add("demo_evidence", "A demo/review claim has captured evidence",
+             _cs.demo_evidence_gate_reason(task, project) or "")
+    except Exception:
+        _add("demo_evidence", "A demo/review claim has captured evidence", "")
+
+    return checks
 
 
 @router.post("/steps/green-gate-status")
@@ -1066,7 +1141,12 @@ def workflow_step_green_gate_status(
     _pending_decline_reason already makes for green_gate reporting, not a
     reimplementation. Never calls adjudicate_green_gate or any of its
     writes. green_gate itself is untouched: still a real WORKFLOW_STEPS
-    state, still decided the same way it always was."""
+    state, still decided the same way it always was.
+
+    `checks` (task 3baadd19, 2026-08-24) makes this the COMPLETE picture,
+    not just the oracle-receipt tooth: every pre-flight that can refuse
+    green_gate, each calling the identical function the real enforcement
+    path calls -- see _green_gate_checks."""
     from prism_service.services import oracle_spec as osp
 
     with _tracer.start_as_current_span("workflow.step.green_gate_status") as span:
@@ -1080,6 +1160,7 @@ def workflow_step_green_gate_status(
                 has_fresh_passing_receipt=False,
                 reason=f"no such task: {body.task_id}",
                 latest_receipt_status="", latest_receipt_reason="",
+                checks=[],
             )
 
         refusal, fresh = ctx.conductor_svc._oracle_receipt_refusal(
@@ -1091,4 +1172,5 @@ def workflow_step_green_gate_status(
             reason=(refusal or (f"fresh passing receipt on file: {fresh.reason}" if fresh else "")),
             latest_receipt_status=(getattr(latest, "status", "") or "") if latest else "",
             latest_receipt_reason=(getattr(latest, "reason", "") or "") if latest else "",
+            checks=_green_gate_checks(ctx, task, project),
         )

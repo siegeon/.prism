@@ -174,13 +174,22 @@ def test_B3_a_ui_tagged_demo_task_is_still_governed_the_same_way(tmp_path):
 
 
 def test_C1_source_pins_the_check_lives_in_advance_task_itself(tmp_path):
-    """Pin WHERE the fix lives: advance_task, not a per-caller patch in
-    conductor_flow.py -- so every caller (flow_report, the legacy
-    conductor_advance MCP tool) inherits it for free."""
+    """Pin WHERE the enforcement call lives: advance_task, not a
+    per-caller patch in conductor_flow.py -- so every caller (flow_report,
+    the legacy conductor_advance MCP tool) inherits it for free. The check
+    logic itself lives in the shared demo_evidence_gate_reason function
+    (also consumed by the green-gate-status reporting endpoint, so the
+    Workflows page can never drift from what is actually enforced)."""
     import inspect
 
-    from prism_service.services.conductor_service import ConductorService
+    from prism_service.services.conductor_service import (
+        ConductorService,
+        demo_evidence_gate_reason,
+    )
 
     src = inspect.getsource(ConductorService.advance_task)
     assert "verify_green_state" in src
-    assert "has_captured_evidence" in src
+    assert "demo_evidence_gate_reason" in src
+
+    reason_src = inspect.getsource(demo_evidence_gate_reason)
+    assert "has_captured_evidence" in reason_src

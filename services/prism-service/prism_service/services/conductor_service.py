@@ -569,6 +569,56 @@ def has_captured_evidence(task_id: object, project: object = "") -> bool:
     return False
 
 
+def demo_evidence_gate_reason(task: object, project: object = "") -> str:
+    """A human-judgment oracle (proof_type=demo/review, or any browser/
+    manual oracle per oracle_spec.is_human_judgment) is DEMONSTRATED, not
+    measured -- someone watches something happen and captures it. Returns
+    a non-empty refusal reason when the task's oracle is human-judgment
+    AND has_captured_evidence() is False; returns "" (no objection)
+    otherwise, including for any non-human-judgment task.
+
+    PUBLIC ON PURPOSE (task 3baadd19 qa discovery, 2026-08-24): unlike
+    most single-caller teeth in this module, this one has TWO real
+    production callers by design -- ConductorService.advance_task (the
+    enforcement path, refuses the verify_green_state -> green_gate
+    advance) and api/workflows.py's green-gate-status governance-
+    visibility endpoint (the reporting path, so what a human sees on the
+    Workflows page can never drift from what is actually enforced -- both
+    read the SAME function, never two independent judgments of the same
+    question).
+
+    Live regression this closes: task 3baadd19 (proof_type=demo, tagged
+    conductor/architecture/owner-directive/drive-worker/github/jira -- no
+    "ui" tag) reported SUCCESS at verify_green_state with completion_proof
+    that admitted "the epic's actual oracle... is NOT yet true in
+    production" and ZERO captured evidence, and advanced to green_gate
+    anyway -- because ui_artifact_gate_reason (the only prior evidence
+    tooth) is scoped to "ui"-tagged tasks and never ran."""
+    pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+    is_demo_claim = pt in ("demo", "review")
+    if not is_demo_claim:
+        try:
+            from prism_service.services import oracle_spec as _osp
+            is_demo_claim = _osp.is_human_judgment(
+                _osp.OracleSpec.from_task(task))
+        except Exception:
+            is_demo_claim = False
+    if not is_demo_claim:
+        return ""
+    task_id = str(getattr(task, "id", "") or "")
+    if has_captured_evidence(task_id, project or ""):
+        return ""
+    return (
+        f"verify_green_state: proof_type={pt!r} means this oracle is "
+        "DEMONSTRATED, not measured -- but no captured screenshot/video "
+        "exists in the evidence store for this task, and no oracle "
+        "receipt carries an artifact either. A self-attested demo claim "
+        "cannot advance to green_gate alone: capture real evidence "
+        "(agent-browser/verify screenshot, a recording of the drive) "
+        "into the evidence store and re-report."
+    )
+
+
 def gate_artifact_reason(gate_step_id: str, completion_proof: object,
                          reason: object, proof_type: object = None) -> str:
     """Dispatch the proof-carrying artifact check by gate + proof_type. ""
@@ -1619,42 +1669,17 @@ class ConductorService:
                     }
 
         # DEMO/REVIEW EVIDENCE CHECK AT verify_green_state (task 3baadd19 qa
-        # discovery, 2026-08-24): a human-judgment oracle (proof_type=demo/
-        # review, or any browser/manual oracle per is_human_judgment) is
-        # DEMONSTRATED, not measured -- someone watches something happen and
-        # captures it. Nothing stopped a verify_green_state SUCCESS report
-        # from advancing straight to green_gate with ZERO captured evidence:
-        # reproduced live on 3baadd19, whose OWN completion_proof admitted
-        # "the epic's actual oracle... is NOT yet true in production" and
-        # still advanced, because ui_artifact_gate_reason (the existing
-        # evidence tooth, STRAND C) only fires for "ui"-tagged tasks --
-        # this epic is tagged conductor/architecture/owner-directive/
-        # drive-worker/github/jira, no "ui" tag, so that tooth never ran.
-        # Checked HERE, at advance_task's one choke point, so every caller
-        # (flow_report's server-driven loop, the legacy conductor_advance
-        # MCP tool) inherits it rather than patching each caller separately.
+        # discovery, 2026-08-24): see demo_evidence_gate_reason's own
+        # docstring for the full live regression. Checked HERE, at
+        # advance_task's one choke point, so every caller (flow_report's
+        # server-driven loop, the legacy conductor_advance MCP tool)
+        # inherits it rather than patching each caller separately. The
+        # SAME function also backs api/workflows.py's green-gate-status
+        # reporting endpoint, so the Workflows page can never show a
+        # different answer than what is actually enforced here.
         if current_id == "verify_green_state":
-            pt = str(getattr(task, "proof_type", "") or "").strip().lower()
-            is_demo_claim = pt in ("demo", "review")
-            if not is_demo_claim:
-                try:
-                    from prism_service.services import oracle_spec as _osp
-                    is_demo_claim = _osp.is_human_judgment(
-                        _osp.OracleSpec.from_task(task))
-                except Exception:
-                    is_demo_claim = False
-            if is_demo_claim and not has_captured_evidence(
-                    task_id, self._project_name or ""):
-                reason = (
-                    f"verify_green_state: proof_type={pt!r} means this "
-                    "oracle is DEMONSTRATED, not measured -- but no "
-                    "captured screenshot/video exists in the evidence "
-                    "store for this task, and no oracle receipt carries an "
-                    "artifact either. A self-attested demo claim cannot "
-                    "advance to green_gate alone: capture real evidence "
-                    "(agent-browser/verify screenshot, a recording of the "
-                    "drive) into the evidence store and re-report."
-                )
+            reason = demo_evidence_gate_reason(task, self._project_name or "")
+            if reason:
                 self._task_svc.update(task_id, gate_reason=reason)
                 self._task_svc.record_history(
                     task_id, action="advance_refused",
