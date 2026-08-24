@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.34"
+PRISM_VERSION = "7.13.35"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5662,4 +5662,26 @@ PRISM_VERSION_NOTES += (
     "was committed directly under the epic's task id instead, orphaning "
     "it from child-task tracking and leaving it stranded on a branch "
     "nobody was watching."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.35: fixed the REAL bug behind the 7.13.34 landing -- owner "
+    "QA, live on task 3baadd19, 2026-08-24: after the AC-1 branch was "
+    "merged to origin/main, the task's blocked_reason still read "
+    "\"this task's [task:3baadd19] commit trailer is not yet reachable "
+    "from origin/main\" on every subsequent read, even though it was now "
+    "false. Root cause: adjudicate_green_gate's shipped-ness pre-flight "
+    "(_unshipped_gate_reason) WRITES blocked_reason via "
+    "_park_green_refusal when it objects, but nothing symmetric ever "
+    "CLEARED it once the objection stopped firing on a later sweep -- "
+    "gate_reason self-heals every ~60s via "
+    "gate_adjudicator._write_pending_reason, but blocked_reason has no "
+    "such re-sweep, so it stayed stuck at whatever text was last parked "
+    "there, with no code path to clear it short of the owner clicking "
+    "Approve (the ship-on-approve queue path). Fix: adjudicate_green_gate "
+    "now clears a stale blocked_reason the moment neither the shipped-"
+    "ness nor screen-claim tooth objects, scoped to status != \"blocked\" "
+    "so it never touches resume_actuator's unrelated dependency-retry "
+    "park. New test_stale_blocked_reason_clears_once_shipped.py (3 "
+    "tests): pins the set-then-clear lifecycle against a real git repo, "
+    "and pins the unrelated-block scoping guard."
 )
