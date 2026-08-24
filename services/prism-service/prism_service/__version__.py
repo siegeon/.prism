@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.35"
+PRISM_VERSION = "7.13.36"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5684,4 +5684,36 @@ PRISM_VERSION_NOTES += (
     "park. New test_stale_blocked_reason_clears_once_shipped.py (3 "
     "tests): pins the set-then-clear lifecycle against a real git repo, "
     "and pins the unrelated-block scoping guard."
+)
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.36: closed the actual structural hole behind task 3baadd19's "
+    "state, found live with the owner ('well that seems like a "
+    "fundamental flaw doesn't it'). 3baadd19 (proof_type=demo) reported "
+    "SUCCESS at verify_green_state with completion_proof that admitted "
+    "'the epic's actual oracle... is NOT yet true in production', and "
+    "with ZERO captured evidence in the task's evidence store -- and "
+    "still advanced straight to green_gate, landing on 'awaiting your "
+    "review... Approve to release' as if it were ready. Root cause: "
+    "ui_artifact_gate_reason (the only tooth requiring a real captured "
+    "artifact for a demo claim) is scoped to tasks tagged 'ui' -- "
+    "3baadd19 carries no 'ui' tag (conductor/architecture/"
+    "owner-directive/drive-worker/github/jira), so that tooth never ran, "
+    "and nothing else checks evidence at the point where a "
+    "verify_green_state SUCCESS report advances the task INTO green_gate "
+    "in the first place. Fix: ConductorService.advance_task now refuses "
+    "a verify_green_state advance when the oracle is human-judgment "
+    "(proof_type in demo/review, or any browser/manual oracle per "
+    "oracle_spec.is_human_judgment) and has_captured_evidence() is False "
+    "-- checked at advance_task itself, the one choke point both "
+    "flow_report's server-driven loop and the legacy conductor_advance "
+    "MCP tool pass through, so every caller inherits it rather than "
+    "patching per-caller. New "
+    "test_verify_green_state_requires_demo_evidence.py (6 tests): "
+    "replays 3baadd19's exact shape (demo, no ui tag, admitted-incomplete "
+    "proof, no evidence) and confirms refusal; confirms captured evidence "
+    "lets the identical task through cleanly; confirms proof_type=test "
+    "and ui-tagged demo tasks are unaffected/still governed. Full unit "
+    "suite: 2576 passed (6 pre-existing unrelated failures in "
+    "csharp-analyzer/wheel-packaging/sqlite-WAL tests, untouched by this "
+    "change)."
 )
