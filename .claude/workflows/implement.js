@@ -827,7 +827,6 @@ function childDriverPrompt(child, idx) {
     GRAPH_BRIEF,
     '',
     'Report ok:false with the blocking tooth in halt_reason rather than forcing anything. A red test is yours, never "pre-existing".',
-    `\n\nHEARTBEAT (drive liveness - REQUIRED, not optional; you are the longest-running agent in this whole flow, and without beats your row reads adrift/stalled with heartbeat:null on the board for your ENTIRE drive). Post your FIRST beat immediately after your first tool call, then re-beat after roughly every 5-8 tool calls (at least every ~2 minutes of work), for every step of your OWN internal conductor_work loop: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${child.task_id}","step":"<your own job.step from the CURRENT iteration of your conductor_work loop - never a step name frozen at prompt-generation time>","elapsed_s":<seconds since you started that step>,"last_tool":"<the tool you just ran>","work_units":<a counter you increment each beat, e.g. total tool calls so far>}'\`. Always use ${child.task_id} (this CHILD's own id) - never the parent/epic's id, or the epic tile reads driving while this row still reads dead. work_units MUST strictly increase. A missed or failed beat is non-fatal, but skipping beats entirely makes the owner's board cry "stalled" over healthy work.`,
     telemetryInstr('child_drive', 'dev'),
   ].join('\n')
 }
