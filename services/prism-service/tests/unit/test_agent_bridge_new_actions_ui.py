@@ -29,32 +29,10 @@ def _read() -> str:
     return _SRC.read_text(encoding="utf-8")
 
 
-def _find(src: str, marker: str) -> int:
-    """Like str.index, but a miss is a genuine AssertionError (with a
-    diagnostic trace) rather than an uncaught ValueError -- an uncaught
-    exception is not a passing red test, per the write-failing-tests-loop
-    policy (see fix(conductor) 9d0fa328)."""
-    idx = src.find(marker)
-    assert idx != -1, f"expected to find {marker!r} in {_SRC}"
-    return idx
-
-
-def _slice(src: str, start_marker: str, end_marker: str) -> str:
-    """The text between two markers, each resolved via _find so a missing
-    marker on either side fails as an AssertionError, not a ValueError."""
-    start = _find(src, start_marker)
-    end = _find(src, end_marker)
-    assert end > start, (
-        f"expected {end_marker!r} to appear after {start_marker!r} in {_SRC}"
-    )
-    return src[start:end]
-
-
 def _branch(src: str, action: str) -> str:
     """The full body of one `cmd.action === "<action>"` else-if branch, up
     to (not including) the next `} else if` or the final `} else {`."""
-    marker = f'cmd.action === "{action}"'
-    start = _find(src, marker)
+    start = src.index(f'cmd.action === "{action}"')
     rest = src[start:]
     end_candidates = [i for i in (
         rest.find("} else if", 1),
@@ -80,11 +58,11 @@ def test_observability_capture_installs_unconditionally_at_module_load():
     # It must not be gated behind `if (session)` / inside the provider's
     # enable() callback -- called unconditionally is what makes "already
     # recording since page load" true rather than "since enable() ran".
-    call_idx = _find(src, "installObservability();")
+    call_idx = src.index("installObservability();")
     # The nearest enclosing function before this call must be none (i.e. it
     # sits at top level) -- approximate by checking it's not indented deep
     # inside AgentBridgeProvider, which starts later in the file.
-    provider_idx = _find(src, "export function AgentBridgeProvider")
+    provider_idx = src.index("export function AgentBridgeProvider")
     assert call_idx < provider_idx, (
         "installObservability() must run before AgentBridgeProvider is even "
         "defined -- i.e. at module import time, not component mount time"
@@ -102,7 +80,7 @@ def test_console_action_reads_from_the_ring_buffer_not_a_fresh_capture():
 
 def test_console_capture_wraps_console_methods_and_global_error_handlers():
     src = _read()
-    body = _slice(src, "function installObservability", "installObservability();")
+    body = src[src.index("function installObservability"):src.index("installObservability();")]
     for method in ("log", "warn", "error"):
         assert f'"{method}"' in body
     assert 'addEventListener("error"' in body, \
@@ -113,7 +91,7 @@ def test_console_capture_wraps_console_methods_and_global_error_handlers():
 
 def test_network_action_wraps_both_fetch_and_xhr():
     src = _read()
-    body = _slice(src, "function installObservability", "installObservability();")
+    body = src[src.index("function installObservability"):src.index("installObservability();")]
     assert "window.fetch = " in body, "must patch window.fetch to capture fetch-based requests"
     assert "XMLHttpRequest" in body, "must also cover XMLHttpRequest-based requests, not fetch-only"
     branch = _branch(src, "network")
@@ -205,7 +183,7 @@ def test_press_key_dispatches_keydown_and_keyup():
 
 def test_dialog_override_never_lets_confirm_alert_prompt_block():
     src = _read()
-    body = _slice(src, "function installDialogOverride", "installDialogOverride();")
+    body = src[src.index("function installDialogOverride"):src.index("installDialogOverride();")]
     assert "window.confirm = " in body
     assert "window.alert = " in body
     assert "window.prompt = " in body
@@ -220,8 +198,8 @@ def test_dialog_override_never_lets_confirm_alert_prompt_block():
 def test_dialog_override_installs_unconditionally_at_module_load():
     src = _read()
     assert "installDialogOverride();" in src
-    call_idx = _find(src, "installDialogOverride();")
-    provider_idx = _find(src, "export function AgentBridgeProvider")
+    call_idx = src.index("installDialogOverride();")
+    provider_idx = src.index("export function AgentBridgeProvider")
     assert call_idx < provider_idx
 
 
@@ -261,7 +239,7 @@ def test_wait_for_can_wait_for_text_not_just_existence():
 
 def test_tabs_documents_the_cross_tab_driving_limitation():
     src = _read()
-    body = _slice(src, "function installTabTracking", "installTabTracking();")
+    body = src[src.index("function installTabTracking"):src.index("installTabTracking();")]
     assert "window.open" in body
     assert "LIMITATION" in src[:src.index("function installTabTracking")] or \
         "LIMITATION" in body or "cannot route" in src
@@ -296,7 +274,7 @@ def test_find_supports_role_name_and_text_filters():
     src = _read()
     branch = _branch(src, "find")
     assert "findElements(" in branch
-    fn_body = _slice(src, "function findElements", "function sleep(")
+    fn_body = src[src.index("function findElements"):src.index("function sleep(")]
     assert "getRole(" in fn_body
     assert "getAccessibleName(" in fn_body
     assert "buildSelector(" in fn_body
@@ -304,7 +282,7 @@ def test_find_supports_role_name_and_text_filters():
 
 def test_find_requires_at_least_one_filter_to_avoid_dumping_the_whole_dom():
     src = _read()
-    fn_body = _slice(src, "function findElements", "function sleep(")
+    fn_body = src[src.index("function findElements"):src.index("function sleep(")]
     # The real guard clause: with no role/name/text filter at all, every
     # element would otherwise match and the whole DOM would come back.
     assert "if (!wantRole && !wantName && !wantText) continue;" in fn_body
@@ -312,7 +290,7 @@ def test_find_requires_at_least_one_filter_to_avoid_dumping_the_whole_dom():
 
 def test_accessible_name_falls_back_through_label_placeholder_title_text():
     src = _read()
-    fn_body = _slice(src, "function getAccessibleName", "function buildSelector")
+    fn_body = src[src.index("function getAccessibleName"):src.index("function buildSelector")]
     assert "aria-label" in fn_body
     assert "aria-labelledby" in fn_body
     assert 'label[for=' in fn_body

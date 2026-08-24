@@ -264,11 +264,16 @@ def ship_task(task_id: str, project: str = "default", *,
         "gh", "pr", "create", "--head", branch, "--base", "main",
         "--title", title, "--body", body, *repo_flag], path)
     if rc != 0:
-        res = _fail("pr_create", err or out or f"gh pr create exited {rc}")
-        _park(task_svc, task_id, res["stage"], res["error"])
-        return res
-    m = _PR_NUM_RE.search(out or "")
-    pr = int(m.group(1)) if m else 0
+        already_exists = "already exists" in (err or out or "").lower()
+        m = _PR_NUM_RE.search(err or "") if already_exists else None
+        if not m:
+            res = _fail("pr_create", err or out or f"gh pr create exited {rc}")
+            _park(task_svc, task_id, res["stage"], res["error"])
+            return res
+        pr = int(m.group(1))
+    else:
+        m = _PR_NUM_RE.search(out or "")
+        pr = int(m.group(1)) if m else 0
     _audit(task_svc, task_id, "pr_create", f"pr={pr}")
 
     # ---- wait for CI -------------------------------------------------------

@@ -722,7 +722,10 @@ function AccessKeyPanel() {
  * can watch it happen — the motivating case is Bespoke Labs support: you
  * hand over a session id explicitly so someone can diagnose/fix something
  * on your own screen). Off by default; the session id/token only ever
- * exist while this toggle is on, and never touch localStorage. */
+ * exist while this toggle is on, and never touch localStorage — the ONLY
+ * thing this toggle persists to localStorage is a plain boolean
+ * ("did the user want this on"), which is what lets the tab reconnect on
+ * its own after a reload or a daemon restart without a re-click. */
 function AgentBridgePanel() {
   const { session, enabling, error, enable, disable } = useAgentBridge();
   const [copied, setCopied] = useState(false);

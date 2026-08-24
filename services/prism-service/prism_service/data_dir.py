@@ -110,6 +110,17 @@ def agent_bridge_screenshot_dir(session_id: str) -> Path:
     return p
 
 
+def agent_bridge_dump_dir(session_id: str) -> Path:
+    """Directory holding one agent-bridge session's oversized `console`/
+    `network` command results — same "persist to disk, hand back a path"
+    convention as agent_bridge_screenshot_dir, for the ring-buffer dumps
+    those two observability actions can return. Callers MUST pass an
+    already-validated session id (see agent_bridge_screenshot_dir)."""
+    p = resolve_data_dir() / "agent-bridge" / session_id / "dumps"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 5
 
