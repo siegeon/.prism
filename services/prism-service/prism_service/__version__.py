@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.57"
+PRISM_VERSION = "7.13.58"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6358,4 +6358,30 @@ PRISM_VERSION_NOTES += (
     "renders a neutral Lozenge chip after the title; external rows show "
     "their provider so native and mirrored rows read the same way. 19 "
     "new tests (test_task_channel_provenance.py)."
+    "\n\n7.13.58: THE PROTOTYPE DASHBOARD LIVES INSIDE PRISM, wave 1 (epic "
+    "d6966b43, seven slices, each red-then-green in its own worktree). "
+    "ONTOLOGY (15c06516 + c1d0ee70): Understand gains an Ontology lens -- "
+    "a class index rail beside plates, Subsume shape-carries-kind "
+    "primitives (square class, round-pill instance, chromeless-mono "
+    "property, dotted literal, hatched abstract) on additive --social/"
+    "--formal/--alarm tokens, PRISM fonts untouched -- backed by a real "
+    "per-project ontology.db (classes/instances/properties/axioms) "
+    "projected from real rows: task channels, the workflow catalog, "
+    "connector providers, tasks, brain docs, code-graph entity kinds and "
+    "edge kinds, arc_governance principles; GET /api/okf/ontology, "
+    "/instances, POST /rebuild. Four prototype rules are evaluated axioms "
+    "that spend --alarm only on a real violation (task-names-its-channel, "
+    "no-artifacts-in-the-root, dated-folder-uses-one-format, "
+    "skill-description-says-when). FILES (5bfdf527 + 1c122936): a Files "
+    "entry under Learning loop rendering the project's folders by the "
+    "area/series/name/date grammar (GET /api/documents) and "
+    "documents.place() -- where a new artifact goes, existing folder "
+    "always wins, whole-token matching (POST /api/documents/place, MCP "
+    "documents_place on the all profile). WORK (153fdf19): the board "
+    "filters by channel, pills derived from the rows. AGENTS = WORKFLOWS "
+    "(af396b2c): Task.workflow (default implement, alias of the conductor "
+    "catalog entry) and task_count per catalog workflow; TaskDetail shows "
+    "it. CONNECTORS (64321cfe): every remote channel in CHANNELS is a "
+    "card; slack/outlook read not_configured honestly. Three new sqlite "
+    "opens routed through sqlite_db.connect. 60+ new tests."
 )
