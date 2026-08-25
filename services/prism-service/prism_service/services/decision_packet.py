@@ -83,8 +83,48 @@ def _commits(path: str, baseline: str) -> list:
     return commits
 
 
+def _epic_rollup_receipt(project: str, task_id: str) -> Optional[dict]:
+    """Live: 2026-08-25, an epic's own gate showed "READY - evidence
+    passing" (from api/conductor.py's gate_readiness epic-rollup branch)
+    directly above a Decision Packet whose "Oracle receipt" line read
+    "browser - manual_evidence_required" and whose pinned-tests check read
+    "0/3 passing" -- both stale, from an EARLIER, unrelated single-task
+    oracle attempt (oracle_spec.latest_receipt is just receipts[-1], the
+    last EVER recorded for this task, across every gate step and attempt).
+    The epic-rollup path that actually decides an epic's gate never writes
+    an EvidenceReceipt row at all, so the packet had nothing current to
+    show and fell back to whatever stale row happened to be last -- a
+    self-contradicting card that reads as "not actually ready" even when
+    it genuinely is. Mirrors gate_readiness's own epic-rollup branch
+    exactly (same verdict function, same live-children filter) so the two
+    surfaces can never say different things."""
+    try:
+        from prism_service.services.conductor_service import (
+            epic_rollup_verdict, _task_attr)
+        from prism_service.project_context import get_project
+        svc = get_project(project).task_svc
+        kids = list(svc.list(parent_id=task_id))
+        live_kids = [c for c in kids
+                    if str(_task_attr(c, "status", "")) not in
+                    ("cancelled", "deleted")]
+        if not live_kids:
+            return None
+        ok_roll, why_roll = epic_rollup_verdict(live_kids)
+        return {"adapter": "epic-rollup", "passed": bool(ok_roll),
+                "status": "rollup" if ok_roll else "rollup_blocked",
+                "ended_at": "", "reason": str(why_roll)[:300]}
+    except Exception:
+        return None
+
+
 def _receipt(project: str, task_id: str) -> Optional[dict]:
-    """The latest oracle EvidenceReceipt, projected to the packet fields."""
+    """The decisive evidence for this task's gate: the epic-rollup verdict
+    when this task has live children (that verdict IS what decides an
+    epic's gate — see _epic_rollup_receipt), else the latest oracle
+    EvidenceReceipt, projected to the packet fields."""
+    rollup = _epic_rollup_receipt(project, task_id)
+    if rollup is not None:
+        return rollup
     try:
         r = oracle_spec.latest_receipt(project, task_id)
     except Exception:
