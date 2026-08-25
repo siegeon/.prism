@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.43"
+PRISM_VERSION = "7.13.44"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5970,4 +5970,39 @@ PRISM_VERSION_NOTES += (
     "environmental failures as 7.13.42 (csharp-analyzer/wheel-"
     "packaging/sqlite-WAL/unbuilt-web_dist-in-fresh-worktree), "
     "unrelated to this 2-file change."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.44: THE DRIVE WORKER COULD NEVER BOOTSTRAP A FRESH TASK "
+    "[task 3baadd19]. Owner, mid-QA-pass on this same epic: 'as qa "
+    "agent you need to try to drive it through the prism app from "
+    "this point, if you can not we may need to fix the app from "
+    "without'. Tried it exactly as instructed: created a real child "
+    "task (AC-2, id 12403c60) under 3baadd19, set it in_progress on "
+    "the AOS dev instance (PRISM_TASK_RUNNER_INTERVAL=900, confirmed "
+    "live), touched nothing else, and waited. task_runner.eligible_"
+    "task()'s own docstring said eligible == 'in_progress, HAS "
+    "ALREADY ENTERED THE FLOW (a non-empty workflow_step)' -- but "
+    "the ONLY thing that ever sets workflow_step is flow_start, "
+    "which is called from INSIDE _run_one_step -- itself only "
+    "reachable once eligible_task() already returned this task's id. "
+    "A brand-new in_progress task can never satisfy its own "
+    "prerequisite: 15+ seconds after the flip, workflow_step was "
+    "still '' and nothing had moved. This directly contradicts the "
+    "epic's own oracle text ('set it in_progress and TOUCH NOTHING "
+    "ELSE... PRISM claims it by itself') -- confirmed via `flow_"
+    "start` (conductor_flow.py:381-384): it already calls `svc."
+    "advance_task(...)` when `not task.workflow_step`, and WORKFLOW_"
+    "STEPS[0] (review_previous_notes) is always type=='agent', never "
+    "a gate -- so bootstrapping a blank-workflow_step task is always "
+    "safe. Fixed: eligible_task() now also returns a task whose "
+    "workflow_step=='' (was previously the FIRST thing it excluded), "
+    "letting _run_one_step's existing flow_start call do the "
+    "bootstrap and then drive that first step in the same tick. Two "
+    "new regression tests: test_fresh_in_progress_task_with_blank_"
+    "workflow_step_is_eligible, test_runner_bootstraps_a_fresh_task_"
+    "into_the_flow_end_to_end (asserts run_one_step alone, with NO "
+    "prior manual flow_start call, both invokes claude_cli once and "
+    "leaves the task at draft_story). Full suite: 3409 passed, same "
+    "8 pre-existing/environmental failures as 7.13.43, unrelated to "
+    "this 2-file change."
 )

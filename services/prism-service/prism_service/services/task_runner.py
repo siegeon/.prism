@@ -115,18 +115,27 @@ def _release(task_id: str) -> None:
 def eligible_task(project: str) -> Optional[str]:
     """The id of the one task this tick may drive in `project`, or None.
 
-    Eligible == in_progress, has already entered the flow (a non-empty
-    workflow_step), and its CURRENT step is an AGENT step — a task
-    sitting at a gate (pending, passed, or failed) is never eligible;
-    gate adjudication belongs to a distinct seat, not this one.
+    Eligible == in_progress and its CURRENT step is an AGENT step — a task
+    sitting at a gate (pending, passed, or failed) is never eligible; gate
+    adjudication belongs to a distinct seat, not this one. A task that has
+    NOT YET entered the flow (workflow_step=="") is also eligible: WORKFLOW_
+    STEPS[0] (review_previous_notes) is always type=="agent", never a gate,
+    and _run_one_step's own flow_start call is what sets workflow_step for
+    the first time — this seat must be the one to make that call, or a task
+    that only ever gets `status=in_progress` (never separately driven by a
+    human/session into the flow) sits forever with workflow_step=="" and is
+    never eligible under any check that requires it non-empty first (epic
+    3baadd19's own oracle: set in_progress and touch nothing else).
     """
     from prism_service.project_context import get_project
     from prism_service.services.conductor_service import ConductorService
 
     ctx = get_project(project)
     for t in ctx.task_svc.list(status="in_progress"):
-        if not t.workflow_step or t.id in _IN_FLIGHT:
+        if t.id in _IN_FLIGHT:
             continue
+        if not t.workflow_step:
+            return t.id
         step = ConductorService._step_by_id(t.workflow_step)
         if step is None or step["type"] == "gate":
             continue

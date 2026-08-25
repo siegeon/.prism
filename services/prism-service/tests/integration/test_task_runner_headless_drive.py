@@ -113,6 +113,47 @@ def test_one_tick_advances_exactly_one_step(make_task, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# A fresh task (status=in_progress, workflow_step=="", never separately
+# driven into the flow by a human/session) is eligible AND the runner
+# bootstraps it itself -- epic 3baadd19's own oracle text ("set it
+# in_progress and TOUCH NOTHING ELSE... PRISM claims it by itself") is not
+# true unless a task that has never entered the flow is eligible: nothing
+# else calls flow_start for it.
+# ---------------------------------------------------------------------------
+
+def test_fresh_in_progress_task_with_blank_workflow_step_is_eligible(
+        make_task):
+    from prism_service.services import task_runner as tr
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, status="in_progress")
+    assert task.workflow_step == ""
+
+    assert tr.eligible_task(project) == task.id
+
+
+def test_runner_bootstraps_a_fresh_task_into_the_flow_end_to_end(
+        make_task, monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, status="in_progress")
+    assert task.workflow_step == ""
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+    assert len(calls) == 1, "the runner's own flow_start must bootstrap " \
+        "the flow and then drive its first step in the same tick"
+
+    after = ctx.task_svc.get(task.id)
+    assert after.workflow_step == "draft_story", after.workflow_step
+
+
+# ---------------------------------------------------------------------------
 # A task at a pending gate is SKIPPED and never gate-decided
 # ---------------------------------------------------------------------------
 
