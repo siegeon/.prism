@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.59"
+PRISM_VERSION = "7.13.60"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6404,4 +6404,17 @@ PRISM_VERSION_NOTES += (
     "child. /api/workflows resolves the project exactly once per request "
     "again (occupancy, triage occupancy and task_count share one "
     "resolved service)."
+    "\n\n7.13.60: THE CONDUCTOR WALKS A TASK'S OWN WORKFLOW (task 6f22d0ad, "
+    "policy-change, epic d6966b43 wave 3). ConductorService._workflow_steps/"
+    "_step_index/_step_by_id/_validation_for_gate and conductor_flow._job "
+    "resolve the step list via models.workflow.steps_for(task.workflow) -- "
+    "a workflow=triage task walks intake -> classify -> decide -> done "
+    "under conductor_work and never enters draft_story; a blank/implement/"
+    "unknown value stays the default sequence byte-for-byte (872 conductor "
+    "tests green). conductor_flow carries triage job content (classify "
+    "names Open/Monitoring/Resolved/Dropped + a one-line reason). Two gaps "
+    "the slice flagged are closed in the same wave: validate_workflow now "
+    "accepts every registered workflow (a triage task was walkable but not "
+    "creatable over REST/MCP), and rewind_task walks the task's own "
+    "sequence instead of the hardcoded default."
 )
