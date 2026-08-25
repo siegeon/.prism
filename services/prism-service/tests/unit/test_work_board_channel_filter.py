@@ -46,11 +46,11 @@ def test_channel_choice_persists_under_the_documented_localstorage_key():
 def test_localstorage_access_is_guarded_by_try_catch():
     page = _read(_TASKS_PAGE)
     assert (
-        "try {\n    const saved = localStorage.getItem(channelStorageKey(project));"
+        "try {\n      const saved = localStorage.getItem(channelStorageKey(project));"
         in page
     )
     assert (
-        "try {\n    localStorage.setItem(channelStorageKey(project), channelFilter);"
+        "try {\n      localStorage.setItem(channelStorageKey(project), channelFilter);"
         in page
     )
 

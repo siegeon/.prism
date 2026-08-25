@@ -161,6 +161,12 @@ function workItemTimestamp(it: WorkItem): number {
   return Number.isNaN(t) ? -Infinity : t;
 }
 
+// Client-side channel-filter preference key, project-scoped — same shape as
+// WorkflowsPage's prism.workflows.* keys (task 153fdf19).
+function channelStorageKey(project: string): string {
+  return `prism.work.channel.${project}`;
+}
+
 export default function TasksPage() {
   const [project] = useProject();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -168,6 +174,7 @@ export default function TasksPage() {
   const [me, setMe] = useState<string>("");
   const [view, setView] = useState<WorkView>("team");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  const [channelFilter, setChannelFilter] = useState<string>("");
   // Owner 2026-07-29: "i need a way to search work for e696d952 a task on
   // this" — id prefix, full uuid, title, or tag, case-insensitive.
   const [searchParams] = useSearchParams();
@@ -176,6 +183,19 @@ export default function TasksPage() {
     const q = searchParams.get("q");
     if (q) setQuery(q);
   }, [searchParams]);
+  // Restore the channel choice per-project (localStorage, WorkflowsPage
+  // precedent); a bad/blocked store just leaves the filter at All.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(channelStorageKey(project));
+      if (saved) setChannelFilter(saved);
+    } catch { /* storage unavailable */ }
+  }, [project]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(channelStorageKey(project), channelFilter);
+    } catch { /* storage unavailable */ }
+  }, [channelFilter, project]);
   const [cursor, setCursor] = useState<number>(0);
   const [started, setStarted] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -235,6 +255,7 @@ export default function TasksPage() {
     const q = query.trim().toLowerCase();
     return merged.filter((it) => {
       if (assigneeFilter && !it.assignee.toLowerCase().includes(assigneeFilter.toLowerCase())) return false;
+      if (channelFilter && it.channel !== channelFilter) return false;
       if (q) {
         const idHit = it.id?.toLowerCase().startsWith(q) || it.id?.toLowerCase().includes(q);
         const titleHit = it.title.toLowerCase().includes(q);
@@ -249,7 +270,7 @@ export default function TasksPage() {
       }
       return true;
     });
-  }, [tasks, external, assigneeFilter, view, me, query]);
+  }, [tasks, external, assigneeFilter, channelFilter, view, me, query]);
 
   // Keyboard navigation across the unified rows: j/ArrowDown and k/ArrowUp move
   // the cursor; Enter opens the focused row's local task.
@@ -274,6 +295,26 @@ export default function TasksPage() {
     }
     return [...s].sort();
   }, [tasks, external]);
+
+  // Distinct non-blank channels present on the loaded board — never a
+  // hardcoded vocabulary (task 153fdf19).
+  const channels = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of [...tasks.map(nativeToWork), ...external.map(externalToWork)]) {
+      if (it.channel) s.add(it.channel);
+    }
+    return [...s].sort();
+  }, [tasks, external]);
+
+  // A channel the owner picked can vanish from the board (task closed,
+  // upstream data changed) — fall back to All rather than silently render
+  // nothing. Guard on channels.length so an in-flight initial load doesn't
+  // clobber a just-restored choice before rows have arrived.
+  useEffect(() => {
+    if (channelFilter && channels.length > 0 && !channels.includes(channelFilter)) {
+      setChannelFilter("");
+    }
+  }, [channelFilter, channels]);
 
   const start = useCallback((it: WorkItem) => {
     if (!it.id) return;
@@ -307,6 +348,28 @@ export default function TasksPage() {
             </button>
           ))}
         </div>
+
+        {channels.length > 0 && (
+          <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" role="tablist" aria-label="Filter by channel">
+            {["", ...channels].map((c) => (
+              <button
+                key={c || "all"}
+                type="button"
+                role="tab"
+                data-channel-pill={c || "all"}
+                aria-selected={channelFilter === c}
+                onClick={() => setChannelFilter(c)}
+                className="px-3 py-1.5 text-xs font-semibold"
+                style={{
+                  background: channelFilter === c ? "var(--surface-2)" : "var(--surface-1)",
+                  color: channelFilter === c ? "var(--text-primary)" : "var(--text-muted)",
+                }}
+              >
+                {c || "All"}
+              </button>
+            ))}
+          </div>
+        )}
 
         <input
           data-work-search
