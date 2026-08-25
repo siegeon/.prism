@@ -430,7 +430,8 @@ def test_wired_into_the_lifespan():
 # never learns about.
 # ---------------------------------------------------------------------------
 
-def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
+def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval(
+        monkeypatch):
     import threading
     import time as time_mod
     from prism_service.services import task_runner as tr
@@ -443,16 +444,25 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         swept.set()
         return None
 
-    tr.sweep_once = _fake_sweep_once
+    monkeypatch.setattr(tr, "sweep_once", _fake_sweep_once)
     # _wake_event is a module-level singleton shared with every real
     # task_svc.update() call in this process -- another test earlier in
     # this session may have already set it. Start from a known-clear state
     # so this test's own wake() is what's actually being observed.
     tr._wake_event.clear()
+    # A real stop signal (not a permanent sweep_once stub) -- without it
+    # this thread has no way to end, so it outlives the test and its
+    # every-wake() call to the shared, module-level sweep_once races every
+    # later test in this file (observed live: intermittent cross-test
+    # failures like a doubled flow_report call). monkeypatch restores the
+    # REAL sweep_once once this test returns, so the thread must actually
+    # be joined before then, not merely made harmless forever.
+    stop_event = threading.Event()
     try:
         # A deliberately huge interval -- if wake() didn't work, the second
         # sweep would never arrive within this test's timeout.
-        t = threading.Thread(target=tr._loop, args=(999,), daemon=True)
+        t = threading.Thread(target=tr._loop, args=(999, stop_event),
+                             daemon=True)
         t.start()
         assert swept.wait(timeout=2), "first sweep (loop entry) never ran"
         swept.clear()
@@ -466,18 +476,9 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         assert sweeps[1] - sweeps[0] < 2, (
             "second sweep took nearly as long as the interval, not a wake")
     finally:
-        # The spawned daemon thread above has no stop signal and outlives
-        # this test for the rest of the pytest PROCESS (observed live on
-        # CI: its real sweep_once() ticks interleaved into unrelated
-        # tests' captured stderr, called by every later test's wake() via
-        # the shared module-level _wake_event, causing intermittent
-        # cross-test failures like a doubled flow_report call). Restoring
-        # sweep_once to the REAL implementation here hands that leaked
-        # thread live production behavior for the rest of the session --
-        # leave it pointed at a permanent no-op instead so the immortal
-        # thread is inert. The real implementation is deliberately never
-        # restored here.
-        tr.sweep_once = lambda: None
+        stop_event.set()
+        tr.wake()  # cut the 999s wait short so the thread notices and exits
+        t.join(timeout=2)
 
 
 # ---------------------------------------------------------------------------
