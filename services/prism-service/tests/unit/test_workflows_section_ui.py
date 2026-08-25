@@ -1453,7 +1453,13 @@ def test_version_bumped_for_the_conductor_live_instance_legibility_fix():
 
 def test_selected_workflow_seeds_from_the_url_query_param():
     page = _read("pages", "WorkflowsPage.tsx")
-    assert 'import { useNavigate, useSearchParams } from "react-router-dom";' in page
+    # Re-anchored by task e14680ba (Trace tab -> own conductor flow): that slice
+    # added `Link` to this import for the back-to-task control, so the exact
+    # import line is no longer stable. The invariant is that useSearchParams is
+    # imported from react-router-dom, whatever siblings share the line.
+    rr_import = re.search(r'import \{([^}]*)\} from "react-router-dom";', page)
+    assert rr_import and "useSearchParams" in rr_import.group(1), (
+        "WorkflowsPage must import useSearchParams from react-router-dom")
     assert "const [searchParams, setSearchParams] = useSearchParams();" in page
     assert (
         'const [selectedWorkflowId, setSelectedWorkflowId] = useState(\n'
