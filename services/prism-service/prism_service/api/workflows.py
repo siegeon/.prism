@@ -468,7 +468,7 @@ def _persona_label(role_id: str) -> str:
     return role.label if role else role_id.capitalize()
 
 
-def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
+def _occupancy(project: str, step_ids: list[str], svc=None) -> dict[str, int]:
     """How many tasks are standing at each step RIGHT NOW, per project.
 
     Keyed by the FSM's own steps only, and seeded to 0 so the renderer can
@@ -484,10 +484,11 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
     cancelled). A legacy row parked at a step id the FSM no longer
     contains must not invent a node the canvas cannot draw either.
     """
-    try:
-        svc = get_project(project).task_svc
-    except Exception as exc:
-        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    if svc is None:
+        try:
+            svc = get_project(project).task_svc
+        except Exception as exc:
+            raise HTTPException(404, f"unknown project: {project}: {exc}")
 
     counts = {sid: 0 for sid in step_ids}
     db_path = getattr(svc, "_db_path", None)
@@ -520,7 +521,7 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
     return counts
 
 
-def _task_count_by_workflow(project: str, catalog_ids: list[str]) -> dict[str, int]:
+def _task_count_by_workflow(project: str, catalog_ids: list[str], svc=None) -> dict[str, int]:
     """Active (pending|in_progress|blocked) tasks bound to each catalog
     entry, joined through models.task.WORKFLOW_ALIASES (task af396b2c) --
     a task never names a catalog id directly, it names a stable
@@ -533,10 +534,11 @@ def _task_count_by_workflow(project: str, catalog_ids: list[str]) -> dict[str, i
     from prism_service.models.task import WORKFLOW_ALIASES, normalize_workflow
 
     counts = {cid: 0 for cid in catalog_ids}
-    try:
-        svc = get_project(project).task_svc
-    except Exception:
-        return counts
+    if svc is None:
+        try:
+            svc = get_project(project).task_svc
+        except Exception:
+            return counts
     for task in svc.list():
         if getattr(task, "status", "") not in ("pending", "in_progress", "blocked"):
             continue
@@ -690,7 +692,14 @@ def get_workflows(project: str = Query("default")) -> dict:
         for bid in BOT_IDS
     ]
 
-    occupancy = _occupancy(project, [s["id"] for s in steps])
+    # Resolve the project ONCE for this view: test_the_view_is_project_scoped
+    # pins exactly one get_project per request, and both occupancy and the
+    # per-workflow task_count below read the same task service.
+    try:
+        _svc = get_project(project).task_svc
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=_svc)
     conductor = {
         "id": "conductor",
         "name": "Conductor",
@@ -731,7 +740,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     catalog = [conductor, validation, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
-    _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog])
+    _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
     for entry in catalog:
         entry["task_count"] = _counts.get(entry["id"], 0)
 
