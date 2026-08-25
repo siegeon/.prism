@@ -233,6 +233,54 @@ def test_task_at_pending_gate_is_skipped(make_task, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Gate boundary regression guard (epic 3baadd19 AC-4): eligible_task must
+# skip ALL FOUR gate steps generically (not just story_gate), and even if
+# the runner's own SEAT_ID somehow reported against one, flow_report's
+# independent distinct-actor check must refuse it too. Two separate
+# defenses, both pinned across every gate id so neither can silently
+# regress on its own.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "gate_id", ["story_gate", "plan_gate", "red_gate", "green_gate"],
+)
+def test_eligible_task_skips_every_gate_step(make_task, gate_id):
+    from prism_service.services import task_runner as tr
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, workflow_step=gate_id,
+                        gate_state="pending", status="in_progress")
+
+    assert tr.eligible_task(project) is None
+
+
+@pytest.mark.parametrize(
+    "gate_id", ["story_gate", "plan_gate", "red_gate", "green_gate"],
+)
+def test_flow_report_refuses_seat_id_as_distinct_actor_on_every_gate(
+    make_task, gate_id,
+):
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as flow
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, workflow_step=gate_id,
+                        gate_state="pending", status="in_progress")
+    ctx.task_svc.link_session(task.id, tr.SEAT_ID)
+
+    result = flow.flow_report(
+        flow.Ident(task_id=task.id, session_id=tr.SEAT_ID,
+                   outcome="pass", expected_step=gate_id),
+        project=project,
+    )
+
+    assert result["ok"] is False
+    assert "distinct-actor" in result["reason"]
+    still = ctx.task_svc.get(task.id)
+    assert still.gate_state == "pending"
+
+
+# ---------------------------------------------------------------------------
 # Budget / turn ceiling passthrough
 # ---------------------------------------------------------------------------
 
