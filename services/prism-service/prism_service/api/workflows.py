@@ -673,7 +673,7 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
     return entries
 
 
-def _triage_workflow(project: str) -> dict:
+def _triage_workflow(project: str, svc=None) -> dict:
     """The triage workflow's own catalog entry (task b837bc98): a second,
     first-class entry beside conductor, built from
     models.workflow.WORKFLOWS["triage"] the same way conductor's own steps
@@ -706,7 +706,9 @@ def _triage_workflow(project: str) -> dict:
             "execution": "connected",
             "linked_workflow_id": None,
         })
-    occupancy = _occupancy(project, [s["id"] for s in steps])
+    # svc threaded from get_workflows so the view resolves the project ONCE
+    # (test_the_view_is_project_scoped pins a single get_project per request).
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
     return {
         "id": "triage",
         "name": "Triage",
@@ -804,7 +806,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     # triage (task b837bc98): a second, first-class root workflow beside
     # conductor -- not one of conductor's own nested capabilities, so it
     # gets no parent_id, same as conductor and validation above.
-    triage = _triage_workflow(project)
+    triage = _triage_workflow(project, svc=_svc)
     catalog = [conductor, validation, triage, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
