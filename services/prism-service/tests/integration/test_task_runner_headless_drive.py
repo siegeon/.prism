@@ -208,6 +208,86 @@ def test_a_starved_project_gets_its_turn_once_the_busy_one_clears(
 
 
 # ---------------------------------------------------------------------------
+# Aggregate spend ceiling (epic 3baadd19): PRISM_TASK_RUNNER_MAX_TOTAL_USD
+# bounds the runner's TOTAL spend across ticks, distinct from the existing
+# per-step PRISM_TASK_RUNNER_MAX_BUDGET_USD passthrough. Without this, an
+# unattended runner with a continuous backlog can burn unbounded real money
+# one $2 step at a time forever. The stop must be VISIBLE (a breach line
+# via _log() naming the ceiling and the accumulated total), never a task
+# that quietly stops progressing with no trace of why.
+#
+# NOTE: placed here, BEFORE test_wake_cuts_the_wait_short_instead_of_sitting_
+# out_the_interval -- that test deliberately leaves tr.sweep_once permanently
+# monkey-punched to a no-op lambda for the rest of the pytest PROCESS (see its
+# own docstring), so any test needing the REAL sweep_once must run earlier in
+# this file than that one.
+# ---------------------------------------------------------------------------
+
+def test_sweep_once_stops_once_aggregate_spend_ceiling_crossed(monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service import project_context
+
+    monkeypatch.setattr(tr, "_rr_index", 0)
+    monkeypatch.setattr(tr, "_total_spent_usd", 0.0, raising=False)
+    monkeypatch.setenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "2.5")
+    monkeypatch.setattr(project_context, "get_all_projects",
+                        lambda: ["p-only"])
+    monkeypatch.setattr(tr, "eligible_task", lambda pid: "task-x")
+
+    calls = []
+
+    def _fake_run_one_step(pid, task_id):
+        calls.append(pid)
+        return {"ok": True, "task_id": task_id, "cost_usd": 1.0}
+
+    monkeypatch.setattr(tr, "run_one_step", _fake_run_one_step)
+
+    results = [tr.sweep_once() for _ in range(4)]
+
+    assert len(calls) == 3, (
+        "3 ticks at $1.00 each (running total 1.0, 2.0, 3.0) may proceed -- "
+        "the ceiling of 2.5 is only CROSSED once the 3rd tick's spend lands, "
+        "so the 4th tick must find it already crossed and refuse to drive "
+        f"another task; got {len(calls)} driven ticks")
+    assert results[3] is not None and results[3].get("ok") is False, (
+        "the 4th tick must report a stop, not silently return as if "
+        f"nothing was eligible: {results[3]!r}")
+    assert "ceiling" in (results[3].get("reason") or "").lower(), results[3]
+
+
+def test_spend_ceiling_breach_is_logged_not_silent(monkeypatch, capsys):
+    from prism_service.services import task_runner as tr
+    from prism_service import project_context
+
+    monkeypatch.setattr(tr, "_rr_index", 0)
+    monkeypatch.setattr(tr, "_total_spent_usd", 0.0, raising=False)
+    monkeypatch.setenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "1.0")
+    monkeypatch.setattr(project_context, "get_all_projects",
+                        lambda: ["p-only"])
+    monkeypatch.setattr(tr, "eligible_task", lambda pid: "task-x")
+    monkeypatch.setattr(
+        tr, "run_one_step",
+        lambda pid, task_id: {"ok": True, "task_id": task_id,
+                              "cost_usd": 1.5})
+
+    first = tr.sweep_once()
+    assert first is not None and first.get("ok") is True, (
+        "the first tick must still be allowed to run -- the ceiling of "
+        "1.0 has not been crossed by anything YET when this tick starts")
+
+    second = tr.sweep_once()
+    assert second is not None and second.get("ok") is False, (
+        "the second tick must refuse: the first tick's $1.50 already "
+        f"crossed the $1.00 ceiling; got {second!r}")
+
+    err = capsys.readouterr().err
+    assert "1.0" in err, (
+        f"breach log must name the configured ceiling (1.0); stderr was: {err!r}")
+    assert "1.5" in err, (
+        f"breach log must name the accumulated total (1.5); stderr was: {err!r}")
+
+
+# ---------------------------------------------------------------------------
 # A task at a pending gate is SKIPPED and never gate-decided
 # ---------------------------------------------------------------------------
 
