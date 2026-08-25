@@ -334,12 +334,21 @@ def test_workflows_catalog_entries_carry_task_count(monkeypatch):
     assert by_id["validation"]["task_count"] == 0
 
 
-def test_live_workflows_endpoint_serves_task_count(project):
+def test_live_workflows_endpoint_serves_task_count(project, monkeypatch):
     from prism_service.project_context import get_project
     from prism_service.api import workflows as workflows_api
     get_project(project).task_svc.create(title="drives conductor")
 
-    client = _api_client()  # tasks router isn't needed; use workflows router
+    # _project_validation_workflow/_conductor_behavior_workflows round-trip
+    # to the (unavailable in this test env) AosWorkflows engine — stubbed
+    # exactly like test_api_workflows.py's own `_client` helper so this
+    # exercises the REAL router + REAL project task_svc for task_count
+    # without a network dependency.
+    monkeypatch.setattr(workflows_api, "_project_validation_workflow",
+                        _scripted_validation)
+    monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows",
+                        lambda project: [])
+
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     app = FastAPI()

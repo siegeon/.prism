@@ -10,7 +10,14 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from prism_service.models.task import Task, TaskHistory, validate_channel
+from prism_service.models.task import (
+    DEFAULT_WORKFLOW,
+    Task,
+    TaskHistory,
+    normalize_workflow,
+    validate_channel,
+    validate_workflow,
+)
 
 
 # Callable signature for LL-03's embedder injection. Returns packed
@@ -117,7 +124,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     plan_diagram TEXT DEFAULT '',
     premise_notes TEXT DEFAULT '',
     channel TEXT DEFAULT '',
-    channel_ref TEXT DEFAULT ''
+    channel_ref TEXT DEFAULT '',
+    workflow TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -268,6 +276,10 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     # task + an opaque origin ref. Existing rows backfill to '' (legacy).
     ("channel", "TEXT DEFAULT ''"),
     ("channel_ref", "TEXT DEFAULT ''"),
+    # Workflow provenance (task af396b2c): which PRISM workflow drives the
+    # task. Existing rows backfill to '' -- read as DEFAULT_WORKFLOW via
+    # normalize_workflow at hydration time (_row_to_task), never blank.
+    ("workflow", "TEXT DEFAULT ''"),
 ]
 
 
@@ -453,6 +465,9 @@ class TaskService:
                      and row["channel"] is not None else ""),
             channel_ref=(row["channel_ref"] if "channel_ref" in keys
                          and row["channel_ref"] is not None else ""),
+            workflow=normalize_workflow(
+                row["workflow"] if "workflow" in keys
+                and row["workflow"] is not None else ""),
         )
 
     def _record_history(
@@ -506,10 +521,14 @@ class TaskService:
         premise_notes: str = "",
         channel: str = "",
         channel_ref: str = "",
+        workflow: str = "",
     ) -> Task:
         """Create a new task and return it. Raises ValueError for a channel
-        outside models.task.CHANNELS (blank is allowed — legacy)."""
+        outside models.task.CHANNELS (blank is allowed — legacy), or a
+        workflow outside models.task.WORKFLOW_ALIASES (blank resolves to
+        DEFAULT_WORKFLOW so every newly-created task names a real driver)."""
         channel = validate_channel(channel)
+        workflow = validate_workflow(workflow) or DEFAULT_WORKFLOW
         task = Task(
             title=title,
             description=description,
@@ -532,6 +551,7 @@ class TaskService:
             premise_notes=premise_notes,
             channel=channel,
             channel_ref=channel_ref or "",
+            workflow=workflow,
         )
         self._db.execute(
             "INSERT INTO tasks "
@@ -541,8 +561,8 @@ class TaskService:
             "oracle, proof_type, completion_proof, likely_misfire, "
             "full_outcome_complete, "
             "allowed_files, verify, stop_if, plan_doc, plan_diagram, "
-            "premise_notes, channel, channel_ref) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "premise_notes, channel, channel_ref, workflow) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -571,6 +591,7 @@ class TaskService:
                 task.premise_notes,
                 task.channel,
                 task.channel_ref,
+                task.workflow,
             ),
         )
         self._db.commit()
@@ -781,7 +802,7 @@ class TaskService:
             "full_outcome_complete=?, "
             "allowed_files=?, verify=?, stop_if=?, "
             "plan_doc=?, plan_diagram=?, premise_notes=?, "
-            "channel=?, channel_ref=? "
+            "channel=?, channel_ref=?, workflow=? "
             "WHERE id=?",
             (
                 task.title,
@@ -812,6 +833,7 @@ class TaskService:
                 task.premise_notes,
                 task.channel,
                 task.channel_ref,
+                task.workflow,
                 task.id,
             ),
         )

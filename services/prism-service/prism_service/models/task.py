@@ -25,6 +25,41 @@ def validate_channel(channel: str) -> str:
     return value
 
 
+# Workflow provenance (task af396b2c): WHICH PRISM workflow drives a task.
+# api/workflows.py's GET /api/workflows builds a catalog of
+# [conductor, validation, *behaviors] (~624-710) -- a task never names a
+# catalog entry directly (conductor_service.py, a POLICY file, stays
+# untouched by this feature); it names a stable, worker-facing value that
+# MAPS to one, defined ONCE here so every entry point (REST, MCP) resolves
+# it the same way. "implement" is the only value with a real driver today
+# (the 10-step SDLC conductor loop) and maps to the catalog's "conductor"
+# entry.
+WORKFLOW_ALIASES: dict[str, str] = {"implement": "conductor"}
+DEFAULT_WORKFLOW = "implement"
+
+
+def validate_workflow(workflow: str) -> str:
+    """Return the normalized workflow name or raise ValueError for a name
+    outside WORKFLOW_ALIASES. Blank passes through unchanged -- callers
+    that want the default resolve it themselves (TaskService.create/
+    update), and a legacy row's blank column reads as DEFAULT_WORKFLOW via
+    normalize_workflow at hydration time, never here."""
+    value = (workflow or "").strip().lower()
+    if value and value not in WORKFLOW_ALIASES:
+        raise ValueError(
+            f"unknown workflow {workflow!r}; expected one of "
+            f"{', '.join(sorted(WORKFLOW_ALIASES))}"
+        )
+    return value
+
+
+def normalize_workflow(workflow: str) -> str:
+    """A persisted blank workflow column (a legacy row from before this
+    field existed, or a row written by a path that never set it) reads as
+    the default driver so nothing breaks. Never raises."""
+    return (workflow or "").strip().lower() or DEFAULT_WORKFLOW
+
+
 @dataclass
 class Task:
     """A work item tracked through the PRISM workflow."""
@@ -114,6 +149,12 @@ class Task:
     # reference — a session id, an issue URL, a message permalink.
     channel: str = ""
     channel_ref: str = ""
+    # Workflow provenance (task af396b2c): which PRISM workflow drives this
+    # task (see WORKFLOW_ALIASES above). Defaults to "implement" for a
+    # freshly-constructed Task; a persisted legacy row with a blank column
+    # normalizes to the same default at hydration time
+    # (task_service._row_to_task), never stored as blank going forward.
+    workflow: str = DEFAULT_WORKFLOW
 
     def __post_init__(self) -> None:
         if not self.id:
