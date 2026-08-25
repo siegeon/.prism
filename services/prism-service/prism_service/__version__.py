@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.48"
+PRISM_VERSION = "7.13.49"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6154,4 +6154,39 @@ PRISM_VERSION_NOTES += (
     "along; only the checker was fixed. Full suite: 3429 passed, "
     "same 8 pre-existing/environmental failures as 7.13.47, "
     "unrelated to this 2-file change."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.49: THE PARENT LINK WAS BURIED PAST THE WHOLE SDLC TRACE "
+    "[epic 3baadd19]. Owner, live remote-assist session, after being "
+    "shown a child task's page: 'i see no way to see the parent to "
+    "navigate to the parent'. Two DIFFERENT parent-link mechanisms "
+    "existed on TaskDetailPage.tsx: (1) the top breadcrumb's root "
+    "button, which only LABELLED itself \"Parent\" and navigated up "
+    "when `location.state.from` (browser navigation history) "
+    "happened to start with \"/tasks/\" -- true only if you clicked "
+    "down from the parent's own page; a task opened by direct URL, "
+    "bookmark, or refresh -- exactly how remote-assist screenshots "
+    "reach it -- showed \"Tasks\" at the top with no parent "
+    "affordance visible at all; (2) a second, REAL task.parent_id-"
+    "driven '↑ <id>' button that always worked correctly, but "
+    "lived in its own Card far down the page, past the entire SDLC "
+    "trace and the gate-decision detail panel -- invisible without "
+    "scrolling past everything else. Fixed: the breadcrumb root now "
+    "checks the task's REAL parent_id first (always correct, "
+    "independent of navigation history) and only falls back to the "
+    "old from-based logic for a genuine root task with no parent -- "
+    "so the parent link is now at the TOP of the page, always "
+    "visible, for every child task regardless of how it was opened. "
+    "The buried Card lower on the page is unchanged (harmless "
+    "redundancy, not removed). Three new source-scanning regression "
+    "tests (TaskDetailPage.tsx has no JS test runner, so UI ACs are "
+    "pinned against the actual TSX source per repo convention) pin: "
+    "the click navigates to the real parent_id, the label says "
+    "\"Parent\" whenever parent_id is set, and a true root task's "
+    "existing from-based fallback is unchanged. `tsc -b` clean, SPA "
+    "rebuilt (web_dist). Full suite: 3440 passed, same 6 pre-"
+    "existing/environmental failures (csharp-analyzer/wheel-"
+    "packaging/sqlite-WAL) as before -- the web_dist-needs-building "
+    "failures are gone this time since this release's own build step "
+    "produced a real one."
 )

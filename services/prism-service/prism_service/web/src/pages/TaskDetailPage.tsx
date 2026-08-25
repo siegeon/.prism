@@ -1652,10 +1652,27 @@ export default function TaskDetailPage() {
   return (
     <Page>
       {/* Breadcrumb — "Tasks / <short-id>"; the crumb root carries the
-          context-aware back navigation the old ← button did. */}
+          context-aware back navigation the old ← button did. When the task
+          HAS a real parent_id, the crumb always goes there and says
+          "Parent" -- previously this only happened when `from` (browser
+          navigation state) pointed at a task, so a child opened via direct
+          URL/bookmark/refresh showed "Tasks" here with no visible way up,
+          and the ONLY real parent link lived in a Card far down the page,
+          past the whole SDLC trace (owner: "i see no way to see the parent
+          to navigate to the parent"). */}
       <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
-        <button onClick={() => navigate(from)} className="hover:text-[color:var(--text-secondary)]" title={backLabel}>
-          {from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
+        <button
+          onClick={() =>
+            task?.parent_id
+              ? navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })
+              : navigate(from)
+          }
+          className="hover:text-[color:var(--text-secondary)]"
+          title={task?.parent_id ? "back to parent" : backLabel}
+        >
+          {task?.parent_id
+            ? "Parent"
+            : from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
         </button>
         <span className="opacity-50">/</span>
         <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
