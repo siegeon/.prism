@@ -863,7 +863,8 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
 
 // The Trace tab body: 4 KPI tiles + a per-session tree (session header row →
 // indented step rows). Honest empty state when the task has no agent_runs.
-function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null }) {
+function TraceView({ trace, loading, spend, taskId, project }: { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null; taskId?: string; project?: string }) {
+  const navigate = useNavigate();
   if (loading && !trace) return <Card><Empty>Loading trace…</Empty></Card>;
   if (!trace || trace.sessions.length === 0) {
     return <Card><Empty>No trace yet — this task has no recorded agent runs.</Empty></Card>;
@@ -873,6 +874,14 @@ function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading
   return (
     <div className="space-y-4">
       <SpendPanel spend={spend} />
+      {taskId && (
+        <button
+          onClick={() => navigate(`/workflows?task=${taskId}${project ? `&project=${project}` : ""}`)}
+          className="px-3 py-2 rounded-md bg-[color:var(--accent-blue-bg)] text-[color:var(--accent-blue-fg)] hover:opacity-90 text-sm font-medium"
+        >
+          Open on Workflows →
+        </button>
+      )}
       <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
         <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
         <TraceKpi label="Steps" value={String(t.steps)} />
@@ -1909,7 +1918,7 @@ export default function TaskDetailPage() {
         ))}
       </div>
 
-      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
+      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} taskId={id} project={project} />}
 
       {docTab === "evidence" && conductorOn && (
         <div id="gate-recovery" className="rounded-md border overflow-hidden mb-6" style={{ borderColor: "var(--border-default)" }}>

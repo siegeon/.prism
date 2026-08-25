@@ -281,10 +281,12 @@ function conductorTimelineFromHistory(
  * intentionally the same names the REST task shape uses (workflow_step,
  * gate_state), so no remapping is needed between this and ConductorRunTask. */
 type ConductorFreshTask = {
+  id?: string;
   title?: string;
   status?: string;
   workflow_step?: string | null;
   gate_state?: string | null;
+  stranded?: boolean;
 };
 
 export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {

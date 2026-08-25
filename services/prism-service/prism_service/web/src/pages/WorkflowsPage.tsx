@@ -994,6 +994,18 @@ export default function WorkflowsPage() {
   }, [selectedWorkflow]);
 
   useEffect(() => {
+    // AC-2: Handle task query param to open a specific task's run
+    const taskParam = searchParams.get("task");
+    if (!taskParam) return;
+
+    // Find the task in the conductor's managed tasks
+    const task = conductorManaged.tasks.find(t => t.id === taskParam);
+    if (task) {
+      openConductorInstance(task);
+    }
+  }, [searchParams, conductorManaged.tasks, openConductorInstance]);
+
+  useEffect(() => {
     // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
     // instance route that does not exist for a conductor task id, nor for
     // any conductor-linked child (they have no WorkflowCore run either).
