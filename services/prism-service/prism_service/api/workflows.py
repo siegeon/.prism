@@ -86,6 +86,41 @@ STEP_ACTIONS = {
     "green_gate": ("Green evidence and acceptance oracles", "An independent Steward decides whether the requested outcome is actually complete", "Accepted outcome or follow-up work"),
 }
 
+# "Who may decide this gate, and how to recover from a wrong decision" —
+# workflow behavior content surfaced on the Workflows page (owner 2026-08-25:
+# "prevent it with workflow behavior content", after a session spent several
+# turns explaining gate authority in chat instead of the app explaining it
+# itself). story_gate/plan_gate/red_gate are always machine-adjudicable
+# (task_runner + gate_adjudicator can decide them); green_gate additionally
+# depends on the TASK's own proof_type, which this static per-step dict
+# can't see — so its text stays generically true for both cases rather than
+# picking one. Every gate's text ends the same way: the recovery lever is
+# the "Rewind one step" control on the task's own Evidence tab, never a raw
+# API call.
+GATE_AUTHORITY = {
+    "story_gate": (
+        "Decided by an independent Steward — machine-adjudicable when the "
+        "story rubric is met, or a human owner's own Approve otherwise. "
+        "Approved in error? Use \"Rewind one step\" on the task's Evidence "
+        "tab to reopen this gate."),
+    "plan_gate": (
+        "Decided by an independent Steward — machine-adjudicable when the "
+        "plan rubric is met, or a human owner's own Approve otherwise. "
+        "Approved in error? Use \"Rewind one step\" on the task's Evidence "
+        "tab to reopen this gate."),
+    "red_gate": (
+        "Decided by an independent Steward — machine-adjudicable on a "
+        "fresh passing EvidenceReceipt. Approved in error? Use \"Rewind "
+        "one step\" on the task's Evidence tab to reopen this gate."),
+    "green_gate": (
+        "Decided by an independent Steward. Machine-adjudicable ONLY for "
+        "proof_type=test tasks with a fresh passing EvidenceReceipt — a "
+        "demo/review proof_type is human-only by standing rule and must "
+        "never be machine- or self-approved. Approved in error? Use "
+        "\"Rewind one step\" on the task's Evidence tab to reopen this "
+        "gate — a passed gate can't be Rejected, only rewound."),
+}
+
 AOS_WORKFLOWS_URL = os.environ.get("AOS_WORKFLOWS_URL", "http://127.0.0.1:5273").rstrip("/")
 
 
@@ -603,6 +638,7 @@ def get_workflows(project: str = Query("default")) -> dict:
             "input": STEP_ACTIONS[step["id"]][0],
             "action": STEP_ACTIONS[step["id"]][1],
             "output": STEP_ACTIONS[step["id"]][2],
+            "authority": GATE_AUTHORITY.get(step["id"], ""),
             "execution": "connected",
             "linked_workflow_id": (
                 "validation" if step["id"] == "verify_green_state"

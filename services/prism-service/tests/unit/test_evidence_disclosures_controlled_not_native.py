@@ -65,12 +65,19 @@ def test_disclosure_component_defaults_closed_via_real_state():
     assert "{open && children}" in body
 
 
-def test_all_three_evidence_disclosures_use_the_component():
+def test_all_evidence_disclosures_use_the_component():
+    # Task 3baadd19 (owner 2026-08-25) added a 4th: the "Recovery" section
+    # (Rewind lever) — same controlled Disclosure component, same pattern,
+    # not a native <details> regression, so the count grows rather than
+    # any prior usage being retired.
     src = _read()
-    assert src.count("<Disclosure") == 3, (
-        f"expected exactly 3 <Disclosure> usages (Acceptance criteria, "
-        f"how a pass could still be wrong, audit detail), got "
+    assert src.count("<Disclosure") == 4, (
+        f"expected exactly 4 <Disclosure> usages (Acceptance criteria, "
+        f"how a pass could still be wrong, audit detail, recovery), got "
         f"{src.count('<Disclosure')}"
     )
-    for label in ("Acceptance criteria", "how a pass could still be wrong", "audit detail (machine text)"):
+    for label in (
+        "Acceptance criteria", "how a pass could still be wrong",
+        "audit detail (machine text)", "recovery — undo a gate decided in error",
+    ):
         assert label in src, f"expected the {label!r} disclosure to survive the migration"

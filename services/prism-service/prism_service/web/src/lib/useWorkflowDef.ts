@@ -37,6 +37,9 @@ export type WorkflowStepDef = {
   input: string;
   action: string;
   output: string;
+  /** Gate steps only — who may decide it and how to recover from a wrong
+   * decision. Empty for non-gate steps. */
+  authority?: string;
   execution: "connected" | "scripted" | "definition_only";
   linked_workflow_id?: string | null;
   linked_workflow_step_count?: number;

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.50"
+PRISM_VERSION = "7.13.51"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6211,4 +6211,34 @@ PRISM_VERSION_NOTES += (
     "legitimately moved into the new helper; the ancestry-avoidance and "
     "499ba9c9-attribution invariants it pins still hold, now checked "
     "against both functions' combined source)."
+    "\n\n7.13.51: task 3baadd19, owner live: 'we need the user to be able "
+    "to intuitively recover from this state [a wrongly-approved gate], "
+    "and we should attempt to prevent it with workflow behavior content'. "
+    "Two gaps closed. (1) RECOVERY: a wrongly-approved gate had NO in-app "
+    "path back -- gate_decide only acts on gate_state 'pending'/'failed' "
+    "(a passed gate can't be Rejected), and the decision card itself only "
+    "renders while gatePanelOwnsOracle is true, so once a gate is "
+    "APPROVED the whole card disappears. The only real lever, "
+    "POST /api/conductor/rewind (audited one-step-back, requires a "
+    "reason), had no UI and no MCP tool -- raw curl only. Added a "
+    "'Recovery' disclosure to the task page's Evidence tab, gated on "
+    "conductorOn (never on gate_state) so it's there exactly when needed "
+    "-- right after a wrong approve. (2) PREVENTION: added GATE_AUTHORITY "
+    "content (api/workflows.py) naming who may decide each gate and "
+    "pointing at the Rewind lever, threaded through GET /api/workflows' "
+    "new 'authority' field and rendered as a 'Who decides this gate' note "
+    "on the Workflows page step-detail panel -- green_gate's text "
+    "explicitly calls out that demo/review proof_type is human-only and "
+    "must never be machine- or self-approved, since that's the one "
+    "authority fact this static per-step content can't otherwise see (it "
+    "varies by the TASK's own proof_type). 5 new tests (2 backend pinning "
+    "GATE_AUTHORITY content + shape, 3 frontend source-scanning pinning "
+    "the recovery control's gating/endpoint/button-disable and the "
+    "authority note's conditional render); also updated "
+    "test_evidence_disclosures_controlled_not_native.py's exact-count "
+    "assertion (3 -> 4 <Disclosure> usages -- the new Recovery section is "
+    "a genuine 4th, not a regression back to native <details>). tsc -b "
+    "clean, web_dist rebuilt, full suite: 2608 passed, same 6 pre-"
+    "existing/environmental failures (csharp-analyzer/wheel-packaging/"
+    "sqlite-WAL)."
 )

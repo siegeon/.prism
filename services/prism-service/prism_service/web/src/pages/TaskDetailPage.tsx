@@ -1101,6 +1101,16 @@ export default function TaskDetailPage() {
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
   const [gateOverride, setGateOverride] = useState(false);
+  // Recovery lever for a gate decided in error (owner 2026-08-25: "the user
+  // [must] be able to intuitively recover from this state" — a wrongly
+  // approved gate, e.g. green_gate, had NO in-app recovery path at all; the
+  // only lever was POST /api/conductor/rewind, callable via raw curl only).
+  // Always offered on the Evidence tab (never gated on gate_state, unlike
+  // the decision card above — the whole point is undoing a decision that
+  // has ALREADY been made, so gate_state is typically 'passed' by then).
+  const [rewindReason, setRewindReason] = useState("");
+  const [rewindBusy, setRewindBusy] = useState(false);
+  const [rewindResult, setRewindResult] = useState<{ kind: "ok" | "refused"; text: string } | null>(null);
   // Real signed-in identity (task 98d38111): the browser's actual approver,
   // never boilerplate reason text - forwarded into gateDecide's two wire
   // calls so a gate_decide history row resolves to a real HUMAN, not
@@ -1591,6 +1601,46 @@ export default function TaskDetailPage() {
     }
   };
 
+  // Step this task back exactly ONE workflow step and reopen that step's
+  // gate for a fresh decision — the audited recovery lever
+  // (ConductorService.rewind_task) for a gate that was decided in error.
+  // The backend itself refuses a blank reason and refuses to rewind off the
+  // first step, so this stays simple: send it, show whatever it says.
+  const doRewind = async () => {
+    if (!rewindReason.trim()) {
+      setRewindResult({ kind: "refused", text: "A reason is required to rewind (audited lever)." });
+      return;
+    }
+    setRewindBusy(true);
+    setRewindResult(null);
+    try {
+      const r = await fetch(`/api/conductor/rewind?project=${project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: id,
+          reason: rewindReason.trim(),
+          actor: approverIdentity || "owner",
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok && body.ok) {
+        setRewindResult({
+          kind: "ok",
+          text: `Rewound ${body.from_step ?? "?"} → ${body.to_step ?? "?"}. That step's gate is open for a fresh decision.`,
+        });
+        setRewindReason("");
+        load();
+      } else {
+        setRewindResult({ kind: "refused", text: body.reason || `Rewind failed (${r.status}).` });
+      }
+    } catch (e) {
+      setRewindResult({ kind: "refused", text: `Rewind failed: ${(e as Error).message ?? e}` });
+    } finally {
+      setRewindBusy(false);
+    }
+  };
+
   // Oracle "N RED" summary → drive PlanView to the Tests tab + scroll to it.
   const showTests = () => {
     setTabRequest((p) => ({ tab: "tests", n: (p?.n ?? 0) + 1 }));
@@ -1849,6 +1899,55 @@ export default function TaskDetailPage() {
       </div>
 
       {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
+
+      {docTab === "evidence" && conductorOn && (
+        <div className="rounded-md border overflow-hidden mb-4" style={{ borderColor: "var(--border-default)" }}>
+          <Disclosure
+            className="text-[12.5px]"
+            summaryClassName="w-full px-4 py-3 text-left text-2xs uppercase tracking-wider"
+            summaryStyle={{ color: "var(--text-muted)", background: "var(--surface-2)" }}
+            summary="recovery — undo a gate decided in error"
+          >
+            <div className="p-4 space-y-2.5" style={{ borderTop: "1px solid var(--border-default)" }}>
+              <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                Moves this task back exactly one workflow step (currently{" "}
+                <code className="font-mono text-2xs px-1 rounded" style={{ background: "var(--surface-1)" }}>{task.workflow_step || "—"}</code>
+                ) and reopens that step's gate — pending, ready for a fresh decision. Use this if a gate was
+                approved when it shouldn't have been (e.g. a human-only gate approved by someone other than the
+                project owner), or a drive advanced further than it should have. Audited: every rewind is
+                recorded on the task's history with your reason.
+              </div>
+              <textarea
+                value={rewindReason}
+                onChange={(e) => setRewindReason(e.target.value)}
+                placeholder="Required — why you're stepping this back (recorded on the audit trail)"
+                rows={2}
+                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
+              />
+              {rewindResult && (
+                <div
+                  className="rounded-md p-2.5 text-[12.5px] leading-relaxed"
+                  style={rewindResult.kind === "ok"
+                    ? { background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }
+                    : { background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                  role="status"
+                >
+                  {rewindResult.text}
+                </div>
+              )}
+              <button
+                type="button"
+                disabled={rewindBusy || !rewindReason.trim()}
+                onClick={doRewind}
+                className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
+                style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+              >
+                {rewindBusy ? "rewinding…" : "Rewind one step"}
+              </button>
+            </div>
+          </Disclosure>
+        </div>
+      )}
 
       {docTab === "evidence" && gatePanelOwnsOracle && (<>
 

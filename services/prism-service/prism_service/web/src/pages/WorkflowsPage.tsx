@@ -1807,6 +1807,16 @@ export default function WorkflowsPage() {
             </header>
             <div className="text-sm">
               {selectedStep && <section>
+                {selectedStep.authority && (
+                  <div
+                    role="note"
+                    aria-label="Gate authority"
+                    className="mx-4 mt-4 border border-amber-500/40 bg-amber-950/10 px-3 py-3 text-xs leading-relaxed text-amber-200/90"
+                  >
+                    <span className="mr-1 font-semibold uppercase tracking-wider text-amber-300">Who decides this gate</span>
+                    <div className="mt-1">{selectedStep.authority}</div>
+                  </div>
+                )}
                 <section aria-label="Step behavior">
                   {selectedStep.execution !== "scripted" && <div className="border border-[color:var(--border-default)] px-3 py-3 text-xs text-[color:var(--text-muted)]">{selectedStep.execution === "connected" ? "Connected to PRISM" : "Definition only"}</div>}
                   {selectedStep.execution === "scripted" && selectedStep.script_source && (
