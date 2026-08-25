@@ -175,9 +175,14 @@ def _step_token_totals(history: list, sessions: list, project: str) -> dict:
 _MIRROR_URL_RE = re.compile(r"(https://(?:github\.com|[\w.-]+\.atlassian\.net)/\S+)")
 
 
-def _mirror_url(description: str) -> str:
+def _mirror_url(description: str, channel_ref: str = "") -> str:
+    """Legacy provenance-trailer regex, plus a fallback for the channel/
+    channel_ref home the trailer text is being retired to (task fb7edc46):
+    a NEW import no longer writes "Mirrored from ..." into description, so
+    the badge must fall back to the task's own channel_ref rather than go
+    blank. Existing rows still carry the trailer and keep matching it."""
     m = _MIRROR_URL_RE.search(description or "")
-    return m.group(1) if m else ""
+    return m.group(1) if m else (channel_ref or "")
 
 
 # artifact_url (task 3c1a326b): turns the has_prototype boolean (below, and
@@ -240,7 +245,8 @@ def list_tasks(project: str = Query("default"),
             row = {}
             for f in field_list:
                 if f == "mirror_url":
-                    row[f] = _mirror_url(getattr(t, "description", "") or "")
+                    row[f] = _mirror_url(getattr(t, "description", "") or "",
+                                          getattr(t, "channel_ref", "") or "")
                 elif f == "artifact_url":
                     row[f] = _artifact_url(getattr(t, "id", ""))
                 elif f == "mirrors":
