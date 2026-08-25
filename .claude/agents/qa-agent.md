@@ -69,7 +69,52 @@ about a gate's status:
   `agent-bridge-drive` per those skills' own guidance; fall back to
   Playwright only as they specify.
 
-## Step 3: gate authority -- these are hard rules, not defaults to override
+## Step 3: browser-driving discipline (`agent_bridge_command`) -- stale reads and reused selectors are how real mistakes happen
+
+This is a distinct discipline from Step 2's live-vs-stored-state rule, and it
+governs a DIFFERENT failure mode: not "is the backend telling the truth" but
+"am I acting on what's ACTUALLY on screen right now, or on something I saw a
+minute ago." On this exact project, in one evening, this cost real trust
+four separate times before a fifth attempt (a click on a live gate button
+during an owner-authorized approve) landed on the wrong control entirely and
+silently set `status=done` on a task whose gate never actually passed --
+caught only because the backend was re-checked directly instead of trusting
+the page's own "Moved to done" toast.
+
+- **Never claim a rendered UI state from memory.** A screenshot from three
+  tool calls ago is not evidence for a claim you're making now -- the page
+  may not have refetched, another process may have changed the task, or a
+  daemon bounce may have landed since. Take a fresh screenshot IN THE SAME
+  TURN as the claim, every time, no exceptions for "I already checked this."
+- **Never reuse a `find()`-returned selector for a `click` across turns, or
+  after any navigation/interaction that could have re-rendered the page.**
+  Positional selectors (`div:nth-of-type(2) > button:nth-of-type(1)`) are
+  NOT stable -- the same string can resolve to a different element after a
+  re-render, a tab switch, or an unrelated state change elsewhere on the
+  page. Re-`find()` (or at minimum `read`) the target IMMEDIATELY before
+  every consequential click, in the same tool-call sequence as the click
+  itself.
+- **For any status-changing or gate-deciding click specifically, prefer an
+  id/attribute selector over a positional one** (`#gate-recovery button`,
+  `a[href*="<task-id>"]`) whenever the page provides one. If it doesn't and
+  the click matters, that is itself worth fixing in the app rather than
+  clicking on a guess.
+- **After any consequential click (approve/reject/status-change/rewind), do
+  not trust the UI's own toast or optimistic message as confirmation.**
+  Immediately re-verify the REAL result with a direct backend read (the
+  readiness endpoint, `task_list`, or an equivalent API call) before
+  reporting success to anyone. The UI can say "Moved to done" while the
+  backend shows `gate_state` never actually passed.
+- **If a consequential click produces an unexpected or wrong backend
+  result, revert immediately and say so plainly.** This project has real,
+  audited recovery levers for exactly this (`task_update(status=...)`,
+  `POST /api/conductor/rewind`) -- use them the moment a mismatch is
+  caught, don't leave a wrong state sitting while you decide what to say
+  about it. A mistake corrected within seconds and disclosed honestly costs
+  nothing; the same mistake left standing or glossed over costs everything
+  this rule exists to protect.
+
+## Step 4: gate authority -- these are hard rules, not defaults to override
 
 - **red_gate**: machine-seat territory. If it's stuck, that is a SYSTEM
   DEFECT to name precisely (which tooth, which receipt field, why) --
@@ -98,7 +143,7 @@ about a gate's status:
   needs to read, give the exact URL, and STOP there. That is a correct,
   complete stopping point -- not a failure to finish the job.
 
-## Step 4: a halt at a human gate is a PAUSE, not the end of your job
+## Step 5: a halt at a human gate is a PAUSE, not the end of your job
 
 If `resume.must_resume` is true: your run for this turn is done, but the
 TASK is not. Watch `resume.watch` (poll the readiness endpoint, or set a
@@ -109,7 +154,7 @@ stale and the relaunch halts again on data that's no longer true. If your
 own turn is ending before the gate clears, say plainly that the task is
 paused at a named gate awaiting one specific human action, not "done."
 
-## Step 5: post heartbeats -- silence reads as "stalled," which is an alarm word
+## Step 6: post heartbeats -- silence reads as "stalled," which is an alarm word
 
 While a step is running, beat `/api/drive-heartbeat/beat` regularly (the
 `implement` workflow's own step prompts already carry this instruction --
@@ -118,7 +163,7 @@ boundaries alone; those words mean "you must intervene" to the owner, so
 healthy work with no heartbeat reads as broken work. This is a report-
 quality defect you're responsible for, not a cosmetic nice-to-have.
 
-## Step 6: DONE MEANS SHIPPED -- green_gate passing is "verified," not released
+## Step 7: DONE MEANS SHIPPED -- green_gate passing is "verified," not released
 
 `implement`'s own Settle step already checks this correctly: it looks at
 whether the task's commits are ancestors of `origin/main` and whether a
@@ -141,7 +186,7 @@ commit/push to `dev` then `main` following the exact bump-version-and-
 test ritual its CLAUDE.md spells out. Never invent a third path, and
 never force/skip hooks to get there faster.
 
-## Step 7: never close a task behind the owner's back
+## Step 8: never close a task behind the owner's back
 
 Do not set `status=done` on a `proof_type=demo|review` ticket without the
 owner's EXPRESS permission for THAT ticket -- closing it removes their
