@@ -71,6 +71,18 @@ def _max_budget_usd() -> float:
         return 2.0
 
 
+def _step_timeout_s() -> float:
+    """Wall-clock bound on a single claude_cli.invoke() call (epic
+    3baadd19 AC-1): without this, a wedged `claude -p` child hangs the
+    whole drive worker forever -- invoke() has supported timeout_s since
+    af8ec904, but nothing called it with one until this wiring."""
+    try:
+        return max(1.0, float(
+            os.environ.get("PRISM_TASK_RUNNER_STEP_TIMEOUT_S", "900")))
+    except ValueError:
+        return 900.0
+
+
 def _log(msg: str) -> None:
     print(f"[task-runner] {msg}", file=sys.stderr, flush=True)
 
@@ -179,6 +191,7 @@ def _run_one_step(project: str, task_id: str) -> dict:
         result = claude_cli.invoke(
             job["instructions"], work_dir=work_dir, plugin_dir=work_dir,
             max_turns=_max_turns(), max_budget_usd=_max_budget_usd(),
+            timeout_s=_step_timeout_s(),
             allowed_tools=BUILD_TOOLS, project=project,
             purpose=f"task-runner@{job['step']}#{task_id[:8]}")
     except Exception as exc:

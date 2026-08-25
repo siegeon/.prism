@@ -162,6 +162,48 @@ def test_budget_and_turns_pass_through(make_task, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Step timeout passthrough (epic 3baadd19 AC-1 wiring gap): claude_cli.invoke
+# has supported timeout_s since af8ec904, but nothing called it with one --
+# a wedged `claude -p` child could still hang the drive worker forever.
+# ---------------------------------------------------------------------------
+
+def test_step_timeout_passes_through_with_env_override(make_task, monkeypatch):
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    monkeypatch.setenv("PRISM_TASK_RUNNER_STEP_TIMEOUT_S", "45")
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    tr.run_one_step(project, task.id)
+    assert calls[0]["timeout_s"] == 45.0
+
+
+def test_step_timeout_defaults_when_env_unset(make_task, monkeypatch):
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    monkeypatch.delenv("PRISM_TASK_RUNNER_STEP_TIMEOUT_S", raising=False)
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    tr.run_one_step(project, task.id)
+    assert calls[0]["timeout_s"] == 900.0
+
+
+# ---------------------------------------------------------------------------
 # A real run leaves proof in /api/claude-runs — nobody watching still
 # leaves a receipt. Fakes subprocess.run only (never claude_cli.invoke
 # itself), so the REAL record-a-run pipeline is exercised end to end.
@@ -184,7 +226,8 @@ def test_run_appears_in_claude_run_log(make_task, monkeypatch):
         '{"message":{"content":[{"type":"text","text":'
         '"## Premises\\n- ok - UNVERIFIED\\n"}]}}\n')
 
-    def _fake_run(cmd, cwd=None, env=None, stdout=None, stderr=None):
+    def _fake_run(cmd, cwd=None, env=None, stdout=None, stderr=None,
+                  timeout=None):
         stdout.write(stream_line)
 
         class _R:

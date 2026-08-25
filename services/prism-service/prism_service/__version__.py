@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.42"
+PRISM_VERSION = "7.13.43"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -5940,4 +5940,34 @@ PRISM_VERSION_NOTES += (
     "sqlite-WAL) plus 2 purely environmental ones (test_task_page_"
     "bundle.py needs `npm run build` run in this fresh worktree, "
     "untouched by any code change) remain."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.43: EPIC 3baadd19 AC-1's OWN WIRING GAP, CLOSED [task "
+    "3baadd19]. QA pass via remote assist on the epic's live green_gate "
+    "Evidence tab: it honestly showed 'AWAITING YOUR REVIEW - no "
+    "machine evidence at this tree', diff only +74/-4 across 2 files, "
+    "Visual evidence: none -- matching the task's own completion_proof, "
+    "which already admitted 'a wedged claude -p child can still hang "
+    "the drive worker forever today' because claude_cli.invoke() grew "
+    "a timeout_s parameter (af8ec904) that NOTHING called with a real "
+    "value -- task_runner.py's own invoke() call site had zero timeout "
+    "wiring. Fixed: task_runner.py now reads "
+    "PRISM_TASK_RUNNER_STEP_TIMEOUT_S (default 900s) via a new "
+    "_step_timeout_s() and passes it as timeout_s into every "
+    "claude_cli.invoke() call, so a wedged headless child no longer "
+    "hangs the drive worker's tick loop indefinitely -- the actual "
+    "production behavior the epic's oracle depends on. Two new "
+    "regression tests (test_step_timeout_passes_through_with_env_"
+    "override, test_step_timeout_defaults_when_env_unset) pin the env "
+    "override and the default. This closes finding #1 from the epic's "
+    "own completion_proof but is NOT the whole epic: AC-2 (distinct "
+    "child session identity), AC-3 (drive heartbeat), AC-4 (gate "
+    "boundary regression guard), AC-5 (aggregate spend ceiling) and "
+    "AC-6 (the epic's real oracle -- an actual captured unattended "
+    "live drive on /live) remain unbuilt. Do not read this release as "
+    "the epic being done; it only makes AC-1's own claim true in "
+    "production. Full suite: 3407 passed, same 8 pre-existing/"
+    "environmental failures as 7.13.42 (csharp-analyzer/wheel-"
+    "packaging/sqlite-WAL/unbuilt-web_dist-in-fresh-worktree), "
+    "unrelated to this 2-file change."
 )
