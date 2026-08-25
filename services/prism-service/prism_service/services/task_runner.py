@@ -72,6 +72,20 @@ def _max_budget_usd() -> float:
         return 2.0
 
 
+def _max_total_usd() -> Optional[float]:
+    """Aggregate spend ceiling across every tick this process has driven
+    (epic 3baadd19 AC-2 follow-on) -- unset/non-positive means no ceiling,
+    byte-for-byte prior behavior."""
+    raw = os.environ.get("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "")
+    if not raw.strip():
+        return None
+    try:
+        val = float(raw)
+    except ValueError:
+        return None
+    return val if val > 0 else None
+
+
 def _step_timeout_s() -> float:
     """Wall-clock bound on a single claude_cli.invoke() call (epic
     3baadd19 AC-1): without this, a wedged `claude -p` child hangs the
@@ -110,6 +124,12 @@ _IN_FLIGHT_LOCK = threading.Lock()
 # an eligible prism task sat untouched.
 _RR_LOCK = threading.Lock()
 _rr_index = 0
+
+# Running total of every driven tick's own cost_usd (run_one_step's usage
+# figure), checked against PRISM_TASK_RUNNER_MAX_TOTAL_USD before each new
+# tick is allowed to claim a task -- an unbounded runner otherwise keeps
+# spending forever once left unattended.
+_total_spent_usd = 0.0
 
 
 def _claim(task_id: str) -> bool:
@@ -262,7 +282,14 @@ def sweep_once() -> Optional[dict]:
     """
     from prism_service.project_context import get_all_projects
 
-    global _rr_index
+    global _rr_index, _total_spent_usd
+    ceiling = _max_total_usd()
+    if ceiling is not None and _total_spent_usd >= ceiling:
+        _log(f"aggregate spend ceiling {ceiling} crossed -- total spent "
+             f"{_total_spent_usd}, refusing to drive another task this tick")
+        return {"ok": False,
+                "reason": f"aggregate spend ceiling {ceiling} crossed"}
+
     projects = get_all_projects()
     if not projects:
         return None
@@ -279,6 +306,9 @@ def sweep_once() -> Optional[dict]:
         if task_id is None:
             continue
         res = run_one_step(pid, task_id)
+        cost = res.get("cost_usd") if isinstance(res, dict) else None
+        if cost:
+            _total_spent_usd += float(cost)
         _log(f"{pid}/{task_id[:8]}: {res}")
         with _RR_LOCK:
             # Next tick starts AFTER this project -- the actual round-robin
