@@ -24,7 +24,7 @@ _SERVICE_ROOT = _HERE.parent.parent.parent
 _TSX = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "pages"
        / "TaskDetailPage.tsx")
 
-_RECOVERY_MARKER = 'summary="recovery — undo a gate decided in error"'
+_RECOVERY_MARKER = 'summary="troubleshooting — recover from a gate decided in error (unrelated to the current decision below)"'
 _RECOVERY_END_MARKER = 'docTab === "evidence" && gatePanelOwnsOracle && (<>'
 
 
@@ -122,4 +122,29 @@ def test_rewind_requires_a_nonblank_reason_before_it_can_be_clicked():
     assert re.search(r"disabled=\{[^}]*!rewindReason\.trim\(\)", section), (
         "the disabled= expression must include !rewindReason.trim() so an "
         f"empty reason can't be submitted: {section}"
+    )
+
+
+def test_recovery_and_the_readiness_banner_are_visibly_separated():
+    """Owner live (2026-08-25): "i dont understand how recovery and ready
+    are sharing a space in the evidence panel" -- the Recovery Disclosure
+    and the gate-readiness banner are two unrelated, independently-gated
+    blocks (conductorOn vs. gatePanelOwnsOracle) that read as one compound
+    "collapsed header + expanded body" element with nothing marking a new
+    section start. Pins the fix: an explicit "current gate decision"
+    label sits between them, and Recovery's own summary text says plainly
+    that it's unrelated to what follows."""
+    src = _strip_comments(_read())
+    recovery_at = src.index(_RECOVERY_MARKER)
+    banner_at = src.index('className="rounded-md border px-4 py-3 text-[13px] '
+                          'leading-relaxed flex items-center gap-3 flex-wrap"',
+                          recovery_at)
+    between = src[recovery_at:banner_at]
+    assert "current gate decision" in between, (
+        "a section label must sit between the Recovery block and the "
+        f"readiness banner: {between}"
+    )
+    assert "unrelated to the current decision below" in _RECOVERY_MARKER, (
+        "Recovery's own summary text must say plainly that it is "
+        "unrelated to the gate decision that follows it"
     )

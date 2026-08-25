@@ -1901,12 +1901,12 @@ export default function TaskDetailPage() {
       {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
 
       {docTab === "evidence" && conductorOn && (
-        <div id="gate-recovery" className="rounded-md border overflow-hidden mb-4" style={{ borderColor: "var(--border-default)" }}>
+        <div id="gate-recovery" className="rounded-md border overflow-hidden mb-6" style={{ borderColor: "var(--border-default)" }}>
           <Disclosure
             className="text-[12.5px]"
             summaryClassName="w-full px-4 py-3 text-left text-2xs uppercase tracking-wider"
             summaryStyle={{ color: "var(--text-muted)", background: "var(--surface-2)" }}
-            summary="recovery — undo a gate decided in error"
+            summary="troubleshooting — recover from a gate decided in error (unrelated to the current decision below)"
           >
             <div className="p-4 space-y-2.5" style={{ borderTop: "1px solid var(--border-default)" }}>
               <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
@@ -1950,6 +1950,17 @@ export default function TaskDetailPage() {
       )}
 
       {docTab === "evidence" && gatePanelOwnsOracle && (<>
+
+      {/* SECTION LABEL (owner live, 2026-08-25: "i dont understand how
+          recovery and ready are sharing a space in the evidence panel") —
+          the Recovery disclosure right above and this banner are two
+          unrelated, independently-rendered blocks (different gating
+          conditions: conductorOn vs. gatePanelOwnsOracle) that read as one
+          compound "collapsed header + expanded body" element with nothing
+          marking a new section start. This label is that mark. */}
+      <div className="text-2xs uppercase tracking-wider mb-1.5" style={{ color: "var(--text-muted)" }}>
+        current gate decision
+      </div>
 
       {/* GATE STATUS HEADER — the severity summary that used to be a
           clickable notification banner on Overview (owner 2026-07-14).

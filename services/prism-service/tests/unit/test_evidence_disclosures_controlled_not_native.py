@@ -78,6 +78,7 @@ def test_all_evidence_disclosures_use_the_component():
     )
     for label in (
         "Acceptance criteria", "how a pass could still be wrong",
-        "audit detail (machine text)", "recovery — undo a gate decided in error",
+        "audit detail (machine text)",
+        "troubleshooting — recover from a gate decided in error",
     ):
         assert label in src, f"expected the {label!r} disclosure to survive the migration"

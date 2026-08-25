@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.53"
+PRISM_VERSION = "7.13.54"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6285,4 +6285,29 @@ PRISM_VERSION_NOTES += (
     "482ea7b8, unattended drive to plan_gate) to 3baadd19's own "
     "completion_proof, so the owner's own review is backed by current "
     "evidence, not just the original AC walkthrough."
+    "\n\n7.13.54: task 3baadd19, owner live: 'i dont understand how "
+    "recovery and ready are sharing a space in the evidence panel'. Real "
+    "layout confusion, not a misread: the Recovery Disclosure "
+    "(conductorOn-gated) and the gate-readiness banner "
+    "(gatePanelOwnsOracle-gated) are two unrelated, independently-"
+    "rendered blocks stacked directly with only a margin between them -- "
+    "no divider, no heading, and Recovery's own collapsed-header look "
+    "(muted, uppercase, small text) reads exactly like the 'collapsed "
+    "header + expanded body' pattern every OTHER Disclosure on this same "
+    "page uses (e.g. 'audit detail'), so it plausibly reads as the same "
+    "kind of compound element as the banner below it. Fixed: increased "
+    "the gap (mb-4 -> mb-6), added an explicit 'current gate decision' "
+    "section label immediately above the readiness banner, and reworded "
+    "Recovery's own summary to say outright it's 'unrelated to the "
+    "current decision below'. Also appended a fresh independent "
+    "re-verification of the epic's own oracle to its completion_proof "
+    "(qa-agent walkthrough) and fixed decision_packet.py showing a "
+    "stale, contradicting oracle receipt on this epic's own evidence "
+    "card in the same window (v7.13.53) -- re-traced epic_rollup_verdict "
+    "by hand against live data first and confirmed READY is genuinely "
+    "correct before touching anything; the deliberate, tested rule that "
+    "a demo/review epic's gate can only close on a real human click "
+    "(test_rollup_never_decides_human_gate.py, incident mx-7e03ff) was "
+    "not touched. 1 new test, 2 existing tests' pinned label text "
+    "updated to match the reworded summary."
 )
