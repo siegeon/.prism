@@ -102,6 +102,10 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/consolidation", label: "Consolidation", icon: Layers },
       { to: "/learning", label: "Learning", icon: Sparkles },
+      // The file tree the ontology grammar resolves (task 5bfdf527): what
+      // the loop's own outputs are FILED as, so it sits last — after the
+      // pipeline that produces them.
+      { to: "/files", label: "Files", icon: FolderTree },
     ],
   },
 ];
