@@ -10,7 +10,6 @@ is pure and does all the grammar work.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -18,6 +17,7 @@ from pydantic import BaseModel
 
 from prism_service.project_context import get_project
 from prism_service.services.document_tree import classify, place
+from prism_service.services import sqlite_db
 
 router = APIRouter()
 
@@ -30,7 +30,10 @@ def list_source_files(project: str) -> list[str]:
     brain_db = getattr(proj.brain_svc, "_brain_db", None)
     if not brain_db or not Path(brain_db).exists():
         return []
-    conn = sqlite3.connect(f"file:{brain_db}?mode=ro", uri=True)
+    # Through the sqlite chokepoint (services/sqlite_db) like every other
+    # site — the repo's grep-gate forbids bare sqlite3.connect. Plain SELECT
+    # only; no writes happen on this handle.
+    conn = sqlite_db.connect(brain_db)
     try:
         rows = conn.execute(
             "SELECT DISTINCT source_file FROM docs WHERE source_file IS NOT NULL"

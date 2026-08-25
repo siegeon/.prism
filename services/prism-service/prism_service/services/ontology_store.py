@@ -18,12 +18,14 @@ import sqlite3
 from typing import Any
 
 from prism_service.config import project_data_dir
+from prism_service.services import sqlite_db
 
 
 class OntologyStore:
     def __init__(self, project: str) -> None:
         self._db_path = project_data_dir(project) / "ontology.db"
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        # sqlite chokepoint (timeout + WAL + busy_timeout), never bare connect.
+        self._conn = sqlite_db.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
 

@@ -18,6 +18,7 @@ from prism_service.config import project_data_dir
 from prism_service.models.task import CHANNELS
 from prism_service.project_context import get_project
 from prism_service.services.ontology_store import OntologyStore
+from prism_service.services import sqlite_db
 
 _EXTRA_PROVIDERS = ("claude",)  # always-on, outside integrations_connect.PROVIDERS
 
@@ -25,9 +26,8 @@ _EXTRA_PROVIDERS = ("claude",)  # always-on, outside integrations_connect.PROVID
 def _connect(path: Path) -> sqlite3.Connection | None:
     if not path.exists():
         return None
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    return conn
+    # sqlite chokepoint (row_factory=Row, timeout, WAL) — never bare connect.
+    return sqlite_db.connect(path)
 
 
 def _channel_instances(project: str) -> list[str]:
