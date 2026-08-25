@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.55"
+PRISM_VERSION = "7.13.56"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6332,4 +6332,16 @@ PRISM_VERSION_NOTES += (
     "real refusal reason. 10 new tests (8 backend pinning the guard at "
     "both choke points + the pure helper, 2 frontend source-scanning "
     "pinning the honest-refusal fix). tsc -b clean, web_dist rebuilt."
+    "\n\n7.13.56: found live, retracing the exact click that caused "
+    "7.13.55's near-miss: the real Approve button's find()-returned "
+    "selector (div:nth-of-type(2) > button:nth-of-type(1)) was IDENTICAL "
+    "to the '-> done' quick-status pill's own selector. Not a fluke -- "
+    "a plain CSS query returns the FIRST document-order match, and the "
+    "status pills render earlier on the page than the gate-decision "
+    "card, so that selector was ALWAYS going to resolve to the wrong "
+    "button. Added id=\"gate-decide-approve\"/\"gate-decide-reject\" to "
+    "the real gate-decision buttons and id=\"status-transition-${target}\" "
+    "to each quick-status pill -- same fix already proven for the "
+    "Recovery control (#gate-recovery, v7.13.52). 3 new tests. tsc -b "
+    "clean, web_dist rebuilt."
 )

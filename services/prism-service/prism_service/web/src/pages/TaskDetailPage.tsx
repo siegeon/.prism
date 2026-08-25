@@ -1847,6 +1847,7 @@ export default function TaskDetailPage() {
         <div className="flex flex-wrap gap-2 shrink-0">
           {transitions.map((target) => (
             <button
+              id={`status-transition-${target}`}
               key={target}
               disabled={busy}
               onClick={() => setStatus(target)}
@@ -2357,6 +2358,7 @@ export default function TaskDetailPage() {
                 )}
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
+                    id="gate-decide-approve"
                     type="button"
                     disabled={busy || (gateVerdict !== "ready" && !isAwaitingDesignApproval && !gateOverride) || (gateOverride && !gateReason.trim())}
                     onClick={() => gateDecide("approve")}
@@ -2369,6 +2371,7 @@ export default function TaskDetailPage() {
                   </button>
                   {task.gate_state !== "failed" && (
                     <button
+                      id="gate-decide-reject"
                       type="button"
                       disabled={busy || !gateReason.trim()}
                       onClick={() => gateDecide("reject")}
