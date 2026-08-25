@@ -154,6 +154,60 @@ def test_runner_bootstraps_a_fresh_task_into_the_flow_end_to_end(
 
 
 # ---------------------------------------------------------------------------
+# Round-robin project fairness: a project that ALWAYS has an eligible task
+# (a continuous backlog) must not permanently starve every alphabetically-
+# later project of the single per-tick work slot. Observed live (epic
+# 3baadd19 AC-2, task 12403c60): "csregs-datamanagement" sorts before
+# "prism" and held every tick for the runner's entire uptime.
+# ---------------------------------------------------------------------------
+
+def test_sweep_once_rotates_starting_project_so_none_can_starve(monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service import project_context
+
+    monkeypatch.setattr(tr, "_rr_index", 0)
+    monkeypatch.setattr(project_context, "get_all_projects",
+                        lambda: ["p-alpha", "p-beta", "p-gamma"])
+    # Every project is ALWAYS eligible -- the worst case for starvation.
+    monkeypatch.setattr(tr, "eligible_task", lambda pid: f"{pid}-task")
+
+    driven = []
+    monkeypatch.setattr(tr, "run_one_step",
+                        lambda pid, task_id: driven.append(pid) or
+                        {"ok": True, "task_id": task_id})
+
+    for _ in range(4):
+        tr.sweep_once()
+
+    assert driven == ["p-alpha", "p-beta", "p-gamma", "p-alpha"], driven
+
+
+def test_a_starved_project_gets_its_turn_once_the_busy_one_clears(
+        monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service import project_context
+
+    monkeypatch.setattr(tr, "_rr_index", 0)
+    monkeypatch.setattr(project_context, "get_all_projects",
+                        lambda: ["p-busy", "p-starved"])
+    # p-busy is eligible forever; p-starved is eligible from the start too
+    # -- with NO rotation, p-busy would win on every single tick.
+    monkeypatch.setattr(
+        tr, "eligible_task",
+        lambda pid: f"{pid}-task" if pid in ("p-busy", "p-starved") else None)
+
+    driven = []
+    monkeypatch.setattr(tr, "run_one_step",
+                        lambda pid, task_id: driven.append(pid) or
+                        {"ok": True, "task_id": task_id})
+
+    tr.sweep_once()
+    tr.sweep_once()
+
+    assert "p-starved" in driven, driven
+
+
+# ---------------------------------------------------------------------------
 # A task at a pending gate is SKIPPED and never gate-decided
 # ---------------------------------------------------------------------------
 

@@ -98,6 +98,18 @@ def is_enabled() -> bool:
 _IN_FLIGHT: set[str] = set()
 _IN_FLIGHT_LOCK = threading.Lock()
 
+# Round-robin offset into get_all_projects()'s (alphabetically SORTED,
+# config.py:list_projects) result -- without this, sweep_once always
+# starts scanning from the same first project every tick, so a project
+# that always has an eligible task (a continuous backlog) permanently
+# starves every alphabetically-later project of the single per-tick work
+# slot. Observed live (epic 3baadd19 AC-2, task 12403c60): "csregs-
+# datamanagement" < "prism" sorts first, and its own continuously-
+# refilled backlog held every tick for the runner's entire uptime while
+# an eligible prism task sat untouched.
+_RR_LOCK = threading.Lock()
+_rr_index = 0
+
 
 def _claim(task_id: str) -> bool:
     with _IN_FLIGHT_LOCK:
@@ -238,13 +250,25 @@ def _run_one_step(project: str, task_id: str) -> dict:
 
 
 def sweep_once() -> Optional[dict]:
-    """One pass over every project: drive the first eligible task found
-    and stop — AT MOST one task advances per tick, bounding blast radius.
-    Returns the run_one_step result, or None when nothing was eligible.
+    """One pass over every project, starting from a ROTATING offset: drive
+    the first eligible task found and stop — AT MOST one task advances per
+    tick, bounding blast radius. The starting project rotates every tick
+    (module-level _rr_index) so no single project can monopolize the one
+    work slot forever just by sorting first and always having something
+    eligible. Returns the run_one_step result, or None when nothing was
+    eligible.
     """
     from prism_service.project_context import get_all_projects
 
-    for pid in get_all_projects():
+    global _rr_index
+    projects = get_all_projects()
+    if not projects:
+        return None
+    with _RR_LOCK:
+        start = _rr_index % len(projects)
+    ordered = projects[start:] + projects[:start]
+
+    for pid in ordered:
         try:
             task_id = eligible_task(pid)
         except Exception as exc:
@@ -254,6 +278,12 @@ def sweep_once() -> Optional[dict]:
             continue
         res = run_one_step(pid, task_id)
         _log(f"{pid}/{task_id[:8]}: {res}")
+        with _RR_LOCK:
+            # Next tick starts AFTER this project -- the actual round-robin
+            # advance. Re-index against the CURRENT `projects` list (not
+            # `ordered`) so a project add/remove between ticks can't skew
+            # the offset.
+            _rr_index = (projects.index(pid) + 1) % len(projects)
         return res
     return None
 

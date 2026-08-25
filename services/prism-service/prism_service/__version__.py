@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.44"
+PRISM_VERSION = "7.13.45"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6004,5 +6004,37 @@ PRISM_VERSION_NOTES += (
     "prior manual flow_start call, both invokes claude_cli once and "
     "leaves the task at draft_story). Full suite: 3409 passed, same "
     "8 pre-existing/environmental failures as 7.13.43, unrelated to "
+    "this 2-file change."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.45: THE DRIVE WORKER COULD STARVE AN ENTIRE PROJECT [task "
+    "3baadd19]. Live QA fallout from shipping 7.13.44 (the bootstrap "
+    "fix): task_runner.sweep_once() bootstrapped AC-2 (12403c60) into "
+    "review_previous_notes, then went quiet on it for the rest of the "
+    "runner's uptime -- `aspire logs` showed the runner exclusively "
+    "driving a DIFFERENT project's task ('csregs-datamanagement/"
+    "f610808f', review_previous_notes -> draft_story -> story_gate) "
+    "on every single tick, never touching 'prism' again. Root cause: "
+    "sweep_once() iterates `get_all_projects()` -- config.py:"
+    "list_projects() returns `sorted(...)`, plain alphabetical, EVERY "
+    "call, no rotation -- and stops at the FIRST eligible task found. "
+    "'csregs-datamanagement' < 'prism' alphabetically, so as long as "
+    "that project keeps refilling its own backlog (which it does), it "
+    "wins the single per-tick work slot forever and every "
+    "alphabetically-later project starves completely. Fixed: sweep_"
+    "once() now rotates its starting offset into the project list "
+    "(module-level _rr_index, advanced past whichever project was "
+    "just driven) so no project can permanently monopolize the slot. "
+    "Two new regression tests: test_sweep_once_rotates_starting_"
+    "project_so_none_can_starve, test_a_starved_project_gets_its_"
+    "turn_once_the_busy_one_clears (both mock get_all_projects/"
+    "eligible_task/run_one_step -- no real project data touched). "
+    "NOTE: observed live, 12403c60 in fact recovered and progressed "
+    "past this stall on its own (csregs-datamanagement's task "
+    "eventually hit its own gate, freeing a tick) BEFORE this fix "
+    "shipped -- so starvation here is bounded, not infinite, but "
+    "still a real fairness defect against a project with a "
+    "continuously-refilled backlog. Full suite: 3411 passed, same 8 "
+    "pre-existing/environmental failures as 7.13.44, unrelated to "
     "this 2-file change."
 )
