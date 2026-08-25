@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.51"
+PRISM_VERSION = "7.13.52"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6241,4 +6241,15 @@ PRISM_VERSION_NOTES += (
     "clean, web_dist rebuilt, full suite: 2608 passed, same 6 pre-"
     "existing/environmental failures (csharp-analyzer/wheel-packaging/"
     "sqlite-WAL)."
+    "\n\n7.13.52: follow-up to 7.13.51's Recovery control -- live-verified "
+    "it via remote assist right after shipping and found it genuinely "
+    "unclickable through a plain-CSS automation bridge (no :has-text, no "
+    "text= selector engine, and a positional `div > button` selector "
+    "matched ambiguously elsewhere on the page). Added a stable "
+    "id=\"gate-recovery\" to the wrapper div, matching the existing "
+    "#delivery-card pattern -- the same fix a human clicking with browser "
+    "devtools, a script, or any other agent would need. Same root lesson "
+    "as the whole point of this feature: intuitive recovery requires the "
+    "control to actually BE reachable, not just present in the DOM. 1 new "
+    "test pinning the id. tsc -b clean, web_dist rebuilt."
 )

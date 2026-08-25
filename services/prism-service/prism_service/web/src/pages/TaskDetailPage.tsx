@@ -1901,7 +1901,7 @@ export default function TaskDetailPage() {
       {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
 
       {docTab === "evidence" && conductorOn && (
-        <div className="rounded-md border overflow-hidden mb-4" style={{ borderColor: "var(--border-default)" }}>
+        <div id="gate-recovery" className="rounded-md border overflow-hidden mb-4" style={{ borderColor: "var(--border-default)" }}>
           <Disclosure
             className="text-[12.5px]"
             summaryClassName="w-full px-4 py-3 text-left text-2xs uppercase tracking-wider"

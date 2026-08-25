@@ -70,6 +70,20 @@ def test_recovery_control_is_never_gated_on_gate_state():
     )
 
 
+def test_recovery_section_has_a_stable_id_for_reliable_targeting():
+    """Discovered live (2026-08-25): a plain CSS-only bridge/automation
+    tool can't reliably target a bare `<Disclosure>` summary button by
+    text -- no :has-text, no text= engine, and a positional selector like
+    `div > button` matches ambiguously elsewhere on the page. A stable id
+    (matching the existing #delivery-card pattern) is what makes this
+    control genuinely, reliably clickable -- by a human, a script, or an
+    agent -- which is the whole point of an "intuitive recovery" control."""
+    section = _recovery_section()
+    assert 'id="gate-recovery"' in section, (
+        f"the recovery block's wrapper div must carry a stable id: {section[:300]}"
+    )
+
+
 def _do_rewind_function() -> str:
     """doRewind is defined as a function upstream of the JSX block that
     invokes it (onClick={doRewind}) -- sliced independently since the fetch
