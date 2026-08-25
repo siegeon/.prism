@@ -116,3 +116,97 @@ def classify(paths: list[str]) -> dict:
         "loose_in_root": sorted(loose_in_root),
         "date_format_breaks": sorted(date_format_breaks),
     }
+
+
+# ---------------------------------------------------------------------------
+# place() -- "Where a new artifact goes" (SKILL.md same section). A folder
+# that already exists always wins; matching is on a WHOLE hyphen-separated
+# token, never a substring. Only when nothing in the tree holds the work
+# does the grammar build <area>/<kind_of>/<date>, <area>/<about>, or
+# <area>/<date>.
+# ---------------------------------------------------------------------------
+
+def _all_folder_paths(tree_paths: list[str]) -> set[str]:
+    """Every folder path at every depth, derived the same way classify()
+    builds its tree (all prefixes of each document's containing folders)."""
+    folders: set[str] = set()
+    for p in tree_paths:
+        parts = _split(p)
+        folder_parts = parts[:-1]
+        for i in range(len(folder_parts)):
+            folders.add("/".join(folder_parts[: i + 1]))
+    return folders
+
+
+def _tokens(s: str) -> list[str]:
+    return [t.lower() for t in s.strip("/").split("-") if t]
+
+
+def _basename(path: str) -> str:
+    return path.rstrip("/").split("/")[-1]
+
+
+def _is_subsequence(needle: list[str], haystack: list[str]) -> bool:
+    n = len(needle)
+    if n == 0 or n > len(haystack):
+        return False
+    return any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+
+
+def _grammar_path(*, about: str | None, area: str | None, kind_of: str | None, date: str | None) -> str:
+    parts = []
+    if area:
+        parts.append(area)
+    if kind_of:
+        parts.append(kind_of)
+    elif about:
+        parts.append(about)
+    if date:
+        parts.append(date)
+    return "/".join(parts)
+
+
+def place(
+    tree_paths: list[str],
+    *,
+    about: str | None = None,
+    area: str | None = None,
+    kind_of: str | None = None,
+    date: str | None = None,
+) -> dict:
+    """Where a new artifact goes. Returns {"path", "reason"}.
+
+    A folder that already exists always wins. Matching for `about` is on a
+    whole hyphen-separated token of the folder's own name, never a
+    substring ("chris" finds .../1-1-chris-wiggins; "pro" never finds
+    "product"; "ps" never finds "platform-economics"). `area` narrows the
+    search to that area's subtree. Only when nothing in the tree holds the
+    work does the grammar build a path.
+    """
+    folders = _all_folder_paths(tree_paths)
+    scoped = folders
+    if area:
+        scoped = {f for f in folders if f == area or f.startswith(area + "/")}
+
+    if about:
+        about_tokens = _tokens(about)
+        exact: list[str] = []
+        partial: list[str] = []
+        for f in sorted(scoped):
+            f_tokens = _tokens(_basename(f))
+            if f_tokens == about_tokens:
+                exact.append(f)
+            elif _is_subsequence(about_tokens, f_tokens):
+                partial.append(f)
+        if exact:
+            return {"path": exact[0], "reason": "already holds this work"}
+        if partial:
+            return {"path": partial[0], "reason": "matched on the name in its folder"}
+
+    candidate = _grammar_path(about=about, area=area, kind_of=kind_of, date=date)
+    if candidate in folders:
+        return {"path": candidate, "reason": "already holds this work"}
+    return {
+        "path": candidate,
+        "reason": "nothing in the tree holds this yet; built from the grammar",
+    }

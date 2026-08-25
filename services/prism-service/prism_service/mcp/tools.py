@@ -1787,6 +1787,29 @@ TOOLS: list[Tool] = [
             "required": ["session_id", "action"],
         },
     ),
+    Tool(
+        name="documents_place",
+        description=(
+            "Where a new artifact goes, per the ontology grammar (proto "
+            "SKILL.md 'Where a new artifact goes'). An existing folder that "
+            "already holds the work always wins (name-token match, never a "
+            "substring); only when nothing in the tree holds it yet does "
+            "this build <area>/<kind_of>/<date>, <area>/<about>, or "
+            "<area>/<date> from the grammar. Ask this BEFORE writing a new "
+            "artifact so it lands beside its siblings instead of forking a "
+            "duplicate folder."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "about": {"type": "string", "description": "The named piece of work, e.g. a person or topic ('chris', 'release-stability')."},
+                "area": {"type": "string", "description": "Narrows the search to one area's subtree, e.g. 'support', 'engineering'."},
+                "kind_of": {"type": "string", "description": "A recurring series name, e.g. 'weekly-reports'."},
+                "date": {"type": "string", "description": "YYYY-MM-DD for a dated instance."},
+            },
+            "additionalProperties": False,
+        },
+    ),
 ]
 
 
@@ -1837,6 +1860,12 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "memory_invalidate",
     "agent_bridge_command",
 }
+# documents_place is intentionally NOT added here: test_mcp_tool_profiles.py
+# pins an exact count of the curated interactive surface and is outside this
+# task's allowed_files (1c122936-a36c-40e5-9e2d-d67b696b3003). It is
+# registered in TOOLS and reachable via tool_profile=all; promoting it to
+# the default interactive profile is a follow-up decision for a session that
+# can touch that test.
 # NOTE: the legacy understand_* tools are intentionally NOT in the default
 # interactive surface — they're superseded by the okf_* Understand wiki and
 # kept reachable only via tool_profile=all (plus understand_refresh/status in
@@ -4509,6 +4538,18 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             result = task_svc.next_task()
             if result is None:
                 return [TextContent(type="text", text=_json({"task": None, "reason": "No unblocked pending tasks"}))]
+            return [TextContent(type="text", text=_json(result))]
+
+        if name == "documents_place":
+            from prism_service.api.documents import list_source_files
+            from prism_service.services.document_tree import place
+            result = place(
+                list_source_files(project_id),
+                about=arguments.get("about"),
+                area=arguments.get("area"),
+                kind_of=arguments.get("kind_of"),
+                date=arguments.get("date"),
+            )
             return [TextContent(type="text", text=_json(result))]
 
         if name == "task_update":
