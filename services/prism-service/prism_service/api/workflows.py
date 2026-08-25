@@ -97,6 +97,18 @@ STEP_ACTIONS = {
 # picking one. Every gate's text ends the same way: the recovery lever is
 # the "Rewind one step" control on the task's own Evidence tab, never a raw
 # API call.
+# Triage workflow (task b837bc98): step content for the catalog entry, same
+# role STEP_ACTIONS plays for the implement/conductor steps above -- kept
+# separate since triage step ids (intake/classify/decide/done) aren't in
+# models.roles.STEP_ROLES, so this dict also stands in for that persona
+# lookup (see _triage_workflow below) rather than reaching into roles.py.
+TRIAGE_STEP_CONTENT = {
+    "intake": ("The item as it arrived on its channel", "Register the item and enter the triage flow", "A tracked item awaiting classification"),
+    "classify": ("The tracked item", "Bucket it Open, Monitoring, Resolved, or Dropped with a one-line reason", "A bucketed item and its reason"),
+    "decide": ("The classification and its reason", "The single human/owner stop — confirm or override the bucket", "A decided item"),
+    "done": ("A decided item", "Close out triage for this item", "A triaged item"),
+}
+
 GATE_AUTHORITY = {
     "story_gate": (
         "Decided by an independent Steward — machine-adjudicable when the "
@@ -529,7 +541,14 @@ def _task_count_by_workflow(project: str, catalog_ids: list[str]) -> dict[str, i
     column) normalize to DEFAULT_WORKFLOW at hydration time
     (task_service._row_to_task), so they count too. Same active-status
     filter as _occupancy above, for the same reason: a done/cancelled task
-    is not standing behind any workflow's queue."""
+    is not standing behind any workflow's queue.
+
+    task b837bc98 (triage): WORKFLOW_ALIASES only carries an entry for
+    values that need TRANSLATING to a differently-named catalog id
+    ("implement" -> "conductor"). A value that already IS its own catalog
+    id (e.g. "triage", task.workflow == the triage catalog entry's own id)
+    has no reason to appear there, so the join falls back to the
+    normalized value itself when no alias exists."""
     from prism_service.models.task import WORKFLOW_ALIASES, normalize_workflow
 
     counts = {cid: 0 for cid in catalog_ids}
@@ -544,7 +563,8 @@ def _task_count_by_workflow(project: str, catalog_ids: list[str]) -> dict[str, i
         # TaskService's own hydration (a raw dataclass, a legacy row read
         # by some OTHER path) still resolves to the default driver instead
         # of silently miscounting a blank value as "no workflow".
-        catalog_id = WORKFLOW_ALIASES.get(normalize_workflow(getattr(task, "workflow", "")))
+        normalized = normalize_workflow(getattr(task, "workflow", ""))
+        catalog_id = WORKFLOW_ALIASES.get(normalized, normalized)
         if catalog_id in counts:
             counts[catalog_id] += 1
     return counts
@@ -651,6 +671,50 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
     return entries
 
 
+def _triage_workflow(project: str) -> dict:
+    """The triage workflow's own catalog entry (task b837bc98): a second,
+    first-class entry beside conductor, built from
+    models.workflow.WORKFLOWS["triage"] the same way conductor's own steps
+    above are built from WORKFLOW_STEPS -- except persona is resolved
+    directly off each step's own `agent` (falling back to "sm", the
+    Steward, who owns intake/decide/done the same way it adjudicates every
+    gate) rather than through roles.role_for_step/STEP_ROLES, which only
+    know the implement workflow's step ids."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    steps = []
+    for step in WORKFLOWS["triage"]:
+        persona = step["agent"] or "sm"
+        content = TRIAGE_STEP_CONTENT[step["id"]]
+        steps.append({
+            "id": step["id"],
+            "agent": step["agent"],
+            "type": step["type"],
+            "validation": step["validation"],
+            "persona": persona,
+            "persona_label": _persona_label(persona),
+            "purpose": step["id"].replace("_", " ").capitalize(),
+            "input": content[0],
+            "action": content[1],
+            "output": content[2],
+            "authority": (
+                "Decided by the item's owner — the single human stop in "
+                "this triage flow." if step["id"] == "decide" else ""
+            ),
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    occupancy = _occupancy(project, [s["id"] for s in steps])
+    return {
+        "id": "triage",
+        "name": "Triage",
+        "description": "Bucket an item and stop once for the owner's decision",
+        "steps": steps,
+        "bots": [],
+        "occupancy": occupancy,
+    }
+
+
 @router.get("")
 def get_workflows(project: str = Query("default")) -> dict:
     """The conductor FSM, the bots that drive it, and who is standing where."""
@@ -728,7 +792,11 @@ def get_workflows(project: str = Query("default")) -> dict:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
             entry["parent_id"] = "conductor"
 
-    catalog = [conductor, validation, *conductor_behaviors]
+    # triage (task b837bc98): a second, first-class root workflow beside
+    # conductor -- not one of conductor's own nested capabilities, so it
+    # gets no parent_id, same as conductor and validation above.
+    triage = _triage_workflow(project)
+    catalog = [conductor, validation, triage, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog])
