@@ -452,7 +452,7 @@ def test_heartbeat_recorded_before_claude_invoke_returns(make_task, monkeypatch)
         # long-running) call returns -- a post-call beat only proves the
         # step FINISHED, not that it was working during the call.
         seen_during_call["row"] = drive_heartbeat.latest(scores_db, task.id)
-        return _FakeResult("## Story\n- ok - UNVERIFIED\n")
+        return _FakeResult("## Premises\n- ok - UNVERIFIED\n")
 
     monkeypatch.setattr(claude_cli, "invoke", _invoke)
 

@@ -48,6 +48,12 @@ _PLAN_STEPS = ("draft_story", "verify_plan")
 _PREMISE_STEP = "review_previous_notes"
 
 
+def _scores_db_for(project: str) -> str:
+    from prism_service.project_context import get_project
+
+    return str(get_project(project)._data_dir / "scores.db")
+
+
 def _interval_s() -> int:
     raw = os.environ.get("PRISM_TASK_RUNNER_INTERVAL", "")
     try:
@@ -208,6 +214,13 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 "reason": "no workspace on file for task"}
 
     from prism_service.inference import claude_cli
+    from prism_service.services import drive_heartbeat
+
+    scores_db = _scores_db_for(project)
+    drive_heartbeat.record_heartbeat(scores_db, {
+        "task_id": task_id, "step": job["step"], "elapsed_s": 0,
+        "last_tool": "claude_cli.invoke", "work_units": 1,
+    })
     try:
         result = claude_cli.invoke(
             job["instructions"], work_dir=work_dir, plugin_dir=work_dir,
