@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
@@ -1639,14 +1639,26 @@ export default function WorkflowsPage() {
             </span>
           )}
           {selectedHistoryRun ? (
-            <button
-              type="button"
-              onClick={leaveHistoricalReplay}
-              title="Historical run selected · click to return to live workflow"
-              className="rounded border border-[color:var(--accent-solid)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--accent-solid)]"
-            >
-              Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={leaveHistoricalReplay}
+                title="Historical run selected · click to return to live workflow"
+                className="rounded border border-[color:var(--accent-solid)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--accent-solid)]"
+              >
+                Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
+              </button>
+              {workflowRun?.data.conductorTask?.id && (
+                <Link
+                  to={`/tasks/${workflowRun?.data.conductorTask?.id}`}
+                  aria-label="Open task detail"
+                  title="Open this task's own detail page"
+                  className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
+                >
+                  Open task ↗
+                </Link>
+              )}
+            </>
           ) : selectedWorkflowId !== "conductor" && (
             <button
               type="button"
