@@ -3191,8 +3191,12 @@ class ConductorService:
         task = self._task_svc.get(task_id)
         if task is None:
             return {"ok": False, "task_id": task_id, "reason": "unknown task"}
-        from prism_service.models.workflow import WORKFLOW_STEPS
-        ids = [s["id"] for s in WORKFLOW_STEPS]
+        # The task's OWN sequence (task 6f22d0ad): a triage task rewinds
+        # along intake->classify->decide->done, the default along
+        # WORKFLOW_STEPS -- same per-task lookup advance_task uses.
+        from prism_service.models.task import normalize_workflow
+        steps = self._workflow_steps(normalize_workflow(getattr(task, "workflow", "")))
+        ids = [s["id"] for s in steps]
         cur = getattr(task, "workflow_step", "") or ""
         if cur not in ids:
             return {"ok": False, "task_id": task_id,
@@ -3202,7 +3206,7 @@ class ConductorService:
             return {"ok": False, "task_id": task_id,
                     "reason": "already on the first workflow step; "
                               "cannot rewind further"}
-        target = WORKFLOW_STEPS[i - 1]
+        target = steps[i - 1]
         self._task_svc.update(
             task_id, workflow_step=target["id"],
             gate_state="pending" if target.get("type") == "gate" else "none",

@@ -45,12 +45,28 @@ def validate_workflow(workflow: str) -> str:
     update), and a legacy row's blank column reads as DEFAULT_WORKFLOW via
     normalize_workflow at hydration time, never here."""
     value = (workflow or "").strip().lower()
-    if value and value not in WORKFLOW_ALIASES:
+    if value and value not in known_workflows():
         raise ValueError(
             f"unknown workflow {workflow!r}; expected one of "
-            f"{', '.join(sorted(WORKFLOW_ALIASES))}"
+            f"{', '.join(sorted(known_workflows()))}"
         )
     return value
+
+
+def known_workflows() -> set[str]:
+    """Every name a task may be bound to: the alias names (implement ->
+    conductor) plus every registered workflow in models.workflow.WORKFLOWS
+    (triage, ...). Lazy import: models.workflow.steps_for imports this
+    module, so a top-level import here would be circular. Task 6f22d0ad
+    found the validator only knew the aliases, so a triage task could be
+    walked by the conductor but never CREATED through REST/MCP."""
+    names = set(WORKFLOW_ALIASES)
+    try:
+        from prism_service.models.workflow import WORKFLOWS
+        names |= set(WORKFLOWS)
+    except Exception:  # pragma: no cover - registry import must never break create
+        pass
+    return names
 
 
 def normalize_workflow(workflow: str) -> str:

@@ -142,3 +142,30 @@ def test_default_tasks_first_transitions_are_byte_for_byte_unchanged(tmp_path):
         visited.append(result["to_step"])
 
     assert visited == expected
+
+
+# --- follow-ups the step-walk slice flagged (task 6f22d0ad, closed in the
+# same wave): a triage task must be CREATABLE through the validated paths,
+# and rewind must walk the task's own sequence, not the default one. ---
+
+def test_validate_workflow_accepts_every_registered_workflow():
+    from prism_service.models.task import validate_workflow, known_workflows
+    from prism_service.models.workflow import WORKFLOWS
+    assert set(WORKFLOWS) <= known_workflows()
+    assert validate_workflow("triage") == "triage"
+    assert validate_workflow("implement") == "implement"
+    import pytest
+    with pytest.raises(ValueError):
+        validate_workflow("nope")
+
+
+def test_rewind_walks_the_triage_sequence(tmp_path, monkeypatch):
+    from prism_service.services.task_service import TaskService
+    from prism_service.services.conductor_service import ConductorService
+    svc = TaskService(str(tmp_path / "tasks.db"))
+    t = svc.create(title="triage me", workflow="triage")
+    svc.update(t.id, workflow_step="decide", gate_state="pending")
+    cs = ConductorService(str(tmp_path / "scores.db"), enable_engine=False, task_svc=svc)
+    out = cs.rewind_task(t.id, reason="test rewind")
+    assert out.get("ok"), out
+    assert svc.get(t.id).workflow_step == "classify"
