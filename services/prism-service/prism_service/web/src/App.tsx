@@ -69,6 +69,7 @@ const SessionDetailPage = lazyRoute("session-detail", () => import("@/pages/Sess
 const RetrievalsPage = lazyRoute("retrievals", () => import("@/pages/RetrievalsPage"));
 const LearningPage = lazyRoute("learning", () => import("@/pages/LearningPage"));
 const ConsolidationPage = lazyRoute("consolidation", () => import("@/pages/ConsolidationPage"));
+const FilesPage = lazyRoute("files", () => import("@/pages/FilesPage"));
 const UnderstandPage = lazyRoute("understand", () => import("@/pages/UnderstandPage"));
 const ArtifactPage = lazyRoute("artifact", () => import("@/pages/ArtifactPage"));
 const SettingsPage = lazyRoute("settings", () => import("@/pages/SettingsPage"));
@@ -208,6 +209,7 @@ export default function App() {
             <Route path="/retrievals" element={<RetrievalsPage />} />
             <Route path="/learning" element={<LearningPage />} />
             <Route path="/consolidation" element={<ConsolidationPage />} />
+            <Route path="/files" element={<FilesPage />} />
             <Route path="/understand" element={<UnderstandPage />} />
             {/* Unified artifact surface (xref S5): the single destination a
                 resolved CODE token routes to. A ROUTE, not a nav entry. */}
