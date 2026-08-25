@@ -127,9 +127,18 @@ def test_projection_populates_from_real_rows(project):
     props = {p["name"] for p in store.list_properties()}
     assert {"calls", "imports"} <= props
 
-    axioms = store.list_axioms()
-    assert len(axioms) >= 1
-    assert all(a["state"] == "quiet" for a in axioms)
+    axioms = {a["name"]: a for a in store.list_axioms()}
+    # Superseded by task c1d0ee70: the four PROTOTYPE_AXIOMS are now
+    # EVALUATED against real rows, not seeded quiet, so this fixture's own
+    # blank-channel "legacy task" and catalog entries with no "when"
+    # phrasing legitimately read as violated. Only the arc_governance
+    # PRINCIPLE-name axioms (pre-c1d0ee70, still seeded quiet by
+    # construction) are asserted quiet here.
+    assert len(axioms) >= 5
+    principle_axioms = [a for n, a in axioms.items() if n.startswith("ARC-")]
+    assert principle_axioms
+    assert all(a["state"] == "quiet" for a in principle_axioms)
+    assert axioms["task-names-its-channel"]["state"] == "violated"
     store.close()
 
 
