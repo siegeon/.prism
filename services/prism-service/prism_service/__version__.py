@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.58"
+PRISM_VERSION = "7.13.59"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6384,4 +6384,24 @@ PRISM_VERSION_NOTES += (
     "it. CONNECTORS (64321cfe): every remote channel in CHANNELS is a "
     "card; slack/outlook read not_configured honestly. Three new sqlite "
     "opens routed through sqlite_db.connect. 60+ new tests."
+    "\n\n7.13.59: prototype dashboard wave 2 (epic d6966b43) + a build fix. "
+    "7.13.58's web bundle did not build: the ontology CSS comment in "
+    "index.css spelled out --surface-*/--border-*/ and the star-slash "
+    "ended the comment early, so Tailwind parsed prose as CSS "
+    "('Unterminated string'); tsc cannot see CSS, which is why the "
+    "typecheck passed -- the real vite build is now part of the ship "
+    "check. MIRROR (fb7edc46): a fresh GitHub/Jira import no longer "
+    "appends the 'Mirrored from ...' prose trailer -- channel/channel_ref "
+    "carry provenance; mirror_url falls back to channel_ref; the legacy "
+    "stub-backfill invariant is re-seeded directly in its test and still "
+    "holds; tags stay (task_mirror/integrations_connect read 'external'). "
+    "TRIAGE (b837bc98): models.workflow gains WORKFLOWS "
+    "{implement, triage} and steps_for(); triage = intake -> classify -> "
+    "decide (the one human stop) -> done; /api/workflows lists it as a "
+    "first-class entry with task_count. The conductor's own per-task step "
+    "walk is still the global WORKFLOW_STEPS (conductor_service.py, a "
+    "control-plane policy file) -- split out as its own policy-change "
+    "child. /api/workflows resolves the project exactly once per request "
+    "again (occupancy, triage occupancy and task_count share one "
+    "resolved service)."
 )
