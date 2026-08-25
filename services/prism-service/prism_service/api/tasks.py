@@ -16,7 +16,9 @@ from prism_service.models.workspace import Principal
 from prism_service.project_context import get_project
 from prism_service.services.actor_service import get_actor_service
 from prism_service.services.integration_store import get_integration_store
-from prism_service.services.task_service import SESSION_GATE_FIX
+from prism_service.services.task_service import (
+    DONE_BLOCKED_BY_OPEN_GATE_FIX, SESSION_GATE_FIX, is_open_gate_step,
+)
 
 router = APIRouter(dependencies=[Depends(authorize_project_request)])
 
@@ -1854,6 +1856,20 @@ def update_task(
             raise HTTPException(404, "task not found")
         if current.status != "in_progress" and not svc.sessions_for_task(task_id):
             raise HTTPException(422, SESSION_GATE_FIX)
+    # Open-gate close guard (2026-08-25, live near-miss on task 3baadd19):
+    # this quick-status PATCH used to let status=done through with zero
+    # gate awareness, silently producing a "DONE" task whose gate never
+    # actually passed. Refuse it here; the real path is a gate_decide
+    # approve, or Rewind first if the gate was decided in error.
+    if kwargs.get("status") == "done":
+        current = svc.get(task_id)
+        if current is None:
+            raise HTTPException(404, "task not found")
+        if is_open_gate_step(getattr(current, "workflow_step", ""),
+                             getattr(current, "gate_state", "")):
+            raise HTTPException(422, DONE_BLOCKED_BY_OPEN_GATE_FIX.format(
+                workflow_step=current.workflow_step,
+                gate_state=current.gate_state))
     t = svc.update(task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")

@@ -4552,6 +4552,25 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                                     "session_id) or pass session_id on this "
                                     "task_update, then retry"),
                         }))]
+            # Open-gate close guard (2026-08-25, live near-miss on task
+            # 3baadd19): status=done used to go through with zero gate
+            # awareness -- silently producing a "DONE" task whose gate
+            # never actually passed. Mirrors the REST route's identical
+            # guard (api/tasks.py update_task) via the same shared helper.
+            if arguments.get("status") == "done":
+                from prism_service.services.task_service import (
+                    DONE_BLOCKED_BY_OPEN_GATE_FIX, is_open_gate_step,
+                )
+                _cur = task_svc.get(arguments["id"])
+                if _cur is not None and is_open_gate_step(
+                        getattr(_cur, "workflow_step", ""),
+                        getattr(_cur, "gate_state", "")):
+                    return [TextContent(type="text", text=_json({
+                        "error": DONE_BLOCKED_BY_OPEN_GATE_FIX.format(
+                            workflow_step=_cur.workflow_step,
+                            gate_state=_cur.gate_state),
+                        "task_id": arguments["id"],
+                    }))]
             task = task_svc.update(arguments["id"], **update_kwargs)
             if task is None:
                 return [TextContent(type="text", text=_json({"error": f"Task {arguments['id']} not found"}))]

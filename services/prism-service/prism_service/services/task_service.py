@@ -32,6 +32,35 @@ SESSION_GATE_FIX = (
 )
 
 
+# Open-gate close guard (2026-08-25, live near-miss on task 3baadd19): the
+# plain status quick-pill (SPA REST PATCH + MCP task_update alike) let
+# status=done through with ZERO awareness of the conductor's own gate
+# state -- a single click silently produced a "DONE" task whose green_gate
+# had never actually passed, bypassing every distinct-actor/human-only
+# safeguard the gate machinery exists to enforce. The ONE real gate-decide
+# path (POST /api/conductor/gate, or the Rewind lever to undo a wrong one)
+# is unaffected; this only refuses the OTHER, ungated door.
+DONE_BLOCKED_BY_OPEN_GATE_FIX = (
+    "this task is sitting at an undecided gate ({workflow_step}, "
+    "gate_state={gate_state}) — status=done cannot be set directly while "
+    "a gate is open. Decide the gate first (POST /api/conductor/gate or "
+    "the Evidence tab's Approve/Reject), or use POST /api/conductor/rewind "
+    "if it was decided in error, then retry"
+)
+
+
+def is_open_gate_step(workflow_step: str, gate_state: str) -> bool:
+    """True when `workflow_step` is a real conductor gate step (per
+    models.workflow.WORKFLOW_STEPS) whose decision is not yet settled
+    (`gate_state` pending or failed — passed/none/anything else is not
+    "open"). Pure and importable from both the REST route and the MCP
+    tool so the two guards can never drift apart."""
+    from prism_service.models.workflow import WORKFLOW_STEPS
+
+    step = next((s for s in WORKFLOW_STEPS if s["id"] == workflow_step), None)
+    return bool(step) and step["type"] == "gate" and gate_state in ("pending", "failed")
+
+
 # The task page's GET /api/tasks/{id} embeds every TaskHistory row verbatim
 # (no pagination — see history() below), so a full-fidelity repr() of a
 # changed plan_doc/plan_diagram/description dumps BOTH the entire old and

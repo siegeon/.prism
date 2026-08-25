@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.54"
+PRISM_VERSION = "7.13.55"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6310,4 +6310,26 @@ PRISM_VERSION_NOTES += (
     "(test_rollup_never_decides_human_gate.py, incident mx-7e03ff) was "
     "not touched. 1 new test, 2 existing tests' pinned label text "
     "updated to match the reworded summary."
+    "\n\n7.13.55: closes the actual PRODUCT gap behind tonight's live "
+    "near-miss on task 3baadd19 -- an owner-authorized gate-decide click "
+    "landed on the wrong control (the task page's plain '-> done' "
+    "quick-status pill, not the real Approve button) and PATCH "
+    "status=done went through with ZERO gate awareness, silently "
+    "producing a DONE task whose green_gate had never actually passed. "
+    "Added an open-gate close guard: PATCH /api/tasks/{id} and MCP "
+    "task_update both now refuse status=done while the task sits on a "
+    "conductor gate step (type=gate) with gate_state pending/failed, "
+    "via one new shared pure helper (is_open_gate_step, "
+    "task_service.py) so the two public choke points can never drift "
+    "apart -- exactly the same shape as the existing session gate "
+    "(ef81fc15). A genuinely-passed gate (gate_state=passed) and a "
+    "non-conductor task (no workflow_step) are both untouched -- this "
+    "closes the ungated door, not the real gate_decide/Rewind paths. "
+    "Also fixed a related bug found while wiring this: the SPA's "
+    "setStatus never checked the PATCH response status at all (fetch() "
+    "only rejects on a network error) -- a refused request still fell "
+    "through to the 'Moved to done.' success toast. Now surfaces the "
+    "real refusal reason. 10 new tests (8 backend pinning the guard at "
+    "both choke points + the pure helper, 2 frontend source-scanning "
+    "pinning the honest-refusal fix). tsc -b clean, web_dist rebuilt."
 )

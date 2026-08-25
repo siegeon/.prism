@@ -1408,11 +1408,21 @@ export default function TaskDetailPage() {
   const setStatus = async (status: string) => {
     setBusy(true);
     try {
-      await fetch(`/api/tasks/${id}?project=${project}`, {
+      const r = await fetch(`/api/tasks/${id}?project=${project}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
+      // fetch() only rejects on a network error, never on a non-2xx status
+      // -- unchecked, a refused PATCH (e.g. the open-gate close guard)
+      // still fell through to "Moved to done.", a false-success toast for
+      // a status change that never actually happened (2026-08-25 live
+      // near-miss). Read the real body and surface a refusal honestly.
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        setNotice(`Not moved: ${body.detail || body.error || `HTTP ${r.status}`}`);
+        return;
+      }
       setNotice(`Moved to ${status}.`);
       load();
     } catch (e) {
