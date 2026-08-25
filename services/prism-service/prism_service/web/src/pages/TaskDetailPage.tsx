@@ -60,6 +60,9 @@ type Task = {
   blocked_reason?: string;
   dependencies?: string[];
   workflow_step?: string;
+  // Which PRISM workflow drives this task (task af396b2c). Absent only for
+  // an older service; the rail header falls back to "implement".
+  workflow?: string;
   gate_state?: string;
   gate_reason?: string;
   parent_id?: string;
@@ -2449,6 +2452,12 @@ export default function TaskDetailPage() {
         <Stagger i={0} reduced={reduced}>
         <div ref={planRef}>
         <Card>
+          {conductorOn && (
+            <div className="flex items-center gap-1.5 px-1 pb-2">
+              <span className="text-2xs uppercase tracking-wider opacity-50">Workflow</span>
+              <Lozenge tone="neutral">{task.workflow || "implement"}</Lozenge>
+            </div>
+          )}
           <PlanView
             diagram={task.plan_diagram}
             doc={task.plan_doc}

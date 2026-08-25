@@ -1131,6 +1131,7 @@ TOOLS: list[Tool] = [
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
                 "channel": {"type": "string", "description": "Where this task came from: ui|mcp|github|jira|slack|outlook|daemon. Defaults to 'mcp' on this tool; a collector relaying another channel over MCP (e.g. slack) names it here."},
                 "channel_ref": {"type": "string", "description": "Opaque origin reference for the channel — a session id, issue URL, or message permalink. Defaults to the request's session id."},
+                "workflow": {"type": "string", "description": "Which PRISM workflow drives this task. Defaults to 'implement' (the 10-step SDLC conductor loop — the only value with a driver today); validated against models.task.WORKFLOW_ALIASES, an unknown name is refused."},
             },
             "required": ["title"],
         },
@@ -1238,6 +1239,7 @@ TOOLS: list[Tool] = [
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
                 "session_id": {"type": "string", "description": "Driving session to auto-link when flipping status to in_progress. The conductor session gate (ef81fc15) refuses a sessionless in_progress transition; when omitted the active request session is resolved and linked automatically."},
+                "workflow": {"type": "string", "description": "Change which PRISM workflow drives this task. Validated against models.task.WORKFLOW_ALIASES — an unknown name is refused."},
             },
             "required": ["id"],
         },
@@ -4467,6 +4469,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 }))]
             _channel_ref = (str(arguments.get("channel_ref", "") or "").strip()
                             or _resolve_link_session_id())
+            # Workflow provenance (task af396b2c): validated BEFORE the row
+            # is inserted, same posture as channel above. Blank is left to
+            # task_svc.create's own DEFAULT_WORKFLOW resolution.
+            from prism_service.models.task import validate_workflow
+            try:
+                _workflow = validate_workflow(arguments.get("workflow", ""))
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "workflow_validation_failed", "detail": str(exc),
+                }))]
             task = task_svc.create(
                 title=arguments["title"],
                 description=arguments.get("description", ""),
@@ -4488,6 +4500,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 plan_diagram=arguments.get("plan_diagram", ""),
                 channel=_channel,
                 channel_ref=_channel_ref,
+                workflow=_workflow,
             )
             if _spec_summary is not None:
                 _out = _serialise(task)
@@ -4554,9 +4567,19 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
-            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram", "workflow"):
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
+            # Workflow validated BEFORE the write (task af396b2c) -- same
+            # posture as the REST route's PATCH handler.
+            if "workflow" in update_kwargs:
+                from prism_service.models.task import DEFAULT_WORKFLOW, validate_workflow
+                try:
+                    update_kwargs["workflow"] = validate_workflow(update_kwargs["workflow"]) or DEFAULT_WORKFLOW
+                except ValueError as exc:
+                    return [TextContent(type="text", text=_json({
+                        "error": "workflow_validation_failed", "detail": str(exc),
+                    }))]
             # Authoring-time oracle validation (task b78a193c): only when
             # this update actually TOUCHES oracle/proof_type/verify (R7) —
             # an update to an unrelated field on a task with a pre-existing

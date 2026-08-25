@@ -520,6 +520,36 @@ def _occupancy(project: str, step_ids: list[str]) -> dict[str, int]:
     return counts
 
 
+def _task_count_by_workflow(project: str, catalog_ids: list[str]) -> dict[str, int]:
+    """Active (pending|in_progress|blocked) tasks bound to each catalog
+    entry, joined through models.task.WORKFLOW_ALIASES (task af396b2c) --
+    a task never names a catalog id directly, it names a stable
+    worker-facing value (task.workflow, "implement" today) that the alias
+    map resolves to the entry that actually drives it. Legacy rows (blank
+    column) normalize to DEFAULT_WORKFLOW at hydration time
+    (task_service._row_to_task), so they count too. Same active-status
+    filter as _occupancy above, for the same reason: a done/cancelled task
+    is not standing behind any workflow's queue."""
+    from prism_service.models.task import WORKFLOW_ALIASES, normalize_workflow
+
+    counts = {cid: 0 for cid in catalog_ids}
+    try:
+        svc = get_project(project).task_svc
+    except Exception:
+        return counts
+    for task in svc.list():
+        if getattr(task, "status", "") not in ("pending", "in_progress", "blocked"):
+            continue
+        # normalize_workflow so a Task built without going through
+        # TaskService's own hydration (a raw dataclass, a legacy row read
+        # by some OTHER path) still resolves to the default driver instead
+        # of silently miscounting a blank value as "no workflow".
+        catalog_id = WORKFLOW_ALIASES.get(normalize_workflow(getattr(task, "workflow", "")))
+        if catalog_id in counts:
+            counts[catalog_id] += 1
+    return counts
+
+
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
@@ -699,6 +729,11 @@ def get_workflows(project: str = Query("default")) -> dict:
             entry["parent_id"] = "conductor"
 
     catalog = [conductor, validation, *conductor_behaviors]
+    # task_count (task af396b2c): the queue standing behind each catalog
+    # entry -- see _task_count_by_workflow's docstring for the alias join.
+    _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog])
+    for entry in catalog:
+        entry["task_count"] = _counts.get(entry["id"], 0)
 
     return {
         "steps": steps,
