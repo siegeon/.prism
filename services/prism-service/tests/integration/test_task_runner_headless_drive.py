@@ -496,3 +496,79 @@ def test_task_service_update_wakes_the_runner(make_task, monkeypatch):
         "task_service.update() must call task_runner.wake() so a task "
         "becoming eligible is swept immediately, not on the next fixed-"
         "interval tick")
+
+
+# ---------------------------------------------------------------------------
+# Drive heartbeat (epic 3baadd19 AC-3): a pre-call beat must land in
+# drive_heartbeats BEFORE claude_cli.invoke is called, so a long-running
+# child still reads as driving on /live instead of stalled/idle.
+# ---------------------------------------------------------------------------
+
+def _scores_db_for(project):
+    from prism_service.project_context import get_project
+
+    return str(get_project(project)._data_dir / "scores.db")
+
+
+def test_heartbeat_recorded_before_claude_invoke_returns(make_task, monkeypatch):
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.services import drive_heartbeat
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    scores_db = _scores_db_for(project)
+    seen_during_call = {}
+
+    def _invoke(prompt, **kwargs):
+        # The heartbeat must already be on file BEFORE this (potentially
+        # long-running) call returns -- a post-call beat only proves the
+        # step FINISHED, not that it was working during the call.
+        seen_during_call["row"] = drive_heartbeat.latest(scores_db, task.id)
+        return _FakeResult("## Premises\n- ok - UNVERIFIED\n")
+
+    monkeypatch.setattr(claude_cli, "invoke", _invoke)
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+
+    row = seen_during_call.get("row")
+    assert row is not None, (
+        "no drive_heartbeats row existed while claude_cli.invoke was "
+        "running -- the heartbeat must be posted BEFORE the call, not "
+        "only after it returns")
+    assert row["last_tool"] == "claude_cli.invoke", row
+
+
+def test_heartbeat_recorded_at_advances_across_two_ticks(make_task, monkeypatch):
+    import time
+
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.services import drive_heartbeat
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    scores_db = _scores_db_for(project)
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    tr.run_one_step(project, task.id)
+    first = drive_heartbeat.latest(scores_db, task.id)
+    assert first is not None, "first tick recorded no heartbeat at all"
+
+    time.sleep(0.01)
+    tr.run_one_step(project, task.id)
+    second = drive_heartbeat.latest(scores_db, task.id)
+    assert second is not None, "second tick recorded no heartbeat at all"
+    assert second["recorded_at"] > first["recorded_at"], (
+        "a second driven tick must advance recorded_at -- a single frozen "
+        "beat does not satisfy a driver that is genuinely still working")
