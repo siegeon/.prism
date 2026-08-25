@@ -57,8 +57,13 @@ def checkpoint_db(path: str | Path) -> bool:
     try:
         conn = sqlite_db.connect(str(p), timeout=5.0)
         try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            # PRAGMA optimize runs ANALYZE-like queries that can write to
+            # sqlite_stat tables, which re-grows the WAL — so it must run
+            # BEFORE the checkpoint, never after, or the TRUNCATE's fold
+            # gets undone by optimize's own write (measured: a 0-byte
+            # -wal after TRUNCATE grew back to 12392 bytes post-optimize).
             conn.execute("PRAGMA optimize")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             conn.close()
         return True
