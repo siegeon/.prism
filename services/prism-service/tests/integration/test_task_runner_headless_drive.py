@@ -379,7 +379,6 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         swept.set()
         return None
 
-    orig_sweep = tr.sweep_once
     tr.sweep_once = _fake_sweep_once
     # _wake_event is a module-level singleton shared with every real
     # task_svc.update() call in this process -- another test earlier in
@@ -403,7 +402,18 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         assert sweeps[1] - sweeps[0] < 2, (
             "second sweep took nearly as long as the interval, not a wake")
     finally:
-        tr.sweep_once = orig_sweep
+        # The spawned daemon thread above has no stop signal and outlives
+        # this test for the rest of the pytest PROCESS (observed live on
+        # CI: its real sweep_once() ticks interleaved into unrelated
+        # tests' captured stderr, called by every later test's wake() via
+        # the shared module-level _wake_event, causing intermittent
+        # cross-test failures like a doubled flow_report call). Restoring
+        # sweep_once to the REAL implementation here hands that leaked
+        # thread live production behavior for the rest of the session --
+        # leave it pointed at a permanent no-op instead so the immortal
+        # thread is inert. The real implementation is deliberately never
+        # restored here.
+        tr.sweep_once = lambda: None
 
 
 # ---------------------------------------------------------------------------
