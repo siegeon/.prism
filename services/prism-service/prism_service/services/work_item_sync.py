@@ -243,20 +243,27 @@ class WorkItemSyncService:
         origin = entity_input.display_key or entity_input.remote_id
         source = f"{container.display_key or container.remote_id} {origin}".strip()
         url = getattr(entity_input, "url", "") or ""
+        # Kept ONLY for the pre-4db228ec stub backfill below, which still
+        # matches on this exact string — a NEW import no longer writes it
+        # into description (task fb7edc46): channel=provider + channel_ref
+        # =url (set below) already carry the provenance, so the body alone
+        # is the description now, and mirror_url/_mirror_entry read
+        # channel_ref, not a description regex, for anything imported here.
         provenance = (f"Mirrored from {connection.provider} {source}."
                       + (f"\n{url}" if url else ""))
         body = (getattr(entity_input, "body", "") or "").strip()
-        # The real issue body leads; the mirror pointer trails as provenance
-        # so a reader can still reach the counterpart (task 4db228ec). This
-        # only ever runs on the FIRST import of a given task_id - the
+        # The real issue body IS the description now; the mirror pointer
+        # lives in channel/channel_ref, not appended prose (task fb7edc46,
+        # superseding the task 4db228ec trailer this replaced). This only
+        # ever runs on the FIRST import of a given task_id - the
         # ensure_external_intake call below is idempotent (a later pull
         # never clobbers a user-edited local row), so a re-sync neither
         # duplicates the body nor overwrites a hand-edited description.
-        description = f"{body}\n\n{provenance}" if body else provenance
+        description = body
         pre_existing = self._intake.get(task_id)
-        # Channel provenance (task b480eb15): the persisted channel is the
-        # provider and the ref is the entity's own URL — the tags + prose
-        # trailer above stay for now (a sibling task retires them).
+        # Channel provenance (task b480eb15, retired trailer task fb7edc46):
+        # the persisted channel is the provider and the ref is the entity's
+        # own URL — that alone carries provenance for new imports now.
         self._intake.ensure_external_intake(
             task_id,
             title=title,
