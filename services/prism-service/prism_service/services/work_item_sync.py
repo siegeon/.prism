@@ -254,11 +254,16 @@ class WorkItemSyncService:
         # duplicates the body nor overwrites a hand-edited description.
         description = f"{body}\n\n{provenance}" if body else provenance
         pre_existing = self._intake.get(task_id)
+        # Channel provenance (task b480eb15): the persisted channel is the
+        # provider and the ref is the entity's own URL — the tags + prose
+        # trailer above stay for now (a sibling task retires them).
         self._intake.ensure_external_intake(
             task_id,
             title=title,
             description=description,
             tags=[connection.provider, "external"],
+            channel=connection.provider,
+            channel_ref=url,
         )
         # Backfill task 82223365: a row imported BEFORE 4db228ec keeps its
         # bare mirror-pointer stub forever, because the ensure_external_intake

@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from prism_service.models.task import Task, TaskHistory
+from prism_service.models.task import Task, TaskHistory, validate_channel
 
 
 # Callable signature for LL-03's embedder injection. Returns packed
@@ -115,7 +115,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     stop_if TEXT DEFAULT '[]',
     plan_doc TEXT DEFAULT '',
     plan_diagram TEXT DEFAULT '',
-    premise_notes TEXT DEFAULT ''
+    premise_notes TEXT DEFAULT '',
+    channel TEXT DEFAULT '',
+    channel_ref TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -262,6 +264,10 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     # premise_notes (task 3928b7ac): review_previous_notes' own dedicated
     # field, decoupled from the shared completion_proof column above.
     ("premise_notes", "TEXT DEFAULT ''"),
+    # Channel provenance (task b480eb15): which entry point created the
+    # task + an opaque origin ref. Existing rows backfill to '' (legacy).
+    ("channel", "TEXT DEFAULT ''"),
+    ("channel_ref", "TEXT DEFAULT ''"),
 ]
 
 
@@ -443,6 +449,10 @@ class TaskService:
                           and row["plan_diagram"] is not None else ""),
             premise_notes=(row["premise_notes"] if "premise_notes" in keys
                            and row["premise_notes"] is not None else ""),
+            channel=(row["channel"] if "channel" in keys
+                     and row["channel"] is not None else ""),
+            channel_ref=(row["channel_ref"] if "channel_ref" in keys
+                         and row["channel_ref"] is not None else ""),
         )
 
     def _record_history(
@@ -494,8 +504,12 @@ class TaskService:
         plan_doc: str = "",
         plan_diagram: str = "",
         premise_notes: str = "",
+        channel: str = "",
+        channel_ref: str = "",
     ) -> Task:
-        """Create a new task and return it."""
+        """Create a new task and return it. Raises ValueError for a channel
+        outside models.task.CHANNELS (blank is allowed — legacy)."""
+        channel = validate_channel(channel)
         task = Task(
             title=title,
             description=description,
@@ -516,6 +530,8 @@ class TaskService:
             plan_doc=plan_doc,
             plan_diagram=plan_diagram,
             premise_notes=premise_notes,
+            channel=channel,
+            channel_ref=channel_ref or "",
         )
         self._db.execute(
             "INSERT INTO tasks "
@@ -525,8 +541,8 @@ class TaskService:
             "oracle, proof_type, completion_proof, likely_misfire, "
             "full_outcome_complete, "
             "allowed_files, verify, stop_if, plan_doc, plan_diagram, "
-            "premise_notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "premise_notes, channel, channel_ref) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -553,6 +569,8 @@ class TaskService:
                 task.plan_doc,
                 task.plan_diagram,
                 task.premise_notes,
+                task.channel,
+                task.channel_ref,
             ),
         )
         self._db.commit()
@@ -604,6 +622,8 @@ class TaskService:
         description: str = "",
         tags: Optional[list[str]] = None,
         priority: int = 0,
+        channel: str = "",
+        channel_ref: str = "",
     ) -> Optional[Task]:
         """Idempotently materialize a LOCAL pending intake task for an imported
         external work item (task fddfd75a).
@@ -618,15 +638,17 @@ class TaskService:
         existing = self.get(task_id)
         if existing is not None:
             return existing
+        channel = validate_channel(channel)
         now = datetime.now(timezone.utc).isoformat()
         # INSERT OR IGNORE (not a bare INSERT) so two concurrent same-id pulls
         # converge on one row instead of racing to an IntegrityError.
         self._db.execute(
             "INSERT OR IGNORE INTO tasks "
             "(id, title, description, status, priority, created_at, tags, "
-            "workflow_step, gate_state) "
-            "VALUES (?, ?, ?, 'pending', ?, ?, ?, '', 'none')",
-            (task_id, title, description, priority, now, json.dumps(tags or [])),
+            "workflow_step, gate_state, channel, channel_ref) "
+            "VALUES (?, ?, ?, 'pending', ?, ?, ?, '', 'none', ?, ?)",
+            (task_id, title, description, priority, now, json.dumps(tags or []),
+             channel, channel_ref or ""),
         )
         self._db.commit()
         self._record_history(task_id, "external_intake", f"title={title!r}")
@@ -758,7 +780,8 @@ class TaskService:
             "oracle=?, proof_type=?, completion_proof=?, likely_misfire=?, "
             "full_outcome_complete=?, "
             "allowed_files=?, verify=?, stop_if=?, "
-            "plan_doc=?, plan_diagram=?, premise_notes=? "
+            "plan_doc=?, plan_diagram=?, premise_notes=?, "
+            "channel=?, channel_ref=? "
             "WHERE id=?",
             (
                 task.title,
@@ -787,6 +810,8 @@ class TaskService:
                 task.plan_doc,
                 task.plan_diagram,
                 task.premise_notes,
+                task.channel,
+                task.channel_ref,
                 task.id,
             ),
         )

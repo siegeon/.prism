@@ -23,6 +23,7 @@ type Task = {
   tags?: string[];
   gate_state?: string;
   mirrors?: TaskMirror[];
+  channel?: string;         // persisted provenance (task b480eb15)
 };
 
 // One badge-worth of data per active provider link (api/tasks.py `mirrors`,
@@ -54,6 +55,10 @@ type WorkItem = {
   imported?: boolean;       // has a local intake task that can be started
   tags?: string[];          // provenance, e.g. ['github','external']
   mirrors?: TaskMirror[];   // server-derived, store-backed backlinks (0..n)
+  // The channel the row came from (ui|mcp|github|jira|slack|outlook|daemon).
+  // Native rows carry the PERSISTED task.channel; external rows render their
+  // provider so native and mirrored rows read the same way (task b480eb15).
+  channel?: string;
 };
 
 // My Work vs Team — the attention model. "mine" scopes to the signed-in
@@ -125,6 +130,7 @@ function nativeToWork(t: Task): WorkItem {
     tags: t.tags,
     mirrors: t.mirrors,
     parent_id: t.parent_id,
+    channel: t.channel,
   };
 }
 
@@ -143,6 +149,7 @@ function externalToWork(e: ExternalEntity): WorkItem {
     displayKey: e.display_key,
     restricted: !!e.restricted,
     imported: !!e.task_id,
+    channel: source,
   };
 }
 
@@ -179,7 +186,7 @@ export default function TasksPage() {
     // `description` is deliberately NOT in this set — the server derives
     // `mirrors` instead so the link-out badge(s) survive without the raw
     // body riding the board (see mirrorsOf below).
-    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors`)
+    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors,channel`)
       .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
     // The viewer identity powers My Work; failure just leaves it empty (Team
@@ -430,6 +437,7 @@ function WorkRow({ item, focused, started, onStart }: {
           ) : (
             <span className="truncate min-w-0 font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</span>
           )}
+          {item.channel && <Lozenge tone="neutral" className="shrink-0">{item.channel}</Lozenge>}
           {step && <Lozenge tone="info">{stepLabel(step)}</Lozenge>}
           {gTone && <Lozenge tone={gTone}>{`gate ${gate}`}</Lozenge>}
         </div>

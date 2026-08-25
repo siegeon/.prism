@@ -6,6 +6,24 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
+# Channel vocabulary (task b480eb15, epic d6966b43) — WHERE a task came from.
+# Defined ONCE here; every entry point (REST, MCP, mirror import) validates
+# against this tuple. Blank is allowed (legacy rows predate the field).
+CHANNELS: tuple[str, ...] = (
+    "ui", "mcp", "github", "jira", "slack", "outlook", "daemon",
+)
+
+
+def validate_channel(channel: str) -> str:
+    """Return the normalized channel or raise ValueError for an unknown one.
+    Blank passes through unchanged (legacy / not-yet-attributed rows)."""
+    value = (channel or "").strip().lower()
+    if value and value not in CHANNELS:
+        raise ValueError(
+            f"unknown channel {channel!r}; expected one of {', '.join(CHANNELS)}"
+        )
+    return value
+
 
 @dataclass
 class Task:
@@ -91,6 +109,11 @@ class Task:
     # (or fail to look like) a premise report. This field decouples the two
     # so premise_grounded can be unconditional without that collision.
     premise_notes: str = ""
+    # Channel provenance (task b480eb15): the entry point that created the
+    # task (one of CHANNELS above, '' for legacy rows) and an opaque origin
+    # reference — a session id, an issue URL, a message permalink.
+    channel: str = ""
+    channel_ref: str = ""
 
     def __post_init__(self) -> None:
         if not self.id:

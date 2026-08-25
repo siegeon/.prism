@@ -1129,6 +1129,8 @@ TOOLS: list[Tool] = [
                 "stop_if": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: conditions that HALT the slice (need files outside allowed_files, behavior ambiguous, verification fails twice)."},
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
+                "channel": {"type": "string", "description": "Where this task came from: ui|mcp|github|jira|slack|outlook|daemon. Defaults to 'mcp' on this tool; a collector relaying another channel over MCP (e.g. slack) names it here."},
+                "channel_ref": {"type": "string", "description": "Opaque origin reference for the channel — a session id, issue URL, or message permalink. Defaults to the request's session id."},
             },
             "required": ["title"],
         },
@@ -4422,6 +4424,20 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "error": "oracle_validation_failed",
                     "domain_errors": _domain_errors,
                 }))]
+            # Channel provenance (task b480eb15): a task created over MCP
+            # came from "mcp" unless the caller relays another channel;
+            # channel_ref is the request's session id (real transcript when
+            # one exists, else the MCP request handle — same lenient
+            # resolver task_link_session stamping uses).
+            from prism_service.models.task import validate_channel
+            try:
+                _channel = validate_channel(arguments.get("channel", "")) or "mcp"
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "channel_validation_failed", "detail": str(exc),
+                }))]
+            _channel_ref = (str(arguments.get("channel_ref", "") or "").strip()
+                            or _resolve_link_session_id())
             task = task_svc.create(
                 title=arguments["title"],
                 description=arguments.get("description", ""),
@@ -4441,6 +4457,8 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 stop_if=arguments.get("stop_if"),
                 plan_doc=arguments.get("plan_doc", ""),
                 plan_diagram=arguments.get("plan_diagram", ""),
+                channel=_channel,
+                channel_ref=_channel_ref,
             )
             if _spec_summary is not None:
                 _out = _serialise(task)

@@ -301,6 +301,12 @@ class TaskCreate(BaseModel):
     # enter_conductor is true so a task can never be handed to the conductor
     # without a session.
     session_id: Optional[str] = None
+    # Channel provenance (task b480eb15): WHERE this task came from. Defaults
+    # to "ui" on this route (the SPA is the REST caller); a collector posting
+    # over REST may name its own channel (models.task.CHANNELS). channel_ref
+    # defaults to the caller's session id when the body carries one.
+    channel: str = ""
+    channel_ref: str = ""
 
 
 @router.post("")
@@ -335,6 +341,13 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     )
     if domain_errors:
         raise HTTPException(422, domain_errors[0])
+    # Channel validated BEFORE the row is inserted so a refusal never
+    # orphans a task (same posture as the oracle check above).
+    from prism_service.models.task import validate_channel
+    try:
+        channel = validate_channel(body.channel) or "ui"
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     ctx = get_project(project)
     task = ctx.task_svc.create(
         title=body.title.strip(),
@@ -348,6 +361,8 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         verify=body.verify,
         allowed_files=body.allowed_files,
         stop_if=body.stop_if,
+        channel=channel,
+        channel_ref=(body.channel_ref or "").strip() or sid,
     )
     out: dict = {"task": task, "advanced": None}
     if spec_summary is not None:

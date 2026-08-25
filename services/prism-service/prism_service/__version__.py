@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.56"
+PRISM_VERSION = "7.13.57"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6344,4 +6344,18 @@ PRISM_VERSION_NOTES += (
     "to each quick-status pill -- same fix already proven for the "
     "Recovery control (#gate-recovery, v7.13.52). 3 new tests. tsc -b "
     "clean, web_dist rebuilt."
+    "\n\n7.13.57: every task records the channel it came from (task "
+    "b480eb15, walking skeleton for epic d6966b43). Two persisted Task "
+    "fields, `channel` (ui|mcp|github|jira|slack|outlook|daemon, defined "
+    "ONCE as models.task.CHANNELS) and `channel_ref` (opaque origin: "
+    "session id / issue URL / permalink), migrated in via _LL_TASK_COLUMNS "
+    "so legacy rows read blank. Stamped at the three entry points that "
+    "exist today: POST /api/tasks -> ui (+ the caller's session id), MCP "
+    "task_create -> mcp (+ the request session id), work_item_sync import "
+    "-> the provider (+ the entity url). Callers may name another channel "
+    "explicitly; an unknown one is refused (400 / ValueError) before the "
+    "row exists. Work board requests `channel` in its projection and "
+    "renders a neutral Lozenge chip after the title; external rows show "
+    "their provider so native and mirrored rows read the same way. 19 "
+    "new tests (test_task_channel_provenance.py)."
 )
