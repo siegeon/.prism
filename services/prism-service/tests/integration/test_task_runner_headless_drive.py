@@ -352,6 +352,73 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         tr.sweep_once = orig_sweep
 
 
+# ---------------------------------------------------------------------------
+# Per-run session identity (task 12403c60, epic 3baadd19 AC-2): a runner-
+# driven claude -p child must run under its own fresh session id, distinct
+# from the constant SEAT_ID that gate reports keep using for distinct-actor
+# identity -- otherwise every worker-driven step across every task collapses
+# onto one indistinguishable identity on /live.
+# ---------------------------------------------------------------------------
+
+def test_run_one_step_passes_a_fresh_uuid_session_id_distinct_from_seat_id(
+        make_task, monkeypatch):
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+
+    session_id = calls[0].get("session_id")
+    assert session_id, "claude_cli.invoke must receive a non-empty session_id"
+    uuid.UUID(session_id)  # raises ValueError if not a real UUID
+    assert session_id != tr.SEAT_ID, (
+        "the per-run session id must not collapse onto the constant "
+        "gate-report seat identity")
+
+
+def test_run_one_step_keeps_seat_id_as_the_gate_report_identity(
+        make_task, monkeypatch):
+    """AC-4: the new per-run session id must be confined to the
+    claude_cli.invoke call site -- flow.Ident/flow_report (the gate-report
+    distinct-actor identity) must still carry SEAT_ID, unchanged."""
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    reported = []
+    orig_flow_report = cf.flow_report
+
+    def _spy_flow_report(body, project="default"):
+        reported.append(body.session_id)
+        return orig_flow_report(body, project=project)
+
+    monkeypatch.setattr(cf, "flow_report", _spy_flow_report)
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+
+    assert reported == [tr.SEAT_ID], (
+        "flow_report's session_id must stay SEAT_ID even though "
+        "claude_cli.invoke now receives a distinct per-run session id")
+
+
 def test_task_service_update_wakes_the_runner(make_task, monkeypatch):
     from prism_service.services import task_runner as tr
 
