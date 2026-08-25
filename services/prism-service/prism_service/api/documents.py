@@ -14,14 +14,15 @@ import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from prism_service.project_context import get_project
-from prism_service.services.document_tree import classify
+from prism_service.services.document_tree import classify, place
 
 router = APIRouter()
 
 
-def _source_files(project: str) -> list[str]:
+def list_source_files(project: str) -> list[str]:
     try:
         proj = get_project(project)
     except Exception as exc:
@@ -41,4 +42,22 @@ def _source_files(project: str) -> list[str]:
 
 @router.get("")
 def get_documents(project: str = Query("default")) -> dict:
-    return classify(_source_files(project))
+    return classify(list_source_files(project))
+
+
+class PlaceRequest(BaseModel):
+    about: str | None = None
+    area: str | None = None
+    kind_of: str | None = None
+    date: str | None = None
+
+
+@router.post("/place")
+def post_place(body: PlaceRequest, project: str = Query("default")) -> dict:
+    return place(
+        list_source_files(project),
+        about=body.about,
+        area=body.area,
+        kind_of=body.kind_of,
+        date=body.date,
+    )
