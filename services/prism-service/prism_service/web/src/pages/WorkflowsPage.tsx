@@ -999,11 +999,11 @@ export default function WorkflowsPage() {
     if (!taskParam) return;
 
     // Find the task in the conductor's managed tasks
-    const task = conductorManaged.tasks.find(t => t.id === taskParam);
+    const task = conductorManaged.find((t: ManagedTask) => t.id === taskParam);
     if (task) {
       openConductorInstance(task);
     }
-  }, [searchParams, conductorManaged.tasks, openConductorInstance]);
+  }, [searchParams, conductorManaged, openConductorInstance]);
 
   useEffect(() => {
     // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
