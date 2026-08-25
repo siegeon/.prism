@@ -34,6 +34,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from typing import Optional
 
 DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
@@ -227,7 +228,8 @@ def _run_one_step(project: str, task_id: str) -> dict:
             max_turns=_max_turns(), max_budget_usd=_max_budget_usd(),
             timeout_s=_step_timeout_s(),
             allowed_tools=BUILD_TOOLS, project=project,
-            purpose=f"task-runner@{job['step']}#{task_id[:8]}")
+            purpose=f"task-runner@{job['step']}#{task_id[:8]}",
+            session_id=str(uuid.uuid4()))
     except Exception as exc:
         return {"ok": False, "task_id": task_id, "step": job["step"],
                 "reason": f"claude_cli invocation failed: {exc}"}

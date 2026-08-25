@@ -238,6 +238,56 @@ def test_invoke_returns_timeout_marked_result_instead_of_raising(tmp_path):
     assert res.exit_code != 0
 
 
+def test_build_cmd_appends_session_id_flag_when_given():
+    """AC-1 (task 12403c60): _build_cmd must append --session-id <value>
+    to the built argv when session_id is passed non-empty, so a runner-
+    driven claude -p child can be attributed its own identity on /live."""
+    cmd = claude_cli._build_cmd(
+        "hello", "/plugin/dir", model="", max_budget_usd=0.0, max_turns=3,
+        session_id="x",
+    )
+    assert "--session-id" in cmd
+    idx = cmd.index("--session-id")
+    assert cmd[idx + 1] == "x"
+
+
+def test_build_cmd_omits_session_id_flag_when_not_given():
+    """AC-1 negative case: an empty/default session_id must never emit
+    the flag at all (never a bare --session-id or an empty-string value)."""
+    cmd = claude_cli._build_cmd(
+        "hello", "/plugin/dir", model="", max_budget_usd=0.0, max_turns=3,
+    )
+    assert "--session-id" not in cmd
+
+    cmd_empty = claude_cli._build_cmd(
+        "hello", "/plugin/dir", model="", max_budget_usd=0.0, max_turns=3,
+        session_id="",
+    )
+    assert "--session-id" not in cmd_empty
+
+
+def test_invoke_passes_session_id_through_to_build_cmd(tmp_path):
+    """AC-2 (task 12403c60): invoke() must accept session_id and thread it
+    through to _build_cmd unchanged -- no default substitution, no reuse
+    of SEAT_ID or any other constant -- so the flag reaches the real
+    subprocess argv, not just the Python call."""
+    captured = {}
+
+    def fake_run(cmd, cwd, env, stdout, stderr, **kwargs):
+        captured["cmd"] = cmd
+        return _completed(exit_code=0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        claude_cli.invoke(
+            "hi", tmp_path, tmp_path, max_turns=1, parse_events=False,
+            session_id="x",
+        )
+
+    assert "--session-id" in captured["cmd"]
+    idx = captured["cmd"].index("--session-id")
+    assert captured["cmd"][idx + 1] == "x"
+
+
 def test_invoke_leaves_structured_output_none_without_a_schema(tmp_path):
     """No json_schema passed -> never even LOOK for the field, even if a
     result event happens to carry one (a plain call shouldn't silently

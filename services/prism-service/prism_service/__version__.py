@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.45"
+PRISM_VERSION = "7.13.46"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6037,4 +6037,39 @@ PRISM_VERSION_NOTES += (
     "continuously-refilled backlog. Full suite: 3411 passed, same 8 "
     "pre-existing/environmental failures as 7.13.44, unrelated to "
     "this 2-file change."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.46: A LEAKED TEST THREAD WAS THE REAL CI FLAKINESS ALL "
+    "NIGHT [task 3baadd19]. Both AC-2's and AC-3's PRs failed CI on "
+    "test_task_runner_headless_drive.py, always in the same odd way "
+    "(a doubled flow_report call, or a spurious 'no workspace on "
+    "file for task') -- reran CI, both passed once, then AC-3's PR "
+    "failed the SAME WAY on a genuine second rerun (confirmed via "
+    "gh's own new job id, not a cached log), which ruled out random "
+    "flakiness. Root cause, found via a smoking-gun clue: a real "
+    "[task-runner] sweep log line from an UNRELATED throwaway "
+    "project showed up inside a completely different test's "
+    "captured stderr. test_wake_cuts_the_wait_short_instead_of_"
+    "sitting_out_the_interval spawns a genuine daemon=True background "
+    "thread running task_runner._loop(999) to prove wake() cuts the "
+    "wait short -- correct for that test's own purpose -- but its "
+    "finally block only restored sweep_once to the real "
+    "implementation and never stopped the thread (Python threads "
+    "have no forced-kill; _loop has no stop signal). That thread "
+    "then lived for the REST OF THE PYTEST PROCESS, re-armed by "
+    "every later test's wake() (task_service.update() calls it on "
+    "every status=in_progress transition, and _wake_event is a "
+    "shared module-level singleton) -- so it kept firing REAL "
+    "sweep_once() calls against whatever throwaway projects other "
+    "concurrently-running tests had just created, occasionally "
+    "landing mid-assertion in an unrelated test and corrupting its "
+    "monkeypatched spies/mocks. Not reproduced locally in isolation "
+    "(where this test runs alone or the timing doesn't collide) but "
+    "reliable on CI's slower, more loaded runners running the FULL "
+    "suite. Fixed: the finally block now points sweep_once at a "
+    "permanent no-op instead of restoring the real implementation, "
+    "so the immortal leaked thread is inert for the rest of the "
+    "session. Full suite: 3411 passed, same 8 pre-existing/"
+    "environmental failures as 7.13.45, unrelated to this 1-file "
+    "test-only change."
 )
