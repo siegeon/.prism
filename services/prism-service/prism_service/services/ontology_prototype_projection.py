@@ -3,9 +3,12 @@
 
 Populates OntologyStore from REAL PRISM rows -- the mx-2d14b0 mapping:
 graph entity kinds -> classes, graph rows -> instances, graph edge kinds ->
-properties, arc_governance principle names -> axioms. Walking skeleton only
-(owner 2026-08-25) -- axiom VIOLATION detection is sibling task c1d0ee70;
-every axiom here is seeded 'quiet'.
+properties, arc_governance principle names -> axioms. Walking skeleton
+(owner 2026-08-25). Axiom VIOLATION detection (task c1d0ee70) is now
+wired: arc_governance principle names stay quiet axioms by construction,
+and PROTOTYPE_AXIOMS (arc_governance.evaluate_axioms) are EVALUATED
+against real task/document/catalog rows each rebuild, so a real violation
+persists as state='violated' with the offending row named in `detail`.
 """
 
 from __future__ import annotations
@@ -83,6 +86,37 @@ def _document_paths(project: str) -> list[str]:
         return sorted({r[0] for r in rows if r[0]})
     finally:
         conn.close()
+
+
+def _task_rows(project: str) -> list[dict]:
+    """Task rows (id/title/channel) for the task-names-its-channel axiom
+    (c1d0ee70) — real rows, never fabricated."""
+    ctx = get_project(project)
+    return [{"id": t.id, "title": t.title, "channel": t.channel}
+            for t in ctx.task_svc.list()]
+
+
+def _catalog_entries(project: str) -> list[dict]:
+    """Workflow/behavior catalog entries -> {id, description} for the
+    skill-description-says-when axiom (c1d0ee70). Same real-data-first,
+    network-free-fallback shape as _agent_instances above: the live
+    /api/workflows catalog's own entries carry a real 'description'; if
+    that call fails (no AosWorkflows engine reachable), fall back to
+    WORKFLOW_STEPS' own STEP_ACTIONS action text — still real doctrine,
+    never fabricated for this axiom."""
+    try:
+        from prism_service.api.workflows import get_workflows
+        catalog = get_workflows(project=project)
+        entries = [{"id": w["id"], "description": w.get("description", "")}
+                   for w in catalog.get("workflows", []) if w.get("id")]
+        if entries:
+            return entries
+    except Exception:
+        pass
+    from prism_service.api.workflows import STEP_ACTIONS
+    from prism_service.models.workflow import WORKFLOW_STEPS
+    return [{"id": s["id"], "description": STEP_ACTIONS.get(s["id"], ("", "", ""))[1]}
+            for s in WORKFLOW_STEPS]
 
 
 def _axiom_names(project: str) -> list[str]:
@@ -194,6 +228,22 @@ def rebuild(project: str) -> dict:
         axioms.append({
             "id": f"axiom::{name}", "name": name,
             "description": "", "state": "quiet", "detail": "",
+        })
+
+    # Prototype rule axioms (c1d0ee70): EVALUATED, not seeded quiet — a
+    # real violation lights the Understand view's --alarm state.
+    from prism_service.services.arc_governance import evaluate_axioms
+
+    context = {
+        "tasks": _task_rows(project),
+        "document_paths": docs,
+        "catalog_entries": _catalog_entries(project),
+    }
+    for axiom in evaluate_axioms(context):
+        axioms.append({
+            "id": f"axiom::{axiom['name']}", "name": axiom["name"],
+            "description": axiom["description"], "state": axiom["state"],
+            "detail": axiom["detail"],
         })
 
     store = OntologyStore(project)
