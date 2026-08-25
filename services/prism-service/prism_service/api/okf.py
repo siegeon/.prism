@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from prism_service.project_context import get_project
+from prism_service.services import ontology_prototype_projection
 from prism_service.services.okf_host import OkfHost
+from prism_service.services.ontology_store import OntologyStore
 
 router = APIRouter()
 
@@ -66,3 +68,38 @@ def raw(path: str, project: str = Query("default")) -> PlainTextResponse:
     if text is None:
         raise HTTPException(404, f"unknown path: {path}")
     return PlainTextResponse(text, media_type="text/markdown")
+
+
+# ---------------------------------------------------------------------------
+# Ontology (task 15c06516) — persisted classes/instances/properties/axioms,
+# served straight off OntologyStore. Never computed on this read path; the
+# projection (services/ontology_prototype_projection.rebuild) is the only
+# writer. Auto-runs ONCE on an empty store so /understand shows real data
+# without a manual rebuild click (no per-project refresh job is reachable
+# from this file's allowed scope for this walking skeleton).
+# ---------------------------------------------------------------------------
+
+@router.get("/ontology")
+def ontology(project: str = Query("default")) -> dict:
+    store = OntologyStore(project)
+    if store.is_empty():
+        ontology_prototype_projection.rebuild(project)
+    return {
+        "classes": store.list_classes(),
+        "properties": store.list_properties(),
+        "axioms": store.list_axioms(),
+    }
+
+
+@router.get("/ontology/instances")
+def ontology_instances(
+    project: str = Query("default"), class_id: str = Query(...),
+    limit: int = Query(200),
+) -> dict:
+    store = OntologyStore(project)
+    return {"instances": store.list_instances(class_id, limit=limit)}
+
+
+@router.post("/ontology/rebuild")
+def ontology_rebuild(project: str = Query("default")) -> dict:
+    return ontology_prototype_projection.rebuild(project)
