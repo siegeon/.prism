@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.49"
+PRISM_VERSION = "7.13.50"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6189,4 +6189,26 @@ PRISM_VERSION_NOTES += (
     "packaging/sqlite-WAL) as before -- the web_dist-needs-building "
     "failures are gone this time since this release's own build step "
     "produced a real one."
+    "\n\n7.13.50: task bb1d934e's own /delivery card was contradicting "
+    "itself -- 'merged to main' checked, headline still 'not yet "
+    "delivered -- branch not pushed'. Root cause: get_task_delivery's "
+    "'pushed'/'released' stages read facts ONLY about the task's own "
+    "tracked worktree branch commit; 'merged' already had an OR-fallback "
+    "onto _is_shipped_on_main (task 499ba9c9, squash-merge case) but "
+    "pushed/released did not. A PRISM-on-PRISM self-dev direct-land "
+    "re-commits the same [task:<id8>] trailer under a FRESH sha straight "
+    "onto origin/main, leaving the original tracked commit local and "
+    "permanently unpushed -- exactly bb1d934e's own history. Fixed by "
+    "adding _shipped_sha_on_main (returns the actual landed sha, not "
+    "just a bool) and OR-ing 'pushed' onto shipped_on_main and "
+    "'released' onto a tag-contains check against that sha, mirroring "
+    "the existing 'merged' fallback exactly -- a normal PR-merged task's "
+    "own-commit path is untouched. 3 new tests in "
+    "test_delivery_pushed_and_released_follow_shipped_sha.py (self-dev "
+    "direct-land resolves pushed, resolves released via a tag on the "
+    "shipped sha, and a genuinely-unshipped task still shows neither) "
+    "plus 1 existing source-scanning test updated (the --grep mechanics "
+    "legitimately moved into the new helper; the ancestry-avoidance and "
+    "499ba9c9-attribution invariants it pins still hold, now checked "
+    "against both functions' combined source)."
 )

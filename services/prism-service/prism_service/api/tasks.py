@@ -416,10 +416,23 @@ def _is_shipped_on_main(repo: str, task_id: str) -> bool:
     documented 8-char short form, and the old exact-bracket needle matched
     neither, so this helper always reported "not shipped" for a task whose
     real commit trailer merely had extra characters after the short id."""
+    return bool(_shipped_sha_on_main(repo, task_id))
+
+
+def _shipped_sha_on_main(repo: str, task_id: str) -> str:
+    """Same squash-safe trailer search as `_is_shipped_on_main`, but returns
+    the actual landed SHA on origin/main (empty string if none) instead of a
+    bare bool -- so a caller can compute facts (pushed? released?) about the
+    commit that REALLY shipped, not the task's own (possibly abandoned)
+    tracked branch. See task bb1d934e-6ee4-4b2b-8e91-9703cbd0a6d1: a
+    self-dev direct-land re-commits the same content under a fresh SHA on
+    main, leaving the original worktree commit local and unpushed forever
+    -- `_is_shipped_on_main` alone can't tell `get_task_delivery` which SHA
+    to check for "pushed"/"released"."""
     needle = f"[task:{task_id[:8]}"
     rc, out = _git(repo, "log", "--fixed-strings", "--grep", needle,
                    "-n", "1", "--format=%H", "origin/main")
-    return rc == 0 and bool(out)
+    return out.strip() if rc == 0 else ""
 
 
 # The stranded scan is O(done-tasks x git-subprocesses) — measured 35s at 301
@@ -1001,8 +1014,8 @@ _delivery_cache: dict = {}
 _delivery_lock = _threading.Lock()
 
 
-def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool]:
-    """(branch, commits, shipped_on_main) for the task, TTL-cached."""
+def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool, str]:
+    """(branch, commits, shipped_on_main, shipped_sha) for the task, TTL-cached."""
     key = (repo, task_id)
     now = _time.monotonic()
     with _delivery_lock:
@@ -1030,8 +1043,8 @@ def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool]
                 "pushed": pushed, "merged_to_main": merged,
                 "released_in": tags.splitlines()[0] if tags else "",
             })
-    shipped = _is_shipped_on_main(repo, task_id)
-    val = (branch, commits, shipped)
+    shipped_sha = _shipped_sha_on_main(repo, task_id)
+    val = (branch, commits, bool(shipped_sha), shipped_sha)
     with _delivery_lock:
         _delivery_cache[key] = (now, val)
         while len(_delivery_cache) > 256:
@@ -1070,8 +1083,9 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     commits: list[dict] = []
     branch = ""
     shipped_on_main = False
+    shipped_sha = ""
     if repo:
-        branch, commits, shipped_on_main = _delivery_git_facts(repo, task_id)
+        branch, commits, shipped_on_main, shipped_sha = _delivery_git_facts(repo, task_id)
 
     def _all(flag: str) -> bool:
         return bool(commits) and all(c[flag] for c in commits)
@@ -1084,18 +1098,32 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     # bare/prefix-collision substring (FR-5).
     merged_ok = _all("merged_to_main") or shipped_on_main
 
+    # Same OR-fallback for "pushed"/"released" (task bb1d934e): a self-dev
+    # direct-land re-commits the task's content under a FRESH sha on
+    # origin/main, leaving the originally-tracked worktree commit (still
+    # found by _delivery_git_facts' grep on the task's own branch) local
+    # and unpushed forever. Being an OR-fallback the tracked-commit path is
+    # untouched — a normal PR-merged task still reports on its own commits.
+    shipped_released_in = ""
+    if shipped_sha and repo:
+        tags = _git(repo, "tag", "--contains", shipped_sha)[1]
+        shipped_released_in = tags.splitlines()[0] if tags else ""
+    pushed_ok = _all("pushed") or shipped_on_main
+    released_ok = _all("released_in") or bool(shipped_released_in)
+
     stage_states = [
         ("verified", "verified", verified,
          "green gate passed on live evidence" if verified else "gate not passed yet"),
         ("committed", "committed", bool(commits),
          f"{len(commits)} commit(s) on {branch or 'local'}" if commits
          else "no [task:…]-tagged commits found"),
-        ("pushed", "pushed", _all("pushed"),
-         "on a remote ref" if _all("pushed") else "branch not pushed"),
+        ("pushed", "pushed", pushed_ok,
+         "on a remote ref" if pushed_ok else "branch not pushed"),
         ("merged", "merged to main", merged_ok,
          "reachable from main" if merged_ok else "no PR merged yet"),
-        ("released", "released", _all("released_in"),
-         (commits and commits[0].get("released_in")) or "no release tag contains this work"),
+        ("released", "released", released_ok,
+         (commits and commits[0].get("released_in")) or shipped_released_in
+         or "no release tag contains this work"),
     ]
     stages, next_seen = [], False
     for key, label, ok, detail in stage_states:

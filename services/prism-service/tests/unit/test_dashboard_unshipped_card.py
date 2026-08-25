@@ -282,7 +282,12 @@ def test_shipped_check_is_squash_safe_and_credits_the_ancestry_bug_owner():
     assert hasattr(tasks_mod, "_is_shipped_on_main"), (
         "expected a dedicated squash-safe shipped-ness helper, e.g. "
         "_is_shipped_on_main(repo, task_id) -> bool")
-    src = inspect.getsource(tasks_mod._is_shipped_on_main)
+    # task bb1d934e: _is_shipped_on_main now delegates its git.log --grep to
+    # _shipped_sha_on_main (so get_task_delivery can also learn WHICH sha
+    # shipped, not just whether one did) -- the invariants below still hold,
+    # just spread across both functions' combined source.
+    src = (inspect.getsource(tasks_mod._is_shipped_on_main)
+          + inspect.getsource(tasks_mod._shipped_sha_on_main))
     assert "merge-base" not in src and "is-ancestor" not in src, (
         f"shipped-ness must never use SHA ancestry (that is get_task_delivery's "
         f"squash bug, task 499ba9c9's to fix, not this slice's): {src}")
