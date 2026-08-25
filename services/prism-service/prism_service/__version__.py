@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.47"
+PRISM_VERSION = "7.13.48"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6117,4 +6117,41 @@ PRISM_VERSION_NOTES += (
     "hand-picked file list; confirmed clean (`git diff HEAD --stat` "
     "empty apart from the known pre-existing LiveBar.tsx stray) "
     "before restarting."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.48: THE reachability_check TOOTH FALSE-FLAGGED ANY SAME-"
+    "FILE HELPER AS UNREACHABLE [epic 3baadd19, task 441dc0bd]. AC-5 "
+    "(spend ceiling) drove cleanly all the way to green_gate -- red "
+    "genuinely red this time, real implementation, real green -- "
+    "then got refused at the ship step's pre-flight with 'unreachable "
+    "entry point(s): _SpendTracker.charge ... new production "
+    "symbol(s) with no non-test production caller anywhere in the "
+    "tree'. Read the actual code: charge() IS called, at the real "
+    "call site inside _run_one_step, and _spend_ceiling_crossed() "
+    "(which reads what charge() wrote) IS called from both eligible_"
+    "task() and sweep_once() -- fully, correctly wired end to end. "
+    "Root cause was in the CHECKER, not AC-5: reachability_check.py's "
+    "_has_production_reference() explicitly skipped the symbol's own "
+    "defining file when searching for a caller ('for rel in "
+    "candidates: if rel == defining_rel: continue') -- so ANY new "
+    "symbol whose only caller is a sibling function in the SAME "
+    "module (the ordinary, ubiquitous way to write a private helper) "
+    "was unconditionally flagged unreachable. This is a real, "
+    "previously-undetected gap in a check that exists specifically "
+    "to catch epic 0784729f's failure class ('a green slice whose "
+    "production code nothing constructs') -- ironic that the safety "
+    "check itself had a blind spot for the single most common wiring "
+    "pattern in the codebase. Fixed: the same-file case is now "
+    "searched too, excluding only the symbol's own `def` line (via "
+    "the caller-supplied line number when available, AND a `def "
+    "symbol(` pattern match as a fallback for callers -- like the "
+    "existing real-repo grounding test -- that don't pass one) so "
+    "the definition can never trivially satisfy its own reference "
+    "check. Two new regression tests pin both directions: a genuine "
+    "same-file caller must clear the tooth, and a symbol with truly "
+    "no caller anywhere (not even in its own file) must still be "
+    "refused. AC-5 itself needs no changes -- it was correct all "
+    "along; only the checker was fixed. Full suite: 3429 passed, "
+    "same 8 pre-existing/environmental failures as 7.13.47, "
+    "unrelated to this 2-file change."
 )

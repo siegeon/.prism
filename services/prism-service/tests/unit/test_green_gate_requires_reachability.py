@@ -88,6 +88,56 @@ def test_new_entry_point_with_a_production_caller_is_not_refused(tmp_path):
         f"{reason!r}")
 
 
+def test_same_file_caller_is_a_production_reference(tmp_path):
+    """task 3baadd19 AC-5 (_SpendTracker.charge): a new symbol whose only
+    caller is a SIBLING function in the SAME module -- the ordinary way to
+    write a private helper -- must NOT be refused. The old code excluded
+    the defining file from the search entirely, so this pattern always
+    false-positived as unreachable."""
+    from prism_service.services.reachability_check import (
+        unreachable_entry_point_reason_for_diff)
+
+    baseline = _init_repo(tmp_path)
+    # `_use_it` is prefixed so it is exempt from its OWN reachability check
+    # (this fixture's point is `register`'s same-file caller, not a second
+    # new public symbol that would need its own caller too).
+    _write(tmp_path / "pkg" / "mod.py",
+          "class Thing:\n"
+          "    def register(self, adapter):\n"
+          "        self._adapter = adapter\n"
+          "\n"
+          "\n"
+          "def _use_it():\n"
+          "    t = Thing()\n"
+          "    t.register(object())\n")
+
+    reason = unreachable_entry_point_reason_for_diff(tmp_path, baseline)
+    assert reason == "", (
+        f"a caller in the SAME file as the definition must clear the "
+        f"tooth: {reason!r}")
+
+
+def test_symbols_own_def_line_does_not_satisfy_its_own_reference_check(
+        tmp_path):
+    """The same-file scan must exclude the symbol's own `def` line --
+    otherwise every new symbol would trivially reference itself and this
+    tooth would never refuse anything."""
+    from prism_service.services.reachability_check import (
+        unreachable_entry_point_reason_for_diff)
+
+    baseline = _init_repo(tmp_path)
+    _write(tmp_path / "pkg" / "mod.py",
+          "class Thing:\n"
+          "    def register(self, adapter):\n"
+          "        self._adapter = adapter\n")
+
+    reason = unreachable_entry_point_reason_for_diff(tmp_path, baseline)
+    assert reason, (
+        "a symbol with NO caller anywhere -- not even a real call in its "
+        "own file -- must still be refused")
+    assert "register" in reason
+
+
 def test_module_wired_but_symbol_unreferenced_is_still_refused(tmp_path):
     """The EXACT attempt-1 shape (work_item_sync.py, 0665c829/d09bee0b/
     7362c14e): the module IS imported/constructed elsewhere (module-level

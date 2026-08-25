@@ -127,10 +127,10 @@ def _candidate_files(repo_root: Path) -> list:
 
 
 def _has_production_reference(symbol: str, defining_file: str,
-                              repo_root) -> bool:
-    """Does any OTHER non-test file reference `symbol`, defined in
-    `defining_file`? Two signals, both permissive-by-design (narrow the
-    seat, never a blanket refusal):
+                              repo_root, defining_lineno: int = 0) -> bool:
+    """Does any file (including `defining_file` itself) reference `symbol`,
+    defined at `defining_lineno` in `defining_file`? Three signals, all
+    permissive-by-design (narrow the seat, never a blanket refusal):
 
       (a) an explicit `.symbol(` / `symbol(` call in a file that IMPORTS
           the defining module -- the import gate is what stops a same-named
@@ -147,6 +147,14 @@ def _has_production_reference(symbol: str, defining_file: str,
           English prose quoting the word "register" (__version__.py
           changelog text, github_auth.py's user-facing copy) -- measured
           live against this repo before landing this check.
+      (c) a call to `symbol(` on any OTHER line of `defining_file` itself
+          -- task 3baadd19 AC-5 (`_SpendTracker.charge`) found this
+          missing: a new symbol whose only caller is a sibling function in
+          the SAME module (the ordinary, correct way to write a private
+          helper) was flagged unreachable, because the old code excluded
+          the defining file from the search entirely. Only the symbol's
+          own `def` line is excluded, so the definition can't trivially
+          satisfy its own reference check.
     """
     repo_root = Path(repo_root)
     defining_rel = str(defining_file).replace("\\", "/")
@@ -161,6 +169,13 @@ def _has_production_reference(symbol: str, defining_file: str,
     dispatch_key_re = re.compile(r'''['"]''' + sym + r'''['"]\s*:''')
     route_path_re = re.compile(
         r'''['"]/[^'"\n]*\b''' + sym + r'''\b[^'"\n]*['"]''')
+    # A `def symbol(`/`async def symbol(` line matches call_re too (the
+    # symbol name followed by `(`) -- excluded so the definition can never
+    # trivially satisfy its own same-file reference check. Line-number
+    # based exclusion (defining_lineno) is the precise signal when the
+    # caller has it; this pattern-based one is the fallback when it does
+    # not (defining_lineno defaults to 0, matching no real line).
+    def_line_re = re.compile(r'^\s*(?:async\s+)?def\s+' + sym + r'\s*\(')
 
     try:
         candidates = _candidate_files(repo_root)
@@ -173,6 +188,16 @@ def _has_production_reference(symbol: str, defining_file: str,
 
     for rel in candidates:
         if rel.replace("\\", "/") == defining_rel:
+            try:
+                text = (repo_root / rel).read_text(encoding="utf-8",
+                                                   errors="ignore")
+            except OSError:
+                continue
+            for i, line in enumerate(text.splitlines(), start=1):
+                if i == defining_lineno or def_line_re.match(line):
+                    continue
+                if call_re.search(line):
+                    return True
             continue
         if _is_test_path(rel):
             continue
@@ -244,7 +269,8 @@ def unreachable_entry_point_reason_for_diff(workspace, baseline: str) -> str:
                 continue
             if not is_new_file and lineno not in added:
                 continue
-            if _has_production_reference(name, rel, workspace):
+            if _has_production_reference(name, rel, workspace,
+                                         defining_lineno=lineno):
                 continue
             violations.append(f"{qualname} in {rel}")
 
