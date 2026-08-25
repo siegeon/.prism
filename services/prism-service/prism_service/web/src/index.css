@@ -184,6 +184,18 @@
    * green (pass), gate reads gold (checkpoint). */
   --et-test:    oklch(0.72 0.12 150);
   --et-gate:    oklch(0.72 0.12 75);
+
+  /* Ontology (task 15c06516) — Subsume's peer-accent pair for the two kinds
+   * its shape-carries-kind primitives distinguish beyond PRISM's own
+   * semantic accents above: --social (people/instances, round pills) and
+   * --formal (classes/properties, square-cornered/chromeless-mono).
+   * --alarm is the axiom-violated state (sibling task c1d0ee70; unused
+   * until that lands). Values are Subsume's own dark-theme hexes
+   * (fe62a2ee-eb52-4cb6-bc35-6bc328f4b7da.html); PRISM's fonts/surfaces
+   * above are UNCHANGED — additive only. */
+  --social: #DCA84A;
+  --formal: #59B4A9;
+  --alarm:  #DE7B66;
 }
 
 /* Light theme — activated by <html class="light light-theme"
@@ -237,6 +249,11 @@
   --et-memory:  oklch(0.52 0.12 325);
   --et-test:    oklch(0.52 0.12 150);
   --et-gate:    oklch(0.52 0.12 75);
+
+  /* Ontology light-theme override (Subsume's own light palette). */
+  --social: #8F6318;
+  --formal: #1D5A56;
+  --alarm:  #962F22;
   color-scheme: light;
 }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -303,3 +320,23 @@ body {
   font: 700 11px/1 ui-monospace, monospace;
   box-shadow: 0 0 0 1px #fecaca;
 }
+
+/* Ontology primitives (task 15c06516) — copied near-verbatim from the
+ * approved Subsume prototype's .node/.edge/.axiom rules
+ * (fe62a2ee-eb52-4cb6-bc35-6bc328f4b7da.html), on PRISM's OWN tokens
+ * (--surface-*/--border-*/--text-*/--font-mono, untouched above) instead
+ * of Subsume's own --raised/--rule/--ink vocabulary. Shape carries kind:
+ * square class, round-pill instance, chromeless-mono property,
+ * dotted-underline literal, hatched abstract. */
+.ont-node{display:inline-flex;align-items:center;gap:7px;padding:4px 11px 4px 9px;font-size:.8125rem;font-weight:500;color:var(--text-primary);background:var(--surface-2);border:1px solid var(--border-strong);border-radius:3px;cursor:pointer;}
+.ont-node .ont-glyph{width:9px;height:9px;flex:0 0 9px;}
+.ont-node[data-kind="class"] .ont-glyph{background:var(--formal);}
+.ont-node[data-kind="class"]{border-color:var(--formal);}
+.ont-node[data-kind="instance"]{border-radius:999px;border-color:var(--social);padding-left:10px;}
+.ont-node[data-kind="instance"] .ont-glyph{background:var(--social);border-radius:50%;}
+.ont-node[data-kind="property"]{border-color:transparent;background:transparent;font-family:var(--font-mono);font-size:.75rem;color:var(--formal);padding-left:2px;}
+.ont-node[data-kind="literal"]{border-color:transparent;background:transparent;border-bottom:1px dotted var(--text-muted);border-radius:0;color:var(--text-secondary);font-family:var(--font-mono);font-size:.75rem;}
+.ont-node[data-kind="abstract"]{background-image:repeating-linear-gradient(135deg, transparent 0 4px, var(--border-strong) 4px 5px);color:var(--text-secondary);border-style:dashed;}
+.ont-axiom{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border:1px solid var(--border-strong);border-left:3px solid var(--text-muted);border-radius:3px;background:var(--surface-2);font-family:var(--font-mono);font-size:.75rem;color:var(--text-secondary);}
+.ont-axiom[data-state="violated"]{border-left-color:var(--alarm);background:var(--surface-3);color:var(--text-primary);}
+.ont-rolled{font-family:var(--font-mono);font-size:.75rem;color:var(--text-muted);padding:5px 10px;border:1px dashed var(--border-strong);border-radius:3px;background:var(--surface-1);display:inline-flex;}
