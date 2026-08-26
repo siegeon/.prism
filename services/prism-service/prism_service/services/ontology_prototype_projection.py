@@ -9,6 +9,16 @@ wired: arc_governance principle names stay quiet axioms by construction,
 and PROTOTYPE_AXIOMS (arc_governance.evaluate_axioms) are EVALUATED
 against real task/document/catalog rows each rebuild, so a real violation
 persists as state='violated' with the offending row named in `detail`.
+
+Task 495d3a69 ("the ontology is an RDF graph you can query with SPARQL"):
+gather() is now the ONE row-gathering pass, feeding BOTH the sqlite cache
+below (OntologyStore -- kept as a thin best-effort cache; unchanged
+behaviour, since tests/unit/test_prototype_axioms.py reads it directly
+and sits outside that task's allowed_files) and services/ontology_graph.
+OntologyGraph's RDF representation, which api/okf.py actually reads from
+now. See ontology_graph.py's module docstring for the real thing this
+was pointing at (rdflib/pyoxigraph/SPARQL — the Subsume prototype's own
+stack, per ontology-SKILL.md).
 """
 
 from __future__ import annotations
@@ -68,12 +78,6 @@ def _provider_instances() -> list[str]:
     return list(PROVIDERS) + list(_EXTRA_PROVIDERS)
 
 
-def _queue_item_instances(project: str) -> list[tuple[str, str]]:
-    """QueueItem <- tasks: (id, title) pairs -- one instance per task."""
-    ctx = get_project(project)
-    return [(t.id, t.title) for t in ctx.task_svc.list()]
-
-
 def _document_paths(project: str) -> list[str]:
     """Document <- brain docs source_file paths (docs table, brain.db)."""
     conn = _connect(project_data_dir(project) / "brain.db")
@@ -119,7 +123,7 @@ def _catalog_entries(project: str) -> list[dict]:
             for s in WORKFLOW_STEPS]
 
 
-def _axiom_names(project: str) -> list[str]:
+def axiom_names(project: str) -> list[str]:
     """arc_governance principle NAMES as quiet axioms (mx-2d14b0). Reads the
     project's own seeded principles (memory domain 'architecture-principles')
     first; PRISM_PRINCIPLES (real source data, not fabricated for a fresh
@@ -163,6 +167,33 @@ def _code_graph_kinds(project: str) -> list[tuple[str, int, list[str]]]:
         conn.close()
 
 
+def axiom_context(project: str) -> dict:
+    """The real-row context arc_governance.evaluate_axioms(context) needs —
+    shared by rebuild()'s sqlite cache write and OntologyGraph.axioms()
+    (task 495d3a69) so both read the SAME rows, never two computations
+    that can drift."""
+    return {
+        "tasks": _task_rows(project),
+        "document_paths": _document_paths(project),
+        "catalog_entries": _catalog_entries(project),
+    }
+
+
+def gather(project: str) -> dict:
+    """The real rows for BOTH representations of the ontology (task
+    495d3a69): rebuild()'s sqlite cache below, and OntologyGraph.rebuild()'s
+    RDF triples. One gather pass, two projections — never two independent
+    reads of the same underlying rows that can silently disagree."""
+    return {
+        "channels": _channel_instances(project),
+        "agents": _agent_instances(project),
+        "providers": _provider_instances(),
+        "tasks": _task_rows(project),
+        "documents": _document_paths(project),
+        "code_kinds": _code_graph_kinds(project),
+    }
+
+
 def _add_class(
     classes: list[dict[str, Any]], instances: list[dict[str, Any]],
     cid: str, kind: str, source: str, members: list[str],
@@ -181,31 +212,35 @@ def _add_class(
 
 
 def rebuild(project: str) -> dict:
-    """Rebuild the ontology tables from real PRISM rows -- persisted,
-    never computed at request time. Returns row counts for the caller
-    (the /api/okf/ontology/rebuild route) to report back."""
+    """Rebuild the ontology -- persisted, never computed at request time.
+    ONE gather() pass feeds both representations (task 495d3a69): the
+    sqlite cache below (ontology_store.py -- kept as a thin best-effort
+    cache; tests/unit/test_prototype_axioms.py reads it directly and sits
+    outside this task's allowed_files) AND the RDF graph
+    (services/ontology_graph.OntologyGraph), which is api/okf.py's actual
+    READ PATH now. Returns row counts (sqlite) plus the graph's own
+    triple-counts-per-class under "graph"."""
+    rows = gather(project)
     classes: list[dict[str, Any]] = []
     instances: list[dict[str, Any]] = []
     properties: list[dict[str, Any]] = []
     axioms: list[dict[str, Any]] = []
 
-    _add_class(classes, instances, "Channel", "class", "tasks",
-               _channel_instances(project))
-    _add_class(classes, instances, "Agent", "class", "workflows",
-               _agent_instances(project))
+    _add_class(classes, instances, "Channel", "class", "tasks", rows["channels"])
+    _add_class(classes, instances, "Agent", "class", "workflows", rows["agents"])
     _add_class(classes, instances, "Provider", "class", "integrations",
-               _provider_instances())
+               rows["providers"])
 
-    qi = _queue_item_instances(project)
+    qi = [(t["id"], t["title"]) for t in rows["tasks"]]
     _add_class(classes, instances, "QueueItem", "class", "tasks",
                [title for _, title in qi], refs=[tid for tid, _ in qi])
 
-    docs = _document_paths(project)
+    docs = rows["documents"]
     _add_class(classes, instances, "Document", "class", "brain", docs)
     folders = sorted({str(Path(d).parent) for d in docs if d})
     _add_class(classes, instances, "Folder", "class", "brain", folders)
 
-    for kind, count, sample in _code_graph_kinds(project):
+    for kind, count, sample in rows["code_kinds"]:
         cid = f"CodeGraph::{kind}"
         classes.append({
             "id": cid, "name": kind.capitalize(), "kind": "class",
@@ -224,7 +259,7 @@ def rebuild(project: str) -> dict:
             "kind": "property",
         })
 
-    for name in _axiom_names(project):
+    for name in axiom_names(project):
         axioms.append({
             "id": f"axiom::{name}", "name": name,
             "description": "", "state": "quiet", "detail": "",
@@ -234,12 +269,7 @@ def rebuild(project: str) -> dict:
     # real violation lights the Understand view's --alarm state.
     from prism_service.services.arc_governance import evaluate_axioms
 
-    context = {
-        "tasks": _task_rows(project),
-        "document_paths": docs,
-        "catalog_entries": _catalog_entries(project),
-    }
-    for axiom in evaluate_axioms(context):
+    for axiom in evaluate_axioms(axiom_context(project)):
         axioms.append({
             "id": f"axiom::{axiom['name']}", "name": axiom["name"],
             "description": axiom["description"], "state": axiom["state"],
@@ -250,9 +280,16 @@ def rebuild(project: str) -> dict:
     store.replace_all(classes, instances, properties, axioms)
     store.close()
 
+    # The RDF representation (task 495d3a69) — SAME gathered rows, so the
+    # sqlite cache above and the graph can never silently disagree.
+    from prism_service.services.ontology_graph import OntologyGraph
+
+    graph_result = OntologyGraph(project).rebuild(rows=rows)
+
     return {
         "classes": len(classes), "instances": len(instances),
         "properties": len(properties), "axioms": len(axioms),
+        "graph": graph_result,
     }
 
 
