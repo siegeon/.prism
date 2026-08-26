@@ -6,7 +6,7 @@ endpoint, reported 1521 green tests, and matched NOTHING in the prototype
 the owner approved. The AC oracle I had written was `curl
 /api/collaboration/surfaces` — an API, not an affordance. The approved mock
 specifies an INBOX nav entry: "what needs you, and what happened for you",
-deliberately NOT called My Work because Work already carries a My Work /
+deliberately NOT called My Tasks because Tasks already carries a My Tasks /
 Team toggle (web/src/pages/TasksPage.tsx:54).
 
 So these assertions pin THE ENTRY POINT A HUMAN USES — the nav item, its
@@ -24,9 +24,9 @@ RE-ANCHORED (task 01d05bff, 2026-08-25): the Inbox nav entry/route are
 retired outright in favour of Queue (owner's model, mx-0889e4 — signals
 arrive in the Queue; a signal becomes a task only on the owner's word,
 never a bare conductor-state projection). The three invariants that survive
-a person can reach the surface from the nav, it sits above Work, and the
+a person can reach the surface from the nav, it sits above Tasks, and the
 route lands on a real page — are re-pointed at Queue below with a `queue_`
-prefix. The My-Work-naming and per-viewer-identity checks were specific to
+prefix. The My-Tasks-naming and per-viewer-identity checks were specific to
 the old Inbox mock and are retired outright (Queue is a shared open-signal
 list, not a personal inbox). The backend /api/inbox tests below are
 UNTOUCHED — api/inbox.py itself is out of this task's scope and keeps
@@ -64,15 +64,17 @@ def test_a_person_can_reach_the_queue_from_the_nav():
         f"the /queue nav item is not labelled Queue: {item.group(0)}")
 
 
-def test_the_queue_sits_above_work_in_activity():
+def test_the_queue_sits_above_tasks_in_activity():
     """RE-ANCHORED (task 01d05bff): the ordering decision that Inbox
     originally protected — the thing that needs you sits above the full
-    list you go query — now applies to Queue."""
+    list you go query — now applies to Queue. RE-ANCHORED again for the
+    Work -> Tasks nav rename: the label text changed, the ordering
+    invariant did not."""
     src = _sidebar()
     queue_at = src.find('to: "/queue"')
-    work_at = src.find('to: "/tasks", label: "Work"')
-    assert queue_at != -1 and work_at != -1, "both nav entries must exist"
-    assert queue_at < work_at, "Queue's source position must precede Work's"
+    tasks_at = src.find('to: "/tasks", label: "Tasks"')
+    assert queue_at != -1 and tasks_at != -1, "both nav entries must exist"
+    assert queue_at < tasks_at, "Queue's source position must precede Tasks's"
 
 
 def test_the_queue_route_lands_on_a_real_page():

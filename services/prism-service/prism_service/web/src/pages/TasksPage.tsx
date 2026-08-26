@@ -31,8 +31,8 @@ type Task = {
 // description-prose `mirror_url`).
 type TaskMirror = { provider: string; issue?: string; url: string; last_synced_at?: string };
 
-// A row on the unified Work surface — a native PRISM task OR an external
-// GitHub/Jira item, normalized to one shape so My Work/Team, the filters, and
+// A row on the unified Tasks surface — a native PRISM task OR an external
+// GitHub/Jira item, normalized to one shape so My Tasks/Team, the filters, and
 // the keyboard cursor treat every provider identically.
 type WorkSource = "native" | "github" | "jira";
 type WorkItem = {
@@ -61,7 +61,7 @@ type WorkItem = {
   channel?: string;
 };
 
-// My Work vs Team — the attention model. "mine" scopes to the signed-in
+// My Tasks vs Team — the attention model. "mine" scopes to the signed-in
 // viewer's assigned rows; "team" shows the whole team's work.
 type WorkView = "mine" | "team";
 
@@ -209,7 +209,7 @@ export default function TasksPage() {
     api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors,channel`)
       .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
-    // The viewer identity powers My Work; failure just leaves it empty (Team
+    // The viewer identity powers My Tasks; failure just leaves it empty (Team
     // still works). Authorization is the server's — we never infer it here.
     api.get<{ user?: { id?: string; display_name?: string; email?: string } }>("/api/auth/me")
       .then((d) => setMe(d.user?.display_name || d.user?.id || d.user?.email || ""))
@@ -263,7 +263,7 @@ export default function TasksPage() {
         if (!idHit && !titleHit && !tagHit) return false;
       }
       if (view === "mine") {
-        // My Work: rows assigned to the signed-in viewer. With no identity we
+        // My Tasks: rows assigned to the signed-in viewer. With no identity we
         // fall back to "assigned to someone" so the toggle still narrows.
         if (me) return it.assignee.toLowerCase() === me.toLowerCase();
         return it.assignee !== "";
@@ -326,10 +326,10 @@ export default function TasksPage() {
 
   return (
     <Page>
-      {/* Work-surface control bar: My Work / Team attention toggle + provider
+      {/* Task-surface control bar: My Tasks / Team attention toggle + provider
           and assignee filters spanning native / GitHub / Jira. */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" role="tablist" aria-label="Work view">
+        <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" role="tablist" aria-label="Task view">
           {(["mine", "team"] as WorkView[]).map((v) => (
             <button
               key={v}
@@ -344,7 +344,7 @@ export default function TasksPage() {
                 color: view === v ? "var(--text-primary)" : "var(--text-muted)",
               }}
             >
-              {v === "mine" ? "My Work" : "Team"}
+              {v === "mine" ? "My Tasks" : "Team"}
             </button>
           ))}
         </div>

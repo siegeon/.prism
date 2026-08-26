@@ -9,8 +9,9 @@ filter makes the same mistake as a control, treating where a task came from as
 a way to slice the list. Provenance is not a category; a badge earns its place
 only by taking you somewhere.
 
-My Work / Team is a DIFFERENT question (mine vs not mine) and must survive
-untouched, which the owner said explicitly.
+My Tasks / Team is a DIFFERENT question (mine vs not mine) and must survive
+untouched, which the owner said explicitly. (Later renamed Work -> Tasks
+nav-wide; the toggle text moved from "My Work" to "My Tasks" along with it.)
 """
 
 from __future__ import annotations
@@ -136,12 +137,12 @@ def test_the_source_filter_is_gone_completely():
 
 # ── AC-6: the ownership filter survives ───────────────────────────────
 
-def test_my_work_and_team_survive():
+def test_my_tasks_and_team_survive():
     """Recorded third misfire. It sits inches away in the same toolbar and is
     the easy thing to delete by accident, and the owner asked to keep it."""
     src = _read()
-    assert "My Work" in src and "Team" in src, (
-        "My Work / Team answers a different question, mine vs not mine, and "
+    assert "My Tasks" in src and "Team" in src, (
+        "My Tasks / Team answers a different question, mine vs not mine, and "
         "must survive")
     assert re.search(r"view\s*===\s*[\"']mine[\"']", src), (
         "the ownership predicate must still run, not just the labels")

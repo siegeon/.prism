@@ -75,13 +75,13 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Activity",
     items: [
-      // Queue sits first, above Work, deliberately: signals arrive here
+      // Queue sits first, above Tasks, deliberately: signals arrive here
       // over their channel and become a task ONLY on the owner's word —
       // typed + clicked, never automatic (owner's model, mx-0889e4; task
       // 01d05bff). Supersedes the flag-gated /inbox item from task
       // d1854966, whose feature flag is now retired outright.
       { to: "/queue", label: "Queue", icon: Inbox },
-      { to: "/tasks", label: "Work", icon: ListChecks },
+      { to: "/tasks", label: "Tasks", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       // The walking-skeleton screen for "PRISM shows its work": live
       // agent activity flowing onto a node graph (task.changed,
@@ -117,7 +117,7 @@ const MAIN_SECTIONS: Section[] = [
  * already gone stale: it said "Tasks" for /tasks while the nav said "Work".
  *
  * Longest matching route wins, so a detail page keeps its section's name
- * (/tasks/:id -> "Work"). A route with no nav item of its own falls back to
+ * (/tasks/:id -> "Tasks"). A route with no nav item of its own falls back to
  * the label of the section that owns its sub-pages (/settings -> "Settings"),
  * and anything unrecognized falls back to the product name.
  */
