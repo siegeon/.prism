@@ -68,13 +68,18 @@ o:Channel a rdfs:Class ; rdfs:label "Channel" ;
 
 o:Code a rdfs:Class ; rdfs:label "Code" ;
     rdfs:comment "A code-graph entity — module, class, function, ..." .
-o:Function a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Function" .
-o:Class a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Class" .
-o:Method a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Method" .
+o:Function a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Function" ;
+    rdfs:comment "A named block of code that runs on its own." .
+o:Class a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Class" ;
+    rdfs:comment "A blueprint bundling data and behavior together." .
+o:Method a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Method" ;
+    rdfs:comment "A function that belongs to a class." .
 o:Module a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Module" ;
     rdfs:comment "A module or file." .
-o:Interface a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Interface" .
-o:Variable a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Variable" .
+o:Interface a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Interface" ;
+    rdfs:comment "A contract other code promises to fulfill." .
+o:Variable a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Variable" ;
+    rdfs:comment "A named slot holding a value." .
 
 # ---------------------------------------------------------------------
 # Properties — "The four surfaces, and how they join" + PRISM's own edges
@@ -150,6 +155,9 @@ o:producedBy a rdf:Property ; rdfs:domain o:Step ; rdfs:range xsd:string ;
     rdfs:label "producedBy" ;
     rdfs:comment "The role whose work this gate is deciding on." .
 
+o:title a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
+    rdfs:label "title" ;
+    rdfs:comment "The rule's sh:name — a human sentence (task 7dbb242f)." .
 o:description a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
     rdfs:label "description" .
 o:lookedAt a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:integer ;

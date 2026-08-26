@@ -25,6 +25,7 @@ classes()/instances()/properties()/axioms() below answer from the graph.
 from __future__ import annotations
 
 import re
+from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -428,6 +429,18 @@ class OntologyGraph:
             return sol["c"].value
         return ""
 
+    def label_of(self, iri_value: str) -> str:
+        """rdfs:label of any IRI (instance or class), queried over BOTH
+        graphs as a union — falls back to the IRI's own local segment when
+        no label triple exists. Used to turn a bare focus-node IRI (the
+        SHACL report) or a relation's endpoint into something a human can
+        read (task 7dbb242f)."""
+        q = (f"PREFIX rdfs: <{_RDFS}> SELECT ?l WHERE "
+             f"{{ GRAPH ?g {{ <{iri_value}> rdfs:label ?l }} }} LIMIT 1")
+        for sol in self._store.query(q):
+            return sol["l"].value
+        return iri_value.rsplit("/", 1)[-1]
+
     def classes(self) -> list[dict]:
         """The prototype's classes() shape (id/name/kind/parent_id/
         description/instance_count/source) — api/okf.py's GET /ontology
@@ -523,6 +536,164 @@ class OntologyGraph:
                  "looked_at": a["looked_at"], "violations": a["violations"],
                  "detail": a["detail"]}
                 for a in ontology_rules.evaluate(self.project)]
+
+    def _class_meta(self) -> dict[str, dict]:
+        """label/comment/parent for every rdfs:Class in the TBox — one row
+        per class, local name keyed (task 7dbb242f's structure())."""
+        q = (f"PREFIX rdfs: <{_RDFS}> SELECT ?c ?label ?comment ?parent WHERE "
+             f"{{ GRAPH <{NS}model> {{ ?c a rdfs:Class . "
+             f"OPTIONAL {{ ?c rdfs:label ?label }} "
+             f"OPTIONAL {{ ?c rdfs:comment ?comment }} "
+             f"OPTIONAL {{ ?c rdfs:subClassOf ?parent }} }} }}")
+        out: dict[str, dict] = {}
+        for sol in self._store.query(q):
+            c = sol["c"].value
+            local = c[len(NS):] if c.startswith(NS) else c
+            meta = out.setdefault(local, {"label": local, "comment": "", "parent": None})
+            if sol["label"] is not None:
+                meta["label"] = sol["label"].value
+            if sol["comment"] is not None:
+                meta["comment"] = sol["comment"].value
+            if sol["parent"] is not None:
+                p = sol["parent"].value
+                meta["parent"] = p[len(NS):] if p.startswith(NS) else p
+        return out
+
+    def relations(self) -> list[dict]:
+        """Every rdf:Property in the TBox with domain/range/comment, the
+        count of ABox edges using it, and one real example edge (task
+        7dbb242f) — sorted by count desc."""
+        q = (f"PREFIX o: <{NS}> "
+             f"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> "
+             f"PREFIX rdfs: <{_RDFS}> SELECT ?p ?domain ?range ?label ?comment WHERE "
+             f"{{ GRAPH <{NS}model> {{ ?p a rdf:Property . "
+             f"OPTIONAL {{ ?p rdfs:domain ?domain }} "
+             f"OPTIONAL {{ ?p rdfs:range ?range }} "
+             f"OPTIONAL {{ ?p rdfs:label ?label }} "
+             f"OPTIONAL {{ ?p rdfs:comment ?comment }} }} }}")
+        out = []
+        for sol in self._store.query(q):
+            p_iri = sol["p"].value
+            name = p_iri[len(NS):] if p_iri.startswith(NS) else p_iri
+            dom, rng = sol["domain"], sol["range"]
+            label, comment = sol["label"], sol["comment"]
+            n = 0
+            count_q = f"SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH ?g {{ ?s <{p_iri}> ?o }} }}"
+            for csol in self._store.query(count_q):
+                n = int(csol["n"].value)
+            example = None
+            if n:
+                ex_q = f"SELECT ?s ?o WHERE {{ GRAPH ?g {{ ?s <{p_iri}> ?o }} }} LIMIT 1"
+                for esol in self._store.query(ex_q):
+                    o_term = esol["o"]
+                    to_label = (o_term.value if isinstance(o_term, ox.Literal)
+                                else self.label_of(o_term.value))
+                    example = {"from_label": self.label_of(esol["s"].value),
+                               "to_label": to_label}
+            out.append({
+                "property": name, "label": label.value if label is not None else name,
+                "comment": comment.value if comment is not None else "",
+                "domain": (dom.value[len(NS):] if dom is not None and dom.value.startswith(NS)
+                           else (dom.value if dom is not None else None)),
+                "range": (rng.value[len(NS):] if rng is not None and rng.value.startswith(NS)
+                          else (rng.value if rng is not None else None)),
+                "count": n, "example": example,
+            })
+        out.sort(key=lambda r: -r["count"])
+        return out
+
+    def structure(self) -> dict:
+        """GET /api/okf/ontology/structure (task 7dbb242f) — the taxonomy
+        in pre-order from the TBox's rdfs:subClassOf edges (root
+        o:Workspace; any class with no declared parent hangs under it
+        directly), each with own_count (direct rdf:type instances) and
+        count rolled up through its subclasses."""
+        from prism_service.services import ontology_rules
+
+        meta = self._class_meta()
+        children: dict[str, list[str]] = defaultdict(list)
+        for local, m in meta.items():
+            if local == "Workspace":
+                continue
+            children[m["parent"] or "Workspace"].append(local)
+
+        own_counts = {local: self._count(local) for local in meta}
+        totals: dict[str, int] = {}
+
+        def total(local: str) -> int:
+            if local not in totals:
+                totals[local] = own_counts.get(local, 0) + sum(
+                    total(child) for child in children.get(local, ()))
+            return totals[local]
+
+        for local in meta:
+            total(local)
+
+        out: list[dict] = []
+
+        def visit(local: str, depth: int, parent_id: str | None) -> None:
+            m = meta[local]
+            out.append({
+                "id": local, "name": m["label"], "parent": parent_id,
+                "comment": m["comment"], "depth": depth,
+                "count": totals.get(local, 0), "own_count": own_counts.get(local, 0),
+                "abstract": own_counts.get(local, 0) == 0 and bool(children.get(local)),
+            })
+            for child in sorted(children.get(local, ()), key=lambda c: meta[c]["label"]):
+                visit(child, depth + 1, local)
+
+        visit("Workspace", 0, None)
+
+        return {
+            "classes": out, "relations": self.relations(),
+            "built_from": {"signals": self._count("Signal"), "tasks": self._count("Task")},
+            "validated_at": ontology_rules.last_validated_at(self.project),
+        }
+
+    def records(self) -> dict:
+        """GET /api/okf/ontology/records (task 7dbb242f) — things (distinct
+        typed subjects), connections (edges to another typed instance),
+        values (literal-object triples on a typed subject), and per-class
+        count + up to 6 sample labels — one pass over the ABox graph."""
+        RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+        LABEL = f"{_RDFS}label"
+        triples = list(self._store.quads_for_pattern(None, None, None, self._abox_iri))
+
+        typed: set[str] = set()
+        subject_types: dict[str, list[str]] = defaultdict(list)
+        labels: dict[str, str] = {}
+        for s, p, o, _ in triples:
+            if p.value == RDF_TYPE:
+                typed.add(s.value)
+                subject_types[s.value].append(o.value)
+            elif p.value == LABEL:
+                labels[s.value] = o.value
+
+        connections = values = 0
+        for s, p, o, _ in triples:
+            if p.value == RDF_TYPE or s.value not in typed:
+                continue
+            if isinstance(o, ox.Literal):
+                values += 1
+            elif o.value in typed:
+                connections += 1
+
+        class_counts: Counter = Counter()
+        class_samples: dict[str, list[str]] = defaultdict(list)
+        for subj, types in subject_types.items():
+            label = labels.get(subj, subj)
+            for t in types:
+                local = t[len(NS):] if t.startswith(NS) else t
+                class_counts[local] += 1
+                if len(class_samples[local]) < 6:
+                    class_samples[local].append(label)
+
+        classes = [{"id": local, "name": local, "count": n, "sample": class_samples[local]}
+                   for local, n in class_counts.items()]
+        classes.sort(key=lambda c: -c["count"])
+
+        return {"things": len(typed), "connections": connections, "values": values,
+                "classes": classes}
 
     def query(self, sparql: str, limit: int = 500) -> dict:
         """SELECT/ASK only (400 on anything else, at the caller). Named

@@ -109,6 +109,35 @@ def ontology_rebuild(project: str = Query("default")) -> dict:
     return ontology_prototype_projection.rebuild(project)["graph"]
 
 
+@router.get("/ontology/structure")
+def ontology_structure(project: str = Query("default")) -> dict:
+    """The Structure tab (task 7dbb242f): taxonomy pre-order + relations,
+    all from the graph."""
+    graph = OntologyGraph(project)
+    if graph.is_empty():
+        ontology_prototype_projection.rebuild(project)
+    return graph.structure()
+
+
+@router.get("/ontology/records")
+def ontology_records(project: str = Query("default")) -> dict:
+    """The Records tab (task 7dbb242f): things/connections/values + a
+    per-class sample, all from the graph's ABox."""
+    graph = OntologyGraph(project)
+    if graph.is_empty():
+        ontology_prototype_projection.rebuild(project)
+    return graph.records()
+
+
+@router.get("/ontology/terms")
+def ontology_terms(project: str = Query("default")) -> dict:
+    """The Terms tab (task 7dbb242f): PRISM's real enums, in_use/count
+    from real task/signal rows, plus held_back values outside them."""
+    from prism_service.services import ontology_terms as terms_svc
+
+    return terms_svc.terms(project)
+
+
 @router.get("/ontology/rules")
 def ontology_rules(project: str = Query("default")) -> dict:
     """The rules are SHACL shapes that can fail (task 8eeb3e65) — the full
