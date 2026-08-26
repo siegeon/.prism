@@ -27,7 +27,11 @@ def project():
     mcp_task = ctx.task_svc.create(title="mcp task", channel="mcp")
     # Undeclared status (not in pending/in_progress/blocked/done/cancelled)
     # — proves terms().held_back reports REAL data, never a fabricated row.
-    ctx.task_svc.update(mcp_task.id, status="archived")
+    # "urgent" is genuinely outside models.task.STATUSES; "archived" (the
+    # original seed) became a DECLARED status when task f5352fa1 aligned the
+    # vocabulary to what conductor_service.py really uses (30 deleted + 2
+    # archived live rows), so it no longer counts as held back.
+    ctx.task_svc.update(mcp_task.id, status="urgent")
     ctx.task_svc.create(title="legacy task")  # blank channel
 
     from prism_service.config import project_data_dir
@@ -162,8 +166,12 @@ def test_terms_seven_vocabularies_and_held_back_status(project):
     assert ui_term["in_use"] and ui_term["count"] >= 1
 
     held_back = out["held_back"]
-    assert any(h["vocabulary"] == "task_status" and h["value"] == "archived"
+    assert any(h["vocabulary"] == "task_status" and h["value"] == "urgent"
                for h in held_back), held_back
+    # And the aligned vocabulary declares the statuses the product really
+    # uses, so they are in the term list, never held back.
+    status_vocab = next(v for v in out["vocabularies"] if v["name"] == "task_status")
+    assert {"deleted", "archived"} <= {t["value"] for t in status_vocab["terms"]}
 
 
 # ---------------------------------------------------------------------------

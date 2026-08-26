@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 
 from prism_service.models.signal import SIGNAL_STATES
-from prism_service.models.task import CHANNELS
+from prism_service.models.task import CHANNELS, PROOF_TYPES, STATUSES
 from prism_service.models.workflow import WORKFLOWS
 from prism_service.project_context import get_project
 from prism_service.services.signal_store import SignalStore
@@ -22,8 +22,13 @@ from prism_service.services.signal_store import SignalStore
 # field) — named here once so this module is the one place that reads them
 # back as a vocabulary, per ontology-SKILL.md's "never a second hand-kept
 # list that can drift from what actually validates".
-TASK_STATUSES: tuple[str, ...] = ("pending", "in_progress", "blocked", "done", "cancelled")
-PROOF_TYPES: tuple[str, ...] = ("test", "metric", "artifact", "demo", "review", "decision")
+# ONE vocabulary, one place (the prototype's drift rule: never a literal
+# re-declared beside the generated one). Status and proof_type come from
+# models.task -- the same tuples validate_status/validate_proof_type enforce
+# on write (task f5352fa1) -- so the Terms tab can never disagree with what
+# the API accepts. Live 2026-08-25 this file's own copy lacked deleted/
+# archived (30 + 2 real rows) and source_backed_answer.
+TASK_STATUSES: tuple[str, ...] = STATUSES
 GATE_STATES: tuple[str, ...] = ("none", "pending", "passed", "failed")
 # signal_resolver._classify_ask's own priority-ordered kind set.
 ASK_KINDS: tuple[str, ...] = ("decision", "review", "deliverable", "reply", "fyi", "unknown")
