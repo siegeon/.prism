@@ -1933,7 +1933,7 @@ export default function TaskDetailPage() {
       {task.blocked_reason && (
         <Card>
           <SectionLabel>Blocked because</SectionLabel>
-          <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1">{task.blocked_reason}</div>
+          <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1"><LinkedText text={task.blocked_reason} /></div>
         </Card>
       )}
 
@@ -2393,7 +2393,7 @@ export default function TaskDetailPage() {
                     summary="audit detail (machine text)"
                   >
                     <div className="mt-1.5 space-y-1">
-                      {task.gate_reason && gateReadiness?.receipt_ok !== false && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                      {task.gate_reason && gateReadiness?.receipt_ok !== false && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}><LinkedText text={task.gate_reason} /></div>}
                       {gateReadiness?.receipt_ok === false && gateReadiness?.receipt_refusal && (
                         <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>live: {gateReadiness.receipt_refusal}</div>
                       )}
@@ -2505,7 +2505,7 @@ export default function TaskDetailPage() {
             )}
             {(task.gate_reason || gateEvidenceLines(history).length > 0) && (
               <div className="space-y-1">
-                {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}><LinkedText text={task.gate_reason} /></div>}
                 {gateEvidenceLines(history).slice(0, 4).map((l, i) => (
                   <div key={i} className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>• {l}</div>
                 ))}
@@ -2520,7 +2520,7 @@ export default function TaskDetailPage() {
           style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
         >
           <span className="text-2xs uppercase tracking-wider font-semibold mr-2">blocked</span>
-          {task.blocked_reason}
+          <LinkedText text={task.blocked_reason} />
         </div>
       )}
 

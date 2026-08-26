@@ -272,17 +272,25 @@ def unreachable_entry_point_reason_for_diff(workspace, baseline: str) -> str:
             if _has_production_reference(name, rel, workspace,
                                          defining_lineno=lineno):
                 continue
-            violations.append(f"{qualname} in {rel}")
+            violations.append(f"{qualname} ({rel})")
 
     if not violations:
         return ""
-    names = ", ".join(sorted(set(violations)))
-    return (
-        f"unreachable entry point(s): {names} -- new production symbol(s) "
-        "with no non-test production caller anywhere in the tree (no "
-        "explicit call site, route decorator, dynamic-dispatch key, or "
-        "SPA route reference found); this adds a construction site with "
-        "nothing wiring it into the running system")
+    # STE (task 938b0a2d): the old message packed every fact into one
+    # long clause with a semicolon. This shape keeps every fact — the
+    # symbol list, "new production symbol", "no caller", and the four
+    # tolerated wiring shapes (call site, route, dispatch key, SPA
+    # route) — as short active sentences, one symbol per line, so
+    # ste.check("flavored") finds nothing to fix.
+    lines = ["Unreachable entry points:"]
+    for entry in sorted(set(violations)):
+        lines.append(f"- {entry}")
+    lines.append(
+        "These are new production symbols. No production code calls "
+        "them. No route, dispatch key or SPA route references them. "
+        "The slice adds code that nothing wires into the running "
+        "system.")
+    return "\n".join(lines)
 
 
 def unreachable_entry_point_reason(task) -> str:

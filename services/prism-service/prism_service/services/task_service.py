@@ -600,10 +600,25 @@ class TaskService:
         """Run the deterministic STE normaliser over every free-text
         field on ``task``, in place, before the caller persists it.
 
-        title, description, completion_proof, and premise_notes run in
-        flavored mode (they read as prose). oracle, likely_misfire, and
-        each stop_if entry run in strict mode (they are instructions a
-        machine or a person must follow exactly).
+        title, description, completion_proof, premise_notes,
+        blocked_reason, and gate_reason run in flavored mode (they read
+        as prose). blocked_reason and gate_reason join this set at task
+        938b0a2d: machine-written task text (a reachability refusal, a
+        gate decline) must read in the same Simplified Technical English
+        as human-written text, and must link to the ontology the same
+        way (owner: "something in the system generated this content but
+        did not respect the ontology"). A check against every known
+        gate_reason reader (decision_packet.packet_state's "rewound" /
+        "rewind" / "recover" / "waiv" / "override" substrings, the '⚠'
+        low-value marker, and api/conductor.py's `tree=<sha>` regex)
+        confirmed none of those literals sit in ste's contraction,
+        filler, nominalisation, phrasal-verb, or marketing-word tables,
+        and none are lexicon synonyms — so aligning gate_reason never
+        rewrites a token a reader depends on.
+
+        oracle, likely_misfire, and each stop_if entry run in strict
+        mode (they are instructions a machine or a person must follow
+        exactly).
 
         plan_doc aligns too (task dc676e24), through ``_align_plan_doc``:
         fenced code (incl. ```mermaid), markdown tables, headings, and
@@ -652,6 +667,10 @@ class TaskService:
                 "completion_proof", task.completion_proof, "flavored")
             task.premise_notes = _process(
                 "premise_notes", task.premise_notes, "flavored")
+            task.blocked_reason = _process(
+                "blocked_reason", task.blocked_reason, "flavored")
+            task.gate_reason = _process(
+                "gate_reason", task.gate_reason, "flavored")
 
             if task.stop_if:
                 stop_rules: list[str] = []
@@ -767,6 +786,8 @@ class TaskService:
             "likely_misfire": task.likely_misfire,
             "completion_proof": task.completion_proof,
             "premise_notes": task.premise_notes,
+            "blocked_reason": task.blocked_reason,
+            "gate_reason": task.gate_reason,
             "plan_doc": task.plan_doc,
             "stop_if": list(task.stop_if),
         }
@@ -1023,6 +1044,8 @@ class TaskService:
             "likely_misfire": task.likely_misfire,
             "completion_proof": task.completion_proof,
             "premise_notes": task.premise_notes,
+            "blocked_reason": task.blocked_reason,
+            "gate_reason": task.gate_reason,
             "plan_doc": task.plan_doc,
             "stop_if": list(task.stop_if),
         }

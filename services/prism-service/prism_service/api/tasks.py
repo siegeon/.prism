@@ -940,7 +940,8 @@ def get_task(task_id: str, project: str = Query("default"),
 
 
 _LINK_FIELDS = ("description", "oracle", "likely_misfire", "plan_doc",
-                "premise_notes", "completion_proof")
+                "premise_notes", "completion_proof", "blocked_reason",
+                "gate_reason")
 
 
 @router.get("/{task_id}/links")
