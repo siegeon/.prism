@@ -109,6 +109,7 @@ export default function DesignPacket({
             </div>
             <div className="flex items-center gap-2">
               <button
+                id="approve-design-btn"
                 type="button"
                 disabled={!onApprove}
                 onClick={onApprove}

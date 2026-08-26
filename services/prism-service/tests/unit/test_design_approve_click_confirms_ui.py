@@ -300,3 +300,23 @@ def test_ok_toast_still_names_the_next_step_for_non_terminal_advances():
         "the ok-branch toast text lost its body.to_step reference - a "
         "non-terminal approve must still name the next step it advanced to"
     )
+
+
+def test_approve_design_button_has_a_stable_selector():
+    """A live near-miss (2026-08-26): remote-driving this button by its ONLY
+    prior handle (a generic positional CSS selector, e.g.
+    `div:nth-of-type(2) > button`) mis-fired onto the page's OWN unrelated
+    "-> done / -> blocked / -> pending" quick-status buttons instead -- those
+    PATCH /api/tasks/{id} directly (setStatus, TaskDetailPage.tsx), and only
+    a 422 from the server (an invalid status transition) prevented an actual
+    wrong mutation on a shared task. A gate-deciding click that matters must
+    have an id/attribute selector, never a positional guess (see the
+    qa-agent doctrine on this exact class of mistake)."""
+    src = _design_packet()
+    button_at = src.index("Approve design")
+    button_open = src.rindex("<button", 0, button_at)
+    button_tag = src[button_open : button_at]
+    assert 'id="approve-design-btn"' in button_tag, (
+        "the Approve design button must carry a stable id so a driver can "
+        "target it directly instead of a fragile positional selector"
+    )

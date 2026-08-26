@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.78"
+PRISM_VERSION = "7.13.79"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6799,4 +6799,19 @@ PRISM_VERSION_NOTES += (
     "test_implement_workflow_claim_first.py pin the guard-before-write "
     "ordering in both prompts. 5/5 green in that file, 138 additional "
     "implement.js-adjacent tests unaffected."
+    "\n\n7.13.79: a live near-miss while approving epic 95474ec7's "
+    "plan_gate via remote assist. The 'Approve design' button "
+    "(DesignPacket.tsx) had no id/attribute selector, only a generic "
+    "positional one -- a re-find + click on it mis-fired onto the SAME "
+    "page's unrelated '-> done / -> blocked / -> pending' quick-status "
+    "buttons instead (setStatus, TaskDetailPage.tsx, which PATCHes "
+    "/api/tasks/{id} directly). Only a 422 from the server (an invalid "
+    "status transition on this task's current state) prevented an actual "
+    "wrong mutation. Added id=\"approve-design-btn\" to the button so a "
+    "driver targets it directly instead of guessing at a positional "
+    "selector, per this project's own doctrine on gate-deciding clicks. "
+    "New regression test pins the id. 16/16 green (incl. the bundle-size "
+    "tests, previously failing in this fresh worktree only because "
+    "web_dist did not exist yet -- npm run build fixed that, unrelated to "
+    "this change)."
 )
