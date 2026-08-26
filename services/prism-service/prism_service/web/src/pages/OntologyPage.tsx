@@ -192,9 +192,29 @@ export default function OntologyPage() {
 
   return (
     <Page>
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="text-lg font-semibold text-[color:var(--text-primary)]">{"Ontology"}</div>
-        <div className="flex items-center gap-3">
+      {/* One header row under the app PageHeader (task c37bc70e): the old
+          in-page "Ontology" title/subtitle duplicated PageHeader.tsx's own
+          title, so it's gone -- tabs sit left, the need-a-decision pill and
+          Refresh sit right, exactly like the prototype's header. */}
+      <div className="flex items-end justify-between gap-4 flex-wrap border-b border-[color:var(--border-default)]">
+        <div className="flex items-center gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={
+                tab === t.key
+                  ? "flex items-center gap-2 px-3 py-2 text-[13px] font-medium border-b-2 -mb-px border-[color:var(--text-primary)] text-[color:var(--text-primary)]"
+                  : "flex items-center gap-2 px-3 py-2 text-[13px] font-medium border-b-2 -mb-px border-transparent text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
+              }
+            >
+              {t.label}
+              <span className="text-2xs font-mono tabular-nums text-[color:var(--text-muted)]">{counts[t.key]}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 pb-2">
           {rules && (
             <span className="inline-flex items-center gap-1.5 text-2xs uppercase tracking-wider text-[color:var(--text-secondary)]">
               <i className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: "var(--social)" }} />
@@ -203,24 +223,6 @@ export default function OntologyPage() {
           )}
           <Button onClick={rebuild} disabled={rebuilding}>{rebuilding ? "Refreshing…" : "Refresh"}</Button>
         </div>
-      </div>
-
-      <div className="flex items-center gap-1 border-b border-[color:var(--border-default)]">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            onClick={() => setTab(t.key)}
-            className={
-              tab === t.key
-                ? "flex items-center gap-2 px-3 py-2 text-[13px] font-medium border-b-2 -mb-px border-[color:var(--text-primary)] text-[color:var(--text-primary)]"
-                : "flex items-center gap-2 px-3 py-2 text-[13px] font-medium border-b-2 -mb-px border-transparent text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
-            }
-          >
-            {t.label}
-            <span className="text-2xs font-mono tabular-nums text-[color:var(--text-muted)]">{counts[t.key]}</span>
-          </button>
-        ))}
       </div>
 
       {tab === "structure" && <StructureTab data={structure} error={structureErr} />}
@@ -272,24 +274,25 @@ function StructureTab({ data, error }: { data: StructurePayload | null; error: s
 }
 
 function StructureRelations({ relations }: { relations: StructureRelation[] }) {
+  const sorted = [...relations].sort((a, b) => b.count - a.count);
   return (
     <Card raised>
       <SectionLabel>How it connects</SectionLabel>
-      {relations.length === 0 ? <Empty>No relations yet.</Empty> : (
-        <div className="space-y-3">
-          {relations.map((r) => (
-            <div key={r.property} className="border-b border-[color:var(--border-default)]/30 pb-3">
-              <div className="flex items-center gap-2 text-[13px] flex-wrap">
-                <span className="font-semibold text-[color:var(--text-primary)]">{r.domain}</span>
-                <span className="font-mono text-2xs" style={{ color: "var(--social)" }}>{r.property} →</span>
-                <span className="font-semibold text-[color:var(--text-primary)]">{r.range}</span>
+      {sorted.length === 0 ? <Empty>No relations yet.</Empty> : (
+        <div className="space-y-4">
+          {sorted.map((r) => (
+            <div key={r.property} className="ont-edge-card">
+              <div className="grid grid-cols-[1fr_auto_1fr] items-baseline gap-3">
+                <span className="text-[13px] font-semibold text-[color:var(--text-primary)]">{r.domain}</span>
+                <span className="ont-edge-property">{r.property} →</span>
+                <span className="text-[13px] font-semibold text-[color:var(--text-primary)] text-right">{r.range}</span>
               </div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-2xs font-mono tabular-nums px-1.5 py-0.5 rounded bg-[color:var(--surface-2)]">{r.count}</span>
-                <span className="text-[12px] text-[color:var(--text-muted)]">{r.comment}</span>
+              <div className="flex items-center gap-2 mt-2">
+                <span className="ont-edge-count">{r.count}</span>
+                <span className="text-[12px] text-[color:var(--text-secondary)]">{r.comment}</span>
               </div>
               {r.example && (
-                <div className="text-2xs text-[color:var(--text-muted)] mt-1 font-mono">
+                <div className="text-2xs text-[color:var(--text-muted)] mt-1.5 font-mono">
                   {r.example.from_label} → {r.example.to_label}
                 </div>
               )}

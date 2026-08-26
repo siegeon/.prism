@@ -140,7 +140,9 @@ def test_tab_strip_and_pill_and_refresh_share_one_row():
     body = _function_body(_page(), "function OntologyPage")
     tabs_idx = body.index("TABS.map")
     pill_idx = body.index("rules need a decision")
-    refresh_idx = body.index("Refresh")
+    # Search for the real Refresh button text AFTER the pill, not an
+    # earlier explanatory comment that happens to say the same word.
+    refresh_idx = body.index("Refresh", pill_idx)
     assert tabs_idx < pill_idx < refresh_idx
     # All three live inside the same still-open header <div> -- the div
     # opening right before TABS.map must not have closed by the time we
