@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.68"
+PRISM_VERSION = "7.13.69"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6596,4 +6596,29 @@ PRISM_VERSION_NOTES += (
     "document. Also filed: the code graph indexes built bundles (Function "
     "instances named '$', '$1' from web_dist), which is why Explore has no "
     "real symbol to classify yet (task 1a361686)."
+    "\n\n7.13.69: fixed a false-refusal in the candidate-controls-judge "
+    "gate tooth (control_plane.candidate_policy_edits), found live on task "
+    "e14680ba. It did a blind `git diff baseline HEAD`, which cannot tell "
+    "'the candidate edited a policy file' apart from 'the candidate's "
+    "branch merged the integration branch forward and inherited an "
+    "UNRELATED, already-authorized task's own policy change on the merge's "
+    "second-parent side' -- a long-running task merging dev in to stay "
+    "shippable got blamed for another task's already-shipped edit to "
+    "conductor_service.py/arc_governance.py. Fix: narrow the COMMITTED "
+    "portion of the diff to files the candidate's OWN first-parent commit "
+    "lineage actually touched, using `git log --first-parent --cc "
+    "--name-only` (verified empirically against this git 2.34 -- plain "
+    "--first-parent still shows a merge's full diff against its first "
+    "parent by default, over-flagging inherited files; the combined-diff "
+    "format only shows a merge commit's file when its resolved content "
+    "differs from EVERY parent, i.e. a real conflict resolution or content "
+    "nobody upstream had). Uncommitted worktree edits stay flagged "
+    "unconditionally regardless -- those cannot have arrived via someone "
+    "else's merge. Falls back to the prior, wider check whenever first-"
+    "parent history can't be resolved, so an environment where this is "
+    "unavailable never becomes MORE permissive. 2 new regression tests "
+    "(test_gate_not_refused_when_policy_file_only_arrives_via_clean_merge, "
+    "test_gate_still_refuses_a_genuine_conflict_resolution_edit) plus the "
+    "full existing control_plane/dirty-judge/adjudicator suites (42 tests) "
+    "still green."
 )
