@@ -228,5 +228,11 @@ def test_human_edited_task_survives_a_resync(tmp_path):
     svc2.pull_container(WS_A, conn, cont)
 
     task_after = tasks.get(link.task_id)
-    assert task_after.title == "Gate the ticket's premise, not just its form"
+    # Re-anchored (task 683e65eb): the lexicon aligns "ticket" to "Task" on
+    # every task write (task 2ee65e14), including this hand-edited title —
+    # assert against the aligner's own output so the fixture and the
+    # aligner cannot drift apart again.
+    from prism_service.services import ste
+    expected_title, _findings = ste.apply("Gate the ticket's premise, not just its form")
+    assert task_after.title == expected_title
     assert task_after.description == "hand-enriched local text, not the mirror stub"
