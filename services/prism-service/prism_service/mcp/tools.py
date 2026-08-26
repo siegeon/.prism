@@ -735,7 +735,11 @@ TOOLS: list[Tool] = [
             "Store an expertise entry in long-term memory. IMPORTANT: Always include "
             "file paths, code examples, and specific details in the description — "
             "a memory entry without evidence is nearly useless. If this fact supersedes "
-            "an older one, the old entry is automatically invalidated (not deleted)."
+            "an older one, the old entry is automatically invalidated (not deleted). "
+            "Write the description in Simplified Technical English (skill asd-ste100): "
+            "short active sentences, no semicolons, no contractions, keep every hedge. "
+            "The server normalises the text and returns a `style` block with what it "
+            "fixed and what it could not."
         ),
         inputSchema={
             "type": "object",
@@ -1099,7 +1103,15 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="task_create",
-        description="Create a new task in the PRISM task tracker",
+        description=(
+            "Create a new task in the PRISM task tracker. Write every text field in "
+            "Simplified Technical English (skill asd-ste100): title and description "
+            "in STE-flavored prose, oracle / likely_misfire / stop_if as Strict "
+            "instructions (one instruction per sentence, at most 20 words, active "
+            "voice, no semicolons, no contractions, keep every hedge). The server "
+            "normalises the text and returns a `style` block with what it fixed and "
+            "what it could not."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
