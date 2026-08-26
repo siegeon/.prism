@@ -127,6 +127,23 @@ def _ox_term_to_rdflib(term):
 # per on-disk path — every OntologyGraph(project) for the same project
 # shares the one open handle, however many wrapper instances exist.
 _STORES: dict[str, ox.Store] = {}
+# Bound the cache: a RocksDB store holds open files + memtables, and the
+# unit suite creates hundreds of throwaway projects, each with its own
+# store. Unbounded caching segfaulted the full run twice (rc=139 at ~65-70%,
+# 2026-08-25) once enough stores were alive at once. The live daemon serves
+# a handful of projects; 8 is plenty. Evicted stores are dropped and GC'd
+# BEFORE a new one opens (RocksDB's per-directory lock is released on drop).
+_STORES_MAX = 8
+
+
+def _cache_store(key: str, store: ox.Store) -> None:
+    import gc
+
+    while len(_STORES) >= _STORES_MAX:
+        oldest = next(iter(_STORES))
+        _STORES.pop(oldest, None)
+        gc.collect()
+    _STORES[key] = store
 
 
 def graph_exists(project: str) -> bool:
@@ -167,6 +184,11 @@ class OntologyGraph:
         store_path.mkdir(parents=True, exist_ok=True)
         if store is None:
             store = ox.Store(key)
+            _cache_store(key, store)
+        else:
+            # LRU touch: re-insert so the most recently used store is the
+            # last to be evicted by _cache_store.
+            _STORES.pop(key, None)
             _STORES[key] = store
         self._store = store
 
