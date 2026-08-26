@@ -47,6 +47,41 @@ _FOCUS_CAP = 100  # per-rule focus nodes kept in the persisted report
 _DETAIL_CAP = 5  # per-rule focus nodes shown in evaluate()'s human detail
 
 
+# CPython 3.11 has no C-stack guard: pyparsing's recursive descent (rdflib's
+# SPARQL parser, which pyshacl drives for every SPARQL-constraint shape and
+# rule_catalog drives over shapes.ttl) burns far more native stack per Python
+# frame than sys.getrecursionlimit() accounts for, and the default 8 MiB main
+# thread stack overflows into a plain SIGSEGV instead of a RecursionError —
+# the unit suite died that way (rc=139, faulthandler top frame
+# pyparsing/core.py _parseNoCache) on 2026-08-25. Run that work on a thread
+# whose stack is big enough that the recursion limit is the binding limit.
+_BIG_STACK_BYTES = 512 * 1024 * 1024
+
+
+def _run_with_big_stack(fn, *args, **kwargs):
+    import threading
+
+    result: dict = {}
+
+    def _target() -> None:
+        try:
+            result["value"] = fn(*args, **kwargs)
+        except BaseException as exc:  # re-raised on the caller's thread
+            result["error"] = exc
+
+    old = threading.stack_size()
+    try:
+        threading.stack_size(_BIG_STACK_BYTES)
+        t = threading.Thread(target=_target, name="ontology-rules-bigstack", daemon=True)
+        t.start()
+    finally:
+        threading.stack_size(old)
+    t.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
+
+
 def _local_name(iri: str) -> str:
     return iri[len(NS):] if iri.startswith(NS) else iri
 
@@ -69,6 +104,12 @@ def _shapes_graph() -> rdflib.Graph:
 
 
 def rule_catalog() -> list[dict]:
+    """The rules declared in shapes*.ttl (read via rdflib SPARQL — pyparsing
+    recursion, hence the big-stack thread; see _run_with_big_stack)."""
+    return _run_with_big_stack(_rule_catalog_impl)
+
+
+def _rule_catalog_impl() -> list[dict]:
     """Rule metadata (name/description/message/target_class), read
     straight off shapes.ttl: one row per <rule>.target node shape. This
     is the ONLY place rule names/descriptions live — never re-declared in
@@ -100,6 +141,12 @@ def rule_catalog() -> list[dict]:
 
 
 def run_shapes(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[str]]]:
+    """owlrl closure + pyshacl over shapes*.ttl, on a big-stack thread (see
+    _run_with_big_stack) — the tests call this directly with fixture graphs."""
+    return _run_with_big_stack(_run_shapes_impl, data_graph)
+
+
+def _run_shapes_impl(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[str]]]:
     """Run owlrl RDFS closure + pyshacl SHACL validation of shapes.ttl
     over a COPY of `data_graph` (the caller's own graph is left
     untouched). Pure — no store I/O. Returns (inferred_graph, violations)
@@ -170,7 +217,12 @@ def _to_evaluate_shape(rows: list[dict]) -> list[dict]:
 def validate(project: str) -> list[dict]:
     """Run the full SHACL pass for `project` and PERSIST the report,
     replacing whatever was on file. Returns the same shape evaluate()
-    returns, computed directly (no extra read-back)."""
+    returns, computed directly (no extra read-back). Runs on a big-stack
+    thread — see _run_with_big_stack."""
+    return _run_with_big_stack(_validate_impl, project)
+
+
+def _validate_impl(project: str) -> list[dict]:
     graph = OntologyGraph(project)
     base = graph.to_rdflib()
     catalog = rule_catalog()

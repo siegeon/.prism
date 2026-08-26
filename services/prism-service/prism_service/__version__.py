@@ -6604,5 +6604,11 @@ PRISM_VERSION_NOTES += (
     "as links, splices plan_doc/completion_proof, and gains a Plan notes card "
     "for premise_notes (a backend field that had no render surface). Known "
     "gap: the Design tab's DesignPacket renders its own plan_doc copy and is "
-    "not yet spliced."
+    "not yet spliced. HARDENING: the intermittent unit-suite segfault "
+    "(rc=139, 5 of ~11 full runs) was finally caught with capture disabled: "
+    "faulthandler's top frame is pyparsing's recursive descent -- rdflib's "
+    "SPARQL parser, which pyshacl drives per SPARQL-constraint shape -- "
+    "overflowing the 8 MiB main-thread C stack on CPython 3.11 (no C-stack "
+    "guard) before RecursionError could fire. run_shapes/validate/"
+    "rule_catalog now run on a 512 MiB-stack thread (task aa7fd8fb)."
 )
