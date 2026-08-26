@@ -913,6 +913,21 @@ def get_task(task_id: str, project: str = Query("default"),
     return out
 
 
+@router.get("/{task_id}/links")
+def get_task_links(task_id: str, project: str = Query("default")) -> dict:
+    """Cross-clicking (task 6968cc39): every ontology-known entity this
+    task's description mentions, as entity_linker.link()'s non-overlapping
+    spans — one call so the task page doesn't hand-roll the SPARQL/regex
+    matching itself."""
+    from prism_service.services import entity_linker
+
+    svc = _svc(project)
+    t = svc.get(task_id)
+    if not t:
+        raise HTTPException(404, "task not found")
+    return {"spans": entity_linker.link(project, t.description or "")}
+
+
 @router.get("/{task_id}/trace")
 def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     """Drive-scoped token trace for the task-detail Trace tab.

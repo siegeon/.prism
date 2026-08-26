@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Button } from "@/components/ui";
 import { Lozenge } from "@/components/Lozenge";
+import LinkedText from "@/components/LinkedText";
 
 // The Queue is where SIGNALS arrive over their channel (owner's model,
 // mx-0889e4). A signal is NOT a task -- it becomes one only when the owner
@@ -159,13 +160,15 @@ function SignalRow({ signal, onPromote, onDrop }: {
   return (
     <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-3">
       <div className="flex items-center gap-2">
-        <span className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>{signal.subject}</span>
+        <span className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>
+          <LinkedText text={signal.subject} />
+        </span>
         <span className="text-2xs shrink-0" style={{ color: "var(--text-muted)" }}>
           {signal.sender} · {relTime(signal.arrived_at)}
         </span>
       </div>
       <div className="text-xs mt-1 line-clamp-2" style={{ color: "var(--text-secondary)" }}>
-        {signal.body}
+        <LinkedText text={signal.body} />
       </div>
       {matches.length > 0 && (
         <div className="text-2xs mt-1 flex flex-wrap gap-x-3" style={{ color: "var(--text-muted)" }}>
