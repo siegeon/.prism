@@ -338,6 +338,11 @@ body {
 .ont-node[data-kind="property"]{border-color:transparent;background:transparent;font-family:var(--font-mono);font-size:.75rem;color:var(--formal);padding-left:2px;}
 .ont-node[data-kind="literal"]{border-color:transparent;background:transparent;border-bottom:1px dotted var(--text-muted);border-radius:0;color:var(--text-secondary);font-family:var(--font-mono);font-size:.75rem;}
 .ont-node[data-kind="abstract"]{background-image:repeating-linear-gradient(135deg, transparent 0 4px, var(--border-strong) 4px 5px);color:var(--text-secondary);border-style:dashed;}
+/* Ontology Structure tab (task 6d470cea): a class pill reused from the
+ * taxonomy tree carries data-kind="class" AND data-abstract="true" when the
+ * class is never instantiated -- dashed border, same as the old data-kind
+ * "abstract" variant, without giving up the square/--formal class coloring. */
+.ont-node[data-abstract="true"]{border-style:dashed;}
 .ont-axiom{display:inline-flex;align-items:center;gap:8px;padding:6px 11px;border:1px solid var(--border-strong);border-left:3px solid var(--text-muted);border-radius:3px;background:var(--surface-2);font-family:var(--font-mono);font-size:.75rem;color:var(--text-secondary);}
 .ont-axiom[data-state="violated"]{border-left-color:var(--alarm);background:var(--surface-3);color:var(--text-primary);}
 .ont-rolled{font-family:var(--font-mono);font-size:.75rem;color:var(--text-muted);padding:5px 10px;border:1px dashed var(--border-strong);border-radius:3px;background:var(--surface-1);display:inline-flex;}

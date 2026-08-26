@@ -60,8 +60,9 @@ def test_need_decision_pill_and_refresh_bound_to_rebuild():
 
 def test_tab_choice_persists_in_localstorage_with_a_try_catch():
     page = _page()
-    assert 'localStorage.getItem("prism.ontology.tab")' in page
-    assert 'localStorage.setItem("prism.ontology.tab"' in page
+    assert 'const TAB_STORAGE_KEY = "prism.ontology.tab";' in page
+    assert "localStorage.getItem(TAB_STORAGE_KEY)" in page
+    assert "localStorage.setItem(TAB_STORAGE_KEY, tab)" in page
     assert "catch" in page
 
 
