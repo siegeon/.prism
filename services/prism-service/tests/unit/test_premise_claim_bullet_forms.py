@@ -132,3 +132,26 @@ def test_prose_paragraph_does_not_get_folded_into_a_bogus_new_claim():
     assert res["ok"] is True, (
         "a trailing unbulleted prose paragraph must not turn into a "
         f"second, ungrounded claim entry: {res}")
+
+
+# ── AC-5: a citation as a NESTED sub-bullet folds into its claim ────────
+
+def test_citation_as_a_nested_sub_bullet_folds_into_the_claim_above_it():
+    """Same bug class as _ac_lines (task 3a3f90da, 2026-08-26): a citation
+    written as its own indented child bullet under the claim, rather than
+    on the same line, must fold into that claim - not become a second,
+    untracked entry that leaves the parent claim looking ungrounded."""
+    notes = (
+        "# Review notes\n\n## Premises\n"
+        "- The failing lane is unit-tests.yml\n"
+        f"  - {CITATION}\n"
+    )
+    claims = _gov()._claim_lines(
+        _gov()._find_section(_gov()._sections(notes), "premises") or "")
+    assert len(claims) == 1, (
+        f"the nested citation bullet must fold into the claim above it, "
+        f"not become its own entry: {claims!r}")
+    assert CITATION in claims[0]
+
+    res = _gov().score_premise_grounded({"notes_md": notes}, _rubric())
+    assert res["ok"] is True, res

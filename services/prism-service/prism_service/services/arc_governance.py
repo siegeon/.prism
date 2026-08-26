@@ -86,17 +86,35 @@ def _ac_lines(section_body: str) -> list[tuple[str, str]]:
     either so a naive author is not silently rejected for omitting the bullet
     (the job instructions never said the AC must be a bullet). Continuation
     (wrapped/indented) lines fold into the current entry, so an 'Oracle:' line
-    under its AC counts toward that AC."""
+    under its AC counts toward that AC.
+
+    BUG FOUND LIVE (task 3a3f90da, 2026-08-26): a nested '- oracle: ...'
+    sub-bullet UNDER its AC (the natural, instructed shape — an indented
+    child bullet, not a same-line suffix) was matched by is_bullet too and
+    started a NEW entry of its own instead of folding into the AC above it,
+    so every AC in that story read as oracle-less even though each one
+    plainly had an oracle line right beneath it. One nested oracle even got
+    mis-attributed to a DIFFERENT AC because its own prose happened to
+    contain that AC's id as a substring. Fixed by tracking each entry's
+    starting indentation: a bullet/AC-id line only opens a NEW entry when it
+    is NOT more indented than the entry currently being built - a deeper
+    bullet is always a continuation of it, matching what the docstring
+    above already claimed this function did."""
     entries: list[str] = []
+    current_indent: int | None = None
     for raw in (section_body or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
             continue
         stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
         is_bullet = re.match(r"^\s*[-*]\s+", line) is not None
         starts_ac = re.match(r"^AC-\d+\b", stripped) is not None
-        if is_bullet or starts_ac:
+        starts_new = (is_bullet or starts_ac) and (
+            current_indent is None or indent <= current_indent)
+        if starts_new:
             entries.append(stripped)
+            current_indent = indent
         elif entries:
             entries[-1] += " " + stripped
     out: list[tuple[str, str]] = []
@@ -249,15 +267,27 @@ def _claim_lines(section_body: str) -> list[str]:
     _ac_lines' bullet-folding, generalized to any bulleted claim line — a
     premise claim carries no required id, unlike an AC). Recognises '-'/'*'
     bullets AND numbered lists ('1.' / '1)') identically (task 43cefc52) —
-    grounding (_claim_is_grounded) is untouched by bullet form."""
+    grounding (_claim_is_grounded) is untouched by bullet form.
+
+    Same indentation guard as _ac_lines (task 3a3f90da, 2026-08-26): a
+    bullet only opens a NEW claim entry when it is not MORE indented than
+    the entry currently being built — a nested sub-bullet (e.g. a citation
+    written as its own indented child bullet under the claim) folds into
+    the claim above it instead of becoming an untracked, ungrounded-looking
+    sibling entry."""
     entries: list[str] = []
+    current_indent: int | None = None
     for raw in (section_body or "").splitlines():
         line = raw.rstrip()
         if not line.strip():
             continue
         stripped = line.strip()
-        if re.match(r"^\s*(?:[-*]|\d+[.)])\s+", line):
+        indent = len(line) - len(line.lstrip())
+        starts_new = re.match(r"^\s*(?:[-*]|\d+[.)])\s+", line) is not None and (
+            current_indent is None or indent <= current_indent)
+        if starts_new:
             entries.append(stripped)
+            current_indent = indent
         elif entries:
             entries[-1] += " " + stripped
     return entries
