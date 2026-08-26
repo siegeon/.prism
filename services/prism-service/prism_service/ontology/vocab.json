@@ -29,10 +29,11 @@
   ],
   "proof_type": [
     "test",
-    "metric",
-    "artifact",
     "demo",
+    "artifact",
+    "metric",
     "review",
+    "source_backed_answer",
     "decision"
   ],
   "signal_state": [
@@ -45,7 +46,9 @@
     "in_progress",
     "blocked",
     "done",
-    "cancelled"
+    "cancelled",
+    "deleted",
+    "archived"
   ],
   "workflow": [
     "implement",
