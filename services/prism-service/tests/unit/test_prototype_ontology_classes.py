@@ -43,6 +43,15 @@ def project(tmp_path_factory):
     ctx.task_svc.create(title="mcp task", channel="mcp")
     ctx.task_svc.create(title="legacy task")  # blank channel
 
+    # QueueItem now projects from signals, not tasks (task 785bb4ce) --
+    # the tasks above still seed Channel/Task/the axiom evaluation.
+    from prism_service.models.signal import Signal
+    from prism_service.services.signal_store import SignalStore
+
+    sig_store = SignalStore(pid)
+    sig_store.create(Signal(project=pid, channel="ui", subject="first signal"))
+    sig_store.create(Signal(project=pid, channel="slack", subject="second signal"))
+
     from prism_service.config import project_data_dir
 
     brain_db = project_data_dir(pid) / "brain.db"
@@ -112,8 +121,22 @@ def test_projection_populates_from_real_rows(project):
     assert set(CHANNELS) <= channel_labels
     assert "ui" in channel_labels and "mcp" in channel_labels
 
+    # Re-anchored by task 785bb4ce ("a signal is resolved against the
+    # ontology on arrival"): QueueItem now projects from SIGNALS, not tasks
+    # -- the Queue is where signals arrive. Task keeps the old tasks-based
+    # projection as its own class (test_signal_resolves_against_ontology.py
+    # pins the fuller signals-vs-tasks contract).
+    assert classes["QueueItem"]["source"] == "signals"
     qi_instances = store.list_instances("QueueItem", limit=50)
-    assert {i["label"] for i in qi_instances} == {"ui task", "mcp task", "legacy task"}
+    assert {i["label"] for i in qi_instances} == {
+        "first signal · open", "second signal · open",
+    }
+
+    assert classes["Task"]["source"] == "tasks"
+    task_instances = store.list_instances("Task", limit=50)
+    assert {i["label"] for i in task_instances} == {
+        "ui task", "mcp task", "legacy task",
+    }
 
     doc_labels = {i["label"] for i in store.list_instances("Document", limit=50)}
     assert doc_labels == {"services/foo.py", "services/bar.py"}
@@ -156,8 +179,10 @@ def test_api_serves_persisted_rows_and_rebuilds(project):
     assert out["properties"]
     assert out["axioms"]
 
+    # Re-anchored by task 785bb4ce: QueueItem instances come from the 2
+    # seeded signals now, not the 3 seeded tasks (see the `project` fixture).
     inst = okf.ontology_instances(project=project, class_id="QueueItem", limit=10)
-    assert len(inst["instances"]) == 3
+    assert len(inst["instances"]) == 2
 
     summary = okf.ontology_rebuild(project=project)
     assert summary["classes"] >= 7
