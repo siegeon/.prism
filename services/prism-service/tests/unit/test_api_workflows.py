@@ -148,13 +148,14 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
                         lambda project: [])
     body = workflows_api.get_workflows("prism")
 
-    # SUPERSEDED (task b837bc98): "triage" is now a real second, first-class
-    # workflow beside conductor/validation, sourced from
-    # models.workflow.WORKFLOWS the same way conductor's own steps are --
-    # not a new persisted entity, so it doesn't violate this test's original
-    # "no new entities" spirit; the exact catalog id list just grew by one.
+    # SUPERSEDED (task b837bc98, then again by task f07c9cea): "triage",
+    # then "align_language", are real first-class workflows beside
+    # conductor/validation, each sourced from models.workflow.WORKFLOWS
+    # the same way conductor's own steps are -- not a new persisted
+    # entity, so neither violates this test's original "no new entities"
+    # spirit; the exact catalog id list just grew by one each time.
     assert [workflow["id"] for workflow in body["workflows"]] == [
-        "conductor", "validation", "triage"]
+        "conductor", "validation", "triage", "align_language"]
     validation = body["workflows"][1]
     assert validation["name"] == "Build and test"
     assert validation["parent_id"] == "conductor", (

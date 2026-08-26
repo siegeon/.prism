@@ -47,6 +47,24 @@ TRIAGE_STEPS = [
     {"id": "done", "agent": None, "type": "done", "validation": None},
 ]
 
+# Align-language workflow (task f07c9cea, owner rule mx-f49a5c: "an
+# agent-shaped behaviour is a top-level workflow the system controls, like
+# the conductor"). A fourth, deliberately SHORT named workflow: it brings a
+# task's free text into plain Simplified Technical English and has no gate
+# at all -- every step is machine-run, so the system, never a person, drives
+# it end to end. collect (intake) gathers the dry-run scan; align (role
+# dev) rewrites the flagged fields through TaskService.update; verify (role
+# qa) confirms a second scan finds nothing left; done is terminal. Every
+# step's validation is None on purpose -- adding a real rubric would need a
+# new _VERIFIER_RULES entry, and conductor_service.py is a POLICY_FILE
+# (services/control_plane.py POLICY_FILES) this workflow must not edit.
+ALIGN_LANGUAGE_STEPS = [
+    {"id": "collect", "agent": None, "type": "intake", "validation": None},
+    {"id": "align", "agent": "dev", "type": "agent", "validation": None},
+    {"id": "verify", "agent": "qa", "type": "agent", "validation": None},
+    {"id": "done", "agent": None, "type": "done", "validation": None},
+]
+
 # NAMED workflow registry (task b837bc98): every step list a task can be
 # driven by, keyed by the SAME worker-facing value models.task.Task.workflow
 # stores ("implement" is models.task.DEFAULT_WORKFLOW). WORKFLOW_STEPS above
@@ -57,6 +75,7 @@ TRIAGE_STEPS = [
 WORKFLOWS: dict[str, list[dict]] = {
     "implement": WORKFLOW_STEPS,
     "triage": TRIAGE_STEPS,
+    "align_language": ALIGN_LANGUAGE_STEPS,
 }
 
 

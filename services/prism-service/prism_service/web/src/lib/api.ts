@@ -75,6 +75,39 @@ export async function approveDesignPacket(
   });
 }
 
+// ── Align-language workflow (task f07c9cea, owner rule mx-f49a5c) ──────
+// A top-level, system-controlled workflow: the button below only ever
+// triggers the SAME run the daemon's own tick would (services/
+// language_alignment_worker.py:run_once_for), never a client-side
+// re-implementation of the rewrite.
+
+export type OntologyRuleFocus = { iri: string; label?: string };
+export type OntologyRuleRow = { name: string; focus: OntologyRuleFocus[] };
+export type OntologyRulesResponse = { rules: OntologyRuleRow[] };
+
+export async function getOntologyRules(
+  project: string,
+): Promise<OntologyRulesResponse> {
+  return api.get<OntologyRulesResponse>(
+    `/api/okf/ontology/rules?project=${project}`,
+  );
+}
+
+export type AlignLanguageResult = {
+  run_task_id: string | null;
+  report: { would_change?: number; changed?: number } & Record<string, unknown>;
+};
+
+export async function alignLanguage(
+  project: string,
+  dryRun: boolean,
+): Promise<AlignLanguageResult> {
+  return api.post<AlignLanguageResult>(
+    `/api/tasks/align-language?project=${project}&dry_run=${dryRun}`,
+    {},
+  );
+}
+
 // ── Team-work integration surface (task ae31c2c0) ──────────────────────
 // Thin typed helpers over the provider-neutral integration core
 // (/api/workspaces/{ws}/integrations/*). The Tasks view merges native tasks
