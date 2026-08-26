@@ -14,17 +14,12 @@ ingestion path this task named and asserts (a) a spy registered directly
 via ste.on_apply saw the call, and (b) coverage(project) lists the
 expected label with count >= 1.
 
-Two producers this file DELIBERATELY does not force through ste, because
-the real code genuinely never routes them there (confirmed by reading
-the source, not assumed):
-
-  * POST /api/signals (raw signal CREATE) -- SignalStore.create writes
-    subject/body with a bare INSERT and never touches ste; only PROMOTE
-    (which creates a TASK through TaskService) aligns. Pinned below as
-    test_signal_create_does_not_align_but_promote_does.
-  * MCP signal_post -- the MCP tool that reaches SignalStore.create
-    directly; same reason, same non-registration, pinned the same way.
-    There is no MCP signal_promote tool at all (grepped mcp/tools.py).
+Signals align ON ARRIVAL since task ed034701 (epic cc9a44c8): SignalStore.
+create runs the aligner over subject and body, keeps the raw text beside
+the aligned text, and the registry labels the hit by its entry point
+(api.signals for POST /api/signals, mcp.signal_post for the MCP tool).
+Promotion then creates a TASK through TaskService, which aligns again
+(idempotent). Both are pinned below.
 
 STATIC: every .py under prism_service (excluding tests) is scanned for
 an INSERT/UPDATE statement that references a column named title,
@@ -283,10 +278,14 @@ def test_signal_create_does_not_align_but_promote_does(project, spy):
     assert posted.status_code == 200, posted.text
     signal = posted.json()["signal"]
 
-    # Raw signal intake never touches ste (SignalStore.create is a bare
-    # INSERT) -- confirmed empty on purpose, not a gap in the spy.
-    assert len(spy) == 0
-    assert la.coverage(project) == []
+    # Re-anchored for task ed034701 (epic cc9a44c8): a signal aligns ON
+    # ARRIVAL now -- SignalStore.create runs the aligner over subject and
+    # body and keeps the raw text beside it -- so the spy sees two calls
+    # and coverage lists the api.signals entry point before anything is promoted.
+    assert len(spy) == 2
+    assert "api.signals" in {row["path"] for row in la.coverage(project)}
+    assert signal["body"] == "please look at this; it matters"
+    assert "It matters" in signal["aligned_body"]
 
     r = client.post(
         f"/api/signals/{signal['id']}/promote", params={"project": project},
@@ -299,10 +298,11 @@ def test_signal_create_does_not_align_but_promote_does(project, spy):
     assert rows["api.signals"]["count"] >= 1
 
 
-def test_mcp_signal_post_does_not_align(project, spy):
-    """Same non-registration as raw POST /api/signals above, over MCP --
-    there is no MCP signal_promote tool at all (grepped mcp/tools.py), so
-    this ingestion path genuinely never reaches ste today."""
+def test_mcp_signal_post_aligns_on_arrival(project, spy):
+    """Re-anchored for task ed034701 (epic cc9a44c8): signal_post over MCP
+    reaches SignalStore.create, which aligns subject and body on arrival
+    and keeps the raw text. The spy sees the two calls and coverage lists
+    the mcp.signal_post entry point."""
     from prism_service.services import language_alignment as la
 
     _mcp_call(
@@ -311,8 +311,8 @@ def test_mcp_signal_post_does_not_align(project, spy):
          "body": "please look; at this", "sender": "bob"},
         project)
 
-    assert len(spy) == 0
-    assert la.coverage(project) == []
+    assert len(spy) == 2
+    assert "mcp.signal_post" in {row["path"] for row in la.coverage(project)}
 
 
 # ── (7) work_item_sync import (fake GitHub adapter) -> work_item_sync ──

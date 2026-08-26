@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.88"
+PRISM_VERSION = "7.13.89"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7003,4 +7003,28 @@ PRISM_VERSION_NOTES += (
     "125 neighboring conductor/workflow UI, one pre-existing assertion "
     "updated in place for the superseded literal string); real "
     "`npm run build` clean."
+    "\n\n7.13.89: every ingestion path invokes Align language (epic cc9a44c8, "
+    "owner: signals from connections, agents, the API and MCP must all invoke "
+    "the workflow to prevent drift). SIGNALS ALIGN ON ARRIVAL: SignalStore."
+    "create aligns subject and body into aligned_subject / aligned_body with "
+    "a style block, keeps the raw text for provenance, the API and MCP "
+    "signal_post return both, promote uses the aligned text, the resolver "
+    "matches on it, the Queue shows it with the raw text behind 'As arrived', "
+    "the graph projects it as rdfs:comment on o:Signal, and o:Signal is a "
+    "target of text-is-plain and text-uses-canonical-terms. CONDUCTOR TEXT "
+    "ALIGNS AT WRITE: plan_doc prose aligns with fences, mermaid, tables, "
+    "headings, list lines and the AC-/oracle:/citation: rubric tokens "
+    "protected, so the story and plan rubrics parse the same before and "
+    "after; PATCH /api/tasks/{id} accepts premise_notes (it answered 400 'no "
+    "fields to update' when that was the only field). NO DRIFT: ste gains an "
+    "on_apply listener; language_alignment maps the caller stack to a path "
+    "label (api.tasks, mcp.task_create, mcp.signal_post, api.signals, "
+    "work_item_sync, task_runner, conductor_flow, memory_service, "
+    "signal_store, reflection, unknown:<module>) and persists per-project "
+    "coverage that the Align language row on /workflows renders as "
+    "'Ingestion paths'; tests/unit/test_every_ingestion_path_aligns.py "
+    "exercises every path and sweeps production code for raw text writes "
+    "outside the three choke points. Tests: test_signals_align_on_arrival "
+    "(13), test_plan_text_aligns_at_write (9), test_every_ingestion_path_"
+    "aligns (14); re-anchors named in place."
 )
