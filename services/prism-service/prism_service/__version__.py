@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.95"
+PRISM_VERSION = "7.13.96"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7134,4 +7134,25 @@ PRISM_VERSION_NOTES += (
     "merge-base alone false-positives on that commit's symbol while the "
     "fix returns no refusal. 45 neighboring reachability/gate-adjudicator "
     "tests green."
+)
+PRISM_VERSION_NOTES += (
+    "7.13.96: live incident (task 8582921d, 2026-08-26) -- a task detail "
+    "page opened BEFORE a green_gate approval and left open through it kept "
+    "showing the stale pre-approval delivery badge (header read both "
+    "'DONE', pushed live via SSE, and 'NOT DELIVERED YET - GATE NOT PASSED "
+    "YET', frozen from the page's single mount-time fetch) even though "
+    "GET /api/tasks/:id/delivery already reported delivered=true with "
+    "every stage done. TaskDetailPage.tsx's tests+delivery effect fetched "
+    "once at [id, project] and never again for the page's lifetime. Fixed "
+    "with the SAME one-shot-per-transition runKey/re-observe shape already "
+    "proven by readinessRunFor/ranPinTestsFor in this file: a new "
+    "deliveryRunFor ref guards a runKey built from "
+    "id:project:workflow_step:gate_state:status, and the effect's "
+    "dependency array now includes task?.workflow_step/gate_state/status "
+    "so it re-fires exactly on a gate transition, never on a timer. New "
+    "source-reading regression test (brace-balanced effect extraction, "
+    "mirroring test_gate_banner_refreshes_on_gate_arrival.py's pattern) "
+    "pins the ref, the deps array and the runKey fields, plus a "
+    "behavioural replay proving a mount+mint+resolve sequence yields "
+    "exactly 3 fetches and 20 stable re-renders yield 0 extra."
 )
