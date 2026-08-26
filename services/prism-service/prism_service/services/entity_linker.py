@@ -145,6 +145,11 @@ def _register(exact: dict, ci: dict, text: str, entry: "_Entry") -> int:
     return len(toks)
 
 
+# Every ABox instance must reach the index; a project has thousands
+# (prism: ~2.5k things). Far above any real graph, far below pathological.
+_INDEX_ROW_LIMIT = 1_000_000
+
+
 def _build_index(project: str) -> tuple[dict, dict, int]:
     """One SPARQL pass over the ABox for real instances (tasks/documents/
     folders/agents/memories), one over the TBox for class names, and one
@@ -164,7 +169,10 @@ def _build_index(project: str) -> tuple[dict, dict, int]:
     q = ("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
          f"SELECT ?i ?label ?cls WHERE {{ GRAPH <{abox}> {{ "
          "?i a ?cls . OPTIONAL { ?i rdfs:label ?label } } }")
-    for row in graph.query(q)["bindings"]:
+    # query() defaults to limit=500 (a UI safety cap) -- the index must see
+    # EVERY instance: live on 2026-08-25 only the first 500 ABox rows (all
+    # documents) were indexed, so no task id or memory id ever linked.
+    for row in graph.query(q, limit=_INDEX_ROW_LIMIT)["bindings"]:
         iri, cls_full = row["i"], row["cls"]
         label = row.get("label") or ""
         cls_local = cls_full[len(NS):] if cls_full.startswith(NS) else cls_full
@@ -186,7 +194,7 @@ def _build_index(project: str) -> tuple[dict, dict, int]:
 
     qc = ("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
           f"SELECT ?c WHERE {{ GRAPH <{model}> {{ ?c a rdfs:Class }} }}")
-    for row in graph.query(qc)["bindings"]:
+    for row in graph.query(qc, limit=_INDEX_ROW_LIMIT)["bindings"]:
         c = row["c"]
         local = c[len(NS):] if c.startswith(NS) else c
         add(local, _Entry(local, "/ontology?tab=structure", local, c))

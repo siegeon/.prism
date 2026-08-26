@@ -246,3 +246,32 @@ def test_task_detail_page_keeps_markdown_for_the_description():
     assert "<Markdown text={linkedDescription || task.description} />" in src
     assert 'import Markdown from "@/components/Markdown"' in src
     assert "spliceLinkedMarkdown" in src
+
+
+# ---------------------------------------------------------------------------
+# Regression (found live 2026-08-25): the index must see EVERY ABox row.
+# OntologyGraph.query() defaults to limit=500 -- with 935 documents ahead of
+# the tasks/memories in the store, no task id or memory id ever linked on
+# the prism project. Seed more than 500 documents and prove the task id,
+# the memory id and the LAST document still link.
+# ---------------------------------------------------------------------------
+
+def test_index_sees_every_instance_past_the_query_default_limit(monkeypatch):
+    from prism_service.services.ontology_graph import OntologyGraph
+    from prism_service.services import entity_linker
+
+    pid = f"entity-linker-big-{uuid.uuid4().hex[:8]}"
+    docs = [f"services/pkg/module_{i:04d}.py" for i in range(600)]
+    rows = {
+        "channels": ["slack"], "agents": [], "providers": [],
+        "tasks": [{"id": TASK_ID, "title": TASK_TITLE, "channel": "slack"}],
+        "signals": [], "documents": docs, "code_kinds": [],
+        "memories": [{"id": MEMORY_ID, "name": "A great decision", "type": "decision",
+                      "domain": "", "cites": [], "evidence_task": "", "evidence_files": []}],
+    }
+    OntologyGraph(pid).rebuild(rows=rows, agent_descriptions={}, signal_arrived_at={})
+    spans = entity_linker.link(pid, f"see {TASK_ID[:8]} and {MEMORY_ID} and {docs[-1]}")
+    texts = {s["text"] for s in spans}
+    assert TASK_ID[:8] in texts, spans
+    assert MEMORY_ID in texts, spans
+    assert docs[-1] in texts, spans
