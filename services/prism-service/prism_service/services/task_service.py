@@ -18,6 +18,7 @@ from prism_service.models.task import (
     validate_channel,
     validate_workflow,
 )
+from prism_service.services import ste
 
 
 # Callable signature for LL-03's embedder injection. Returns packed
@@ -338,6 +339,11 @@ class TaskService:
         # change on an advance_task transition — so serve the same grouped
         # dict until _record_history sees one (task 9974d407).
         self._advance_rows_cache: Optional[dict] = None
+        # STE style report (task 36283d72): the STYLE BLOCK from the most
+        # recent create/update call. A plain attribute, not a model field —
+        # a sibling slice reads it right after the call that set it. Empty
+        # until the first create/update runs.
+        self.last_style: dict = {}
 
     # ------------------------------------------------------------------
     # Per-thread connection factory (task 0584addb)
@@ -495,6 +501,85 @@ class TaskService:
         self._record_history(task_id, action, details=details, actor=actor)
 
     # ------------------------------------------------------------------
+    # STE normalisation (task 36283d72)
+    # ------------------------------------------------------------------
+
+    def _apply_ste(self, task: Task) -> list[str]:
+        """Run the deterministic STE normaliser over every free-text
+        field on ``task``, in place, before the caller persists it.
+
+        title, description, completion_proof, and premise_notes run in
+        flavored mode (they read as prose). oracle, likely_misfire, and
+        each stop_if entry run in strict mode (they are instructions a
+        machine or a person must follow exactly).
+
+        plan_doc and plan_diagram are only CHECKED, never rewritten — a
+        plan a human already approved at plan_gate must not shift under
+        them.
+
+        Sets ``self.last_style`` to the combined style_block for this
+        call. Returns the distinct rule names that changed a field, so
+        the caller can record one ``ste_normalise`` history row. Never
+        raises — a normaliser bug must not block a task write.
+        """
+        fields: dict[str, tuple[list[str], list[ste.Finding]]] = {}
+        changed_rules: list[str] = []
+
+        def _remember(rules: list[str]) -> None:
+            for rule in rules:
+                if rule not in changed_rules:
+                    changed_rules.append(rule)
+
+        def _process(name: str, value: str, mode: str) -> str:
+            fixed, rules = ste.normalize(value, mode=mode)
+            findings = ste.check(fixed, mode=mode)
+            fields[name] = (rules, findings)
+            _remember(rules)
+            return fixed
+
+        try:
+            task.title = _process("title", task.title, "flavored")
+            task.description = _process(
+                "description", task.description, "flavored")
+            task.oracle = _process("oracle", task.oracle, "strict")
+            task.likely_misfire = _process(
+                "likely_misfire", task.likely_misfire, "strict")
+            task.completion_proof = _process(
+                "completion_proof", task.completion_proof, "flavored")
+            task.premise_notes = _process(
+                "premise_notes", task.premise_notes, "flavored")
+
+            if task.stop_if:
+                stop_rules: list[str] = []
+                stop_findings: list[ste.Finding] = []
+                new_stop_if: list[str] = []
+                for entry in task.stop_if:
+                    fixed_entry, rules = ste.normalize(entry, mode="strict")
+                    new_stop_if.append(fixed_entry)
+                    for rule in rules:
+                        if rule not in stop_rules:
+                            stop_rules.append(rule)
+                    stop_findings.extend(ste.check(fixed_entry, mode="strict"))
+                task.stop_if = new_stop_if
+                fields["stop_if"] = (stop_rules, stop_findings)
+                _remember(stop_rules)
+
+            # Check-only fields (task 36283d72): never rewritten.
+            fields["plan_doc"] = ([], ste.check(task.plan_doc, mode="flavored"))
+            fields["plan_diagram"] = (
+                [], ste.check(task.plan_diagram, mode="flavored"))
+
+            self.last_style = ste.style_block(fields)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "STE normaliser failed for task %s; the write proceeds "
+                "with the caller's own text unchanged.", task.id,
+                exc_info=True)
+            return []
+
+        return changed_rules
+
+    # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
@@ -553,6 +638,11 @@ class TaskService:
             channel_ref=channel_ref or "",
             workflow=workflow,
         )
+        # STE normalisation (task 36283d72): rewrite the safe fields BEFORE
+        # the insert below, so the stored row already carries the fixed
+        # text. Never blocks the write — _apply_ste swallows its own
+        # errors.
+        ste_rules = self._apply_ste(task)
         self._db.execute(
             "INSERT INTO tasks "
             "(id, title, description, status, priority, story_file, "
@@ -596,6 +686,9 @@ class TaskService:
         )
         self._db.commit()
         self._record_history(task.id, "created", f"title={title!r}")
+        if ste_rules:
+            self._record_history(
+                task.id, "ste_normalise", "rules=" + ",".join(ste_rules))
         # LL-03: embed title+description so LL-06's similarity retrieval
         # has something to search over. Silent on embedder-offline —
         # the row still exists, just without a vector.
@@ -784,6 +877,34 @@ class TaskService:
             if value is None or isinstance(value, (str, int, float, bool)):
                 changed_fields[key] = value
 
+        # STE normalisation (task 36283d72): run on every call that finds
+        # a task, so self.last_style always reflects the CURRENT fields —
+        # not just the ones this particular call happened to touch. Any
+        # safe rewrite this makes rides the same write as the caller's
+        # own change; a no-op call (nothing in kwargs differs, and the
+        # stored text is already normalised) leaves `changes` untouched
+        # here, so the early return below still fires.
+        ste_before = {
+            "title": task.title,
+            "description": task.description,
+            "oracle": task.oracle,
+            "likely_misfire": task.likely_misfire,
+            "completion_proof": task.completion_proof,
+            "premise_notes": task.premise_notes,
+            "stop_if": list(task.stop_if),
+        }
+        ste_rules = self._apply_ste(task)
+        for field_name, old_value in ste_before.items():
+            new_value = getattr(task, field_name)
+            if new_value == old_value:
+                continue
+            changes.append(
+                f"{field_name}: {_history_value_repr(old_value)} -> "
+                f"{_history_value_repr(new_value)}"
+            )
+            if isinstance(new_value, (str, int, float, bool)) or new_value is None:
+                changed_fields[field_name] = new_value
+
         if not changes:
             return task
 
@@ -839,6 +960,9 @@ class TaskService:
         )
         self._db.commit()
         self._record_history(task.id, "updated", "; ".join(changes))
+        if ste_rules:
+            self._record_history(
+                task.id, "ste_normalise", "rules=" + ",".join(ste_rules))
         # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
         # it — the write already committed above, so a publish failure
         # (bus down, serialization) must never surface as a write failure.

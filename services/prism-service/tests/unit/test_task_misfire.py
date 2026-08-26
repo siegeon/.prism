@@ -70,9 +70,13 @@ def test_likely_misfire_round_trip_create_and_update(tmp_path):
     t = task_svc.create(
         title="x", likely_misfire="tests stub the API; dead UI passes green"
     )
-    assert t.likely_misfire == "tests stub the API; dead UI passes green"
+    # Re-anchored for task 36283d72: likely_misfire runs through the STE
+    # normaliser (strict mode) on every write, and the normaliser turns a
+    # clause-joining semicolon into a sentence break with the next word
+    # capitalised. The literal semicolon form no longer round-trips.
+    assert t.likely_misfire == "tests stub the API. Dead UI passes green"
     g = task_svc.get(t.id)
-    assert g.likely_misfire == "tests stub the API; dead UI passes green"
+    assert g.likely_misfire == "tests stub the API. Dead UI passes green"
     task_svc.update(t.id, likely_misfire="updated misfire risk")
     g2 = task_svc.get(t.id)
     assert g2.likely_misfire == "updated misfire risk"
