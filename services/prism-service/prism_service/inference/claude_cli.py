@@ -87,6 +87,7 @@ def _build_cmd(
     max_turns: int,
     allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS,
     json_schema: dict | None = None,
+    session_id: str = "",
 ) -> list[str]:
     """Build the `claude -p` invocation.
 
@@ -118,6 +119,8 @@ def _build_cmd(
         cmd += ["--model", model]
     if max_budget_usd > 0:
         cmd += ["--max-budget-usd", str(max_budget_usd)]
+    if session_id:
+        cmd += ["--session-id", session_id]
     if json_schema is not None:
         # Verified live (2026-08-20): --json-schema + --output-format
         # json/stream-json returns a "structured_output" field, already
@@ -246,6 +249,7 @@ def invoke(
     allowed_tools: tuple[str, ...] = READ_ONLY_TOOLS,
     json_schema: dict | None = None,
     timeout_s: float | None = None,
+    session_id: str = "",
 ) -> ClaudeCliResult:
     """Run `claude -p` headless and capture stream-json output.
 
@@ -276,6 +280,7 @@ def invoke(
     cmd = _build_cmd(
         prompt, plugin_dir, model, max_budget_usd, max_turns,
         allowed_tools=allowed_tools, json_schema=json_schema,
+        session_id=session_id,
     )
     env = _strip_env()
 

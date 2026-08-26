@@ -44,10 +44,12 @@ def make_task():
 
 
 class _FakeResult:
-    def __init__(self, text: str, exit_code: int = 0, run_id: str = "run-x"):
+    def __init__(self, text: str, exit_code: int = 0, run_id: str = "run-x",
+                 usage: dict | None = None):
         self._text = text
         self.exit_code = exit_code
         self.run_id = run_id
+        self.usage = usage
 
     def final_text(self) -> str:
         return self._text
@@ -58,6 +60,20 @@ def _fake_invoke(calls, text="## Premises\n- ok - UNVERIFIED\n",
     def _invoke(prompt, **kwargs):
         calls.append({"prompt": prompt, **kwargs})
         return _FakeResult(text, exit_code=exit_code)
+    return _invoke
+
+
+def _fake_invoke_charging(calls, cost_usd,
+                          text="## Premises\n- ok - UNVERIFIED\n"):
+    """Like _fake_invoke, but the result carries a `usage["cost_usd"]` so
+    the aggregate spend tracker (epic 3baadd19 AC-5) has something to
+    charge against."""
+    def _invoke(prompt, **kwargs):
+        calls.append({"prompt": prompt, **kwargs})
+        return _FakeResult(text, usage={"cost_usd": cost_usd,
+                                        "model": "test-model",
+                                        "input_tokens": 10,
+                                        "output_tokens": 10})
     return _invoke
 
 
@@ -233,6 +249,54 @@ def test_task_at_pending_gate_is_skipped(make_task, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Gate boundary regression guard (epic 3baadd19 AC-4): eligible_task must
+# skip ALL FOUR gate steps generically (not just story_gate), and even if
+# the runner's own SEAT_ID somehow reported against one, flow_report's
+# independent distinct-actor check must refuse it too. Two separate
+# defenses, both pinned across every gate id so neither can silently
+# regress on its own.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "gate_id", ["story_gate", "plan_gate", "red_gate", "green_gate"],
+)
+def test_eligible_task_skips_every_gate_step(make_task, gate_id):
+    from prism_service.services import task_runner as tr
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, workflow_step=gate_id,
+                        gate_state="pending", status="in_progress")
+
+    assert tr.eligible_task(project) is None
+
+
+@pytest.mark.parametrize(
+    "gate_id", ["story_gate", "plan_gate", "red_gate", "green_gate"],
+)
+def test_flow_report_refuses_seat_id_as_distinct_actor_on_every_gate(
+    make_task, gate_id,
+):
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as flow
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, workflow_step=gate_id,
+                        gate_state="pending", status="in_progress")
+    ctx.task_svc.link_session(task.id, tr.SEAT_ID)
+
+    result = flow.flow_report(
+        flow.Ident(task_id=task.id, session_id=tr.SEAT_ID,
+                   outcome="pass", expected_step=gate_id),
+        project=project,
+    )
+
+    assert result["ok"] is False
+    assert "distinct-actor" in result["reason"]
+    still = ctx.task_svc.get(task.id)
+    assert still.gate_state == "pending"
+
+
+# ---------------------------------------------------------------------------
 # Budget / turn ceiling passthrough
 # ---------------------------------------------------------------------------
 
@@ -366,7 +430,8 @@ def test_wired_into_the_lifespan():
 # never learns about.
 # ---------------------------------------------------------------------------
 
-def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
+def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval(
+        monkeypatch):
     import threading
     import time as time_mod
     from prism_service.services import task_runner as tr
@@ -379,17 +444,25 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         swept.set()
         return None
 
-    orig_sweep = tr.sweep_once
-    tr.sweep_once = _fake_sweep_once
+    monkeypatch.setattr(tr, "sweep_once", _fake_sweep_once)
     # _wake_event is a module-level singleton shared with every real
     # task_svc.update() call in this process -- another test earlier in
     # this session may have already set it. Start from a known-clear state
     # so this test's own wake() is what's actually being observed.
     tr._wake_event.clear()
+    # A real stop signal (not a permanent sweep_once stub) -- without it
+    # this thread has no way to end, so it outlives the test and its
+    # every-wake() call to the shared, module-level sweep_once races every
+    # later test in this file (observed live: intermittent cross-test
+    # failures like a doubled flow_report call). monkeypatch restores the
+    # REAL sweep_once once this test returns, so the thread must actually
+    # be joined before then, not merely made harmless forever.
+    stop_event = threading.Event()
     try:
         # A deliberately huge interval -- if wake() didn't work, the second
         # sweep would never arrive within this test's timeout.
-        t = threading.Thread(target=tr._loop, args=(999,), daemon=True)
+        t = threading.Thread(target=tr._loop, args=(999, stop_event),
+                             daemon=True)
         t.start()
         assert swept.wait(timeout=2), "first sweep (loop entry) never ran"
         swept.clear()
@@ -403,7 +476,76 @@ def test_wake_cuts_the_wait_short_instead_of_sitting_out_the_interval():
         assert sweeps[1] - sweeps[0] < 2, (
             "second sweep took nearly as long as the interval, not a wake")
     finally:
-        tr.sweep_once = orig_sweep
+        stop_event.set()
+        tr.wake()  # cut the 999s wait short so the thread notices and exits
+        t.join(timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Per-run session identity (task 12403c60, epic 3baadd19 AC-2): a runner-
+# driven claude -p child must run under its own fresh session id, distinct
+# from the constant SEAT_ID that gate reports keep using for distinct-actor
+# identity -- otherwise every worker-driven step across every task collapses
+# onto one indistinguishable identity on /live.
+# ---------------------------------------------------------------------------
+
+def test_run_one_step_passes_a_fresh_uuid_session_id_distinct_from_seat_id(
+        make_task, monkeypatch):
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+
+    session_id = calls[0].get("session_id")
+    assert session_id, "claude_cli.invoke must receive a non-empty session_id"
+    uuid.UUID(session_id)  # raises ValueError if not a real UUID
+    assert session_id != tr.SEAT_ID, (
+        "the per-run session id must not collapse onto the constant "
+        "gate-report seat identity")
+
+
+def test_run_one_step_keeps_seat_id_as_the_gate_report_identity(
+        make_task, monkeypatch):
+    """AC-4: the new per-run session id must be confined to the
+    claude_cli.invoke call site -- flow.Ident/flow_report (the gate-report
+    distinct-actor identity) must still carry SEAT_ID, unchanged."""
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    reported = []
+    orig_flow_report = cf.flow_report
+
+    def _spy_flow_report(body, project="default"):
+        reported.append(body.session_id)
+        return orig_flow_report(body, project=project)
+
+    monkeypatch.setattr(cf, "flow_report", _spy_flow_report)
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+
+    assert reported == [tr.SEAT_ID], (
+        "flow_report's session_id must stay SEAT_ID even though "
+        "claude_cli.invoke now receives a distinct per-run session id")
 
 
 def test_task_service_update_wakes_the_runner(make_task, monkeypatch):
@@ -419,3 +561,274 @@ def test_task_service_update_wakes_the_runner(make_task, monkeypatch):
         "task_service.update() must call task_runner.wake() so a task "
         "becoming eligible is swept immediately, not on the next fixed-"
         "interval tick")
+
+
+# ---------------------------------------------------------------------------
+# Drive heartbeat (epic 3baadd19 AC-3): a pre-call beat must land in
+# drive_heartbeats BEFORE claude_cli.invoke is called, so a long-running
+# child still reads as driving on /live instead of stalled/idle.
+# ---------------------------------------------------------------------------
+
+def _scores_db_for(project):
+    from prism_service.project_context import get_project
+
+    return str(get_project(project)._data_dir / "scores.db")
+
+
+def test_heartbeat_recorded_before_claude_invoke_returns(make_task, monkeypatch):
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.services import drive_heartbeat
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    scores_db = _scores_db_for(project)
+    seen_during_call = {}
+
+    def _invoke(prompt, **kwargs):
+        # The heartbeat must already be on file BEFORE this (potentially
+        # long-running) call returns -- a post-call beat only proves the
+        # step FINISHED, not that it was working during the call.
+        seen_during_call["row"] = drive_heartbeat.latest(scores_db, task.id)
+        return _FakeResult("## Premises\n- ok - UNVERIFIED\n")
+
+    monkeypatch.setattr(claude_cli, "invoke", _invoke)
+
+    res = tr.run_one_step(project, task.id)
+    assert res["ok"] is True, res
+
+    row = seen_during_call.get("row")
+    assert row is not None, (
+        "no drive_heartbeats row existed while claude_cli.invoke was "
+        "running -- the heartbeat must be posted BEFORE the call, not "
+        "only after it returns")
+    assert row["last_tool"] == "claude_cli.invoke", row
+
+
+def test_heartbeat_recorded_at_advances_across_two_ticks(make_task, monkeypatch):
+    import time
+
+    from prism_service.api import conductor_flow as cf
+    from prism_service.services import task_runner as tr
+    from prism_service.services import drive_heartbeat
+    from prism_service.inference import claude_cli
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    scores_db = _scores_db_for(project)
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke(calls))
+
+    tr.run_one_step(project, task.id)
+    first = drive_heartbeat.latest(scores_db, task.id)
+    assert first is not None, "first tick recorded no heartbeat at all"
+
+    time.sleep(0.01)
+    tr.run_one_step(project, task.id)
+    second = drive_heartbeat.latest(scores_db, task.id)
+    assert second is not None, "second tick recorded no heartbeat at all"
+    assert second["recorded_at"] > first["recorded_at"], (
+        "a second driven tick must advance recorded_at -- a single frozen "
+        "beat does not satisfy a driver that is genuinely still working")
+
+
+# ---------------------------------------------------------------------------
+# Aggregate spend ceiling (epic 3baadd19 AC-5, task 441dc0bd): a runaway
+# drive (a stuck loop, a wedged step retried forever, or simply many
+# expensive tasks queued) has no circuit breaker today -- only a PER-
+# INVOCATION cap exists (_max_budget_usd). These pin a module-level
+# accumulator, gated by PRISM_TASK_RUNNER_MAX_TOTAL_USD (unset/blank ==
+# unbounded), charged immediately after claude_cli.invoke returns, and
+# checked by BOTH sweep_once() and eligible_task() before claiming new
+# work -- with a visible, grep-able breach reason via the existing _log().
+# ---------------------------------------------------------------------------
+
+def test_spend_unbounded_when_ceiling_env_unset(make_task, monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as cf
+    from prism_service.inference import claude_cli
+    from prism_service import project_context
+
+    monkeypatch.delenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", raising=False)
+    monkeypatch.setattr(tr, "_spend_tracker", tr._SpendTracker())
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    monkeypatch.setattr(project_context, "get_all_projects", lambda: [project])
+    monkeypatch.setattr(tr, "_rr_index", 0)
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke",
+                        _fake_invoke_charging(calls, cost_usd=1000.0))
+
+    first = tr.sweep_once()
+    assert first is not None and first["ok"] is True, first
+    second = tr.sweep_once()
+    assert second is not None and second["ok"] is True, second
+    assert len(calls) == 2, (
+        "an unset/blank PRISM_TASK_RUNNER_MAX_TOTAL_USD must never skip a "
+        "tick for spend reasons")
+
+
+def test_accumulator_charged_immediately_after_invoke_returns(
+        make_task, monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as cf
+    from prism_service.inference import claude_cli
+
+    monkeypatch.setattr(tr, "_spend_tracker", tr._SpendTracker())
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke",
+                        _fake_invoke_charging(calls, cost_usd=1.25))
+
+    assert tr._spend_tracker.spent == 0.0
+    tr.run_one_step(project, task.id)
+    assert tr._spend_tracker.spent == pytest.approx(1.25), (
+        "usage['cost_usd'] must be charged to the accumulator immediately "
+        "after claude_cli.invoke returns")
+
+
+def test_sweep_once_skips_tick_once_ceiling_crossed(make_task, monkeypatch):
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as cf
+    from prism_service.inference import claude_cli
+    from prism_service import project_context
+
+    monkeypatch.setenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "1.0")
+    monkeypatch.setattr(tr, "_spend_tracker", tr._SpendTracker())
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    monkeypatch.setattr(project_context, "get_all_projects", lambda: [project])
+    monkeypatch.setattr(tr, "_rr_index", 0)
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke",
+                        _fake_invoke_charging(calls, cost_usd=1.5))
+
+    real_run_one_step = tr.run_one_step
+    run_calls = []
+
+    def _spy(pid, task_id):
+        run_calls.append((pid, task_id))
+        return real_run_one_step(pid, task_id)
+
+    monkeypatch.setattr(tr, "run_one_step", _spy)
+
+    first = tr.sweep_once()
+    assert first is not None and first["ok"] is True, first
+    assert len(run_calls) == 1
+
+    second = tr.sweep_once()
+    assert second is None, second
+    assert len(run_calls) == 1, (
+        "once the ceiling is crossed, sweep_once() must claim nothing on "
+        "the next tick -- no further run_one_step call")
+
+
+def test_eligible_task_refuses_once_ceiling_crossed(make_task, monkeypatch):
+    from prism_service.services import task_runner as tr
+
+    monkeypatch.setenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "1.0")
+    tracker = tr._SpendTracker()
+    tracker.charge(5.0)
+    monkeypatch.setattr(tr, "_spend_tracker", tracker)
+
+    ctx, task, project = make_task()
+    ctx.task_svc.update(task.id, status="in_progress")
+    assert task.workflow_step == ""
+
+    assert tr.eligible_task(project) is None, (
+        "eligible_task() must independently refuse once the ceiling is "
+        "crossed, not rely on sweep_once() to be the only guard")
+
+
+def test_breach_logs_ceiling_and_accumulated_spend(
+        make_task, monkeypatch, capsys):
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as cf
+    from prism_service.inference import claude_cli
+    from prism_service import project_context
+
+    monkeypatch.setenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "1.0")
+    monkeypatch.setattr(tr, "_spend_tracker", tr._SpendTracker())
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    monkeypatch.setattr(project_context, "get_all_projects", lambda: [project])
+    monkeypatch.setattr(tr, "_rr_index", 0)
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke",
+                        _fake_invoke_charging(calls, cost_usd=1.5))
+
+    tr.sweep_once()  # crosses the ceiling; still completes and reports
+    capsys.readouterr()  # discard the first tick's own log noise
+
+    second = tr.sweep_once()
+    assert second is None
+
+    captured = capsys.readouterr()
+    assert "1.0" in captured.err, captured.err
+    assert "1.5" in captured.err, captured.err
+
+
+def test_check_then_claim_then_charge_ordering(make_task, monkeypatch):
+    """The crossing step itself must still complete (charged at report
+    time); only the FOLLOWING tick's pre-claim check may refuse -- not
+    detected one tick late (charge-before-check) and not blocked mid-step
+    (check-after-claim-but-before-charge would be a no-op here either
+    way, so this pins the observable behavior directly)."""
+    from prism_service.services import task_runner as tr
+    from prism_service.api import conductor_flow as cf
+    from prism_service.inference import claude_cli
+    from prism_service import project_context
+
+    monkeypatch.setenv("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "1.0")
+    monkeypatch.setattr(tr, "_spend_tracker", tr._SpendTracker())
+
+    ctx, task, project = make_task()
+    cf.flow_start(cf.Ident(task_id=task.id, session_id="human"),
+                 project=project)
+    ctx.task_svc.update(task.id, status="in_progress")
+
+    monkeypatch.setattr(project_context, "get_all_projects", lambda: [project])
+    monkeypatch.setattr(tr, "_rr_index", 0)
+
+    calls = []
+    monkeypatch.setattr(claude_cli, "invoke",
+                        _fake_invoke_charging(calls, cost_usd=1.5))
+
+    before = ctx.task_svc.get(task.id).workflow_step
+    crossing = tr.sweep_once()
+    assert crossing is not None and crossing["ok"] is True, crossing
+    after = ctx.task_svc.get(task.id)
+    assert after.workflow_step != before, (
+        "the step that pushes spend past the ceiling must still complete "
+        "and advance the task")
+
+    blocked = tr.sweep_once()
+    assert blocked is None, (
+        "the very next tick must be the first one to refuse")

@@ -1,0 +1,339 @@
+# prism_service/ontology/shapes.ttl — the rules ARE SHACL shapes (task
+# 8eeb3e65, epic 3efbcd89) that can actually fail, over the o: model
+# (model.ttl). Retires arc_governance.PROTOTYPE_AXIOMS as the axioms()
+# source (see arc_governance.py's own comment on that section).
+#
+# Keyed exactly as ontology-SKILL.md's "Adding to the model / A new rule"
+# prescribes: the PROPERTY shape (or, for a SPARQL-constrained rule, the
+# sh:SPARQLConstraint node) carries the rule's own IRI, and the node
+# shape doing the targeting is <rule>.target — an inline blank node works
+# but the violation cannot be mapped back to which rule fired, so it
+# silently reports nothing. services/ontology_rules.py reads this file
+# back as the RULE CATALOG (name/description/message/target class) via
+# SPARQL over the shapes graph itself, so this file is the one place a
+# rule is defined — never a second hand-kept list that can drift from
+# what actually validates ("the failure mode to watch for").
+#
+# pyshacl runs this in advanced=True mode (sh:sparql / sh:SPARQLConstraint
+# require it) against a scratch rdflib.Graph that already has owlrl RDFS
+# entailment applied, so o:Signal instances also carry o:QueueItem (its
+# rdfs:subClassOf parent in model.ttl) before any shape is checked.
+
+@prefix o: <urn:prism:onto:> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------------------------------------------------
+# task-names-its-channel — o:Task without o:arrivedVia. Plain property
+# shape (sh:minCount), the simple keying case.
+# ---------------------------------------------------------------------
+
+o:task-names-its-channel.target a sh:NodeShape ;
+    sh:targetClass o:Task ;
+    sh:property o:task-names-its-channel .
+
+o:task-names-its-channel a sh:PropertyShape ;
+    rdfs:comment "Every task row names the channel it arrived through — a blank channel is a rule with no way to fail." ;
+    sh:name "Every task names its channel" ;
+    sh:description "A task with no channel is a rule that cannot fail." ;
+    sh:path o:arrivedVia ;
+    sh:minCount 1 ;
+    sh:message "task has no arrivedVia channel" .
+
+# ---------------------------------------------------------------------
+# ask-comes-from-the-queue — a Task that is the object of some Signal's
+# o:becameTask must share that Signal's o:arrivedVia channel. SPARQL
+# constraint: guards the join so the two halves cannot drift apart.
+# ---------------------------------------------------------------------
+
+o:ask-comes-from-the-queue.target a sh:NodeShape ;
+    sh:targetClass o:Signal ;
+    sh:sparql o:ask-comes-from-the-queue .
+
+o:ask-comes-from-the-queue a sh:SPARQLConstraint ;
+    rdfs:comment "A task's channel must match the signal it became — guards the join, so the two halves cannot drift apart." ;
+    sh:name "Every ask came from the queue" ;
+    sh:description "A task's channel must match the signal it became." ;
+    sh:message "task's channel drifted from the signal it came from" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:becameTask ?task ; o:arrivedVia ?sigChan .
+            ?task o:arrivedVia ?taskChan .
+            FILTER(?sigChan != ?taskChan)
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# flagged-signal-is-placed — an open Signal with no o:becameTask: pending
+# placement. Violates only when older than 7 days IF o:arrivedAt is
+# present; a signal with no arrivedAt (arrived_at could not be read)
+# violates on ANY open+unplaced state, per the rule's own spec.
+# ---------------------------------------------------------------------
+
+o:flagged-signal-is-placed.target a sh:NodeShape ;
+    sh:targetClass o:Signal ;
+    sh:sparql o:flagged-signal-is-placed .
+
+o:flagged-signal-is-placed a sh:SPARQLConstraint ;
+    rdfs:comment "What a connector could not place, waiting on a person — pending placement past a week is a rule that fires." ;
+    sh:name "Every signal got placed" ;
+    sh:description "An open signal waiting on a person past a week is a rule that fires." ;
+    sh:message "open signal is pending placement" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT $this WHERE {
+            $this o:state "open" .
+            FILTER NOT EXISTS { $this o:becameTask ?t }
+            OPTIONAL { $this o:arrivedAt ?at }
+            BIND( (NOW() - "P7D"^^xsd:dayTimeDuration) AS ?cutoff )
+            FILTER( !BOUND(?at) || ?at < ?cutoff )
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# no-artifacts-in-the-root — o:Document without o:inFolder. Plain
+# property shape, same keying shape as task-names-its-channel.
+# ---------------------------------------------------------------------
+
+o:no-artifacts-in-the-root.target a sh:NodeShape ;
+    sh:targetClass o:Document ;
+    sh:property o:no-artifacts-in-the-root .
+
+o:no-artifacts-in-the-root a sh:PropertyShape ;
+    rdfs:comment "Every document lives inside a folder — one sitting loose in the root breaks the file-tree grammar." ;
+    sh:name "Nothing loose in the root" ;
+    sh:description "Every document lives inside a folder." ;
+    sh:path o:inFolder ;
+    sh:minCount 1 ;
+    sh:message "document has no inFolder — loose in the root" .
+
+# ---------------------------------------------------------------------
+# dated-folder-uses-one-format — an o:Folder whose label looks dated
+# (^\d{4}-(Q\d|\d{2})$) but is not YYYY-MM-DD. SPARQL constraint: regex
+# needs two conditions ANDed, past what sh:pattern alone expresses.
+# ---------------------------------------------------------------------
+
+o:dated-folder-uses-one-format.target a sh:NodeShape ;
+    sh:targetClass o:Folder ;
+    sh:sparql o:dated-folder-uses-one-format .
+
+o:dated-folder-uses-one-format a sh:SPARQLConstraint ;
+    rdfs:comment "One folder dated 2026-Q1 among 34 written YYYY-MM-DD — the tree commits to one date format." ;
+    sh:name "Dated folders use one format" ;
+    sh:description "A dated folder name commits to YYYY-MM-DD, not a quarter or a year." ;
+    sh:message "dated folder does not use YYYY-MM-DD" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this rdfs:label ?label .
+            FILTER(REGEX(?label, "[0-9]{4}-(Q[0-9]|[0-9]{2})$")
+                   && !REGEX(?label, "[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# skill-description-says-when — an o:Agent whose rdfs:comment lacks
+# when/use-when/trigger phrasing (or has no comment at all — a missing
+# description says WHEN even less than a bad one does).
+# ---------------------------------------------------------------------
+
+o:skill-description-says-when.target a sh:NodeShape ;
+    sh:targetClass o:Agent ;
+    sh:sparql o:skill-description-says-when .
+
+o:skill-description-says-when a sh:SPARQLConstraint ;
+    rdfs:comment "A skill nothing ever triggers is a skill we do not have — discovery is on the description." ;
+    sh:name "Every agent says when to use it" ;
+    sh:description "An agent's description names the condition that triggers it." ;
+    sh:message "description gives no when/trigger condition" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            OPTIONAL { $this rdfs:comment ?c }
+            FILTER( !BOUND(?c) || !REGEX(?c, "when|trigger", "i") )
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# skill-description-has-no-markup — rdfs:comment containing '<' or '>'.
+# ---------------------------------------------------------------------
+
+o:skill-description-has-no-markup.target a sh:NodeShape ;
+    sh:targetClass o:Agent ;
+    sh:sparql o:skill-description-has-no-markup .
+
+o:skill-description-has-no-markup a sh:SPARQLConstraint ;
+    rdfs:comment "'<monday>' in a description is markup in a prompt." ;
+    sh:name "Descriptions carry no markup" ;
+    sh:description "An angle bracket in a description reads as markup in a prompt." ;
+    sh:message "description contains angle-bracket markup" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this rdfs:comment ?c .
+            FILTER(CONTAINS(?c, "<") || CONTAINS(?c, ">"))
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# agent-delegates-one-tier-down — a gate step's deciding role must differ
+# from the role that produced the work it is deciding on. o:Step/
+# o:decidedBy/o:producedBy are emitted by OntologyGraph from WORKFLOW_
+# STEPS + STEP_ROLES (models/roles.py) — real conductor doctrine, never
+# fabricated. Conway, enforced, per axis.
+# ---------------------------------------------------------------------
+
+o:agent-delegates-one-tier-down.target a sh:NodeShape ;
+    sh:targetClass o:Step ;
+    sh:sparql o:agent-delegates-one-tier-down .
+
+o:agent-delegates-one-tier-down a sh:SPARQLConstraint ;
+    rdfs:comment "Conway, enforced, per axis — the producing role cannot also be the role that decides the gate on its own work." ;
+    sh:name "One tier up decides each gate" ;
+    sh:description "The role that produced the work cannot also decide the gate on it." ;
+    sh:message "the role that produced the work also decides its gate" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:decidedBy ?d ; o:producedBy ?p .
+            FILTER(?d = ?p)
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# twin-classes — two o: classes with identical non-empty instance sets:
+# one concept, two representations. SPARQL constraint over rdfs:Class.
+# ---------------------------------------------------------------------
+
+o:twin-classes.target a sh:NodeShape ;
+    sh:targetClass rdfs:Class ;
+    sh:sparql o:twin-classes .
+
+o:twin-classes a sh:SPARQLConstraint ;
+    rdfs:comment "Every structural bug in this model is one concept with two representations." ;
+    sh:name "No two classes are twins" ;
+    sh:description "Two classes sharing an identical instance set are one concept, twice." ;
+    sh:message "shares an identical non-empty instance set with another class" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this a rdfs:Class .
+            FILTER EXISTS { ?i a $this }
+            FILTER EXISTS {
+                ?other a rdfs:Class . FILTER(?other != $this)
+                FILTER NOT EXISTS { ?i2 a $this . FILTER NOT EXISTS { ?i2 a ?other } }
+                FILTER NOT EXISTS { ?i3 a ?other . FILTER NOT EXISTS { ?i3 a $this } }
+            }
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# Signals are parsed the prototype's way into the ontology (task
+# 31b737fb, epic 3a652b3b). Three new rules over the joins signal_parse's
+# regex extraction feeds into the graph via OntologyGraph._emit_signals.
+# ---------------------------------------------------------------------
+
+o:jira-issue-known-project.target a sh:NodeShape ;
+    sh:targetClass o:JiraIssue ;
+    sh:sparql o:jira-issue-known-project .
+
+o:jira-issue-known-project a sh:SPARQLConstraint ;
+    rdfs:comment "This stops '10:00 AM-10:30' from misreading as ticket AM-10 — a JiraIssue the graph holds must come from a known project." ;
+    sh:name "Every Jira issue names a known project" ;
+    sh:description "A JiraIssue's project key is in the known set." ;
+    sh:message "jira issue's project is not in the known set" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            FILTER NOT EXISTS { $this o:projectKnown true }
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# ask-names-a-person — o:Ask without o:askedBy. Plain property shape,
+# same keying shape as task-names-its-channel.
+# ---------------------------------------------------------------------
+
+o:ask-names-a-person.target a sh:NodeShape ;
+    sh:targetClass o:Ask ;
+    sh:property o:ask-names-a-person .
+
+o:ask-names-a-person a sh:PropertyShape ;
+    rdfs:comment "An ask with nobody named as asking it is a rule that cannot fail." ;
+    sh:name "Every ask names a person" ;
+    sh:description "Every ask has an askedBy." ;
+    sh:path o:askedBy ;
+    sh:minCount 1 ;
+    sh:message "ask has no askedBy" .
+
+# ---------------------------------------------------------------------
+# signal-joins-on-address — an o:Ask's askedBy target with no o:email:
+# joined by a bare name instead of an address ("an address is evidence,
+# a name is a guess"). SPARQL constraint: needs a second hop past
+# askedBy, past what sh:minCount alone expresses.
+# ---------------------------------------------------------------------
+
+o:signal-joins-on-address.target a sh:NodeShape ;
+    sh:targetClass o:Ask ;
+    sh:sparql o:signal-joins-on-address .
+
+o:signal-joins-on-address a sh:SPARQLConstraint ;
+    rdfs:comment "An address is evidence, a name is a guess — every join is on an address where one exists." ;
+    sh:name "An ask's person joins on an address" ;
+    sh:description "askedBy names a person that the address field identifies, not a bare display name." ;
+    sh:message "askedBy target has no o:email — joined by name, not address" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:askedBy ?p .
+            FILTER NOT EXISTS { ?p o:email ?e }
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# text-is-plain — a task title, decision name, term definition, or
+# agent description reads as plain English (task 5ac5d04c). Four small
+# target shapes share one SPARQLConstraint: each targets a class whose
+# real projection carries free text (o:Task/o:Decision get rdfs:label —
+# services/ontology_graph.py's _emit_tasks/_emit_memories only ever set
+# a label; o:Agent gets rdfs:comment from its skill description;
+# o:Term gets rdfs:comment for its definition). The shared sh:select
+# checks whichever of the two properties the instance actually carries,
+# so one rule covers all four without re-declaring the regex four
+# times. Regex-checkable subset of STE only: a semicolon, a contraction,
+# or a marketing adjective — sentence length, passive voice, and
+# present-perfect stay in services/ste.py, which needs real tokenizing
+# a SPARQL regex cannot do.
+# ---------------------------------------------------------------------
+
+o:text-is-plain-task.target a sh:NodeShape ;
+    sh:targetClass o:Task ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain-decision.target a sh:NodeShape ;
+    sh:targetClass o:Decision ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain-term.target a sh:NodeShape ;
+    sh:targetClass o:Term ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain-agent.target a sh:NodeShape ;
+    sh:targetClass o:Agent ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain a sh:SPARQLConstraint ;
+    rdfs:comment "A semicolon, a contraction, or a marketing adjective reads as prompt noise, not plain English." ;
+    sh:name "Every description reads as plain English" ;
+    sh:description "A task title, decision name, term definition, or agent description has no semicolon, no contraction, and no marketing adjective." ;
+    sh:message "text is not plain English: it has a semicolon, a contraction, or a marketing word" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            { $this rdfs:label ?t } UNION { $this rdfs:comment ?t }
+            FILTER(REGEX(?t, ";|n't\\\\b|\\\\b(it|that|what|there)'s\\\\b|'re\\\\b|'ll\\\\b|'ve\\\\b|\\\\bI'm\\\\b|\\\\b(seamless(ly)?|robust|powerful|cutting-edge|effortless(ly)?|blazing-fast)\\\\b", "i"))
+        }
+    """ .

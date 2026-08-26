@@ -1,0 +1,48 @@
+# prism_service/ontology/model-knowledge.ttl — the memory/knowledge layer
+# of the TBox (task f5352fa1, epic 3a652b3b, owner: "we need to make sure
+# that the ontology is respected throughout the system, understanding and
+# such"). A SEPARATE file from model.ttl (sibling task 31b737fb edits
+# model.ttl concurrently) — loaded into the SAME shared TBox named graph by
+# services/ontology_graph.OntologyGraph.load_model(), which globs every
+# ontology/model-*.ttl alongside model.ttl.
+#
+# o:Concept is what a memory (ExpertiseEntry) row becomes: subclassed per
+# its `type` field (pattern|convention|failure|decision) by
+# services/ontology_graph._emit_memories, an unmapped type stays the
+# generic o:Concept. o:Domain is the memory `domain` string, reified as its
+# own instance so many concepts can share one. o:cites is a concept's real
+# [[wikilink]] cross-links (services/okf_host already resolves these);
+# o:evidencedBy points at the o:Task / o:Document a concept's evidence
+# names.
+
+@prefix o: <urn:prism:onto:> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+o:Concept a rdfs:Class ; rdfs:label "Concept" ;
+    rdfs:comment "A curated memory entry — the unit Understand reads." .
+o:Pattern a rdfs:Class ; rdfs:subClassOf o:Concept ; rdfs:label "Pattern" ;
+    rdfs:comment "A recurring, reusable shape worth naming." .
+o:Convention a rdfs:Class ; rdfs:subClassOf o:Concept ; rdfs:label "Convention" ;
+    rdfs:comment "An agreed-upon way of doing something." .
+o:Failure a rdfs:Class ; rdfs:subClassOf o:Concept ; rdfs:label "Failure" ;
+    rdfs:comment "A mistake worth remembering so it does not repeat." .
+o:Decision a rdfs:Class ; rdfs:subClassOf o:Concept ; rdfs:label "Decision" ;
+    rdfs:comment "A choice made, with a reason, that others should honor." .
+
+o:Domain a rdfs:Class ; rdfs:label "Domain" ;
+    rdfs:comment "The memory domain a concept belongs to." .
+
+o:inDomain a rdf:Property ; rdfs:domain o:Concept ; rdfs:range o:Domain ;
+    rdfs:label "inDomain" ; rdfs:comment "Which domain files this concept." .
+o:cites a rdf:Property ; rdfs:domain o:Concept ;
+    rdfs:label "cites" ;
+    rdfs:comment "A concept's own [[wikilink]] cross-references, resolved to real concepts." .
+    # No rdfs:range here, deliberately: an rdfs:range o:Concept would make
+    # RDFS entailment (rdfs3) INFER every cited target as o:Concept just
+    # from being cited -- which would make concept-cites-only-known
+    # (shapes-knowledge.ttl) permanently vacuous, unable to ever detect a
+    # dangling citation to something that was never really a concept.
+o:evidencedBy a rdf:Property ; rdfs:domain o:Concept ;
+    rdfs:label "evidencedBy" ;
+    rdfs:comment "The Task or Document a concept's evidence points at." .

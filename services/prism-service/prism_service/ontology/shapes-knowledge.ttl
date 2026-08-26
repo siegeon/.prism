@@ -1,0 +1,72 @@
+# prism_service/ontology/shapes-knowledge.ttl — the knowledge-layer SHACL
+# rules (task f5352fa1, epic 3a652b3b), over o:Concept/o:Domain (model-
+# knowledge.ttl). A SEPARATE file from shapes.ttl (sibling task 31b737fb
+# edits shapes.ttl concurrently) — services/ontology_rules._shapes_graph()
+# globs every ontology/shapes*.ttl into one merged rule catalog + SHACL
+# shapes graph, so this file needs no wiring beyond existing here.
+#
+# Keyed exactly as shapes.ttl's own rules: the property (or SPARQLConstraint)
+# shape carries the rule's own IRI, the node shape doing the targeting is
+# <rule>.target.
+
+@prefix o: <urn:prism:onto:> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# ---------------------------------------------------------------------
+# concept-names-its-domain — o:Concept without o:inDomain. Plain property
+# shape (sh:minCount), same keying as task-names-its-channel.
+# ---------------------------------------------------------------------
+
+o:concept-names-its-domain.target a sh:NodeShape ;
+    sh:targetClass o:Concept ;
+    sh:property o:concept-names-its-domain .
+
+o:concept-names-its-domain a sh:PropertyShape ;
+    rdfs:comment "Every concept names its own domain. Understand's domain-first drill-in cannot find a concept with no domain." ;
+    sh:name "Every concept names its domain" ;
+    sh:description "A concept with no domain is unreachable from Understand's domain-first drill." ;
+    sh:path o:inDomain ;
+    sh:minCount 1 ;
+    sh:message "concept has no inDomain" .
+
+# ---------------------------------------------------------------------
+# concept-cites-only-known — a o:cites target that is not itself a typed
+# o:Concept: a dangling or stale cross-link. SPARQL constraint: needs an
+# EXISTS check across the cited node, past what sh:class alone expresses
+# cleanly against a blank-node-free property path.
+# ---------------------------------------------------------------------
+
+o:concept-cites-only-known.target a sh:NodeShape ;
+    sh:targetClass o:Concept ;
+    sh:sparql o:concept-cites-only-known .
+
+o:concept-cites-only-known a sh:SPARQLConstraint ;
+    rdfs:comment "A [[wikilink]] to a concept that no longer exists is a dangling citation — one concept, one representation, and the other half went missing." ;
+    sh:name "Every citation targets a known concept" ;
+    sh:description "A cites edge must point at a real, typed concept." ;
+    sh:message "cites a target that is not a known concept" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:cites ?target .
+            FILTER NOT EXISTS { ?target a o:Concept }
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# decision-has-evidence — o:Decision without o:evidencedBy. Plain property
+# shape, same keying shape as concept-names-its-domain.
+# ---------------------------------------------------------------------
+
+o:decision-has-evidence.target a sh:NodeShape ;
+    sh:targetClass o:Decision ;
+    sh:property o:decision-has-evidence .
+
+o:decision-has-evidence a sh:PropertyShape ;
+    rdfs:comment "A decision with no evidence is an assertion, not a decision. This is the rule that governs everything else: an address is evidence, a name is a guess." ;
+    sh:name "Every decision has evidence" ;
+    sh:description "A decision names the Task or Document that serves as its evidence." ;
+    sh:path o:evidencedBy ;
+    sh:minCount 1 ;
+    sh:message "decision has no evidencedBy" .

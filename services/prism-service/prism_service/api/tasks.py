@@ -16,7 +16,9 @@ from prism_service.models.workspace import Principal
 from prism_service.project_context import get_project
 from prism_service.services.actor_service import get_actor_service
 from prism_service.services.integration_store import get_integration_store
-from prism_service.services.task_service import SESSION_GATE_FIX
+from prism_service.services.task_service import (
+    DONE_BLOCKED_BY_OPEN_GATE_FIX, SESSION_GATE_FIX, is_open_gate_step,
+)
 
 router = APIRouter(dependencies=[Depends(authorize_project_request)])
 
@@ -173,9 +175,14 @@ def _step_token_totals(history: list, sessions: list, project: str) -> dict:
 _MIRROR_URL_RE = re.compile(r"(https://(?:github\.com|[\w.-]+\.atlassian\.net)/\S+)")
 
 
-def _mirror_url(description: str) -> str:
+def _mirror_url(description: str, channel_ref: str = "") -> str:
+    """Legacy provenance-trailer regex, plus a fallback for the channel/
+    channel_ref home the trailer text is being retired to (task fb7edc46):
+    a NEW import no longer writes "Mirrored from ..." into description, so
+    the badge must fall back to the task's own channel_ref rather than go
+    blank. Existing rows still carry the trailer and keep matching it."""
     m = _MIRROR_URL_RE.search(description or "")
-    return m.group(1) if m else ""
+    return m.group(1) if m else (channel_ref or "")
 
 
 # artifact_url (task 3c1a326b): turns the has_prototype boolean (below, and
@@ -238,7 +245,8 @@ def list_tasks(project: str = Query("default"),
             row = {}
             for f in field_list:
                 if f == "mirror_url":
-                    row[f] = _mirror_url(getattr(t, "description", "") or "")
+                    row[f] = _mirror_url(getattr(t, "description", "") or "",
+                                          getattr(t, "channel_ref", "") or "")
                 elif f == "artifact_url":
                     row[f] = _artifact_url(getattr(t, "id", ""))
                 elif f == "mirrors":
@@ -299,6 +307,17 @@ class TaskCreate(BaseModel):
     # enter_conductor is true so a task can never be handed to the conductor
     # without a session.
     session_id: Optional[str] = None
+    # Channel provenance (task b480eb15): WHERE this task came from. Defaults
+    # to "ui" on this route (the SPA is the REST caller); a collector posting
+    # over REST may name its own channel (models.task.CHANNELS). channel_ref
+    # defaults to the caller's session id when the body carries one.
+    channel: str = ""
+    channel_ref: str = ""
+    # Which PRISM workflow drives this task (task af396b2c). Blank resolves
+    # to models.task.DEFAULT_WORKFLOW ("implement") inside TaskService.create
+    # -- unknown names (outside models.task.WORKFLOW_ALIASES) are refused
+    # below before the row exists.
+    workflow: str = ""
 
 
 @router.post("")
@@ -333,6 +352,27 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     )
     if domain_errors:
         raise HTTPException(422, domain_errors[0])
+    # Channel validated BEFORE the row is inserted so a refusal never
+    # orphans a task (same posture as the oracle check above).
+    from prism_service.models.task import (
+        validate_channel, validate_proof_type, validate_workflow,
+    )
+    try:
+        channel = validate_channel(body.channel) or "ui"
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # proof_type validated against the vocabulary (task f5352fa1) -- same
+    # posture as channel/workflow, before the row exists.
+    try:
+        validate_proof_type(body.proof_type)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # Workflow validated the same way, BEFORE the row is inserted (task
+    # af396b2c) -- blank is left to TaskService.create's own default.
+    try:
+        workflow = validate_workflow(body.workflow)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     ctx = get_project(project)
     task = ctx.task_svc.create(
         title=body.title.strip(),
@@ -346,8 +386,15 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         verify=body.verify,
         allowed_files=body.allowed_files,
         stop_if=body.stop_if,
+        channel=channel,
+        channel_ref=(body.channel_ref or "").strip() or sid,
+        workflow=workflow,
     )
-    out: dict = {"task": task, "advanced": None}
+    # STE style block (task 6e611531): every write path returns the report
+    # from the SAME TaskService instance that just performed this write, so
+    # a caller can see what the normaliser fixed and what still needs a
+    # human look.
+    out: dict = {"task": task, "advanced": None, "style": ctx.task_svc.last_style}
     if spec_summary is not None:
         out["oracle_spec"] = spec_summary
     if sid:
@@ -416,10 +463,23 @@ def _is_shipped_on_main(repo: str, task_id: str) -> bool:
     documented 8-char short form, and the old exact-bracket needle matched
     neither, so this helper always reported "not shipped" for a task whose
     real commit trailer merely had extra characters after the short id."""
+    return bool(_shipped_sha_on_main(repo, task_id))
+
+
+def _shipped_sha_on_main(repo: str, task_id: str) -> str:
+    """Same squash-safe trailer search as `_is_shipped_on_main`, but returns
+    the actual landed SHA on origin/main (empty string if none) instead of a
+    bare bool -- so a caller can compute facts (pushed? released?) about the
+    commit that REALLY shipped, not the task's own (possibly abandoned)
+    tracked branch. See task bb1d934e-6ee4-4b2b-8e91-9703cbd0a6d1: a
+    self-dev direct-land re-commits the same content under a fresh SHA on
+    main, leaving the original worktree commit local and unpushed forever
+    -- `_is_shipped_on_main` alone can't tell `get_task_delivery` which SHA
+    to check for "pushed"/"released"."""
     needle = f"[task:{task_id[:8]}"
     rc, out = _git(repo, "log", "--fixed-strings", "--grep", needle,
                    "-n", "1", "--format=%H", "origin/main")
-    return rc == 0 and bool(out)
+    return out.strip() if rc == 0 else ""
 
 
 # The stranded scan is O(done-tasks x git-subprocesses) — measured 35s at 301
@@ -857,6 +917,31 @@ def get_task(task_id: str, project: str = Query("default"),
     return out
 
 
+_LINK_FIELDS = ("description", "oracle", "likely_misfire", "plan_doc",
+                "premise_notes", "completion_proof")
+
+
+@router.get("/{task_id}/links")
+def get_task_links(task_id: str, project: str = Query("default")) -> dict:
+    """Cross-clicking (task 6968cc39, extended by task 2ec1e395): every
+    ontology-known entity this task's TEXT FIELDS mention, as
+    entity_linker.link()'s non-overlapping spans. `fields` carries spans
+    per field name (_LINK_FIELDS) so TaskDetailPage's oracle/plan/premise/
+    proof cards share ONE response instead of each hand-rolling their own
+    linker call — entity_linker's own index cache means these N link()
+    calls still cost only the FIRST request's SPARQL build, never one per
+    field. `spans` stays the bare description-only shape for old callers."""
+    from prism_service.services import entity_linker
+
+    svc = _svc(project)
+    t = svc.get(task_id)
+    if not t:
+        raise HTTPException(404, "task not found")
+    fields = {name: entity_linker.link(project, getattr(t, name, "") or "")
+              for name in _LINK_FIELDS}
+    return {"spans": fields["description"], "fields": fields}
+
+
 @router.get("/{task_id}/trace")
 def get_task_trace(task_id: str, project: str = Query("default")) -> dict:
     """Drive-scoped token trace for the task-detail Trace tab.
@@ -1001,8 +1086,8 @@ _delivery_cache: dict = {}
 _delivery_lock = _threading.Lock()
 
 
-def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool]:
-    """(branch, commits, shipped_on_main) for the task, TTL-cached."""
+def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool, str]:
+    """(branch, commits, shipped_on_main, shipped_sha) for the task, TTL-cached."""
     key = (repo, task_id)
     now = _time.monotonic()
     with _delivery_lock:
@@ -1030,8 +1115,8 @@ def _delivery_git_facts(repo: str, task_id: str) -> tuple[str, list[dict], bool]
                 "pushed": pushed, "merged_to_main": merged,
                 "released_in": tags.splitlines()[0] if tags else "",
             })
-    shipped = _is_shipped_on_main(repo, task_id)
-    val = (branch, commits, shipped)
+    shipped_sha = _shipped_sha_on_main(repo, task_id)
+    val = (branch, commits, bool(shipped_sha), shipped_sha)
     with _delivery_lock:
         _delivery_cache[key] = (now, val)
         while len(_delivery_cache) > 256:
@@ -1070,8 +1155,9 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     commits: list[dict] = []
     branch = ""
     shipped_on_main = False
+    shipped_sha = ""
     if repo:
-        branch, commits, shipped_on_main = _delivery_git_facts(repo, task_id)
+        branch, commits, shipped_on_main, shipped_sha = _delivery_git_facts(repo, task_id)
 
     def _all(flag: str) -> bool:
         return bool(commits) and all(c[flag] for c in commits)
@@ -1084,18 +1170,32 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
     # bare/prefix-collision substring (FR-5).
     merged_ok = _all("merged_to_main") or shipped_on_main
 
+    # Same OR-fallback for "pushed"/"released" (task bb1d934e): a self-dev
+    # direct-land re-commits the task's content under a FRESH sha on
+    # origin/main, leaving the originally-tracked worktree commit (still
+    # found by _delivery_git_facts' grep on the task's own branch) local
+    # and unpushed forever. Being an OR-fallback the tracked-commit path is
+    # untouched — a normal PR-merged task still reports on its own commits.
+    shipped_released_in = ""
+    if shipped_sha and repo:
+        tags = _git(repo, "tag", "--contains", shipped_sha)[1]
+        shipped_released_in = tags.splitlines()[0] if tags else ""
+    pushed_ok = _all("pushed") or shipped_on_main
+    released_ok = _all("released_in") or bool(shipped_released_in)
+
     stage_states = [
         ("verified", "verified", verified,
          "green gate passed on live evidence" if verified else "gate not passed yet"),
         ("committed", "committed", bool(commits),
          f"{len(commits)} commit(s) on {branch or 'local'}" if commits
          else "no [task:…]-tagged commits found"),
-        ("pushed", "pushed", _all("pushed"),
-         "on a remote ref" if _all("pushed") else "branch not pushed"),
+        ("pushed", "pushed", pushed_ok,
+         "on a remote ref" if pushed_ok else "branch not pushed"),
         ("merged", "merged to main", merged_ok,
          "reachable from main" if merged_ok else "no PR merged yet"),
-        ("released", "released", _all("released_in"),
-         (commits and commits[0].get("released_in")) or "no release tag contains this work"),
+        ("released", "released", released_ok,
+         (commits and commits[0].get("released_in")) or shipped_released_in
+         or "no release tag contains this work"),
     ]
     stages, next_seen = [], False
     for key, label, ok, detail in stage_states:
@@ -1801,6 +1901,14 @@ class TaskUpdate(BaseModel):
     stop_if: Optional[list[str]] = None
     plan_doc: Optional[str] = None
     plan_diagram: Optional[str] = None
+    # Which PRISM workflow drives this task (task af396b2c). Validated
+    # against models.task.WORKFLOW_ALIASES below before the write.
+    workflow: Optional[str] = None
+    # dependencies were settable at create and then silently DROPPED on
+    # every edit (task d67bca9f) -- this route had no field for it at all,
+    # so a PATCH {"dependencies":[...]} echoed back the OLD (usually
+    # empty) list with a 200. TaskService.update already accepts it.
+    dependencies: Optional[list[str]] = None
 
 
 @router.patch("/{task_id}")
@@ -1814,6 +1922,40 @@ def update_task(
     kwargs = {k: v for k, v in body.dict().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "no fields to update")
+    # Workflow validated BEFORE the write (task af396b2c) -- an unknown
+    # name is refused rather than silently persisted; blank resolves to
+    # the default driver so a PATCH can never leave the row un-driven.
+    if "workflow" in kwargs:
+        from prism_service.models.task import DEFAULT_WORKFLOW, validate_workflow
+        try:
+            kwargs["workflow"] = validate_workflow(kwargs["workflow"]) or DEFAULT_WORKFLOW
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    # Status/proof_type validated against their vocabularies (task
+    # f5352fa1) BEFORE the write -- legacy rows are never re-validated on
+    # read, only a write that touches the field is checked.
+    if "status" in kwargs:
+        from prism_service.models.task import validate_status
+        try:
+            kwargs["status"] = validate_status(kwargs["status"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    if "proof_type" in kwargs:
+        from prism_service.models.task import validate_proof_type
+        try:
+            kwargs["proof_type"] = validate_proof_type(kwargs["proof_type"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    # dependencies validated BEFORE the write (task d67bca9f): every id
+    # must exist in this project, and a task cannot depend on itself --
+    # same posture as the workflow check just above.
+    if "dependencies" in kwargs:
+        deps = kwargs["dependencies"] or []
+        if task_id in deps:
+            raise HTTPException(422, f"task cannot depend on itself: {task_id}")
+        missing = [d for d in deps if svc.get(d) is None]
+        if missing:
+            raise HTTPException(422, f"unknown dependency ids: {', '.join(missing)}")
     # Conductor session gate (ef81fc15): flipping a task to in_progress
     # hands it to the conductor (intake lane on /conductor). Refuse the
     # TRANSITION when no session is linked — this exact sessionless PATCH
@@ -1826,7 +1968,23 @@ def update_task(
             raise HTTPException(404, "task not found")
         if current.status != "in_progress" and not svc.sessions_for_task(task_id):
             raise HTTPException(422, SESSION_GATE_FIX)
+    # Open-gate close guard (2026-08-25, live near-miss on task 3baadd19):
+    # this quick-status PATCH used to let status=done through with zero
+    # gate awareness, silently producing a "DONE" task whose gate never
+    # actually passed. Refuse it here; the real path is a gate_decide
+    # approve, or Rewind first if the gate was decided in error.
+    if kwargs.get("status") == "done":
+        current = svc.get(task_id)
+        if current is None:
+            raise HTTPException(404, "task not found")
+        if is_open_gate_step(getattr(current, "workflow_step", ""),
+                             getattr(current, "gate_state", "")):
+            raise HTTPException(422, DONE_BLOCKED_BY_OPEN_GATE_FIX.format(
+                workflow_step=current.workflow_step,
+                gate_state=current.gate_state))
     t = svc.update(task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")
-    return {"task": t, "history": svc.history(task_id)}
+    # STE style block (task 6e611531): svc.last_style reflects THIS write —
+    # svc is the same TaskService instance that just ran svc.update above.
+    return {"task": t, "history": svc.history(task_id), "style": svc.last_style}

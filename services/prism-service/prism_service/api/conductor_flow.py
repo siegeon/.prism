@@ -139,6 +139,27 @@ _GUIDE = {
         "diff is not shippable, and nothing downstream of this step "
         "checks for one.",
     "verify_green_state": "Verify full green against a real run.",
+    # Triage workflow (task 6f22d0ad): a task whose task.workflow == "triage"
+    # walks TRIAGE_STEPS (models/workflow.py) instead — intake/classify/
+    # decide/done. Wording mirrors api/workflows.py's TRIAGE_STEP_CONTENT so
+    # the catalog page and this live job never disagree.
+    "intake": "Register the item and enter the triage flow.",
+    "classify": (
+        "Classify this item into exactly one bucket: Open (needs action), "
+        "Monitoring (watching, no action yet), Resolved (handled), or "
+        "Dropped (not actionable) — report the bucket plus a one-line "
+        "reason for it."
+    ),
+    "done": "Terminal — the item's triage flow is complete; nothing further to do.",
+}
+
+# Step-specific expected_proof override (task 6f22d0ad): classify's raw
+# validation kind ("triage_bucketed") isn't a proof description a worker can
+# act on — spell out what the report must actually contain. Every step NOT
+# listed here keeps the generic step.get("validation") fallback below,
+# unchanged.
+_EXPECTED_PROOF_OVERRIDE = {
+    "classify": "the bucket (Open/Monitoring/Resolved/Dropped) plus a one-line reason",
 }
 
 
@@ -146,10 +167,18 @@ def _svc(project: str):
     return get_project(project).conductor_svc
 
 
+def _task_workflow(task) -> str:
+    """Normalize `task.workflow` the same way ConductorService's own step
+    helpers do (task 6f22d0ad) — a blank/legacy value reads as "implement"."""
+    from prism_service.models.task import normalize_workflow
+
+    return normalize_workflow(getattr(task, "workflow", "") or "")
+
+
 def _job(task) -> Optional[dict]:
     """Build the self-describing job for a task's CURRENT step, or None
     when the task hasn't entered the flow yet."""
-    step = ConductorService._step_by_id(task.workflow_step)
+    step = ConductorService._step_by_id(task.workflow_step, _task_workflow(task))
     if step is None:
         return None
     kind = step["type"]
@@ -187,7 +216,8 @@ def _job(task) -> Optional[dict]:
         "gate_reason": getattr(task, "gate_reason", "") or "",
         "instructions": instructions,
         "doctrine": doctrine,
-        "expected_proof": step.get("validation") or (
+        "expected_proof": _EXPECTED_PROOF_OVERRIDE.get(step["id"])
+        or step.get("validation") or (
             "prior step's validation" if kind == "gate" else "n/a"),
         # Worker contract (fb2846dc): the STRUCTURED allowed_files/verify/
         # stop_if the task was given — a first-class job field the worker
@@ -278,7 +308,7 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     task = svc._task_svc.get(task_id)
     if task is None or getattr(task, "gate_state", "") != "pending":
         return None
-    step = ConductorService._step_by_id(task.workflow_step)
+    step = ConductorService._step_by_id(task.workflow_step, _task_workflow(task))
     if step is None or step["type"] != "gate":
         return None
     if step["id"] == "green_gate":
@@ -523,7 +553,7 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
     task = svc._task_svc.get(body.task_id)
     if task is None:
         return {"ok": False, "error": "unknown task"}
-    step = ConductorService._step_by_id(task.workflow_step)
+    step = ConductorService._step_by_id(task.workflow_step, _task_workflow(task))
     if step is None:
         return {"ok": False, "error": "task has not started the flow"}
 

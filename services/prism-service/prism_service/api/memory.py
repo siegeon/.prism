@@ -191,7 +191,13 @@ def entry_action(
             importance=int(body.get("importance", entry.importance)),
             memory_type=entry.memory_type,
         )
-        return {"ok": True, "action": "supersede", "entry": new_entry}
+        # STE style report (task 5de57583): svc.store already normalised
+        # ``desc`` to STE before persisting; surface the style block next
+        # to the new entry.
+        return {
+            "ok": True, "action": "supersede", "entry": new_entry,
+            "style": svc.last_style,
+        }
 
     raise HTTPException(422, f"unknown action {action!r}; expected edit|retire|supersede")
 

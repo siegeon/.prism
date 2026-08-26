@@ -23,6 +23,7 @@ type Task = {
   tags?: string[];
   gate_state?: string;
   mirrors?: TaskMirror[];
+  channel?: string;         // persisted provenance (task b480eb15)
 };
 
 // One badge-worth of data per active provider link (api/tasks.py `mirrors`,
@@ -30,8 +31,8 @@ type Task = {
 // description-prose `mirror_url`).
 type TaskMirror = { provider: string; issue?: string; url: string; last_synced_at?: string };
 
-// A row on the unified Work surface — a native PRISM task OR an external
-// GitHub/Jira item, normalized to one shape so My Work/Team, the filters, and
+// A row on the unified Tasks surface — a native PRISM task OR an external
+// GitHub/Jira item, normalized to one shape so My Tasks/Team, the filters, and
 // the keyboard cursor treat every provider identically.
 type WorkSource = "native" | "github" | "jira";
 type WorkItem = {
@@ -54,9 +55,13 @@ type WorkItem = {
   imported?: boolean;       // has a local intake task that can be started
   tags?: string[];          // provenance, e.g. ['github','external']
   mirrors?: TaskMirror[];   // server-derived, store-backed backlinks (0..n)
+  // The channel the row came from (ui|mcp|github|jira|slack|outlook|daemon).
+  // Native rows carry the PERSISTED task.channel; external rows render their
+  // provider so native and mirrored rows read the same way (task b480eb15).
+  channel?: string;
 };
 
-// My Work vs Team — the attention model. "mine" scopes to the signed-in
+// My Tasks vs Team — the attention model. "mine" scopes to the signed-in
 // viewer's assigned rows; "team" shows the whole team's work.
 type WorkView = "mine" | "team";
 
@@ -125,6 +130,7 @@ function nativeToWork(t: Task): WorkItem {
     tags: t.tags,
     mirrors: t.mirrors,
     parent_id: t.parent_id,
+    channel: t.channel,
   };
 }
 
@@ -143,6 +149,7 @@ function externalToWork(e: ExternalEntity): WorkItem {
     displayKey: e.display_key,
     restricted: !!e.restricted,
     imported: !!e.task_id,
+    channel: source,
   };
 }
 
@@ -154,6 +161,12 @@ function workItemTimestamp(it: WorkItem): number {
   return Number.isNaN(t) ? -Infinity : t;
 }
 
+// Client-side channel-filter preference key, project-scoped — same shape as
+// WorkflowsPage's prism.workflows.* keys (task 153fdf19).
+function channelStorageKey(project: string): string {
+  return `prism.work.channel.${project}`;
+}
+
 export default function TasksPage() {
   const [project] = useProject();
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -161,6 +174,7 @@ export default function TasksPage() {
   const [me, setMe] = useState<string>("");
   const [view, setView] = useState<WorkView>("team");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  const [channelFilter, setChannelFilter] = useState<string>("");
   // Owner 2026-07-29: "i need a way to search work for e696d952 a task on
   // this" — id prefix, full uuid, title, or tag, case-insensitive.
   const [searchParams] = useSearchParams();
@@ -169,6 +183,19 @@ export default function TasksPage() {
     const q = searchParams.get("q");
     if (q) setQuery(q);
   }, [searchParams]);
+  // Restore the channel choice per-project (localStorage, WorkflowsPage
+  // precedent); a bad/blocked store just leaves the filter at All.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(channelStorageKey(project));
+      if (saved) setChannelFilter(saved);
+    } catch { /* storage unavailable */ }
+  }, [project]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(channelStorageKey(project), channelFilter);
+    } catch { /* storage unavailable */ }
+  }, [channelFilter, project]);
   const [cursor, setCursor] = useState<number>(0);
   const [started, setStarted] = useState<Set<string>>(new Set());
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -179,10 +206,10 @@ export default function TasksPage() {
     // `description` is deliberately NOT in this set — the server derives
     // `mirrors` instead so the link-out badge(s) survive without the raw
     // body riding the board (see mirrorsOf below).
-    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors`)
+    api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors,channel`)
       .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
-    // The viewer identity powers My Work; failure just leaves it empty (Team
+    // The viewer identity powers My Tasks; failure just leaves it empty (Team
     // still works). Authorization is the server's — we never infer it here.
     api.get<{ user?: { id?: string; display_name?: string; email?: string } }>("/api/auth/me")
       .then((d) => setMe(d.user?.display_name || d.user?.id || d.user?.email || ""))
@@ -228,6 +255,7 @@ export default function TasksPage() {
     const q = query.trim().toLowerCase();
     return merged.filter((it) => {
       if (assigneeFilter && !it.assignee.toLowerCase().includes(assigneeFilter.toLowerCase())) return false;
+      if (channelFilter && it.channel !== channelFilter) return false;
       if (q) {
         const idHit = it.id?.toLowerCase().startsWith(q) || it.id?.toLowerCase().includes(q);
         const titleHit = it.title.toLowerCase().includes(q);
@@ -235,14 +263,14 @@ export default function TasksPage() {
         if (!idHit && !titleHit && !tagHit) return false;
       }
       if (view === "mine") {
-        // My Work: rows assigned to the signed-in viewer. With no identity we
+        // My Tasks: rows assigned to the signed-in viewer. With no identity we
         // fall back to "assigned to someone" so the toggle still narrows.
         if (me) return it.assignee.toLowerCase() === me.toLowerCase();
         return it.assignee !== "";
       }
       return true;
     });
-  }, [tasks, external, assigneeFilter, view, me, query]);
+  }, [tasks, external, assigneeFilter, channelFilter, view, me, query]);
 
   // Keyboard navigation across the unified rows: j/ArrowDown and k/ArrowUp move
   // the cursor; Enter opens the focused row's local task.
@@ -268,6 +296,26 @@ export default function TasksPage() {
     return [...s].sort();
   }, [tasks, external]);
 
+  // Distinct non-blank channels present on the loaded board — never a
+  // hardcoded vocabulary (task 153fdf19).
+  const channels = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of [...tasks.map(nativeToWork), ...external.map(externalToWork)]) {
+      if (it.channel) s.add(it.channel);
+    }
+    return [...s].sort();
+  }, [tasks, external]);
+
+  // A channel the owner picked can vanish from the board (task closed,
+  // upstream data changed) — fall back to All rather than silently render
+  // nothing. Guard on channels.length so an in-flight initial load doesn't
+  // clobber a just-restored choice before rows have arrived.
+  useEffect(() => {
+    if (channelFilter && channels.length > 0 && !channels.includes(channelFilter)) {
+      setChannelFilter("");
+    }
+  }, [channelFilter, channels]);
+
   const start = useCallback((it: WorkItem) => {
     if (!it.id) return;
     setStarted((prev) => new Set(prev).add(it.key));
@@ -278,10 +326,10 @@ export default function TasksPage() {
 
   return (
     <Page>
-      {/* Work-surface control bar: My Work / Team attention toggle + provider
+      {/* Task-surface control bar: My Tasks / Team attention toggle + provider
           and assignee filters spanning native / GitHub / Jira. */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" role="tablist" aria-label="Work view">
+        <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" role="tablist" aria-label="Task view">
           {(["mine", "team"] as WorkView[]).map((v) => (
             <button
               key={v}
@@ -296,10 +344,32 @@ export default function TasksPage() {
                 color: view === v ? "var(--text-primary)" : "var(--text-muted)",
               }}
             >
-              {v === "mine" ? "My Work" : "Team"}
+              {v === "mine" ? "My Tasks" : "Team"}
             </button>
           ))}
         </div>
+
+        {channels.length > 0 && (
+          <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden" role="tablist" aria-label="Filter by channel">
+            {["", ...channels].map((c) => (
+              <button
+                key={c || "all"}
+                type="button"
+                role="tab"
+                data-channel-pill={c || "all"}
+                aria-selected={channelFilter === c}
+                onClick={() => setChannelFilter(c)}
+                className="px-3 py-1.5 text-xs font-semibold"
+                style={{
+                  background: channelFilter === c ? "var(--surface-2)" : "var(--surface-1)",
+                  color: channelFilter === c ? "var(--text-primary)" : "var(--text-muted)",
+                }}
+              >
+                {c || "All"}
+              </button>
+            ))}
+          </div>
+        )}
 
         <input
           data-work-search
@@ -430,6 +500,7 @@ function WorkRow({ item, focused, started, onStart }: {
           ) : (
             <span className="truncate min-w-0 font-medium" style={{ color: "var(--text-primary)" }}>{item.title}</span>
           )}
+          {item.channel && <Lozenge tone="neutral" className="shrink-0">{item.channel}</Lozenge>}
           {step && <Lozenge tone="info">{stepLabel(step)}</Lozenge>}
           {gTone && <Lozenge tone={gTone}>{`gate ${gate}`}</Lozenge>}
         </div>

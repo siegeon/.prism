@@ -49,7 +49,9 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # + agent_bridge_command (agent-drivable browser bridge — an authorized
     # agent, holding a user's own access key, drives that same user's own
     # already-open browser tab live; plan peaceful-seeking-octopus).
-    assert len(names) == 32
+    # + signal_post (task a6858911 — Queue intake: a collector posting a
+    # signal over MCP is the primary path, unlike documents_place).
+    assert len(names) == 33
     # Pin the INTENT, not just the number: the loop verb is served and the
     # legacy drivers stay off the default surface (tool-surface reduction).
     assert "conductor_work" in names

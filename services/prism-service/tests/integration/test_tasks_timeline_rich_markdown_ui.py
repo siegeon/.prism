@@ -118,10 +118,17 @@ def test_detail_description_uses_markdown_not_pre():
     # viewer (~L597) that fetches a log/receipt and shows it as monospace
     # text. A log viewer SHOULD be a <pre whitespace-pre-wrap>; that is the
     # correct tag for preformatted output. So the old assertions failed on
-    # code that is right, while the actual contract (L1886 renders
+    # code that is right, while the actual contract (renders
     # <Markdown text={task.description} />) was satisfied the whole time.
     # Pin the contract itself: no <pre> may wrap the description.
-    assert "<Markdown text={task.description}" in src, \
+    #
+    # SUPERSEDED 2026-08-26 (task 6968cc39): the call now reads
+    # `<Markdown text={linkedDescription || task.description} />` -- the
+    # description falls back to task.description only when no
+    # entity-linked version exists. The contract (description renders
+    # through <Markdown>, task.description is still the ultimate source)
+    # is unchanged; only the literal shape moved.
+    assert re.search(r"<Markdown\s+text=\{[^}]*task\.description[^}]*\}", src), \
         "AC-4: the description must render through <Markdown>, not a raw <pre>"
     for block in re.findall(r"<pre\b.*?</pre>", src, flags=re.S):
         assert "task.description" not in block, \

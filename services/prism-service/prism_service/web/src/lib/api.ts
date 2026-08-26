@@ -77,7 +77,7 @@ export async function approveDesignPacket(
 
 // ── Team-work integration surface (task ae31c2c0) ──────────────────────
 // Thin typed helpers over the provider-neutral integration core
-// (/api/workspaces/{ws}/integrations/*). The Work view merges native tasks
+// (/api/workspaces/{ws}/integrations/*). The Tasks view merges native tasks
 // with the external entities these return; authorization/sync truth is always
 // the server's, never inferred client-side.
 
@@ -324,4 +324,69 @@ export async function connectJiraApiToken(
 ): Promise<{ connected: boolean; account: string }> {
   return api.post("/api/integrations/connect/jira/api-token",
     { site_url: siteUrl, email, api_token: apiToken });
+}
+
+// ── Ontology cross-linking (task 6968cc39) ─────────────────────────────
+// entity_linker.link()'s span shape — every ontology-known entity a piece
+// of text mentions, non-overlapping, in reading order. LinkedText.tsx
+// renders these directly; TaskDetailPage/UnderstandPage splice them into
+// markdown source instead (spliceLinkedMarkdown below).
+
+export type LinkedSpan = {
+  start: number; end: number; text: string; kind: string;
+  iri: string; cls: string; href: string; label: string;
+};
+
+/** POST so a long task/memory body never hits a URL length limit — the
+ * GET twin (services/entity_linker.py's own doc) is for short strings. */
+export async function linkText(project: string, text: string): Promise<LinkedSpan[]> {
+  if (!text || !text.trim()) return [];
+  const d = await api.post<{ spans: LinkedSpan[] }>(
+    `/api/okf/ontology/link?project=${encodeURIComponent(project)}`, { text });
+  return d.spans ?? [];
+}
+
+// One combined per-task-load fetch (task 2ec1e395) -- GET /api/tasks/{id}/
+// links now returns spans PER FIELD in one response, so TaskDetailPage's
+// oracle/plan/premise/proof cards share a single linker call instead of
+// each hitting linkText separately, never one call per field per poll.
+export type TaskLinkFields = {
+  description: LinkedSpan[]; oracle: LinkedSpan[]; likely_misfire: LinkedSpan[];
+  plan_doc: LinkedSpan[]; premise_notes: LinkedSpan[]; completion_proof: LinkedSpan[];
+};
+
+const EMPTY_LINK_FIELDS: TaskLinkFields = {
+  description: [], oracle: [], likely_misfire: [],
+  plan_doc: [], premise_notes: [], completion_proof: [],
+};
+
+export async function linkTaskFields(project: string, taskId: string): Promise<TaskLinkFields> {
+  const d = await api.get<{ spans: LinkedSpan[]; fields?: Partial<TaskLinkFields> }>(
+    `/api/tasks/${taskId}/links?project=${encodeURIComponent(project)}`);
+  return { ...EMPTY_LINK_FIELDS, ...(d.fields ?? {}) };
+}
+
+/** Splice `[text](href)` markdown links into raw markdown SOURCE for every
+ * span with a real href that does not fall inside an existing `[...](...)`
+ * link or a backtick code span — so the existing Markdown component
+ * renders the result exactly as it already renders any other link, never
+ * a second renderer (task 6968cc39). Spans are assumed non-overlapping
+ * and in reading order (entity_linker.link()'s own contract). */
+export function spliceLinkedMarkdown(text: string, spans: LinkedSpan[]): string {
+  if (!text || spans.length === 0) return text;
+  const guarded: [number, number][] = [];
+  for (const re of [/\[[^\]]*\]\([^)\s]+\)/g, /`[^`]*`/g]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) guarded.push([m.index, m.index + m[0].length]);
+  }
+  let out = "";
+  let last = 0;
+  for (const s of spans) {
+    if (!s.href) continue;
+    if (guarded.some(([a, b]) => s.start < b && s.end > a)) continue;
+    out += text.slice(last, s.start);
+    out += `[${text.slice(s.start, s.end)}](${s.href})`;
+    last = s.end;
+  }
+  return out + text.slice(last);
 }

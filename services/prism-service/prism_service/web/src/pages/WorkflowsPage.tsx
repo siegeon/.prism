@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
 import { api } from "@/lib/api";
@@ -100,24 +100,24 @@ const RUN_RAIL_PILLS = 72;
 
 type ReplayEvent = NonNullable<WorkflowRun["timeline"]>[number];
 
-function replayStepMs(event: ReplayEvent): number {
+function replayStepMs(event: ReplayEvent, speed: number = REPLAY_SPEED): number {
   const elapsed = event.endedAt
     ? Math.max(0, Date.parse(event.endedAt) - Date.parse(event.startedAt))
     : REPLAY_MIN_STEP_MS;
-  return Math.min(REPLAY_MAX_STEP_MS, Math.max(REPLAY_MIN_STEP_MS, elapsed / REPLAY_SPEED));
+  return Math.min(REPLAY_MAX_STEP_MS, Math.max(REPLAY_MIN_STEP_MS, elapsed / speed));
 }
 
-function replayGapMs(event: ReplayEvent, next?: ReplayEvent): number {
+function replayGapMs(event: ReplayEvent, next?: ReplayEvent, speed: number = REPLAY_SPEED): number {
   if (!next?.startedAt || !event.endedAt) return 0;
   const gap = Math.max(0, Date.parse(next.startedAt) - Date.parse(event.endedAt));
-  return Math.min(REPLAY_MAX_GAP_MS, gap / REPLAY_SPEED);
+  return Math.min(REPLAY_MAX_GAP_MS, gap / speed);
 }
 
-function replaySpanMs(event: ReplayEvent, next?: ReplayEvent): number {
+function replaySpanMs(event: ReplayEvent, next?: ReplayEvent, speed: number = REPLAY_SPEED): number {
   // Keep the clock moving continuously until the next recorded event. A
   // separate post-fill delay made short steps look complete long before the
   // replay advanced, which falsely read as a stalled workflow.
-  return Math.min(REPLAY_MAX_STEP_MS, replayStepMs(event) + replayGapMs(event, next));
+  return Math.min(REPLAY_MAX_STEP_MS, replayStepMs(event, speed) + replayGapMs(event, next, speed));
 }
 
 function pillIndexTitle(index: number, offset: number, runs: WorkflowRun[]): string | undefined {
@@ -313,6 +313,16 @@ export default function WorkflowsPage() {
   const [testStep, setTestStep] = useState<number | null>(null);
   const testWorkflowRef = useRef<WorkflowCatalogEntry | null>(null);
   const testModeRef = useRef<"runtime" | "replay" | null>(null);
+  // AC-7: a real, user-adjustable playback speed for a done-task replay --
+  // previously REPLAY_SPEED was a hardcoded constant only ever rendered as a
+  // label with nothing to click. The ref is what the timing functions below
+  // actually read (they're plain functions, not hooks); the state re-renders
+  // the control and its label.
+  const [replaySpeed, setReplaySpeed] = useState(REPLAY_SPEED);
+  const replaySpeedRef = useRef(REPLAY_SPEED);
+  useEffect(() => {
+    replaySpeedRef.current = replaySpeed;
+  }, [replaySpeed]);
   const replayStepStartedRef = useRef(0);
   const replayStepDurationRef = useRef(REPLAY_MIN_STEP_MS);
   const replayTimelineRef = useRef<ReplayEvent[]>([]);
@@ -533,7 +543,7 @@ export default function WorkflowsPage() {
   // a second, slower phase_progress fetch (scope=full, ~30s cold) -- the
   // same tradeoff the canvas's own activeProgress already makes.
   const conductorLivePhase = useMemo<PhaseProgress | null>(() => {
-    if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
+    if (!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
     const step = selectedWorkflow?.steps.find((candidate) => candidate.id === workflowRun.runtime?.currentStep);
     const typical = step?.average_duration_seconds ?? undefined;
     const startedAt = workflowRun.runtime.startedAt;
@@ -544,7 +554,7 @@ export default function WorkflowsPage() {
       in_step_s: inStepS,
       typical_s: typical,
     };
-  }, [selectedWorkflowId, workflowRun, selectedWorkflow]);
+  }, [isStateMachineWorkflow, workflowRun, selectedWorkflow]);
   const conductorLiveActivity = useMemo<Activity | null>(() => {
     const t = conductorLivePhase && workflowRun?.data.conductorTask;
     if (!t) return null;
@@ -873,7 +883,7 @@ export default function WorkflowsPage() {
     graphRef.current.setDef({ ...workflow, occupancy: { ...occupancy, __start__: 0, __complete__: 0 } });
     graphRef.current.sendTransition(replayEventIndex === 0 ? "__start__" : timeline[replayEventIndex - 1].step, event.step);
     setTestStep(stepIndex);
-    const duration = replaySpanMs(event, timeline[replayEventIndex + 1]);
+    const duration = replaySpanMs(event, timeline[replayEventIndex + 1], replaySpeedRef.current);
     replayStepStartedRef.current = performance.now();
     replayStepDurationRef.current = duration;
     // A retried step (flow_report_failure/advance_refused/a rejected gate
@@ -992,6 +1002,36 @@ export default function WorkflowsPage() {
     setHistoryOverlayReady(false);
     if (selectedWorkflow) graphRef.current.setDef(workflowForGraph(selectedWorkflow));
   }, [selectedWorkflow]);
+
+  useEffect(() => {
+    // AC-2: Handle task query param to open a specific task's run
+    const taskParam = searchParams.get("task");
+    if (!taskParam) return;
+
+    // Find the task in the conductor's managed tasks
+    const task = conductorManaged.find((t: ManagedTask) => t.id === taskParam);
+    if (task) {
+      openConductorInstance(task);
+    }
+  }, [searchParams, conductorManaged, openConductorInstance]);
+
+  // The whole state-machine family's own version of validation's "reattach
+  // after reload/navigation" effect below: land on ANY bot-family canvas
+  // (not just the top "conductor" one) with a task genuinely in flight on
+  // one of its steps right now, and its fill/clock should already be
+  // playing -- no click needed -- the same way "Build and test" has always
+  // auto-attached to its own active run (owner: "each step here should
+  // have a playback mode... look at how we did it with build and test").
+  // Skips when ?task= is already being handled above, so the two effects
+  // never race onto different pills for the same canvas.
+  useEffect(() => {
+    if (!isStateMachineWorkflow || workflowRun || searchParams.get("task")) return;
+    const live = [...conductorRailTasks].reverse().find((task) =>
+      task.status !== "done"
+      && (task.gate_state === "pending" || task.gate_state === "failed"
+        || task.activity?.state === "working" || task.activity?.state === "driving"));
+    if (live) openConductorInstance(live);
+  }, [isStateMachineWorkflow, workflowRun, searchParams, conductorRailTasks, openConductorInstance]);
 
   useEffect(() => {
     // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
@@ -1620,21 +1660,33 @@ export default function WorkflowsPage() {
               {replayStoppedAt
                 ? `Replay stopped · ${replayStoppedAt.step.replace(/_/g, " ")} ${replayStoppedAt.status.replace(/_/g, " ")}`
                 : testStep < 0
-                ? testModeRef.current === "replay" ? `Replay ${REPLAY_SPEED}× · start` : "Testing · start"
+                ? testModeRef.current === "replay" ? `Replay ${replaySpeed}× · start` : "Testing · start"
                 : testStep < selectedWorkflow.steps.length
-                  ? `${testModeRef.current === "replay" ? `Replay ${REPLAY_SPEED}×` : "Testing"} · ${selectedWorkflow.steps[testStep].id.replace(/_/g, " ")}`
-                : testModeRef.current === "replay" ? `Replay ${REPLAY_SPEED}× · complete` : "Flow complete"}
+                  ? `${testModeRef.current === "replay" ? `Replay ${replaySpeed}×` : "Testing"} · ${selectedWorkflow.steps[testStep].id.replace(/_/g, " ")}`
+                : testModeRef.current === "replay" ? `Replay ${replaySpeed}× · complete` : "Flow complete"}
             </span>
           )}
           {selectedHistoryRun ? (
-            <button
-              type="button"
-              onClick={leaveHistoricalReplay}
-              title="Historical run selected · click to return to live workflow"
-              className="rounded border border-[color:var(--accent-solid)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--accent-solid)]"
-            >
-              Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={leaveHistoricalReplay}
+                title="Historical run selected · click to return to live workflow"
+                className="rounded border border-[color:var(--accent-solid)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--accent-solid)]"
+              >
+                Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
+              </button>
+              {workflowRun?.data.conductorTask?.id && (
+                <Link
+                  to={`/tasks/${workflowRun?.data.conductorTask?.id}`}
+                  aria-label="Open task detail"
+                  title="Open this task's own detail page"
+                  className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
+                >
+                  ↗ Task
+                </Link>
+              )}
+            </>
           ) : selectedWorkflowId !== "conductor" && (
             <button
               type="button"
@@ -1661,16 +1713,46 @@ export default function WorkflowsPage() {
                   ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
                   : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
             </div>
+          </div>
+        )}
+        {/* AC-6: the timeline content (SdlcProgress for a live run, the
+            speed control for a done-instance replay) lives in its OWN bottom
+            bar, separate from the box above which now holds only the
+            run's title/identification -- previously both were crammed into
+            the same top-left overlay (owner, live, 2026-08-25). Sits just
+            above the pill-rail bar (bottom-10, that bar is h-10). */}
+        {(conductorLivePhase || replayEventIndex !== null) && (
+          <div className="absolute bottom-10 left-0 right-0 z-20 h-9 border-t border-white/10 bg-[#08090b] px-3 flex items-center gap-4">
             {conductorLivePhase && (
-              <div className="mt-2">
-                <SdlcProgress
-                  step={workflowRun?.data.conductorTask?.workflowStep ?? undefined}
-                  phase={conductorLivePhase}
-                  status={workflowRun?.data.conductorTask?.status}
-                  activity={conductorLiveActivity}
-                  reduced={reduced}
-                  hideTokens
-                />
+              <SdlcProgress
+                step={workflowRun?.data.conductorTask?.workflowStep ?? undefined}
+                phase={conductorLivePhase}
+                status={workflowRun?.data.conductorTask?.status}
+                activity={conductorLiveActivity}
+                reduced={reduced}
+                hideTokens
+              />
+            )}
+            {replayEventIndex !== null && (
+              <div className="flex items-center gap-3 ml-auto text-2xs uppercase tracking-wider text-[color:var(--text-secondary)]">
+                <span>Replay {replaySpeed}×</span>
+                <div role="group" aria-label="Playback speed" className="flex items-center gap-1">
+                  {[30, 120, 240].map((speed) => (
+                    <button
+                      key={speed}
+                      type="button"
+                      onClick={() => setReplaySpeed(speed)}
+                      aria-pressed={replaySpeed === speed}
+                      className={`rounded border px-2 py-1 font-mono ${
+                        replaySpeed === speed
+                          ? "border-[color:var(--accent-solid)] text-[color:var(--accent-solid)]"
+                          : "border-[color:var(--border-default)] text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
+                      }`}
+                    >
+                      {speed}×
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1730,7 +1812,11 @@ export default function WorkflowsPage() {
                 aria-label={pill.ariaLabel}
                 title={pill.title}
                 onClick={pill.onClick}
-                className={`h-9 min-w-1 max-w-[10px] flex-1 rounded-none transition-colors duration-500 ${pill.ringHighlighted ? "ring-2 ring-inset ring-white" : ""} ${pill.tone}`}
+                className={`h-9 min-w-1 max-w-[10px] flex-1 rounded-none transition-all duration-500 ${
+                  pill.ringHighlighted
+                    ? "ring-[3px] ring-inset ring-white shadow-[0_0_10px_2px_rgba(255,255,255,0.7)] scale-y-125 relative z-10"
+                    : ""
+                } ${pill.tone}`}
               />
             ))}
           </div>
@@ -1807,6 +1893,16 @@ export default function WorkflowsPage() {
             </header>
             <div className="text-sm">
               {selectedStep && <section>
+                {selectedStep.authority && (
+                  <div
+                    role="note"
+                    aria-label="Gate authority"
+                    className="mx-4 mt-4 border border-amber-500/40 bg-amber-950/10 px-3 py-3 text-xs leading-relaxed text-amber-200/90"
+                  >
+                    <span className="mr-1 font-semibold uppercase tracking-wider text-amber-300">Who decides this gate</span>
+                    <div className="mt-1">{selectedStep.authority}</div>
+                  </div>
+                )}
                 <section aria-label="Step behavior">
                   {selectedStep.execution !== "scripted" && <div className="border border-[color:var(--border-default)] px-3 py-3 text-xs text-[color:var(--text-muted)]">{selectedStep.execution === "connected" ? "Connected to PRISM" : "Definition only"}</div>}
                   {selectedStep.execution === "scripted" && selectedStep.script_source && (

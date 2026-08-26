@@ -253,21 +253,118 @@ def dirty_judge_reason() -> str:
             "code — commit or discard these edits before any gate is decided")
 
 
+def _first_parent_touched_files(workspace: Path, baseline: str) -> Optional[set[str]]:
+    """Repo-relative paths the candidate's OWN first-parent commit lineage
+    between ``baseline`` and HEAD actually altered -- as distinct from files
+    that only differ because the candidate merged in an integration branch
+    (e.g. ``dev``) carrying someone ELSE'S already-authorized change on the
+    merge's second-parent side.
+
+    Uses ``--first-parent`` WITH a combined-diff format (``--cc``, this git's
+    only supported spelling of it -- ``--diff-merges=combined`` needs git
+    >=2.36) rather than plain ``--name-only``: plain first-parent logging
+    shows a merge commit's FULL diff against its first parent, which flags a
+    file the candidate never touched merely because the merge changed it (a
+    clean `git merge` that took the incoming side wholesale). The combined
+    format instead shows a merge commit's file ONLY when its resolved content
+    differs from EVERY parent -- i.e. a real conflict resolution the
+    candidate authored, or content nobody upstream already had. Verified
+    empirically (not just recalled) against git 2.34: a clean merge inheriting
+    an unrelated policy-file change reports NO files for that merge commit;
+    a candidate-authored conflict resolution still does; a same-commit direct
+    edit (independent of how any later merge resolves) is still caught by its
+    own non-merge commit regardless.
+
+    None when this can't be computed (caller then falls back to the wider,
+    more conservative check -- fails toward MORE refusals, never fewer).
+    COMMITTED history only -- uncommitted worktree edits are not commits and
+    cannot appear in `git log`; the caller handles those separately and
+    UNCONDITIONALLY, since an uncommitted edit sitting in the worktree right
+    now cannot have arrived via a merge someone else authored."""
+    try:
+        out = subprocess.run(
+            ["git", "log", "--first-parent", "--cc", "--name-only",
+             "--format=", f"{baseline}..HEAD"],
+            cwd=str(workspace), capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if out.returncode != 0:
+        return None
+    return {ln.strip() for ln in out.stdout.splitlines() if ln.strip()}
+
+
+def _uncommitted_files(workspace: Path) -> Optional[set[str]]:
+    """Repo-relative paths that differ between the worktree's current state
+    (working tree + index) and its own HEAD -- i.e. genuinely uncommitted
+    edits, tracked or untracked. These can never be "merely inherited via a
+    merge" (a merge only ever changes committed history), so the caller
+    always flags them regardless of first-parent scoping. None on any git
+    failure -- caller then treats it as "cannot rule out", not "nothing
+    uncommitted"."""
+    try:
+        tracked = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=str(workspace), capture_output=True, text=True, timeout=15,
+        )
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard"],
+            cwd=str(workspace), capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if tracked.returncode != 0 or untracked.returncode != 0:
+        return None
+    files = tracked.stdout.splitlines() + untracked.stdout.splitlines()
+    return {ln.strip() for ln in files if ln.strip()}
+
+
 def candidate_policy_edits(task_id: str) -> list[str]:
     """The gate-policy files the task's WORKTREE has modified vs its baseline
     (committed OR working-tree edits). Empty when the task has no worktree or
     touched no policy file. Reuses the verifier's diff scoping so the same
-    'changed since baseline' semantics apply."""
+    'changed since baseline' semantics apply.
+
+    A task's branch merging the integration branch (dev) forward -- to stay
+    shippable across a long-running slice, or to resolve conflicts before
+    landing -- can bring in ANOTHER task's own, separately-authorized policy
+    change on the merge's second-parent side. A blind `git diff baseline
+    HEAD` cannot tell that apart from the candidate authoring the edit
+    itself, and refuses the gate on an edit this task never made (task
+    e14680ba, 2026-08-26: a merge that absorbed conductor_service.py/
+    arc_governance.py changes from unrelated, already-shipped tasks tripped
+    this exact false positive). Narrow the COMMITTED portion of the raw diff
+    down to files the candidate's OWN first-parent lineage actually touched
+    (see ``_first_parent_touched_files``) -- but a policy file with a genuine
+    UNCOMMITTED edit right now stays flagged unconditionally, since that
+    cannot have arrived via someone else's merge. When first-parent scoping
+    can't be computed, fall back to the wider (pre-existing, more
+    conservative) set so an environment where it's unresolvable never gets
+    MORE permissive than before."""
     ws = _workspace_for(task_id)
     if not ws:
         return []
+    baseline = ws.get("baseline") or None
     try:
         from prism_service.services.verifier_service import _git_changed_files
-        changed = _git_changed_files(Path(ws["path"]),
-                                     ws.get("baseline") or None)
+        changed = _git_changed_files(Path(ws["path"]), baseline)
     except Exception:
         changed = []
-    return sorted({_norm(f) for f in changed if is_policy_file(f)})
+    flagged = {_norm(f) for f in changed if is_policy_file(f)}
+    if not flagged or not baseline:
+        return sorted(flagged)
+    uncommitted = _uncommitted_files(Path(ws["path"]))
+    if uncommitted is None:
+        return sorted(flagged)
+    uncommitted_norm = {_norm(f) for f in uncommitted}
+    always_flagged = flagged & uncommitted_norm
+    committed_only = flagged - uncommitted_norm
+    if not committed_only:
+        return sorted(always_flagged)
+    own = _first_parent_touched_files(Path(ws["path"]), baseline)
+    if own is None:
+        return sorted(flagged)
+    return sorted(always_flagged | (committed_only & {_norm(f) for f in own}))
 
 
 def policy_change_authorized(task: object = None) -> bool:

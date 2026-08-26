@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Network } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, linkText, spliceLinkedMarkdown } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty } from "@/components/ui";
 import { typeToneHashed, toneVar, type Tone } from "@/lib/domainTone";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip, GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
+import LinkedText from "@/components/LinkedText";
 
 // Understand — the domain-first knowledge drill (owner doctrine): Understand
 // starts at the DOMAIN layer and drills DOWN. It never opens on a concept.
@@ -36,6 +37,15 @@ type OkfGraph = { nodes: GraphNode[]; edges: GraphEdge[] };
 // Sessions became attributable in task fc258f15 (recall_log.session_id).
 type Recaller = { task_id: string; recall_count?: number; last_recalled?: string; outcome?: string };
 type SessionRecaller = { session_id: string; recall_count?: number; last_recalled?: string };
+
+// 'In the ontology' strip (task f5352fa1) — GET /api/okf/ontology/concept's
+// shape: the concept's o: class, its o:inDomain label, and its o:cites /
+// o:evidencedBy relations, all resolved off the live graph.
+type OntologyRef = { id: string; label: string };
+type OntologyConceptInfo = {
+  class: string; domain: string; cites: OntologyRef[];
+  evidenced_by_tasks: OntologyRef[]; evidenced_by_documents: OntologyRef[];
+};
 
 type Concept = {
   path: string; type: string;
@@ -420,6 +430,12 @@ function DetailPanel({
   const [draft, setDraft] = useState("");
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [ontologyInfo, setOntologyInfo] = useState<OntologyConceptInfo | null>(null);
+  // Cross-clicked body (task 6968cc39): link() over the concept's raw
+  // markdown source, spliced into `[text](href)` links so WovenMarkdown's
+  // existing renderer draws them exactly like any other markdown link —
+  // memory bodies name tasks/files constantly and none of it was clickable.
+  const [linkedBody, setLinkedBody] = useState("");
 
   useEffect(() => {
     setConcept(null); setEditing(false); setNote(null);
@@ -430,6 +446,27 @@ function DetailPanel({
       .catch(() => setConcept(null))
       .finally(() => setBusy(false));
   }, [path, project]);
+
+  // 'In the ontology' strip data — keyed on the concept's real memory id,
+  // once the concept itself has loaded.
+  const conceptId = String(concept?.frontmatter.id ?? "");
+  useEffect(() => {
+    setOntologyInfo(null);
+    if (!conceptId) return;
+    api.get<OntologyConceptInfo>(
+      `/api/okf/ontology/concept?project=${encodeURIComponent(project)}&id=${encodeURIComponent(conceptId)}`,
+    ).then((o) => setOntologyInfo(o)).catch(() => setOntologyInfo(null));
+  }, [conceptId, project]);
+
+  const body = concept?.body ?? "";
+  useEffect(() => {
+    let alive = true;
+    if (!body) { setLinkedBody(""); return; }
+    linkText(project, body)
+      .then((spans) => { if (alive) setLinkedBody(spliceLinkedMarkdown(body, spans)); })
+      .catch(() => { if (alive) setLinkedBody(""); });
+    return () => { alive = false; };
+  }, [body, project]);
 
   if (!path) {
     return <Empty>Select a concept to read it, follow its links, and edit it.</Empty>;
@@ -492,7 +529,9 @@ function DetailPanel({
         {tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {tags.map((t) => (
-              <span key={t} className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-2)] text-[color:var(--text-muted)]">{t}</span>
+              <span key={t} className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-2)] text-[color:var(--text-muted)]">
+                <LinkedText text={t} />
+              </span>
             ))}
           </div>
         )}
@@ -512,6 +551,8 @@ function DetailPanel({
       </div>
       {note && <div className="text-2xs opacity-70">{note}</div>}
 
+      <OntologyStrip info={ontologyInfo} navigate={navigate} />
+
       {editing ? (
         <div className="space-y-2">
           <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={10}
@@ -529,7 +570,7 @@ function DetailPanel({
           </div>
         </div>
       ) : (
-        <WovenMarkdown text={concept.body} onSelect={onSelect} />
+        <WovenMarkdown text={linkedBody || concept.body} onSelect={onSelect} />
       )}
 
       <div className="border-t border-[color:var(--border-default)] pt-3">
@@ -589,6 +630,44 @@ function DetailPanel({
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  );
+}
+
+// 'In the ontology' strip (task f5352fa1) — the concept's real class pill,
+// its domain (linking to the ontology's Structure tab), and its cites/
+// evidencedBy relation counts, all sourced from GET /api/okf/ontology/
+// concept. Renders nothing until that call resolves with a known class —
+// never a guessed class from the concept's own OKF `type`.
+function OntologyStrip({
+  info, navigate,
+}: { info: OntologyConceptInfo | null; navigate: (to: string) => void }) {
+  if (!info || !info.class) return null;
+  const evidenceCount = info.evidenced_by_tasks.length + info.evidenced_by_documents.length;
+  return (
+    <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)]
+      px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
+      <span className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">In the ontology</span>
+      <Lozenge tone={typeLozengeTone(info.class)}>{info.class}</Lozenge>
+      {info.domain && (
+        <button
+          onClick={() => navigate("/ontology?tab=structure")}
+          className="capitalize text-[color:var(--accent-teal-fg)] hover:underline"
+        >
+          {info.domain}
+        </button>
+      )}
+      {info.cites.length > 0 && (
+        <span className="text-[color:var(--text-muted)]">cites {info.cites.length}</span>
+      )}
+      {evidenceCount > 0 && (
+        <span className="text-[color:var(--text-muted)]">
+          evidencedBy {info.evidenced_by_tasks.length} task{info.evidenced_by_tasks.length === 1 ? "" : "s"}
+          {info.evidenced_by_documents.length > 0
+            ? `, ${info.evidenced_by_documents.length} document${info.evidenced_by_documents.length === 1 ? "" : "s"}`
+            : ""}
+        </span>
       )}
     </div>
   );

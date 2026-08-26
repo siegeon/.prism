@@ -56,7 +56,7 @@
     "steps": [
       {
         "step": 1,
-        "action": "navigate to /tasks, switch from 'My Work' to 'Team', click the first row's task title link.",
+        "action": "navigate to /tasks, switch from 'My Tasks' to 'Team', click the first row's task title link.",
         "expect": "Lands on /tasks/<id> for the top-priority in_progress task (task 3baadd19 at time of writing). Overview tab loads with no red 'BLOCKED BECAUSE' banner (AC-BLOCKED-REASON-CLEARS's live signal -- a stale unshipped-commit refusal would render one here)."
       },
       {

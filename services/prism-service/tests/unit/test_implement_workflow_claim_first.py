@@ -73,6 +73,59 @@ def test_preflight_halt_leaves_a_visible_trace():
     )
 
 
+def test_claim_never_clobbers_a_task_that_is_already_done():
+    """Task 39244a32 (2026-08-26): a relaunched drive's Claim step blindly
+    flipped status="in_progress" over a task the machine gate adjudicator
+    had already, legitimately, finished (status=done) moments earlier -- no
+    check, no guard. The clobber then propagated: the pre-flight halt that
+    followed "un-claimed" the row straight to pending, permanently losing
+    the correct done state until a human caught the discrepancy. Both
+    write paths must read status FIRST and refuse to write over "done"."""
+    src = _source()
+    claim_at = src.index("phase('Claim')")
+    preflight_at = src.index("phase('Pre-flight')")
+    claim_block = src[claim_at:preflight_at]
+
+    # The guard read happens before either mutating call in the SAME prompt.
+    guard_at = claim_block.index('status=="done"')
+    write_at = claim_block.index('status="in_progress"')
+    link_at = claim_block.index("task_link_session(task_id=")
+    assert guard_at < write_at < preflight_at - claim_at, (
+        "the already-done guard read must precede the in_progress write"
+    )
+    assert guard_at < link_at
+
+    # The schema and the JS control flow both carry the short-circuit -- an
+    # agent that reports already_done must never reach the write path, and
+    # the script itself must return immediately rather than falling through
+    # to Pre-flight/Locate/Drive for a task with nothing left to do.
+    assert "already_done" in src
+    already_done_at = src.index("claim.already_done")
+    assert already_done_at < preflight_at, (
+        "the already_done short-circuit must be checked before Pre-flight runs"
+    )
+    return_block = src[already_done_at:preflight_at]
+    assert "return {" in return_block
+    assert "done: true" in return_block
+
+
+def test_preflight_halt_also_guards_against_clobbering_a_task_that_finished_mid_flight():
+    """Same race, the other write path: between Claim setting in_progress
+    and Pre-flight halting, the task can legitimately finish (status ->
+    done) out from under the drive. The halt's own "un-claim to pending"
+    step must not blindly overwrite that -- it needs the same guard read
+    Claim itself now has."""
+    src = _source()
+    halt_at = src.index("pre-flight-halt")
+    halt_prompt = src[halt_at - 2500 : halt_at]
+    guard_at = halt_prompt.index('status=="done"')
+    write_at = halt_prompt.index('status="pending"')
+    assert guard_at < write_at, (
+        "the halt handler must read status and refuse to overwrite an "
+        "already-done task before it un-claims to pending"
+    )
+
+
 def test_graph_phase_heartbeats():
     src = _source()
     assert '"step":"graph"' in src, (

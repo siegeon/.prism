@@ -69,6 +69,82 @@ def test_packet_state_matrix(step, gate, status, reason, expected):
     assert packet_state(step, gate, status, reason) == expected
 
 
+def test_epic_with_a_clean_rollup_shows_the_rollup_receipt_not_a_stale_one(
+    monkeypatch,
+):
+    """Live, 2026-08-25: an epic's gate banner read "READY - evidence
+    passing" while the Decision Packet directly below it showed "Oracle
+    receipt: browser - manual_evidence_required" and the pinned-tests
+    check read "0/3 passing" -- both a STALE, unrelated single-task
+    receipt (oracle_spec.latest_receipt is just receipts[-1], the very
+    last one ever recorded for this task across every gate/attempt). The
+    epic-rollup path that actually decided the gate never writes an
+    EvidenceReceipt row, so the packet fell back to whatever stale row
+    happened to be last, reading as "not actually ready" even though it
+    genuinely was.
+
+    Reproduces exactly that: a task with live, all-done, strong-proof
+    children (epic_rollup_verdict -> True) AND a stale FAILING
+    oracle_spec receipt on file. The packet must surface the rollup as
+    the decisive receipt, not the stale failure."""
+    from prism_service.services import decision_packet, oracle_spec, task_workspace
+    from prism_service import project_context
+
+    monkeypatch.setattr(task_workspace, "workspace_for", lambda tid: None)
+    monkeypatch.setattr(decision_packet, "_screenshots", lambda t: [])
+    monkeypatch.setattr(
+        oracle_spec, "latest_receipt",
+        lambda p, t: SimpleNamespace(
+            adapter="browser", passed=False, status="manual_evidence_required",
+            ended_at="2026-08-17T13:28:12Z",
+            reason="browser: no loadable URL found in the oracle text"))
+
+    children = [
+        {"id": "c1", "status": "done", "completion_proof": "## real proof one"},
+        {"id": "c2", "status": "done", "completion_proof": "## real proof two"},
+        {"id": "c3", "status": "cancelled", "completion_proof": ""},
+    ]
+    fake_task_svc = SimpleNamespace(
+        list=lambda parent_id=None, **kw: children if parent_id == "epic-1" else [])
+    monkeypatch.setattr(project_context, "get_project",
+                        lambda project: SimpleNamespace(task_svc=fake_task_svc))
+
+    task = SimpleNamespace(workflow_step="green_gate", gate_state="pending",
+                           status="in_progress", gate_reason="")
+    pkt = decision_packet.assemble_packet("prism", "epic-1", task)
+
+    assert pkt["receipt"]["adapter"] == "epic-rollup", pkt["receipt"]
+    assert pkt["receipt"]["passed"] is True, pkt["receipt"]
+    assert "manual_evidence_required" not in str(pkt["receipt"]), pkt["receipt"]
+    assert "browser" not in pkt["receipt"]["adapter"], pkt["receipt"]
+
+
+def test_a_task_with_no_children_still_falls_back_to_its_own_receipt(monkeypatch):
+    """Regression guard: a normal (non-epic) task's own receipt path must
+    stay exactly as before -- the rollup lookup finds no live children and
+    gets out of the way."""
+    from prism_service.services import decision_packet, oracle_spec, task_workspace
+    from prism_service import project_context
+
+    monkeypatch.setattr(task_workspace, "workspace_for", lambda tid: None)
+    monkeypatch.setattr(decision_packet, "_screenshots", lambda t: [])
+    monkeypatch.setattr(
+        oracle_spec, "latest_receipt",
+        lambda p, t: SimpleNamespace(
+            adapter="pytest_ids", passed=True, status="passed",
+            ended_at="2026-08-25T00:00:00Z", reason="3 passed"))
+    fake_task_svc = SimpleNamespace(list=lambda parent_id=None, **kw: [])
+    monkeypatch.setattr(project_context, "get_project",
+                        lambda project: SimpleNamespace(task_svc=fake_task_svc))
+
+    task = SimpleNamespace(workflow_step="green_gate", gate_state="pending",
+                           status="in_progress", gate_reason="")
+    pkt = decision_packet.assemble_packet("prism", "leaf-task-1", task)
+
+    assert pkt["receipt"]["adapter"] == "pytest_ids", pkt["receipt"]
+    assert pkt["receipt"]["passed"] is True, pkt["receipt"]
+
+
 def test_empty_when_no_worktree(monkeypatch):
     """AC-3: no registered worktree -> well-formed empty packet, never raises."""
     from prism_service.services import decision_packet, task_workspace

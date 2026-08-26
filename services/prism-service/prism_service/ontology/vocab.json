@@ -1,0 +1,57 @@
+{
+  "ask": [
+    "decision",
+    "review",
+    "deliverable",
+    "reply",
+    "fyi",
+    "unknown"
+  ],
+  "bucket": [
+    "needs_attention",
+    "team_updates",
+    "low_priority"
+  ],
+  "channel": [
+    "daemon",
+    "github",
+    "jira",
+    "mcp",
+    "outlook",
+    "slack",
+    "ui"
+  ],
+  "gate_state": [
+    "none",
+    "pending",
+    "passed",
+    "failed"
+  ],
+  "proof_type": [
+    "test",
+    "demo",
+    "artifact",
+    "metric",
+    "review",
+    "source_backed_answer",
+    "decision"
+  ],
+  "signal_state": [
+    "open",
+    "became_task",
+    "dropped"
+  ],
+  "task_status": [
+    "pending",
+    "in_progress",
+    "blocked",
+    "done",
+    "cancelled",
+    "deleted",
+    "archived"
+  ],
+  "workflow": [
+    "implement",
+    "triage"
+  ]
+}

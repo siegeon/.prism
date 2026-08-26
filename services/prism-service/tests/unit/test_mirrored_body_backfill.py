@@ -105,9 +105,18 @@ def _sync(store, intake, *adapters):
 
 
 def _import_stub_only(tmp_path, url="https://github.com/siegeon/.prism/issues/222"):
-    """Seed a task exactly as a PRE-fix import would have: an empty-body
-    pull, so the description is the bare mirror-pointer stub and nothing
-    else - reproducing the ~25 already-mirrored rows this task backfills."""
+    """Seed a task exactly as a PRE-4db228ec import would have: description
+    is the bare mirror-pointer stub and nothing else - reproducing the ~25
+    already-mirrored rows this task backfills.
+
+    Task fb7edc46 stopped a FRESH empty-body import from ever writing this
+    stub (description is just the body now, "" when the body is empty), so
+    the sync path this helper used to run can no longer fabricate the
+    legacy state on its own. The stub row is now inserted directly - via a
+    real empty-body sync (to get a genuine store link + entity), then a
+    hand-written description update to the exact pre-fix stub text - which
+    is exactly what an old, never-migrated database row looks like today.
+    """
     store = _store(tmp_path)
     tasks = _task_svc(tmp_path)
     conn = store.ensure_connection(WS_A, "github", "install-1")
@@ -119,8 +128,10 @@ def _import_stub_only(tmp_path, url="https://github.com/siegeon/.prism/issues/22
     svc = _sync(store, tasks, adapter)
     svc.pull_container(WS_A, conn, cont)
     link = store.list_links(WS_A)[0]
+    stub = f"Mirrored from github .prism #222.\n{url}"
+    tasks.update(link.task_id, description=stub)
     task = tasks.get(link.task_id)
-    assert "Where the hole" not in task.description  # sanity: really stub-only
+    assert task.description == stub  # sanity: really stub-only, legacy shape
     return store, tasks, conn, cont, task
 
 

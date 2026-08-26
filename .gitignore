@@ -110,6 +110,9 @@ benchmarks/.venv-wsl/
 services/bench-service/data-bench/
 .prism/feedback-buffer.jsonl
 services/prism-service/prism_service/web_dist/
+# Vite watch-build staging dir (web/vite.config.ts WATCH_STAGE, written by the
+# AOS AppHost's prism-web-build resource) — a runtime artifact, never source.
+services/prism-service/prism_service/web_dist_next/
 services/prism-service/build/
 services/prism-service/dist/
 services/prism-service/*.egg-info/

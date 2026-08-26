@@ -392,14 +392,28 @@ const CLAIM_SCHEMA = {
   required: ['claimed'],
   properties: {
     claimed: { type: 'boolean', description: 'true only if the task row now reads status=in_progress' },
+    already_done: { type: 'boolean', description: 'true if the GUARD READ found status=="done" BEFORE any write - no claim was attempted and status was never touched' },
     note: { type: 'string', description: 'one line on anything that failed (best-effort steps included)' },
   },
 }
 phase('Claim')
 if (TASK_ID && !DRY) {
   const claim = await agent(
-    `You have PRISM MCP tools via ToolSearch. Load them in ONE call: ToolSearch("select:mcp__prism__task_update,mcp__prism__task_link_session"). Project slug is "prism".\n\nCLAIM TASK ${TASK_ID} FOR THIS DRIVE - three quick actions, NOTHING else: no reading, no context, no grep. Speed is the whole point of this step.\n1. task_update(id="${TASK_ID}", status="in_progress"${SID ? `, session_id="${SID}"` : ''}) - the board must leave the pending column THIS SECOND.\n2. task_link_session(task_id="${TASK_ID}"${SID ? `, session_id="${SID}"` : ''}) - tie the driving session to the task.\n3. First heartbeat via Bash curl (127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${TASK_ID}","step":"claim","elapsed_s":0,"last_tool":"claim","work_units":1}'\`\nReturn claimed=true only if action 1 succeeded (2 and 3 are best-effort - note a failure in \`note\`, never retry more than once).`,
+    `You have PRISM MCP tools via ToolSearch. Load them in ONE call: ToolSearch("select:mcp__prism__task_list,mcp__prism__task_update,mcp__prism__task_link_session"). Project slug is "prism".\n\nCLAIM TASK ${TASK_ID} FOR THIS DRIVE - a guard read, then three quick actions, NOTHING else: no context, no grep. Speed is the whole point of this step, except for the ONE read below, which is load-bearing.\n0. GUARD READ, FIRST, BEFORE ANY WRITE: task_list(id="${TASK_ID}", fields=["status"]). If status=="done", this task is ALREADY FINISHED - by a prior drive, or by the machine gate adjudicator racing ahead of you. Return already_done=true, claimed=false, and STOP - do not run steps 1-3, do not call task_update at all. This guard exists because task 39244a32 (2026-08-26) had its correctly-set status=done clobbered back to pending by a relaunched drive's Claim step that skipped this check and blindly flipped status=in_progress over a task that had already, legitimately, finished.\n1. task_update(id="${TASK_ID}", status="in_progress"${SID ? `, session_id="${SID}"` : ''}) - the board must leave the pending column THIS SECOND.\n2. task_link_session(task_id="${TASK_ID}"${SID ? `, session_id="${SID}"` : ''}) - tie the driving session to the task.\n3. First heartbeat via Bash curl (127.0.0.1, NEVER localhost): \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' -d '{"task_id":"${TASK_ID}","step":"claim","elapsed_s":0,"last_tool":"claim","work_units":1}'\`\nReturn claimed=true only if action 1 succeeded (2 and 3 are best-effort - note a failure in \`note\`, never retry more than once).`,
     { label: 'claim', phase: 'Claim', schema: CLAIM_SCHEMA, model: TIER_MODEL.mechanical })
+  if (claim && claim.already_done) {
+    log(`Task ${TASK_ID} is already done - the guard read caught it before any write. Exiting cleanly without touching status (this is the fix for the claim-race clobber bug).`)
+    return {
+      task_id: TASK_ID,
+      dry_run: DRY,
+      already_done: true,
+      done: true,
+      started_at_step: 'claim',
+      ended_at_step: 'claim',
+      halted: null,
+      note: 'Guard read found status=="done" before any write; the drive exited immediately without claiming or touching status. Re-check the task directly for its real gate/shipping state - this drive did not re-derive it.',
+    }
+  }
   if (claim && claim.claimed) {
     log(`Task ${TASK_ID} claimed - the board shows in_progress before anything is read.`)
   } else {
@@ -421,9 +435,16 @@ if (!preflight.ok) {
   // WHY the drive died instead of showing nothing. Best-effort: if the daemon
   // is the thing that is down, these calls fail quietly and the throw still
   // carries the reason to the invoker.
+  //
+  // GUARD, SAME BUG AS CLAIM (task 39244a32, 2026-08-26): between Claim
+  // setting in_progress and pre-flight halting, the machine gate adjudicator
+  // can race in and legitimately finish the task (status -> done). A blind
+  // "un-claim to pending" here would then clobber that real completion back
+  // to pending, exactly as it did that day. Re-read status FIRST and only
+  // un-claim when it is NOT already done.
   if (TASK_ID && !DRY) {
     await agent(
-      `You have PRISM MCP tools via ToolSearch. Load ToolSearch("select:mcp__prism__task_update"). Project slug "prism". The implement drive for task ${TASK_ID} HALTED at pre-flight: ${preflight.halt_reason || 'a pre-flight check failed'}. Two quick actions, nothing else:\n1. task_update(id="${TASK_ID}", status="pending") - the drive is dead, the row must not sit in_progress with no driver.\n2. Bash curl: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' --data-binary '{"task_id":"${TASK_ID}","step":"pre-flight","elapsed_s":60,"last_tool":"pre-flight-halt: ${String(preflight.halt_reason || 'check failed').replace(/["\\]/g, '')}","work_units":2}'\`\nReturn claimed=false with a note. Best-effort - a failure here is non-fatal.`,
+      `You have PRISM MCP tools via ToolSearch. Load ToolSearch("select:mcp__prism__task_list,mcp__prism__task_update"). Project slug "prism". The implement drive for task ${TASK_ID} HALTED at pre-flight: ${preflight.halt_reason || 'a pre-flight check failed'}.\n0. GUARD READ FIRST: task_list(id="${TASK_ID}", fields=["status"]). If status=="done" already, DO NOT touch it - the task finished legitimately (e.g. the machine gate adjudicator) while this drive was starting up. Return claimed=false with note="already done, left untouched" and stop.\n1. Otherwise: task_update(id="${TASK_ID}", status="pending") - the drive is dead, the row must not sit in_progress with no driver.\n2. Bash curl: \`curl -s -m5 -X POST '${API_BASE}/api/drive-heartbeat/beat?project=prism' -H 'Content-Type: application/json' --data-binary '{"task_id":"${TASK_ID}","step":"pre-flight","elapsed_s":60,"last_tool":"pre-flight-halt: ${String(preflight.halt_reason || 'check failed').replace(/["\\]/g, '')}","work_units":2}'\`\nReturn claimed=false with a note either way. Best-effort - a failure here is non-fatal.`,
       { label: 'halt-visible', phase: 'Pre-flight', schema: CLAIM_SCHEMA, model: TIER_MODEL.mechanical })
   }
   throw new Error(`PRE-FLIGHT HALT - ${preflight.halt_reason || 'a pre-flight check failed'} [sane_branch=${preflight.sane_branch} clock_clean=${preflight.datenow_clean} daemon_ok=${preflight.daemon_ok} deps_present=${preflight.deps_present} identity_ok=${preflight.identity_ok}]`)

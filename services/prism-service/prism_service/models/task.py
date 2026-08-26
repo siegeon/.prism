@@ -6,6 +6,123 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
+# Channel vocabulary (task b480eb15, epic d6966b43) — WHERE a task came from.
+# Defined ONCE here; every entry point (REST, MCP, mirror import) validates
+# against this tuple. Blank is allowed (legacy rows predate the field).
+CHANNELS: tuple[str, ...] = (
+    "ui", "mcp", "github", "jira", "slack", "outlook", "daemon",
+)
+
+
+def validate_channel(channel: str) -> str:
+    """Return the normalized channel or raise ValueError for an unknown one.
+    Blank passes through unchanged (legacy / not-yet-attributed rows)."""
+    value = (channel or "").strip().lower()
+    if value and value not in CHANNELS:
+        raise ValueError(
+            f"unknown channel {channel!r}; expected one of {', '.join(CHANNELS)}"
+        )
+    return value
+
+
+# Workflow provenance (task af396b2c): WHICH PRISM workflow drives a task.
+# api/workflows.py's GET /api/workflows builds a catalog of
+# [conductor, validation, *behaviors] (~624-710) -- a task never names a
+# catalog entry directly (conductor_service.py, a POLICY file, stays
+# untouched by this feature); it names a stable, worker-facing value that
+# MAPS to one, defined ONCE here so every entry point (REST, MCP) resolves
+# it the same way. "implement" is the only value with a real driver today
+# (the 10-step SDLC conductor loop) and maps to the catalog's "conductor"
+# entry.
+WORKFLOW_ALIASES: dict[str, str] = {"implement": "conductor"}
+DEFAULT_WORKFLOW = "implement"
+
+
+def validate_workflow(workflow: str) -> str:
+    """Return the normalized workflow name or raise ValueError for a name
+    outside WORKFLOW_ALIASES. Blank passes through unchanged -- callers
+    that want the default resolve it themselves (TaskService.create/
+    update), and a legacy row's blank column reads as DEFAULT_WORKFLOW via
+    normalize_workflow at hydration time, never here."""
+    value = (workflow or "").strip().lower()
+    if value and value not in known_workflows():
+        raise ValueError(
+            f"unknown workflow {workflow!r}; expected one of "
+            f"{', '.join(sorted(known_workflows()))}"
+        )
+    return value
+
+
+def known_workflows() -> set[str]:
+    """Every name a task may be bound to: the alias names (implement ->
+    conductor) plus every registered workflow in models.workflow.WORKFLOWS
+    (triage, ...). Lazy import: models.workflow.steps_for imports this
+    module, so a top-level import here would be circular. Task 6f22d0ad
+    found the validator only knew the aliases, so a triage task could be
+    walked by the conductor but never CREATED through REST/MCP."""
+    names = set(WORKFLOW_ALIASES)
+    try:
+        from prism_service.models.workflow import WORKFLOWS
+        names |= set(WORKFLOWS)
+    except Exception:  # pragma: no cover - registry import must never break create
+        pass
+    return names
+
+
+def normalize_workflow(workflow: str) -> str:
+    """A persisted blank workflow column (a legacy row from before this
+    field existed, or a row written by a path that never set it) reads as
+    the default driver so nothing breaks. Never raises."""
+    return (workflow or "").strip().lower() or DEFAULT_WORKFLOW
+
+
+# Status vocabulary (task f5352fa1, epic 3a652b3b: "the ontology is
+# respected throughout the system") -- the lifecycle values a task row may
+# hold. Defined ONCE here; validated on WRITE only (REST create/update, MCP
+# task_create/task_update) -- a legacy row is never re-validated on read,
+# same posture as validate_channel/validate_workflow above. "deleted" and
+# "archived" are real statuses conductor_service.py itself transitions rows
+# through (soft-delete / archival), confirmed live via the Terms tab's
+# held_back list (30 deleted + 2 archived rows) -- declaring only the
+# "visible" five would refuse those genuine transitions.
+STATUSES: tuple[str, ...] = (
+    "pending", "in_progress", "blocked", "done", "cancelled",
+    "deleted", "archived",
+)
+
+
+def validate_status(status: str) -> str:
+    """Return the normalized status or raise ValueError for an unknown one.
+    Blank passes through unchanged (a write that doesn't touch status)."""
+    value = (status or "").strip().lower()
+    if value and value not in STATUSES:
+        raise ValueError(
+            f"unknown status {status!r}; expected one of {', '.join(STATUSES)}"
+        )
+    return value
+
+
+# Proof-type vocabulary (task f5352fa1) -- the kind of completion evidence a
+# task's green_gate demands (see Task.proof_type below). Kept in sync with
+# the values mcp/tools.py's task_create/task_update schemas already
+# document (test|demo|artifact|metric|review|source_backed_answer|decision).
+PROOF_TYPES: tuple[str, ...] = (
+    "test", "demo", "artifact", "metric", "review",
+    "source_backed_answer", "decision",
+)
+
+
+def validate_proof_type(proof_type: str) -> str:
+    """Return the normalized proof_type or raise ValueError for an unknown
+    one. Blank passes through unchanged (proof_type is optional)."""
+    value = (proof_type or "").strip().lower()
+    if value and value not in PROOF_TYPES:
+        raise ValueError(
+            f"unknown proof_type {proof_type!r}; expected one of "
+            f"{', '.join(PROOF_TYPES)}"
+        )
+    return value
+
 
 @dataclass
 class Task:
@@ -91,6 +208,17 @@ class Task:
     # (or fail to look like) a premise report. This field decouples the two
     # so premise_grounded can be unconditional without that collision.
     premise_notes: str = ""
+    # Channel provenance (task b480eb15): the entry point that created the
+    # task (one of CHANNELS above, '' for legacy rows) and an opaque origin
+    # reference — a session id, an issue URL, a message permalink.
+    channel: str = ""
+    channel_ref: str = ""
+    # Workflow provenance (task af396b2c): which PRISM workflow drives this
+    # task (see WORKFLOW_ALIASES above). Defaults to "implement" for a
+    # freshly-constructed Task; a persisted legacy row with a blank column
+    # normalizes to the same default at hydration time
+    # (task_service._row_to_task), never stored as blank going forward.
+    workflow: str = DEFAULT_WORKFLOW
 
     def __post_init__(self) -> None:
         if not self.id:

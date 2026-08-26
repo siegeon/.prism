@@ -37,6 +37,9 @@ export type WorkflowStepDef = {
   input: string;
   action: string;
   output: string;
+  /** Gate steps only — who may decide it and how to recover from a wrong
+   * decision. Empty for non-gate steps. */
+  authority?: string;
   execution: "connected" | "scripted" | "definition_only";
   linked_workflow_id?: string | null;
   linked_workflow_step_count?: number;
@@ -72,6 +75,11 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
    * of the catalog entry this one is disclosed under (e.g. a bot's own
    * FSM/Behavior entries nest under that bot's top-level entry). */
   parent_id?: string | null;
+  /** Active (pending|in_progress|blocked) tasks bound to this entry,
+   * joined server-side through models.task.WORKFLOW_ALIASES (task
+   * af396b2c) — the queue behind this agent. Absent only for an older
+   * service. */
+  task_count?: number;
 };
 
 export type WorkflowStepResult = {
@@ -278,10 +286,12 @@ function conductorTimelineFromHistory(
  * intentionally the same names the REST task shape uses (workflow_step,
  * gate_state), so no remapping is needed between this and ConductorRunTask. */
 type ConductorFreshTask = {
+  id?: string;
   title?: string;
   status?: string;
   workflow_step?: string | null;
   gate_state?: string | null;
+  stranded?: boolean;
 };
 
 export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {

@@ -1546,35 +1546,45 @@ class ConductorService:
     # Out of scope for [1/4]:
     #   * No MCP surface (deliverable [2/4]).
     #   * No verifier_service consultation (deliverable [3/4]).
-    #   * No per-task override of WORKFLOW_STEPS — every task walks the
-    #     default sequence from models.workflow.
+    #
+    # Per-task workflow lookup (task 6f22d0ad): the step LIST resolves via
+    # models.workflow.steps_for(task.workflow) — a blank/"implement"/unknown
+    # value still walks WORKFLOW_STEPS, the default sequence, byte-for-byte
+    # unchanged; task.workflow="triage" walks TRIAGE_STEPS instead. Every
+    # helper below defaults its `workflow` arg to "implement" so an external
+    # caller that never passes one is unaffected.
 
     @staticmethod
-    def _workflow_steps() -> list[dict]:
-        """Local import avoids a circular dep with models.workflow."""
-        from prism_service.models.workflow import WORKFLOW_STEPS
+    def _workflow_steps(workflow: str = "implement") -> list[dict]:
+        """Resolve `workflow`'s step list via models.workflow.steps_for
+        (task 6f22d0ad) — a blank/"implement"/unknown value returns
+        WORKFLOW_STEPS itself (steps_for's own default fallback), so every
+        caller that leaves `workflow` at its default sees byte-for-byte the
+        same list as before this task. Local import avoids a circular dep
+        with models.workflow."""
+        from prism_service.models.workflow import steps_for
 
-        return WORKFLOW_STEPS
+        return steps_for(workflow)
 
     @classmethod
-    def _step_index(cls, step_id: str) -> int:
-        """Return the position of step_id in WORKFLOW_STEPS, or -1.
+    def _step_index(cls, step_id: str, workflow: str = "implement") -> int:
+        """Return the position of step_id in `workflow`'s step list, or -1.
 
         An empty step_id means the task has not entered the workflow,
         which is equivalent to index -1 (the next step is index 0).
         """
         if not step_id:
             return -1
-        for i, step in enumerate(cls._workflow_steps()):
+        for i, step in enumerate(cls._workflow_steps(workflow)):
             if step["id"] == step_id:
                 return i
         return -1
 
     @classmethod
-    def _step_by_id(cls, step_id: str) -> Optional[dict]:
+    def _step_by_id(cls, step_id: str, workflow: str = "implement") -> Optional[dict]:
         if not step_id:
             return None
-        for step in cls._workflow_steps():
+        for step in cls._workflow_steps(workflow):
             if step["id"] == step_id:
                 return step
         return None
@@ -1609,13 +1619,15 @@ class ConductorService:
             return {"ok": False, "task_id": task_id,
                     "reason": "unknown task"}
 
-        steps = self._workflow_steps()
+        from prism_service.models.task import normalize_workflow
+        task_workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+        steps = self._workflow_steps(task_workflow)
         if not steps:
             return {"ok": False, "task_id": task_id,
                     "reason": "WORKFLOW_STEPS is empty"}
 
         current_id = task.workflow_step or ""
-        current_step = self._step_by_id(current_id)
+        current_step = self._step_by_id(current_id, task_workflow)
 
         # Refuse if we're sitting on a gate that hasn't been decided.
         if (current_step is not None
@@ -1695,7 +1707,7 @@ class ConductorService:
                     "reason": reason,
                 }
 
-        current_index = self._step_index(current_id)
+        current_index = self._step_index(current_id, task_workflow)
         next_index = current_index + 1
         if next_index >= len(steps):
             return {
@@ -1939,14 +1951,15 @@ class ConductorService:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _validation_for_gate(cls, gate_step_id: str) -> Optional[str]:
+    def _validation_for_gate(cls, gate_step_id: str,
+                             workflow: str = "implement") -> Optional[str]:
         """Return the validation kind the verifier should check at this
         gate. By convention, a gate inherits its expectation from the
         immediately preceding step's ``validation`` field
         (e.g. ``red_gate`` follows ``write_failing_tests`` whose
         validation is ``red_with_trace``)."""
-        steps = cls._workflow_steps()
-        idx = cls._step_index(gate_step_id)
+        steps = cls._workflow_steps(workflow)
+        idx = cls._step_index(gate_step_id, workflow)
         if idx <= 0:
             return None
         for prev in reversed(steps[:idx]):
@@ -2944,7 +2957,9 @@ class ConductorService:
         if getattr(task, "status", "") in ("cancelled", "archived",
                                            "deleted", "done"):
             return None
-        validation = self._validation_for_gate(step)
+        from prism_service.models.task import normalize_workflow
+        task_workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+        validation = self._validation_for_gate(step, task_workflow)
         rule = (self._VERIFIER_RULES.get(validation)
                 if validation else None)
         if not (rule and rule.get("rubric")):
@@ -3176,8 +3191,12 @@ class ConductorService:
         task = self._task_svc.get(task_id)
         if task is None:
             return {"ok": False, "task_id": task_id, "reason": "unknown task"}
-        from prism_service.models.workflow import WORKFLOW_STEPS
-        ids = [s["id"] for s in WORKFLOW_STEPS]
+        # The task's OWN sequence (task 6f22d0ad): a triage task rewinds
+        # along intake->classify->decide->done, the default along
+        # WORKFLOW_STEPS -- same per-task lookup advance_task uses.
+        from prism_service.models.task import normalize_workflow
+        steps = self._workflow_steps(normalize_workflow(getattr(task, "workflow", "")))
+        ids = [s["id"] for s in steps]
         cur = getattr(task, "workflow_step", "") or ""
         if cur not in ids:
             return {"ok": False, "task_id": task_id,
@@ -3187,7 +3206,7 @@ class ConductorService:
             return {"ok": False, "task_id": task_id,
                     "reason": "already on the first workflow step; "
                               "cannot rewind further"}
-        target = WORKFLOW_STEPS[i - 1]
+        target = steps[i - 1]
         self._task_svc.update(
             task_id, workflow_step=target["id"],
             gate_state="pending" if target.get("type") == "gate" else "none",
@@ -3247,7 +3266,9 @@ class ConductorService:
            'validation': <kind or None>}
         'verified' is True/False after a verifier run, or None when no
         verifier is attached or the validation is a manual kind."""
-        validation = self._validation_for_gate(gate_step_id)
+        from prism_service.models.task import normalize_workflow
+        task_workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+        validation = self._validation_for_gate(gate_step_id, task_workflow)
         if validation is None:
             return {"verified": None, "reason": "gate has no validation kind",
                     "verifier": None, "validation": None}
@@ -3719,7 +3740,9 @@ class ConductorService:
         # from the carried task_id + session on every gate decision.
         self._stamp_session(task_id, session_id)
 
-        current_step = self._step_by_id(task.workflow_step)
+        from prism_service.models.task import normalize_workflow
+        task_workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+        current_step = self._step_by_id(task.workflow_step, task_workflow)
         if current_step is None or current_step["type"] != "gate":
             return {
                 "ok": False,

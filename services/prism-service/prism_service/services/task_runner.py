@@ -34,6 +34,7 @@ import os
 import sys
 import threading
 import time
+import uuid
 from typing import Optional
 
 DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
@@ -46,6 +47,12 @@ BUILD_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
 # runner-produced report reads identically to a human-driven one.
 _PLAN_STEPS = ("draft_story", "verify_plan")
 _PREMISE_STEP = "review_previous_notes"
+
+
+def _scores_db_for(project: str) -> str:
+    from prism_service.project_context import get_project
+
+    return str(get_project(project)._data_dir / "scores.db")
 
 
 def _interval_s() -> int:
@@ -83,6 +90,22 @@ def _step_timeout_s() -> float:
         return 900.0
 
 
+def _max_total_usd() -> Optional[float]:
+    """Aggregate spend ceiling across every tick this process ever runs
+    (epic 3baadd19 AC-5) -- unlike `_max_budget_usd` (a PER-INVOCATION cap
+    passed to claude_cli.invoke), this bounds the runaway case: a stuck
+    loop, a wedged step retried forever, or simply many expensive tasks
+    queued back to back. Unset/blank == unbounded (None), matching every
+    other opt-in knob in this module."""
+    raw = os.environ.get("PRISM_TASK_RUNNER_MAX_TOTAL_USD", "")
+    if not raw.strip():
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
+
+
 def _log(msg: str) -> None:
     print(f"[task-runner] {msg}", file=sys.stderr, flush=True)
 
@@ -109,6 +132,46 @@ _IN_FLIGHT_LOCK = threading.Lock()
 # an eligible prism task sat untouched.
 _RR_LOCK = threading.Lock()
 _rr_index = 0
+
+
+class _SpendTracker:
+    """Process-lifetime accumulator of `usage["cost_usd"]` across every
+    step this seat has run (epic 3baadd19 AC-5). Charged immediately after
+    each claude_cli.invoke() returns, checked against `_max_total_usd()`
+    before the NEXT tick claims any work."""
+
+    def __init__(self) -> None:
+        self.spent = 0.0
+        self._lock = threading.Lock()
+
+    def charge(self, amount: object) -> None:
+        try:
+            amount = float(amount)
+        except (TypeError, ValueError):
+            return
+        if amount <= 0:
+            return
+        with self._lock:
+            self.spent += amount
+
+
+_spend_tracker = _SpendTracker()
+
+
+def _spend_ceiling_crossed() -> bool:
+    """True (and logged) once accumulated spend has exceeded the
+    configured ceiling -- unset/blank PRISM_TASK_RUNNER_MAX_TOTAL_USD is
+    always False (unbounded)."""
+    ceiling = _max_total_usd()
+    if ceiling is None:
+        return False
+    spent = _spend_tracker.spent
+    if spent <= ceiling:
+        return False
+    _log(f"spend ceiling crossed: ${spent:.2f} spent > ${ceiling:.2f} "
+         "ceiling (PRISM_TASK_RUNNER_MAX_TOTAL_USD) -- refusing further "
+         "work until the ceiling is raised")
+    return True
 
 
 def _claim(task_id: str) -> bool:
@@ -141,6 +204,9 @@ def eligible_task(project: str) -> Optional[str]:
     """
     from prism_service.project_context import get_project
     from prism_service.services.conductor_service import ConductorService
+
+    if _spend_ceiling_crossed():
+        return None
 
     ctx = get_project(project)
     for t in ctx.task_svc.list(status="in_progress"):
@@ -208,25 +274,24 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 "reason": "no workspace on file for task"}
 
     from prism_service.inference import claude_cli
+    from prism_service.services import drive_heartbeat
+
+    scores_db = _scores_db_for(project)
+    drive_heartbeat.record_heartbeat(scores_db, {
+        "task_id": task_id, "step": job["step"], "elapsed_s": 0,
+        "last_tool": "claude_cli.invoke", "work_units": 1,
+    })
     try:
         result = claude_cli.invoke(
             job["instructions"], work_dir=work_dir, plugin_dir=work_dir,
             max_turns=_max_turns(), max_budget_usd=_max_budget_usd(),
             timeout_s=_step_timeout_s(),
             allowed_tools=BUILD_TOOLS, project=project,
-            purpose=f"task-runner@{job['step']}#{task_id[:8]}")
+            purpose=f"task-runner@{job['step']}#{task_id[:8]}",
+            session_id=str(uuid.uuid4()))
     except Exception as exc:
         return {"ok": False, "task_id": task_id, "step": job["step"],
                 "reason": f"claude_cli invocation failed: {exc}"}
-
-    proof = (result.final_text() or "").strip()
-    step_id = job["step"]
-    if result.exit_code == 0 and proof:
-        _route_proof(task_svc, task_id, step_id, proof)
-        outcome: object = "pass"
-    else:
-        outcome = {"ok": False,
-                   "reason": f"exit={result.exit_code}, no usable output"}
 
     # The run's OWN usage, straight off the `result` stream event that
     # claude_cli already parsed for us. This seat reports under a SEAT NAME,
@@ -236,6 +301,20 @@ def _run_one_step(project: str, task_id: str) -> dict:
     # getattr-guarded: a lighter result object must never break the drive.
     usage = getattr(result, "usage", None)
     usage = dict(usage) if isinstance(usage, dict) and usage else None
+    # Charged IMMEDIATELY after invoke() returns (epic 3baadd19 AC-2/AC-6):
+    # this step already started, so it must still complete and report --
+    # only the FOLLOWING tick's pre-claim check sees the crossed ceiling.
+    if usage and usage.get("cost_usd"):
+        _spend_tracker.charge(usage["cost_usd"])
+
+    proof = (result.final_text() or "").strip()
+    step_id = job["step"]
+    if result.exit_code == 0 and proof:
+        _route_proof(task_svc, task_id, step_id, proof)
+        outcome: object = "pass"
+    else:
+        outcome = {"ok": False,
+                   "reason": f"exit={result.exit_code}, no usable output"}
 
     report = flow.flow_report(flow.Ident(
         task_id=task_id, session_id=SEAT_ID, outcome=outcome,
@@ -259,6 +338,9 @@ def sweep_once() -> Optional[dict]:
     eligible.
     """
     from prism_service.project_context import get_all_projects
+
+    if _spend_ceiling_crossed():
+        return None
 
     global _rr_index
     projects = get_all_projects()
@@ -309,9 +391,17 @@ def wake() -> None:
     _wake_event.set()
 
 
-def _loop(interval_s: int) -> None:
+def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None:
+    """`stop_event` is test-only plumbing (never passed by
+    `start_task_runner`): without it, a test that spins up this loop in a
+    background thread has no way to end it, so the thread outlives the
+    test and its calls to the shared, module-level `sweep_once` keep
+    firing on every later test's `wake()` -- observed live as exactly
+    that leak in test_wake_cuts_the_wait_short_instead_of_sitting_out_the_
+    interval, which used to cope by permanently stubbing `sweep_once` to
+    a no-op instead, breaking every later test that calls it directly."""
     _log(f"started; interval={interval_s}s (event-driven, interval is a fallback)")
-    while True:
+    while stop_event is None or not stop_event.is_set():
         try:
             sweep_once()
         except Exception as exc:

@@ -485,8 +485,7 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   ctx.fillStyle = PALETTE.card;
   ctx.fillRect(x, y, w, h);
 
-  // Establish stable card chrome. Progress gets its own rail and never
-  // paints beneath content.
+  // Establish stable card chrome.
   ctx.fillStyle = n.gate ? "#3a2f45" : n.kind === "bot" ? "#2c3550" : PALETTE.cardTitle;
   ctx.fillRect(x, y, w, 20);
 
@@ -499,6 +498,20 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
     ctx.fillRect(x + 1, y + 1, w - 2, 3);
     ctx.fillStyle = `rgba(${rgb}, 0.95)`;
     ctx.fillRect(x + 1, y + 1, fillWidth, 3);
+    // The card's own body fills left-to-right over the step's
+    // elapsed/average duration -- the actual playback a person watches,
+    // not just the thin header rail above (owner, live, pointing at a
+    // card's body: "a bar in the body of the panel filling over time").
+    // Painted before the glyph/label/sub/summary text below so the fill
+    // always sits under, never over, the card's own content.
+    const bodyY = y + 20, bodyH = h - 20;
+    ctx.fillStyle = `rgba(${rgb}, 0.16)`;
+    ctx.fillRect(x + 1, bodyY, fillWidth, bodyH - 1);
+    // A brighter leading edge marks exactly how far the fill has reached,
+    // the same "where is it right now" cue the header rail's hard right
+    // edge already gives.
+    ctx.fillStyle = `rgba(${rgb}, 0.55)`;
+    ctx.fillRect(x + 1 + Math.max(0, fillWidth - 2), bodyY, 2, bodyH - 1);
   }
 
   // A gate is a DECISION, not a unit of work — magenta is the locked hue for

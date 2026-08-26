@@ -10,7 +10,15 @@ import threading
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from prism_service.models.task import Task, TaskHistory
+from prism_service.models.task import (
+    DEFAULT_WORKFLOW,
+    Task,
+    TaskHistory,
+    normalize_workflow,
+    validate_channel,
+    validate_workflow,
+)
+from prism_service.services import ste
 
 
 # Callable signature for LL-03's embedder injection. Returns packed
@@ -30,6 +38,35 @@ SESSION_GATE_FIX = (
     "(body: {\"session_id\": ...}) or the MCP task_link_session verb, "
     "then retry"
 )
+
+
+# Open-gate close guard (2026-08-25, live near-miss on task 3baadd19): the
+# plain status quick-pill (SPA REST PATCH + MCP task_update alike) let
+# status=done through with ZERO awareness of the conductor's own gate
+# state -- a single click silently produced a "DONE" task whose green_gate
+# had never actually passed, bypassing every distinct-actor/human-only
+# safeguard the gate machinery exists to enforce. The ONE real gate-decide
+# path (POST /api/conductor/gate, or the Rewind lever to undo a wrong one)
+# is unaffected; this only refuses the OTHER, ungated door.
+DONE_BLOCKED_BY_OPEN_GATE_FIX = (
+    "this task is sitting at an undecided gate ({workflow_step}, "
+    "gate_state={gate_state}) — status=done cannot be set directly while "
+    "a gate is open. Decide the gate first (POST /api/conductor/gate or "
+    "the Evidence tab's Approve/Reject), or use POST /api/conductor/rewind "
+    "if it was decided in error, then retry"
+)
+
+
+def is_open_gate_step(workflow_step: str, gate_state: str) -> bool:
+    """True when `workflow_step` is a real conductor gate step (per
+    models.workflow.WORKFLOW_STEPS) whose decision is not yet settled
+    (`gate_state` pending or failed — passed/none/anything else is not
+    "open"). Pure and importable from both the REST route and the MCP
+    tool so the two guards can never drift apart."""
+    from prism_service.models.workflow import WORKFLOW_STEPS
+
+    step = next((s for s in WORKFLOW_STEPS if s["id"] == workflow_step), None)
+    return bool(step) and step["type"] == "gate" and gate_state in ("pending", "failed")
 
 
 # The task page's GET /api/tasks/{id} embeds every TaskHistory row verbatim
@@ -86,7 +123,10 @@ CREATE TABLE IF NOT EXISTS tasks (
     stop_if TEXT DEFAULT '[]',
     plan_doc TEXT DEFAULT '',
     plan_diagram TEXT DEFAULT '',
-    premise_notes TEXT DEFAULT ''
+    premise_notes TEXT DEFAULT '',
+    channel TEXT DEFAULT '',
+    channel_ref TEXT DEFAULT '',
+    workflow TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS task_history (
@@ -233,6 +273,14 @@ _LL_TASK_COLUMNS: list[tuple[str, str]] = [
     # premise_notes (task 3928b7ac): review_previous_notes' own dedicated
     # field, decoupled from the shared completion_proof column above.
     ("premise_notes", "TEXT DEFAULT ''"),
+    # Channel provenance (task b480eb15): which entry point created the
+    # task + an opaque origin ref. Existing rows backfill to '' (legacy).
+    ("channel", "TEXT DEFAULT ''"),
+    ("channel_ref", "TEXT DEFAULT ''"),
+    # Workflow provenance (task af396b2c): which PRISM workflow drives the
+    # task. Existing rows backfill to '' -- read as DEFAULT_WORKFLOW via
+    # normalize_workflow at hydration time (_row_to_task), never blank.
+    ("workflow", "TEXT DEFAULT ''"),
 ]
 
 
@@ -291,6 +339,11 @@ class TaskService:
         # change on an advance_task transition — so serve the same grouped
         # dict until _record_history sees one (task 9974d407).
         self._advance_rows_cache: Optional[dict] = None
+        # STE style report (task 36283d72): the STYLE BLOCK from the most
+        # recent create/update call. A plain attribute, not a model field —
+        # a sibling slice reads it right after the call that set it. Empty
+        # until the first create/update runs.
+        self.last_style: dict = {}
 
     # ------------------------------------------------------------------
     # Per-thread connection factory (task 0584addb)
@@ -414,6 +467,13 @@ class TaskService:
                           and row["plan_diagram"] is not None else ""),
             premise_notes=(row["premise_notes"] if "premise_notes" in keys
                            and row["premise_notes"] is not None else ""),
+            channel=(row["channel"] if "channel" in keys
+                     and row["channel"] is not None else ""),
+            channel_ref=(row["channel_ref"] if "channel_ref" in keys
+                         and row["channel_ref"] is not None else ""),
+            workflow=normalize_workflow(
+                row["workflow"] if "workflow" in keys
+                and row["workflow"] is not None else ""),
         )
 
     def _record_history(
@@ -441,6 +501,85 @@ class TaskService:
         self._record_history(task_id, action, details=details, actor=actor)
 
     # ------------------------------------------------------------------
+    # STE normalisation (task 36283d72)
+    # ------------------------------------------------------------------
+
+    def _apply_ste(self, task: Task) -> list[str]:
+        """Run the deterministic STE normaliser over every free-text
+        field on ``task``, in place, before the caller persists it.
+
+        title, description, completion_proof, and premise_notes run in
+        flavored mode (they read as prose). oracle, likely_misfire, and
+        each stop_if entry run in strict mode (they are instructions a
+        machine or a person must follow exactly).
+
+        plan_doc and plan_diagram are only CHECKED, never rewritten — a
+        plan a human already approved at plan_gate must not shift under
+        them.
+
+        Sets ``self.last_style`` to the combined style_block for this
+        call. Returns the distinct rule names that changed a field, so
+        the caller can record one ``ste_normalise`` history row. Never
+        raises — a normaliser bug must not block a task write.
+        """
+        fields: dict[str, tuple[list[str], list[ste.Finding]]] = {}
+        changed_rules: list[str] = []
+
+        def _remember(rules: list[str]) -> None:
+            for rule in rules:
+                if rule not in changed_rules:
+                    changed_rules.append(rule)
+
+        def _process(name: str, value: str, mode: str) -> str:
+            fixed, rules = ste.normalize(value, mode=mode)
+            findings = ste.check(fixed, mode=mode)
+            fields[name] = (rules, findings)
+            _remember(rules)
+            return fixed
+
+        try:
+            task.title = _process("title", task.title, "flavored")
+            task.description = _process(
+                "description", task.description, "flavored")
+            task.oracle = _process("oracle", task.oracle, "strict")
+            task.likely_misfire = _process(
+                "likely_misfire", task.likely_misfire, "strict")
+            task.completion_proof = _process(
+                "completion_proof", task.completion_proof, "flavored")
+            task.premise_notes = _process(
+                "premise_notes", task.premise_notes, "flavored")
+
+            if task.stop_if:
+                stop_rules: list[str] = []
+                stop_findings: list[ste.Finding] = []
+                new_stop_if: list[str] = []
+                for entry in task.stop_if:
+                    fixed_entry, rules = ste.normalize(entry, mode="strict")
+                    new_stop_if.append(fixed_entry)
+                    for rule in rules:
+                        if rule not in stop_rules:
+                            stop_rules.append(rule)
+                    stop_findings.extend(ste.check(fixed_entry, mode="strict"))
+                task.stop_if = new_stop_if
+                fields["stop_if"] = (stop_rules, stop_findings)
+                _remember(stop_rules)
+
+            # Check-only fields (task 36283d72): never rewritten.
+            fields["plan_doc"] = ([], ste.check(task.plan_doc, mode="flavored"))
+            fields["plan_diagram"] = (
+                [], ste.check(task.plan_diagram, mode="flavored"))
+
+            self.last_style = ste.style_block(fields)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "STE normaliser failed for task %s; the write proceeds "
+                "with the caller's own text unchanged.", task.id,
+                exc_info=True)
+            return []
+
+        return changed_rules
+
+    # ------------------------------------------------------------------
     # CRUD
     # ------------------------------------------------------------------
 
@@ -465,8 +604,16 @@ class TaskService:
         plan_doc: str = "",
         plan_diagram: str = "",
         premise_notes: str = "",
+        channel: str = "",
+        channel_ref: str = "",
+        workflow: str = "",
     ) -> Task:
-        """Create a new task and return it."""
+        """Create a new task and return it. Raises ValueError for a channel
+        outside models.task.CHANNELS (blank is allowed — legacy), or a
+        workflow outside models.task.WORKFLOW_ALIASES (blank resolves to
+        DEFAULT_WORKFLOW so every newly-created task names a real driver)."""
+        channel = validate_channel(channel)
+        workflow = validate_workflow(workflow) or DEFAULT_WORKFLOW
         task = Task(
             title=title,
             description=description,
@@ -487,7 +634,15 @@ class TaskService:
             plan_doc=plan_doc,
             plan_diagram=plan_diagram,
             premise_notes=premise_notes,
+            channel=channel,
+            channel_ref=channel_ref or "",
+            workflow=workflow,
         )
+        # STE normalisation (task 36283d72): rewrite the safe fields BEFORE
+        # the insert below, so the stored row already carries the fixed
+        # text. Never blocks the write — _apply_ste swallows its own
+        # errors.
+        ste_rules = self._apply_ste(task)
         self._db.execute(
             "INSERT INTO tasks "
             "(id, title, description, status, priority, story_file, "
@@ -496,8 +651,8 @@ class TaskService:
             "oracle, proof_type, completion_proof, likely_misfire, "
             "full_outcome_complete, "
             "allowed_files, verify, stop_if, plan_doc, plan_diagram, "
-            "premise_notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "premise_notes, channel, channel_ref, workflow) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.id,
                 task.title,
@@ -524,10 +679,16 @@ class TaskService:
                 task.plan_doc,
                 task.plan_diagram,
                 task.premise_notes,
+                task.channel,
+                task.channel_ref,
+                task.workflow,
             ),
         )
         self._db.commit()
         self._record_history(task.id, "created", f"title={title!r}")
+        if ste_rules:
+            self._record_history(
+                task.id, "ste_normalise", "rules=" + ",".join(ste_rules))
         # LL-03: embed title+description so LL-06's similarity retrieval
         # has something to search over. Silent on embedder-offline —
         # the row still exists, just without a vector.
@@ -575,6 +736,8 @@ class TaskService:
         description: str = "",
         tags: Optional[list[str]] = None,
         priority: int = 0,
+        channel: str = "",
+        channel_ref: str = "",
     ) -> Optional[Task]:
         """Idempotently materialize a LOCAL pending intake task for an imported
         external work item (task fddfd75a).
@@ -589,15 +752,17 @@ class TaskService:
         existing = self.get(task_id)
         if existing is not None:
             return existing
+        channel = validate_channel(channel)
         now = datetime.now(timezone.utc).isoformat()
         # INSERT OR IGNORE (not a bare INSERT) so two concurrent same-id pulls
         # converge on one row instead of racing to an IntegrityError.
         self._db.execute(
             "INSERT OR IGNORE INTO tasks "
             "(id, title, description, status, priority, created_at, tags, "
-            "workflow_step, gate_state) "
-            "VALUES (?, ?, ?, 'pending', ?, ?, ?, '', 'none')",
-            (task_id, title, description, priority, now, json.dumps(tags or [])),
+            "workflow_step, gate_state, channel, channel_ref) "
+            "VALUES (?, ?, ?, 'pending', ?, ?, ?, '', 'none', ?, ?)",
+            (task_id, title, description, priority, now, json.dumps(tags or []),
+             channel, channel_ref or ""),
         )
         self._db.commit()
         self._record_history(task_id, "external_intake", f"title={title!r}")
@@ -712,6 +877,34 @@ class TaskService:
             if value is None or isinstance(value, (str, int, float, bool)):
                 changed_fields[key] = value
 
+        # STE normalisation (task 36283d72): run on every call that finds
+        # a task, so self.last_style always reflects the CURRENT fields —
+        # not just the ones this particular call happened to touch. Any
+        # safe rewrite this makes rides the same write as the caller's
+        # own change; a no-op call (nothing in kwargs differs, and the
+        # stored text is already normalised) leaves `changes` untouched
+        # here, so the early return below still fires.
+        ste_before = {
+            "title": task.title,
+            "description": task.description,
+            "oracle": task.oracle,
+            "likely_misfire": task.likely_misfire,
+            "completion_proof": task.completion_proof,
+            "premise_notes": task.premise_notes,
+            "stop_if": list(task.stop_if),
+        }
+        ste_rules = self._apply_ste(task)
+        for field_name, old_value in ste_before.items():
+            new_value = getattr(task, field_name)
+            if new_value == old_value:
+                continue
+            changes.append(
+                f"{field_name}: {_history_value_repr(old_value)} -> "
+                f"{_history_value_repr(new_value)}"
+            )
+            if isinstance(new_value, (str, int, float, bool)) or new_value is None:
+                changed_fields[field_name] = new_value
+
         if not changes:
             return task
 
@@ -729,7 +922,8 @@ class TaskService:
             "oracle=?, proof_type=?, completion_proof=?, likely_misfire=?, "
             "full_outcome_complete=?, "
             "allowed_files=?, verify=?, stop_if=?, "
-            "plan_doc=?, plan_diagram=?, premise_notes=? "
+            "plan_doc=?, plan_diagram=?, premise_notes=?, "
+            "channel=?, channel_ref=?, workflow=? "
             "WHERE id=?",
             (
                 task.title,
@@ -758,11 +952,17 @@ class TaskService:
                 task.plan_doc,
                 task.plan_diagram,
                 task.premise_notes,
+                task.channel,
+                task.channel_ref,
+                task.workflow,
                 task.id,
             ),
         )
         self._db.commit()
         self._record_history(task.id, "updated", "; ".join(changes))
+        if ste_rules:
+            self._record_history(
+                task.id, "ste_normalise", "rules=" + ",".join(ste_rules))
         # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
         # it — the write already committed above, so a publish failure
         # (bus down, serialization) must never surface as a write failure.

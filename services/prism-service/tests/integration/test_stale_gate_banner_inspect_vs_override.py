@@ -179,13 +179,19 @@ def test_escaped_slash_regex_literal_is_not_read_as_a_line_comment():
         "an escaped slash inside a regex literal was mistaken for the "
         "start of a // line comment, so the rest of the line was deleted"
     )
-    # ...and on the REAL file: line 1574's tail carries genuine closing
-    # ')' and '}' tokens that the unguarded strip removed.
+    # ...and on the REAL file: the line carrying the escaped-slash regex
+    # also carries genuine closing ')' and '}' tokens that the unguarded
+    # strip removed. SUPERSEDED 2026-08-26 (task 2ec1e395): the tail used
+    # to read bare `{lead.slice(m.index + m[1].length)}` -- it now wraps
+    # that same slice in `renderInline(...)` so trailing bare-URL text goes
+    # through the same entity-linker as the rest of the oracle text. The
+    # property under test (closing tokens survive the strip) is unchanged;
+    # only the literal shape moved.
     real = _strip_comments(_read())
-    assert "{lead.slice(m.index + m[1].length)}" in real, (
-        "TaskDetailPage.tsx:1574 was truncated by the comment stripper - "
-        "its closing JSX tokens are gone, which is what breaks the "
-        "paren-balance scan below"
+    assert "{renderInline(lead.slice(m.index + m[1].length))}" in real, (
+        "TaskDetailPage.tsx's escaped-slash regex line was truncated by "
+        "the comment stripper - its closing JSX tokens are gone, which is "
+        "what breaks the paren-balance scan below"
     )
 
 

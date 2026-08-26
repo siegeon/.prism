@@ -148,8 +148,13 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
                         lambda project: [])
     body = workflows_api.get_workflows("prism")
 
+    # SUPERSEDED (task b837bc98): "triage" is now a real second, first-class
+    # workflow beside conductor/validation, sourced from
+    # models.workflow.WORKFLOWS the same way conductor's own steps are --
+    # not a new persisted entity, so it doesn't violate this test's original
+    # "no new entities" spirit; the exact catalog id list just grew by one.
     assert [workflow["id"] for workflow in body["workflows"]] == [
-        "conductor", "validation"]
+        "conductor", "validation", "triage"]
     validation = body["workflows"][1]
     assert validation["name"] == "Build and test"
     assert validation["parent_id"] == "conductor", (
@@ -295,6 +300,43 @@ def test_gates_are_owned_by_the_steward_not_left_blank(tmp_path, monkeypatch):
             f"gate {g['id']} must be Steward-adjudicated, got {g['persona']!r}")
         assert g["persona_label"] == "Steward", (
             f"gate {g['id']} label drifted from the role registry: {g}")
+
+
+def test_gates_carry_authority_content_naming_the_recovery_lever(tmp_path, monkeypatch):
+    """Workflow-behavior content (owner 2026-08-25, task 3baadd19: "prevent
+    it with workflow behavior content" -- after a session spent several
+    turns explaining gate authority in chat instead of the app explaining
+    it itself). Every gate must carry non-empty `authority` text naming the
+    Rewind recovery lever; non-gate steps must not carry one (there's
+    nothing to adjudicate there)."""
+    client = _client(_Svc([]), monkeypatch, tmp_path / "data")
+    steps = client.get("/api/workflows?project=prism").json()["steps"]
+
+    for s in steps:
+        if s["type"] == "gate":
+            assert s.get("authority"), (
+                f"gate {s['id']} must carry non-empty authority text: {s}")
+            assert "Rewind" in s["authority"], (
+                f"gate {s['id']}'s authority text must name the Rewind "
+                f"recovery lever: {s['authority']!r}")
+        else:
+            assert not s.get("authority"), (
+                f"non-gate step {s['id']} must not carry authority text "
+                f"(nobody adjudicates it): {s.get('authority')!r}")
+
+
+def test_green_gate_authority_names_the_human_only_demo_rule(tmp_path, monkeypatch):
+    """green_gate is the one gate whose authority genuinely varies by the
+    TASK's own proof_type (demo/review proof is human-only by standing
+    rule, never machine- or self-approved) -- this static per-step content
+    can't see the task, so it must say so explicitly rather than implying
+    every green_gate is machine-decidable."""
+    client = _client(_Svc([]), monkeypatch, tmp_path / "data")
+    steps = client.get("/api/workflows?project=prism").json()["steps"]
+    green = next(s for s in steps if s["id"] == "green_gate")
+
+    assert "human-only" in green["authority"], green["authority"]
+    assert "proof_type=test" in green["authority"], green["authority"]
 
 
 def test_the_four_bots_are_served_with_their_role_cards(tmp_path, monkeypatch):

@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
-import { api, approveDesignPacket } from "@/lib/api";
+import { api, approveDesignPacket, linkTaskFields, spliceLinkedMarkdown, type TaskLinkFields } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
@@ -11,7 +11,8 @@ import PlanView, { parseAc, gateEvidenceLines } from "@/components/plan/PlanView
 import DecisionPacket from "@/components/plan/DecisionPacket";
 import DesignPacket from "@/components/plan/DesignPacket";
 import { stepLabel } from "@/lib/workflowChips";
-import Markdown from "@/components/Markdown";
+import Markdown, { renderInline } from "@/components/Markdown";
+import LinkedText from "@/components/LinkedText";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
@@ -60,6 +61,9 @@ type Task = {
   blocked_reason?: string;
   dependencies?: string[];
   workflow_step?: string;
+  // Which PRISM workflow drives this task (task af396b2c). Absent only for
+  // an older service; the rail header falls back to "implement".
+  workflow?: string;
   gate_state?: string;
   gate_reason?: string;
   parent_id?: string;
@@ -73,6 +77,9 @@ type Task = {
   stop_if?: string[];
   plan_doc?: string;
   plan_diagram?: string;
+  // Review-previous-notes' report (task 2ec1e395: cross-clicked like every
+  // other task text field, in the Design/plan card below).
+  premise_notes?: string;
   phase_progress?: PhaseProgress | null;
   // Honest work state — rides top-level on the detail response (see load()).
   activity?: Activity | null;
@@ -949,6 +956,17 @@ export default function TaskDetailPage() {
       : "back to tasks";
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
+  // Cross-clicked description (task 6968cc39): the markdown SOURCE with
+  // ontology-known entities spliced in as real `[text](href)` markdown
+  // links, so <Markdown> renders them exactly as it already renders any
+  // other link — never a second renderer. Falls back to the raw
+  // description on any fetch failure; never blocks the description from
+  // showing.
+  const [linkedDescription, setLinkedDescription] = useState("");
+  // Every OTHER text field's spans from the SAME one-shot fetch (task
+  // 2ec1e395) -- oracle/plan_doc/premise_notes/completion_proof splice off
+  // this instead of each hitting the linker on their own.
+  const [linkFields, setLinkFields] = useState<TaskLinkFields | null>(null);
   // Doc-column tab (artifact .itabs): Overview = the existing content, Trace =
   // the drive-scoped token trace, Evidence = the gate decision packet (task
   // d9f082fe follow-up, owner live 2026-08-24: "this evidence stuff should
@@ -1101,6 +1119,16 @@ export default function TaskDetailPage() {
   // POST /api/conductor/gate (the same path the MCP conductor_gate tool uses).
   const [gateReason, setGateReason] = useState("");
   const [gateOverride, setGateOverride] = useState(false);
+  // Recovery lever for a gate decided in error (owner 2026-08-25: "the user
+  // [must] be able to intuitively recover from this state" — a wrongly
+  // approved gate, e.g. green_gate, had NO in-app recovery path at all; the
+  // only lever was POST /api/conductor/rewind, callable via raw curl only).
+  // Always offered on the Evidence tab (never gated on gate_state, unlike
+  // the decision card above — the whole point is undoing a decision that
+  // has ALREADY been made, so gate_state is typically 'passed' by then).
+  const [rewindReason, setRewindReason] = useState("");
+  const [rewindBusy, setRewindBusy] = useState(false);
+  const [rewindResult, setRewindResult] = useState<{ kind: "ok" | "refused"; text: string } | null>(null);
   // Real signed-in identity (task 98d38111): the browser's actual approver,
   // never boilerplate reason text - forwarded into gateDecide's two wire
   // calls so a gate_decide history row resolves to a real HUMAN, not
@@ -1335,6 +1363,48 @@ export default function TaskDetailPage() {
     return () => { cancelled = true; };
   }, [docTab, trace, id, project]);
 
+  // Cross-clicked task text (task 6968cc39, extended by 2ec1e395): ONE
+  // fetch per task load resolves description/oracle/likely_misfire/
+  // plan_doc/premise_notes/completion_proof together (linkTaskFields ->
+  // GET /api/tasks/{id}/links) -- <Markdown>/renderInline below splice the
+  // results into each card's own source, never a second renderer and
+  // never a separate call per field. Deps are the field VALUES, so an
+  // unchanged poll never refetches; a real edit to any one field refetches
+  // once. A fetch failure leaves every field unspliced, never a blocked
+  // card.
+  useEffect(() => {
+    let cancelled = false;
+    if (!id || !task) { setLinkFields(null); setLinkedDescription(""); return; }
+    linkTaskFields(project, id)
+      .then((f) => {
+        if (cancelled) return;
+        setLinkFields(f);
+        setLinkedDescription(task.description ? spliceLinkedMarkdown(task.description, f.description) : "");
+      })
+      .catch(() => { if (!cancelled) { setLinkFields(null); setLinkedDescription(""); } });
+    return () => { cancelled = true; };
+  }, [id, project, task?.description, task?.oracle, task?.likely_misfire,
+      task?.plan_doc, task?.premise_notes, task?.completion_proof]);
+
+  // Spliced markdown SOURCE for the other fields, computed once linkFields
+  // lands -- each falls back to the raw field on no spans / no fetch yet.
+  const linkedOracle = useMemo(
+    () => (task?.oracle && linkFields ? spliceLinkedMarkdown(task.oracle, linkFields.oracle) : ""),
+    [task?.oracle, linkFields],
+  );
+  const linkedPlanDoc = useMemo(
+    () => (task?.plan_doc && linkFields ? spliceLinkedMarkdown(task.plan_doc, linkFields.plan_doc) : ""),
+    [task?.plan_doc, linkFields],
+  );
+  const linkedPremiseNotes = useMemo(
+    () => (task?.premise_notes && linkFields ? spliceLinkedMarkdown(task.premise_notes, linkFields.premise_notes) : ""),
+    [task?.premise_notes, linkFields],
+  );
+  const linkedCompletionProof = useMemo(
+    () => (task?.completion_proof && linkFields ? spliceLinkedMarkdown(task.completion_proof, linkFields.completion_proof) : ""),
+    [task?.completion_proof, linkFields],
+  );
+
   useEffect(() => {
     if (!notice) return;
     const t = setTimeout(() => setNotice(null), 4000);
@@ -1398,11 +1468,21 @@ export default function TaskDetailPage() {
   const setStatus = async (status: string) => {
     setBusy(true);
     try {
-      await fetch(`/api/tasks/${id}?project=${project}`, {
+      const r = await fetch(`/api/tasks/${id}?project=${project}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status }),
       });
+      // fetch() only rejects on a network error, never on a non-2xx status
+      // -- unchecked, a refused PATCH (e.g. the open-gate close guard)
+      // still fell through to "Moved to done.", a false-success toast for
+      // a status change that never actually happened (2026-08-25 live
+      // near-miss). Read the real body and surface a refusal honestly.
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        setNotice(`Not moved: ${body.detail || body.error || `HTTP ${r.status}`}`);
+        return;
+      }
       setNotice(`Moved to ${status}.`);
       load();
     } catch (e) {
@@ -1591,6 +1671,46 @@ export default function TaskDetailPage() {
     }
   };
 
+  // Step this task back exactly ONE workflow step and reopen that step's
+  // gate for a fresh decision — the audited recovery lever
+  // (ConductorService.rewind_task) for a gate that was decided in error.
+  // The backend itself refuses a blank reason and refuses to rewind off the
+  // first step, so this stays simple: send it, show whatever it says.
+  const doRewind = async () => {
+    if (!rewindReason.trim()) {
+      setRewindResult({ kind: "refused", text: "A reason is required to rewind (audited lever)." });
+      return;
+    }
+    setRewindBusy(true);
+    setRewindResult(null);
+    try {
+      const r = await fetch(`/api/conductor/rewind?project=${project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: id,
+          reason: rewindReason.trim(),
+          actor: approverIdentity || "owner",
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.ok && body.ok) {
+        setRewindResult({
+          kind: "ok",
+          text: `Rewound ${body.from_step ?? "?"} → ${body.to_step ?? "?"}. That step's gate is open for a fresh decision.`,
+        });
+        setRewindReason("");
+        load();
+      } else {
+        setRewindResult({ kind: "refused", text: body.reason || `Rewind failed (${r.status}).` });
+      }
+    } catch (e) {
+      setRewindResult({ kind: "refused", text: `Rewind failed: ${(e as Error).message ?? e}` });
+    } finally {
+      setRewindBusy(false);
+    }
+  };
+
   // Oracle "N RED" summary → drive PlanView to the Tests tab + scroll to it.
   const showTests = () => {
     setTabRequest((p) => ({ tab: "tests", n: (p?.n ?? 0) + 1 }));
@@ -1652,13 +1772,41 @@ export default function TaskDetailPage() {
   return (
     <Page>
       {/* Breadcrumb — "Tasks / <short-id>"; the crumb root carries the
-          context-aware back navigation the old ← button did. */}
-      <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
-        <button onClick={() => navigate(from)} className="hover:text-[color:var(--text-secondary)]" title={backLabel}>
-          {from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
-        </button>
-        <span className="opacity-50">/</span>
-        <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+          context-aware back navigation the old ← button did. When the task
+          HAS a real parent_id, the crumb always goes there and says
+          "Parent" -- previously this only happened when `from` (browser
+          navigation state) pointed at a task, so a child opened via direct
+          URL/bookmark/refresh showed "Tasks" here with no visible way up,
+          and the ONLY real parent link lived in a Card far down the page,
+          past the whole SDLC trace (owner: "i see no way to see the parent
+          to navigate to the parent"). */}
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
+          <button
+            onClick={() =>
+              task?.parent_id
+                ? navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })
+                : navigate(from)
+            }
+            className="hover:text-[color:var(--text-secondary)]"
+            title={task?.parent_id ? "back to parent" : backLabel}
+          >
+            {task?.parent_id
+              ? "Parent"
+              : from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
+          </button>
+          <span className="opacity-50">/</span>
+          <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+        </div>
+        {conductorOn && (
+          <Link
+            to={`/workflows?task=${task.id}`}
+            aria-label="Open this task's conductor flow"
+            className="text-xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
+          >
+            ↗ Flow
+          </Link>
+        )}
       </div>
 
       <AnimatePresence>
@@ -1770,6 +1918,7 @@ export default function TaskDetailPage() {
         <div className="flex flex-wrap gap-2 shrink-0">
           {transitions.map((target) => (
             <button
+              id={`status-transition-${target}`}
               key={target}
               disabled={busy}
               onClick={() => setStatus(target)}
@@ -1833,7 +1982,67 @@ export default function TaskDetailPage() {
 
       {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
 
+      {docTab === "evidence" && conductorOn && (
+        <div id="gate-recovery" className="rounded-md border overflow-hidden mb-6" style={{ borderColor: "var(--border-default)" }}>
+          <Disclosure
+            className="text-[12.5px]"
+            summaryClassName="w-full px-4 py-3 text-left text-2xs uppercase tracking-wider"
+            summaryStyle={{ color: "var(--text-muted)", background: "var(--surface-2)" }}
+            summary="troubleshooting — recover from a gate decided in error (unrelated to the current decision below)"
+          >
+            <div className="p-4 space-y-2.5" style={{ borderTop: "1px solid var(--border-default)" }}>
+              <div className="text-[12.5px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+                Moves this task back exactly one workflow step (currently{" "}
+                <code className="font-mono text-2xs px-1 rounded" style={{ background: "var(--surface-1)" }}>{task.workflow_step || "—"}</code>
+                ) and reopens that step's gate — pending, ready for a fresh decision. Use this if a gate was
+                approved when it shouldn't have been (e.g. a human-only gate approved by someone other than the
+                project owner), or a drive advanced further than it should have. Audited: every rewind is
+                recorded on the task's history with your reason.
+              </div>
+              <textarea
+                value={rewindReason}
+                onChange={(e) => setRewindReason(e.target.value)}
+                placeholder="Required — why you're stepping this back (recorded on the audit trail)"
+                rows={2}
+                className="w-full text-[13px] rounded-md bg-[color:var(--background-base)]/40 border border-[color:var(--midground-base)]/20 p-2 leading-relaxed resize-y"
+              />
+              {rewindResult && (
+                <div
+                  className="rounded-md p-2.5 text-[12.5px] leading-relaxed"
+                  style={rewindResult.kind === "ok"
+                    ? { background: "var(--accent-emerald-bg)", color: "var(--accent-emerald-fg)", boxShadow: "inset 0 0 0 1px var(--accent-emerald-ring)" }
+                    : { background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
+                  role="status"
+                >
+                  {rewindResult.text}
+                </div>
+              )}
+              <button
+                type="button"
+                disabled={rewindBusy || !rewindReason.trim()}
+                onClick={doRewind}
+                className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
+                style={{ background: "var(--accent-amber-bg)", color: "var(--accent-amber-fg)", boxShadow: "inset 0 0 0 1px var(--accent-amber-ring)" }}
+              >
+                {rewindBusy ? "rewinding…" : "Rewind one step"}
+              </button>
+            </div>
+          </Disclosure>
+        </div>
+      )}
+
       {docTab === "evidence" && gatePanelOwnsOracle && (<>
+
+      {/* SECTION LABEL (owner live, 2026-08-25: "i dont understand how
+          recovery and ready are sharing a space in the evidence panel") —
+          the Recovery disclosure right above and this banner are two
+          unrelated, independently-rendered blocks (different gating
+          conditions: conductorOn vs. gatePanelOwnsOracle) that read as one
+          compound "collapsed header + expanded body" element with nothing
+          marking a new section start. This label is that mark. */}
+      <div className="text-2xs uppercase tracking-wider mb-1.5" style={{ color: "var(--text-muted)" }}>
+        current gate decision
+      </div>
 
       {/* GATE STATUS HEADER — the severity summary that used to be a
           clickable notification banner on Overview (owner 2026-07-14).
@@ -1906,13 +2115,19 @@ export default function TaskDetailPage() {
                 <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>what you're approving</div>
                 <div className="text-[15px] font-semibold text-[color:var(--text-primary)]">{task.title}</div>
                 {task.oracle && (() => {
-                  const dot = task.oracle!.indexOf(". ");
-                  const lead = dot > 0 ? task.oracle!.slice(0, dot + 1) : task.oracle!;
-                  const rest = dot > 0 ? task.oracle!.slice(dot + 1).trim() : "";
+                  // task 2ec1e395: split on the SPLICED source (entity spans
+                  // already turned into `[text](href)` markdown) so
+                  // renderInline below turns those into real links too —
+                  // the bare-URL auto-link stays for a raw https:// the
+                  // linker itself doesn't know about.
+                  const src = linkedOracle || task.oracle!;
+                  const dot = src.indexOf(". ");
+                  const lead = dot > 0 ? src.slice(0, dot + 1) : src;
+                  const rest = dot > 0 ? src.slice(dot + 1).trim() : "";
                   const m = /(https?:\/\/\S+)/.exec(lead);
                   const leadNode = m
-                    ? (<>{lead.slice(0, m.index)}<a href={m[1]} target="_blank" rel="noreferrer" className="font-mono underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>{m[1].replace(/^https?:\/\//, "")}</a>{lead.slice(m.index + m[1].length)}</>)
-                    : lead;
+                    ? (<>{renderInline(lead.slice(0, m.index))}<a href={m[1]} target="_blank" rel="noreferrer" className="font-mono underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>{m[1].replace(/^https?:\/\//, "")}</a>{renderInline(lead.slice(m.index + m[1].length))}</>)
+                    : renderInline(lead);
                   return (
                     <>
                       <div className="text-[13px] leading-relaxed text-[color:var(--text-secondary)]">{leadNode}</div>
@@ -1923,7 +2138,7 @@ export default function TaskDetailPage() {
                           summary={<>Acceptance criteria{pinTests.length > 0 ? ` (${pinTests.length} assertions)` : ""}</>}
                         >
                           <div className="mt-1.5 space-y-1.5 text-[color:var(--text-secondary)] leading-relaxed">
-                            {rest && <div>{rest}</div>}
+                            {rest && <div>{renderInline(rest)}</div>}
                             {pinTests.length > 0 && (
                               <button type="button" onClick={showTests} className="underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>
                                 each assertion is a pinned test → view them with their latest outcomes
@@ -1945,7 +2160,9 @@ export default function TaskDetailPage() {
                     summaryStyle={{ color: "var(--accent-amber-fg)" }}
                     summary="how a pass could still be wrong"
                   >
-                    <div className="mt-1.5 leading-relaxed text-[color:var(--text-secondary)]">{task.likely_misfire}</div>
+                    <div className="mt-1.5 leading-relaxed text-[color:var(--text-secondary)]">
+                      <LinkedText text={task.likely_misfire} />
+                    </div>
                   </Disclosure>
                 )}
               </div>
@@ -2220,6 +2437,7 @@ export default function TaskDetailPage() {
                 )}
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
+                    id="gate-decide-approve"
                     type="button"
                     disabled={busy || (gateVerdict !== "ready" && !isAwaitingDesignApproval && !gateOverride) || (gateOverride && !gateReason.trim())}
                     onClick={() => gateDecide("approve")}
@@ -2232,6 +2450,7 @@ export default function TaskDetailPage() {
                   </button>
                   {task.gate_state !== "failed" && (
                     <button
+                      id="gate-decide-reject"
                       type="button"
                       disabled={busy || !gateReason.trim()}
                       onClick={() => gateDecide("reject")}
@@ -2309,9 +2528,15 @@ export default function TaskDetailPage() {
         <Stagger i={0} reduced={reduced}>
         <div ref={planRef}>
         <Card>
+          {conductorOn && (
+            <div className="flex items-center gap-1.5 px-1 pb-2">
+              <span className="text-2xs uppercase tracking-wider opacity-50">Workflow</span>
+              <Lozenge tone="neutral">{task.workflow || "implement"}</Lozenge>
+            </div>
+          )}
           <PlanView
             diagram={task.plan_diagram}
-            doc={task.plan_doc}
+            doc={linkedPlanDoc || task.plan_doc}
             prototypeSrc={task.has_prototype
               ? `/api/tasks/${id}/prototype?project=${encodeURIComponent(project)}`
               : undefined}
@@ -2326,7 +2551,7 @@ export default function TaskDetailPage() {
             project={project}
             proofType={task.proof_type}
             oracle={gatePanelOwnsOracle ? undefined : task.oracle}
-            completionProof={task.completion_proof}
+            completionProof={linkedCompletionProof || task.completion_proof}
             likelyMisfire={task.likely_misfire}
             fullOutcomeComplete={task.full_outcome_complete}
             isAwaitingDesignApproval={isAwaitingDesignApproval}
@@ -2353,13 +2578,27 @@ export default function TaskDetailPage() {
         </Stagger>
       )}
 
+      {/* Plan notes (task 2ec1e395): premise_notes had no render surface at
+          all — this is its first one, cross-clicked like plan_doc/oracle
+          from the same one-shot fetch above. */}
+      {!!task.premise_notes && (
+        <Stagger i={0.5} reduced={reduced}>
+        <Card>
+          <SectionLabel>Plan notes</SectionLabel>
+          <div className="mt-2">
+            <Markdown text={linkedPremiseNotes || task.premise_notes} />
+          </div>
+        </Card>
+        </Stagger>
+      )}
+
       {!(task.plan_doc || task.plan_diagram || task.has_prototype) && (
         <Stagger i={1} reduced={reduced}>
         <Card>
           <SectionLabel>Description</SectionLabel>
           {task.description ? (
             <div className="mt-2">
-              <Markdown text={task.description} />
+              <Markdown text={linkedDescription || task.description} />
             </div>
           ) : (
             <Empty>No description.</Empty>

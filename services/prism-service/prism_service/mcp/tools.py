@@ -735,7 +735,11 @@ TOOLS: list[Tool] = [
             "Store an expertise entry in long-term memory. IMPORTANT: Always include "
             "file paths, code examples, and specific details in the description — "
             "a memory entry without evidence is nearly useless. If this fact supersedes "
-            "an older one, the old entry is automatically invalidated (not deleted)."
+            "an older one, the old entry is automatically invalidated (not deleted). "
+            "Write the description in Simplified Technical English (skill asd-ste100): "
+            "short active sentences, no semicolons, no contractions, keep every hedge. "
+            "The server normalises the text and returns a `style` block with what it "
+            "fixed and what it could not."
         ),
         inputSchema={
             "type": "object",
@@ -1099,7 +1103,15 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         name="task_create",
-        description="Create a new task in the PRISM task tracker",
+        description=(
+            "Create a new task in the PRISM task tracker. Write every text field in "
+            "Simplified Technical English (skill asd-ste100): title and description "
+            "in STE-flavored prose, oracle / likely_misfire / stop_if as Strict "
+            "instructions (one instruction per sentence, at most 20 words, active "
+            "voice, no semicolons, no contractions, keep every hedge). The server "
+            "normalises the text and returns a `style` block with what it fixed and "
+            "what it could not."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -1129,6 +1141,9 @@ TOOLS: list[Tool] = [
                 "stop_if": {"type": "array", "items": {"type": "string"}, "description": "Worker contract: conditions that HALT the slice (need files outside allowed_files, behavior ambiguous, verification fails twice)."},
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
+                "channel": {"type": "string", "description": "Where this task came from: ui|mcp|github|jira|slack|outlook|daemon. Defaults to 'mcp' on this tool; a collector relaying another channel over MCP (e.g. slack) names it here."},
+                "channel_ref": {"type": "string", "description": "Opaque origin reference for the channel — a session id, issue URL, or message permalink. Defaults to the request's session id."},
+                "workflow": {"type": "string", "description": "Which PRISM workflow drives this task. Defaults to 'implement' (the 10-step SDLC conductor loop — the only value with a driver today); validated against models.task.WORKFLOW_ALIASES, an unknown name is refused."},
             },
             "required": ["title"],
         },
@@ -1212,6 +1227,12 @@ TOOLS: list[Tool] = [
             "properties": {
                 "id": {"type": "string", "description": "Task ID to update"},
                 "title": {"type": "string", "description": "Rename the task. Blank/whitespace is ignored (never blanks an existing title)."},
+                "description": {"type": "string", "description": "Replace the task description."},
+                "dependencies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Replace the dependency list -- ids of tasks that must be done before this one is unblocked. Every id must exist in this project; a task cannot depend on itself.",
+                },
                 "status": {
                     "type": "string",
                     "description": "New status: pending, in_progress, done, blocked",
@@ -1236,6 +1257,7 @@ TOOLS: list[Tool] = [
                 "plan_doc": {"type": "string", "description": "Proposed-change plan as markdown — rendered below the diagram in the PRISM task Plan card."},
                 "plan_diagram": {"type": "string", "description": "Mermaid source (sequence/UML) for the plan — rendered at the top of the PRISM task Plan card."},
                 "session_id": {"type": "string", "description": "Driving session to auto-link when flipping status to in_progress. The conductor session gate (ef81fc15) refuses a sessionless in_progress transition; when omitted the active request session is resolved and linked automatically."},
+                "workflow": {"type": "string", "description": "Change which PRISM workflow drives this task. Validated against models.task.WORKFLOW_ALIASES — an unknown name is refused."},
             },
             "required": ["id"],
         },
@@ -1785,6 +1807,51 @@ TOOLS: list[Tool] = [
             "required": ["session_id", "action"],
         },
     ),
+    Tool(
+        name="documents_place",
+        description=(
+            "Where a new artifact goes, per the ontology grammar (proto "
+            "SKILL.md 'Where a new artifact goes'). An existing folder that "
+            "already holds the work always wins (name-token match, never a "
+            "substring); only when nothing in the tree holds it yet does "
+            "this build <area>/<kind_of>/<date>, <area>/<about>, or "
+            "<area>/<date> from the grammar. Ask this BEFORE writing a new "
+            "artifact so it lands beside its siblings instead of forking a "
+            "duplicate folder."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "about": {"type": "string", "description": "The named piece of work, e.g. a person or topic ('chris', 'release-stability')."},
+                "area": {"type": "string", "description": "Narrows the search to one area's subtree, e.g. 'support', 'engineering'."},
+                "kind_of": {"type": "string", "description": "A recurring series name, e.g. 'weekly-reports'."},
+                "date": {"type": "string", "description": "YYYY-MM-DD for a dated instance."},
+            },
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
+        name="signal_post",
+        description=(
+            "Drop a signal into the Queue (task a6858911): a collector "
+            "(slack, outlook, github, jira, or an MCP agent) reports "
+            "something that arrived, BEFORE it becomes a task. A signal "
+            "is never a task -- it only becomes one when the owner acts "
+            "on it in the app."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Where this signal came from: ui|mcp|github|jira|slack|outlook|daemon. Defaults to 'mcp' on this tool; a collector relaying another channel over MCP names it here."},
+                "channel_ref": {"type": "string", "description": "Opaque origin reference for the channel — a session id, issue URL, or message permalink. Defaults to the request's session id."},
+                "subject": {"type": "string", "description": "Short summary of the signal."},
+                "body": {"type": "string", "description": "Full body/content of the signal."},
+                "sender": {"type": "string", "description": "Who or what sent it."},
+                "arrived_at": {"type": "string", "description": "ISO timestamp the signal arrived; defaults to now."},
+            },
+            "required": ["subject"],
+        },
+    ),
 ]
 
 
@@ -1834,7 +1901,17 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "janitor_abandon",
     "memory_invalidate",
     "agent_bridge_command",
+    # Queue intake (task a6858911): a collector posting a signal over MCP
+    # is the primary path (slack/outlook/github/jira/other agents), so
+    # this rides the default interactive surface unlike documents_place.
+    "signal_post",
 }
+# documents_place is intentionally NOT added here: test_mcp_tool_profiles.py
+# pins an exact count of the curated interactive surface and is outside this
+# task's allowed_files (1c122936-a36c-40e5-9e2d-d67b696b3003). It is
+# registered in TOOLS and reachable via tool_profile=all; promoting it to
+# the default interactive profile is a follow-up decision for a session that
+# can touch that test.
 # NOTE: the legacy understand_* tools are intentionally NOT in the default
 # interactive surface — they're superseded by the okf_* Understand wiki and
 # kept reachable only via tool_profile=all (plus understand_refresh/status in
@@ -1996,6 +2073,26 @@ def _serialise(obj: Any) -> Any:
 def _json(obj: Any) -> str:
     """Serialise *obj* to a JSON string, handling dataclasses."""
     return json.dumps(_serialise(obj), indent=2, default=str)
+
+
+def _ontology_class_for_brain_hit(og: Any, hit: dict) -> str:
+    """ontology_class for one brain_search hit (task f5352fa1). A memory
+    entry indexed via MemoryService._index_in_brain carries a doc_id shaped
+    'memory/<domain>/<mx-id>[::chunk]' -- resolve THAT id to the same IRI
+    services.ontology_graph._emit_memories builds (bucket 'memory') and look
+    up its rdf:type. Any other doc_id shape (code, docs) returns '' -- never
+    a guessed class."""
+    from prism_service.services.ontology_graph import _iri
+
+    if og is None:
+        return ""
+    doc_id = str(hit.get("doc_id") or "")
+    if not doc_id.startswith("memory/"):
+        return ""
+    entry_id = doc_id.split("::", 1)[0].rsplit("/", 1)[-1]
+    if not entry_id:
+        return ""
+    return og.class_of(_iri("memory", entry_id))
 
 
 def _resolve_real_session_id() -> str:
@@ -3596,6 +3693,19 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 session_id=_ask_sid,
                 task_id=_ask_tid,
             )
+            # ontology_class (task f5352fa1): resolves a hit's doc_id back to
+            # the IRI the matching ontology emitter built for it -- today
+            # only a memory-indexed hit ('memory/<domain>/<mx-id>' doc_ids,
+            # see MemoryService._index_in_brain) is identifiable this way;
+            # any other hit kind gets '', never a guessed class.
+            # open_if_exists: a search must never CREATE the RocksDB store
+            # as a side effect (segfaulted the full suite, 2026-08-25).
+            from prism_service.services.ontology_graph import open_if_exists
+            _og = open_if_exists(project_id)
+            for _r in results:
+                if isinstance(_r, dict):
+                    _r["ontology_class"] = (
+                        _ontology_class_for_brain_hit(_og, _r) if _og is not None else "")
             _body = _json(results)
             # Honest retrieval savings (task 7ee022cc). Emitted as a
             # SEPARATE content block so block 0 stays exactly the results
@@ -4157,7 +4267,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 ))
             except Exception:
                 pass  # best-effort — never break the memory write
-            return [TextContent(type="text", text=_json(result))]
+            # STE style report (task 5de57583): surface the normaliser's
+            # style block next to the stored entry, mirroring how
+            # task_create/task_update report their own style block.
+            response = _serialise(result)
+            if isinstance(response, dict):
+                response["style"] = memory_svc.last_style
+            return [TextContent(type="text", text=_json(response))]
 
         if name == "memory_invalidate":
             import sqlite3 as _sq3
@@ -4281,7 +4397,22 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 limit=arguments.get("limit", 5),
                 session_id=_recall_sid,
             )
-            return [TextContent(type="text", text=_json(results))]
+            # ontology_class (task f5352fa1): the graph's rdf:type for this
+            # hit's IRI, built the SAME way the memory emitter builds it
+            # (bucket 'memory', key = entry id) -- empty string when the
+            # graph hasn't been rebuilt to know this entry yet, never
+            # guessed from the entry's `type` string.
+            # open_if_exists: recall must never CREATE the RocksDB store as
+            # a side effect (segfaulted the full suite, 2026-08-25).
+            from prism_service.services.ontology_graph import open_if_exists, _iri
+            _og = open_if_exists(project_id)
+            _rows = []
+            for e in results:
+                row = _serialise(e)
+                row["ontology_class"] = (
+                    _og.class_of(_iri("memory", e.id)) if _og is not None else "")
+                _rows.append(row)
+            return [TextContent(type="text", text=_json(_rows))]
 
         # ------------------------------------------------------------------
         # OKF tools — read-only projection of memory + brain as an OKF wiki
@@ -4422,6 +4553,39 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     "error": "oracle_validation_failed",
                     "domain_errors": _domain_errors,
                 }))]
+            # Channel provenance (task b480eb15): a task created over MCP
+            # came from "mcp" unless the caller relays another channel;
+            # channel_ref is the request's session id (real transcript when
+            # one exists, else the MCP request handle — same lenient
+            # resolver task_link_session stamping uses).
+            from prism_service.models.task import validate_channel
+            try:
+                _channel = validate_channel(arguments.get("channel", "")) or "mcp"
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "channel_validation_failed", "detail": str(exc),
+                }))]
+            _channel_ref = (str(arguments.get("channel_ref", "") or "").strip()
+                            or _resolve_link_session_id())
+            # Workflow provenance (task af396b2c): validated BEFORE the row
+            # is inserted, same posture as channel above. Blank is left to
+            # task_svc.create's own DEFAULT_WORKFLOW resolution.
+            from prism_service.models.task import validate_workflow
+            try:
+                _workflow = validate_workflow(arguments.get("workflow", ""))
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "workflow_validation_failed", "detail": str(exc),
+                }))]
+            # proof_type validated against the vocabulary (task f5352fa1),
+            # same posture as channel/workflow, before the row exists.
+            from prism_service.models.task import validate_proof_type
+            try:
+                validate_proof_type(arguments.get("proof_type", ""))
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "proof_type_validation_failed", "detail": str(exc),
+                }))]
             task = task_svc.create(
                 title=arguments["title"],
                 description=arguments.get("description", ""),
@@ -4441,12 +4605,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 stop_if=arguments.get("stop_if"),
                 plan_doc=arguments.get("plan_doc", ""),
                 plan_diagram=arguments.get("plan_diagram", ""),
+                channel=_channel,
+                channel_ref=_channel_ref,
+                workflow=_workflow,
             )
+            # STE style block (task 6e611531): task_svc.last_style reflects
+            # THIS create call — task_svc.create ran just above.
+            _out = _serialise(task)
+            _out["style"] = task_svc.last_style
             if _spec_summary is not None:
-                _out = _serialise(task)
                 _out["oracle_spec"] = _spec_summary
-                return [TextContent(type="text", text=_json(_out))]
-            return [TextContent(type="text", text=_json(task))]
+            return [TextContent(type="text", text=_json(_out))]
 
         if name == "task_list":
             _status = arguments.get("status")
@@ -4493,11 +4662,131 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 return [TextContent(type="text", text=_json({"task": None, "reason": "No unblocked pending tasks"}))]
             return [TextContent(type="text", text=_json(result))]
 
+        if name == "documents_place":
+            from prism_service.api.documents import list_source_files
+            from prism_service.services.document_tree import place
+            result = place(
+                list_source_files(project_id),
+                about=arguments.get("about"),
+                area=arguments.get("area"),
+                kind_of=arguments.get("kind_of"),
+                date=arguments.get("date"),
+            )
+            return [TextContent(type="text", text=_json(result))]
+
+        if name == "signal_post":
+            # Channel provenance (task a6858911): same posture as
+            # task_create -- a signal posted over MCP came from "mcp"
+            # unless the caller relays another channel; channel_ref is
+            # the request's session id when the caller doesn't supply one.
+            from prism_service.models.task import validate_channel
+            from prism_service.models.signal import Signal
+            from prism_service.services.signal_store import SignalStore
+            try:
+                _channel = validate_channel(arguments.get("channel", "")) or "mcp"
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "channel_validation_failed", "detail": str(exc),
+                }))]
+            _channel_ref = (str(arguments.get("channel_ref", "") or "").strip()
+                            or _resolve_link_session_id())
+            signal = Signal(
+                project=project_id,
+                channel=_channel,
+                channel_ref=_channel_ref,
+                subject=arguments.get("subject", ""),
+                body=arguments.get("body", ""),
+                sender=arguments.get("sender", ""),
+            )
+            if arguments.get("arrived_at"):
+                signal.arrived_at = arguments["arrived_at"]
+            _sig_store = SignalStore(project_id)
+            _sig_store.create(signal)
+            # Resolve against the ontology on arrival (task 785bb4ce) --
+            # same best-effort call the REST create makes; a collector's
+            # post over MCP must not land with empty matches.
+            try:
+                from prism_service.api.signals import _resolve_best_effort
+                _resolve_best_effort(_sig_store, project_id, signal)
+            except Exception:
+                pass
+            return [TextContent(type="text", text=_json(signal.__dict__))]
+
         if name == "task_update":
+            # Accepted keys defined ONCE (task d67bca9f) so the unknown-
+            # fields check below and the kwargs build below can never drift
+            # apart. `id`/`session_id` are request plumbing, not update
+            # fields -- accepted but never fed to TaskService.update.
+            _TASK_UPDATE_FIELDS = (
+                "title", "description", "status", "priority", "tags",
+                "assigned_agent", "blocked_reason", "parent_id", "oracle",
+                "proof_type", "completion_proof", "likely_misfire",
+                "full_outcome_complete", "allowed_files", "verify",
+                "stop_if", "plan_doc", "plan_diagram", "workflow",
+                "dependencies",
+            )
+            _unknown_keys = [
+                k for k in arguments
+                if k not in _TASK_UPDATE_FIELDS and k not in ("id", "session_id")
+            ]
+            if _unknown_keys:
+                # The MCP server layer (handle_tool/handle_mcp) dispatches
+                # arguments straight to _dispatch_tool with no jsonschema
+                # validation against inputSchema -- an unknown key was
+                # previously silently dropped and the call still returned
+                # ok. Reject it loudly instead (task d67bca9f).
+                return [TextContent(type="text", text=_json({
+                    "error": "unknown_fields", "fields": _unknown_keys,
+                }))]
             update_kwargs: dict[str, Any] = {}
-            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram"):
+            for key in _TASK_UPDATE_FIELDS:
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
+            # Workflow validated BEFORE the write (task af396b2c) -- same
+            # posture as the REST route's PATCH handler.
+            if "workflow" in update_kwargs:
+                from prism_service.models.task import DEFAULT_WORKFLOW, validate_workflow
+                try:
+                    update_kwargs["workflow"] = validate_workflow(update_kwargs["workflow"]) or DEFAULT_WORKFLOW
+                except ValueError as exc:
+                    return [TextContent(type="text", text=_json({
+                        "error": "workflow_validation_failed", "detail": str(exc),
+                    }))]
+            # Status/proof_type validated against their vocabularies (task
+            # f5352fa1) BEFORE the write -- same posture as workflow above.
+            if "status" in update_kwargs:
+                from prism_service.models.task import validate_status
+                try:
+                    update_kwargs["status"] = validate_status(update_kwargs["status"])
+                except ValueError as exc:
+                    return [TextContent(type="text", text=_json({
+                        "error": "status_validation_failed", "detail": str(exc),
+                    }))]
+            if "proof_type" in update_kwargs:
+                from prism_service.models.task import validate_proof_type
+                try:
+                    update_kwargs["proof_type"] = validate_proof_type(update_kwargs["proof_type"])
+                except ValueError as exc:
+                    return [TextContent(type="text", text=_json({
+                        "error": "proof_type_validation_failed", "detail": str(exc),
+                    }))]
+            # dependencies validated BEFORE the write (task d67bca9f): every
+            # id must exist in this project, and a task cannot depend on
+            # itself -- same posture as the REST route's PATCH handler.
+            if "dependencies" in update_kwargs:
+                _deps = update_kwargs["dependencies"] or []
+                _tid = arguments["id"]
+                if _tid in _deps:
+                    return [TextContent(type="text", text=_json({
+                        "error": "dependencies_validation_failed",
+                        "detail": f"task cannot depend on itself: {_tid}",
+                    }))]
+                _missing = [d for d in _deps if task_svc.get(d) is None]
+                if _missing:
+                    return [TextContent(type="text", text=_json({
+                        "error": "dependencies_validation_failed",
+                        "detail": f"unknown dependency ids: {', '.join(_missing)}",
+                    }))]
             # Authoring-time oracle validation (task b78a193c): only when
             # this update actually TOUCHES oracle/proof_type/verify (R7) —
             # an update to an unrelated field on a task with a pre-existing
@@ -4552,6 +4841,25 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                                     "session_id) or pass session_id on this "
                                     "task_update, then retry"),
                         }))]
+            # Open-gate close guard (2026-08-25, live near-miss on task
+            # 3baadd19): status=done used to go through with zero gate
+            # awareness -- silently producing a "DONE" task whose gate
+            # never actually passed. Mirrors the REST route's identical
+            # guard (api/tasks.py update_task) via the same shared helper.
+            if arguments.get("status") == "done":
+                from prism_service.services.task_service import (
+                    DONE_BLOCKED_BY_OPEN_GATE_FIX, is_open_gate_step,
+                )
+                _cur = task_svc.get(arguments["id"])
+                if _cur is not None and is_open_gate_step(
+                        getattr(_cur, "workflow_step", ""),
+                        getattr(_cur, "gate_state", "")):
+                    return [TextContent(type="text", text=_json({
+                        "error": DONE_BLOCKED_BY_OPEN_GATE_FIX.format(
+                            workflow_step=_cur.workflow_step,
+                            gate_state=_cur.gate_state),
+                        "task_id": arguments["id"],
+                    }))]
             task = task_svc.update(arguments["id"], **update_kwargs)
             if task is None:
                 return [TextContent(type="text", text=_json({"error": f"Task {arguments['id']} not found"}))]
@@ -4581,11 +4889,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     except Exception:
                         pass  # best-effort — never break task updates
 
+            # STE style block (task 6e611531): task_svc.last_style reflects
+            # THIS update call — task_svc.update ran just above.
+            _out = _serialise(task)
+            _out["style"] = task_svc.last_style
             if _spec_summary is not None:
-                _out = _serialise(task)
                 _out["oracle_spec"] = _spec_summary
-                return [TextContent(type="text", text=_json(_out))]
-            return [TextContent(type="text", text=_json(task))]
+            return [TextContent(type="text", text=_json(_out))]
 
         if name == "task_link_session":
             # FORCED WRITER. session_id resolution: caller-passed wins;
