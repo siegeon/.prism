@@ -187,7 +187,8 @@ class OntologyGraph:
 
     def rebuild(self, rows: dict | None = None, *,
                 agent_descriptions: dict[str, str] | None = None,
-                signal_arrived_at: dict[str, str] | None = None) -> dict:
+                signal_arrived_at: dict[str, str] | None = None,
+                signal_enrichment: dict[str, dict] | None = None) -> dict:
         """Build the ABox from the SAME real rows ontology_prototype_
         projection reads (gather(project), reused rather than re-queried
         when the caller already has it) and replace the named ABox graph
@@ -196,11 +197,13 @@ class OntologyGraph:
         {"total_triples", "per_class"} — triple counts per catalog class,
         read straight back off the store after the swap.
 
-        agent_descriptions/signal_arrived_at (task 8eeb3e65's skill-
-        description-* and flagged-signal-is-placed rules): real data
-        gather()'s own rows don't carry, fetched independently by default
-        (self._agent_descriptions/_signal_arrived_at) — never fabricated;
-        callers (tests) may pass explicit dicts to control a fixture."""
+        agent_descriptions/signal_arrived_at/signal_enrichment (task
+        8eeb3e65's skill-description-* and flagged-signal-is-placed rules;
+        task 31b737fb's aboutTicket/aboutCode/askedBy/raises joins): real
+        data gather()'s own rows don't carry, fetched independently by
+        default (self._agent_descriptions/_signal_arrived_at/
+        _signal_enrichment) — never fabricated; callers (tests) may pass
+        explicit dicts to control a fixture."""
         if rows is None:
             from prism_service.services import ontology_prototype_projection as proj
             rows = proj.gather(self.project)
@@ -208,6 +211,8 @@ class OntologyGraph:
             agent_descriptions = self._agent_descriptions()
         if signal_arrived_at is None:
             signal_arrived_at = self._signal_arrived_at()
+        if signal_enrichment is None:
+            signal_enrichment = self._signal_enrichment()
 
         import rdflib
 
@@ -223,7 +228,8 @@ class OntologyGraph:
         self._emit_channels_agents_providers(g, rows, U, CLS, RDF, RDFS,
                                               agent_descriptions)
         self._emit_tasks(g, rows, U, CLS, RDF, RDFS)
-        self._emit_signals(g, rows, U, CLS, RDF, RDFS, signal_arrived_at)
+        self._emit_signals(g, rows, U, CLS, RDF, RDFS, signal_arrived_at,
+                            signal_enrichment)
         self._emit_documents_folders(g, rows, U, CLS, RDF, RDFS)
         self._emit_code_graph(g, rows, U, CLS, RDF, RDFS)
         self._emit_workflow_steps(g, U, CLS, RDF, RDFS)
@@ -321,14 +327,20 @@ class OntologyGraph:
 
     @staticmethod
     def _emit_signals(g, rows, U, CLS, RDF, RDFS,
-                       signal_arrived_at: dict[str, str]) -> None:
+                       signal_arrived_at: dict[str, str],
+                       signal_enrichment: dict[str, dict] | None = None) -> None:
         """Signal rows -> o:Signal (rdfs:subClassOf o:QueueItem in model.ttl,
         task 785bb4ce: the Queue holds SIGNALS, not tasks), with
         o:arrivedVia -> its o:Channel, o:state as a literal, o:arrivedAt
         (task 8eeb3e65's flagged-signal-is-placed rule) when known, and
-        o:becameTask -> the o:Task it turned into once the owner acted."""
+        o:becameTask -> the o:Task it turned into once the owner acted.
+        task 31b737fb: also projects the signal's persisted parse()
+        Extraction (matches['extraction']) as aboutTicket/aboutCode/
+        askedBy/raises/dueBy joins — never re-parses, only projects what
+        the resolver already decided."""
         import rdflib
 
+        signal_enrichment = signal_enrichment or {}
         for s in rows.get("signals", []):
             u = U("signal", s["id"])
             g.add((u, RDF.type, CLS("Signal")))
@@ -346,6 +358,92 @@ class OntologyGraph:
                 g.add((u, CLS("arrivedVia"), cu))
             if s.get("task_id"):
                 g.add((u, CLS("becameTask"), U("task", s["task_id"])))
+
+            matches = signal_enrichment.get(s["id"]) or {}
+            OntologyGraph._emit_extraction_joins(
+                g, u, s["id"], matches, U, CLS, RDF, RDFS)
+
+    # o:JiraIssue subclass local name -> o: local name (model.ttl, task
+    # 31b737fb) — 'reply' maps to AskForInformation: a reply-shaped ask
+    # wants information back.
+    _ASK_CLASS = {
+        "decision": "AskForDecision", "review": "AskForReview",
+        "deliverable": "AskForDeliverable", "reply": "AskForInformation",
+        "fyi": "AskFyi",
+    }
+
+    @staticmethod
+    def _emit_extraction_joins(g, signal_node, signal_id, matches: dict,
+                                U, CLS, RDF, RDFS) -> None:
+        """Project one signal's persisted matches (resolve()'s own output,
+        task 31b737fb) onto the graph: o:aboutTicket -> o:JiraIssue(key)
+        with o:projectKnown (the jira-issue-known-project rule's own
+        evidence), o:aboutCode -> o:PullRequest(number/repo), o:askedBy ->
+        o:Person(address) with o:email, o:raises -> the Ask subclass per
+        kind with o:dueBy when a deadline was found. Reads exactly what
+        the resolver decided — never re-parses, never fabricates."""
+        import rdflib
+
+        extraction = matches.get("extraction") or {}
+
+        for t in extraction.get("tickets") or []:
+            key = t.get("key")
+            if not key:
+                continue
+            tu = U("jira_issue", key)
+            g.add((tu, RDF.type, CLS("JiraIssue")))
+            g.add((tu, RDFS.label, rdflib.Literal(key)))
+            g.add((tu, CLS("projectKnown"),
+                   rdflib.Literal(bool(t.get("known", True)))))
+            g.add((signal_node, CLS("aboutTicket"), tu))
+
+        for c in extraction.get("code_refs") or []:
+            if c.get("kind") != "pr" or c.get("number") is None:
+                continue
+            number = c["number"]
+            ref_key = f"{c.get('repo') or ''}#{number}"
+            pu = U("pull_request", ref_key)
+            g.add((pu, RDF.type, CLS("PullRequest")))
+            g.add((pu, RDFS.label, rdflib.Literal(f"PR #{number}")))
+            g.add((signal_node, CLS("aboutCode"), pu))
+
+        addresses = extraction.get("addresses") or []
+        asker = None
+        if addresses:
+            address = addresses[0]
+            asker = U("person", address)
+            g.add((asker, RDF.type, CLS("Person")))
+            g.add((asker, RDFS.label, rdflib.Literal(address)))
+            g.add((asker, CLS("email"), rdflib.Literal(address)))
+
+        ask_kind = (matches.get("ask") or {}).get("kind")
+        ask_class = OntologyGraph._ASK_CLASS.get(ask_kind)
+        if ask_class:
+            au = U("ask", signal_id)
+            g.add((au, RDF.type, CLS(ask_class)))
+            g.add((signal_node, CLS("raises"), au))
+            if asker is not None:
+                g.add((au, CLS("askedBy"), asker))
+            deadlines = extraction.get("deadlines") or []
+            if deadlines:
+                g.add((au, CLS("dueBy"),
+                       rdflib.Literal(deadlines[0], datatype=rdflib.XSD.date)))
+
+    def _signal_enrichment(self) -> dict[str, dict]:
+        """Signal id -> its full persisted matches dict, off the real
+        SignalStore (task 31b737fb) — used by _emit_extraction_joins to
+        project aboutTicket/aboutCode/askedBy/raises without ever
+        re-parsing. Best effort: {} -> no extraction joins emitted, same
+        discipline as _signal_arrived_at."""
+        try:
+            from prism_service.services.signal_store import SignalStore
+            store = SignalStore(self.project)
+            try:
+                return {s.id: (s.matches or {}) for s in store.list(limit=2000)}
+            finally:
+                store.close()
+        except Exception:
+            return {}
 
     @staticmethod
     def _emit_documents_folders(g, rows, U, CLS, RDF, RDFS) -> None:

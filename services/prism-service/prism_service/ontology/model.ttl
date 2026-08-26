@@ -170,3 +170,44 @@ o:message a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
     rdfs:label "message" .
 o:validatedAt a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:dateTime ;
     rdfs:label "validatedAt" .
+
+# ---------------------------------------------------------------------
+# Signals are parsed the prototype's way into the ontology (task
+# 31b737fb, epic 3a652b3b): the ticket/PR/person/deadline joins
+# services/signal_parse.py extracts, and signal_resolver persists into a
+# signal's matches['extraction'] — projected by OntologyGraph._emit_signals.
+# Ask's five subclasses mirror the prototype's six kinds folded onto
+# services/signal_resolver._classify_ask's own kind set (reply -> asks
+# for information back).
+# ---------------------------------------------------------------------
+
+o:JiraIssue a rdfs:Class ; rdfs:subClassOf o:Work ; rdfs:label "Jira issue" ;
+    rdfs:comment "A ticket a signal's text names, key like PLAT-42." .
+o:PullRequest a rdfs:Class ; rdfs:subClassOf o:Work ; rdfs:label "Pull request" ;
+    rdfs:comment "A PR or issue reference a signal's text names." .
+
+o:AskForInformation a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for information" ;
+    rdfs:comment "A question, wanting a reply back." .
+o:AskForDecision a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for decision" ;
+    rdfs:comment "Wants an approve/decide/choose." .
+o:AskForReview a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for review" ;
+    rdfs:comment "Wants eyes on a PR or a piece of work." .
+o:AskForDeliverable a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for deliverable" ;
+    rdfs:comment "Names a deliverable and/or a deadline." .
+o:AskFyi a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "FYI" ;
+    rdfs:comment "Informational only — nothing is asked." .
+
+o:aboutTicket a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:JiraIssue ;
+    rdfs:label "aboutTicket" ; rdfs:comment "The Jira issue a signal's text names." .
+o:aboutCode a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:PullRequest ;
+    rdfs:label "aboutCode" ; rdfs:comment "The PR/issue a signal's text names." .
+o:dueBy a rdf:Property ; rdfs:domain o:Ask ; rdfs:range xsd:date ;
+    rdfs:label "dueBy" ; rdfs:comment "A deadline resolved from the signal's text." .
+o:email a rdf:Property ; rdfs:domain o:Person ; rdfs:range xsd:string ;
+    rdfs:label "email" ;
+    rdfs:comment "An address is evidence, a name is a guess — the join key." .
+o:permalink a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range xsd:string ;
+    rdfs:label "permalink" .
+o:projectKnown a rdf:Property ; rdfs:domain o:JiraIssue ; rdfs:range xsd:boolean ;
+    rdfs:label "projectKnown" ;
+    rdfs:comment "Set at emission time from the same known-project set parse() enforces." .

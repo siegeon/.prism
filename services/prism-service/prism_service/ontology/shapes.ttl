@@ -229,3 +229,66 @@ o:twin-classes a sh:SPARQLConstraint ;
             }
         }
     """ .
+
+# ---------------------------------------------------------------------
+# Signals are parsed the prototype's way into the ontology (task
+# 31b737fb, epic 3a652b3b). Three new rules over the joins signal_parse's
+# regex extraction feeds into the graph via OntologyGraph._emit_signals.
+# ---------------------------------------------------------------------
+
+o:jira-issue-known-project.target a sh:NodeShape ;
+    sh:targetClass o:JiraIssue ;
+    sh:sparql o:jira-issue-known-project .
+
+o:jira-issue-known-project a sh:SPARQLConstraint ;
+    rdfs:comment "Stops '10:00 AM-10:30' being read as ticket AM-10 — a JiraIssue the graph holds must come from a known project." ;
+    sh:name "Every Jira issue's project is known" ;
+    sh:description "A JiraIssue's project key is in the known set." ;
+    sh:message "jira issue's project is not in the known set" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            FILTER NOT EXISTS { $this o:projectKnown true }
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# ask-names-a-person — o:Ask without o:askedBy. Plain property shape,
+# same keying shape as task-names-its-channel.
+# ---------------------------------------------------------------------
+
+o:ask-names-a-person.target a sh:NodeShape ;
+    sh:targetClass o:Ask ;
+    sh:property o:ask-names-a-person .
+
+o:ask-names-a-person a sh:PropertyShape ;
+    rdfs:comment "An ask with nobody named as asking it is a rule that cannot fail." ;
+    sh:name "Every ask names a person" ;
+    sh:description "Every ask has an askedBy." ;
+    sh:path o:askedBy ;
+    sh:minCount 1 ;
+    sh:message "ask has no askedBy" .
+
+# ---------------------------------------------------------------------
+# signal-joins-on-address — an o:Ask's askedBy target with no o:email:
+# joined by a bare name instead of an address ("an address is evidence,
+# a name is a guess"). SPARQL constraint: needs a second hop past
+# askedBy, past what sh:minCount alone expresses.
+# ---------------------------------------------------------------------
+
+o:signal-joins-on-address.target a sh:NodeShape ;
+    sh:targetClass o:Ask ;
+    sh:sparql o:signal-joins-on-address .
+
+o:signal-joins-on-address a sh:SPARQLConstraint ;
+    rdfs:comment "An address is evidence, a name is a guess — every join is on an address where one exists." ;
+    sh:name "An ask's person joins on an address" ;
+    sh:description "askedBy names a person who is joined by an address, not a bare display name." ;
+    sh:message "askedBy target has no o:email — joined by name, not address" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:askedBy ?p .
+            FILTER NOT EXISTS { ?p o:email ?e }
+        }
+    """ .
