@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from prism_service.services import sqlite_db
 import threading
@@ -504,6 +505,97 @@ class TaskService:
     # STE normalisation (task 36283d72)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_protected_plan_line(line: str) -> bool:
+        """True when ``line`` must survive plan_doc alignment byte-
+        identical (task dc676e24): a markdown heading (services.
+        arc_governance._sections keys a rubric section by its exact
+        heading text), a table row (a line starting with '|'), a bullet
+        or numbered-list item (arc_governance._ac_lines / _claim_lines
+        fold an AC/oracle/citation line on '-'/'*'/'1.'/'1)'  bullets,
+        including a nested 'oracle:' or citation sub-bullet), a bare
+        'AC-<n>' line, or a bare 'oracle:'/'citation:' continuation
+        line. Fenced code (``` ... ```, including ```mermaid) is NOT
+        listed here — ste._protected_spans already masks it inside
+        whatever chunk this line lands in, so a fence line is safe to
+        leave in the alignable chunk."""
+        s = line.strip()
+        if not s:
+            return False
+        if s.startswith("#"):
+            return True
+        if s.startswith("|"):
+            return True
+        if re.match(r"^(?:[-*]|\d+[.)])\s+", s):
+            return True
+        if re.match(r"^AC-\d+\b", s):
+            return True
+        if s.lower().startswith("oracle:") or s.lower().startswith("citation:"):
+            return True
+        return False
+
+    def _align_plan_doc(
+        self, text: str
+    ) -> tuple[str, list[str], list[ste.Finding], list[dict]]:
+        """Align plan_doc prose at write (task dc676e24 — conductor-
+        authored plan text aligns at write, like the other flavored
+        fields) while leaving structural / rubric-critical lines byte-
+        identical.
+
+        The doc is split line-by-line into alignable runs and protected
+        lines (``_is_protected_plan_line``). Each alignable run is
+        normalised (ste.normalize) and lexicon-aligned (lexicon.align)
+        exactly like ``_process`` does for the other flavored fields —
+        those two functions already skip fenced code, inline code,
+        URLs, quotes, and ids inside a run via ste._protected_spans, so
+        a mermaid fence sitting inside an alignable run still comes out
+        byte-identical. A protected line is copied through untouched.
+        This lives here, not in services/ste.py, because it is a
+        plan_doc-specific policy (rubric line shapes), not a general
+        STE rule.
+
+        Returns (aligned_text, rules, findings, aligned) — the same
+        shape ``_process`` builds for its ``fields`` entries, computed
+        against the FINAL aligned text so findings reflect what is
+        actually stored.
+        """
+        if not text:
+            return text, [], [], []
+
+        lines = text.splitlines(keepends=True)
+        out_parts: list[str] = []
+        rules: list[str] = []
+        aligned: list[dict] = []
+        buffer: list[str] = []
+
+        def _flush() -> None:
+            if not buffer:
+                return
+            chunk = "".join(buffer)
+            buffer.clear()
+            fixed, chunk_rules = ste.normalize(chunk, mode="flavored")
+            fixed, chunk_aligned = lexicon.align(fixed)
+            for rule in chunk_rules:
+                if rule not in rules:
+                    rules.append(rule)
+            if chunk_aligned:
+                if "lexicon" not in rules:
+                    rules.append("lexicon")
+                aligned.extend(chunk_aligned)
+            out_parts.append(fixed)
+
+        for line in lines:
+            if self._is_protected_plan_line(line):
+                _flush()
+                out_parts.append(line)
+            else:
+                buffer.append(line)
+        _flush()
+
+        new_text = "".join(out_parts)
+        findings = ste.check(new_text, mode="flavored")
+        return new_text, rules, findings, aligned
+
     def _apply_ste(self, task: Task) -> list[str]:
         """Run the deterministic STE normaliser over every free-text
         field on ``task``, in place, before the caller persists it.
@@ -513,9 +605,14 @@ class TaskService:
         each stop_if entry run in strict mode (they are instructions a
         machine or a person must follow exactly).
 
-        plan_doc and plan_diagram are only CHECKED, never rewritten — a
-        plan a human already approved at plan_gate must not shift under
-        them.
+        plan_doc aligns too (task dc676e24), through ``_align_plan_doc``:
+        fenced code (incl. ```mermaid), markdown tables, headings, and
+        AC-<n>/oracle/citation bullet lines stay byte-identical so
+        services.arc_governance's story/plan rubric parsers still parse;
+        surrounding prose gets the same normalize + lexicon.align pass
+        as the other flavored fields. plan_diagram is only CHECKED,
+        never rewritten — a mermaid source a human already approved at
+        plan_gate must not shift under them.
 
         Sets ``self.last_style`` to the combined style_block for this
         call. Returns the distinct rule names that changed a field, so
@@ -576,8 +673,16 @@ class TaskService:
                 fields["stop_if"] = (stop_rules, stop_findings, stop_aligned)
                 _remember(stop_rules)
 
-            # Check-only fields (task 36283d72): never rewritten.
-            fields["plan_doc"] = ([], ste.check(task.plan_doc, mode="flavored"))
+            # plan_doc aligns at write (task dc676e24): normalize + lexicon
+            # align every non-protected run, fences/tables/headings/AC-
+            # oracle-citation lines held byte-identical by _align_plan_doc.
+            plan_fixed, plan_rules, plan_findings, plan_aligned = (
+                self._align_plan_doc(task.plan_doc))
+            task.plan_doc = plan_fixed
+            fields["plan_doc"] = (plan_rules, plan_findings, plan_aligned)
+            _remember(plan_rules)
+
+            # plan_diagram stays check-only (task 36283d72): never rewritten.
             fields["plan_diagram"] = (
                 [], ste.check(task.plan_diagram, mode="flavored"))
 
@@ -662,6 +767,7 @@ class TaskService:
             "likely_misfire": task.likely_misfire,
             "completion_proof": task.completion_proof,
             "premise_notes": task.premise_notes,
+            "plan_doc": task.plan_doc,
             "stop_if": list(task.stop_if),
         }
         ste_rules = self._apply_ste(task)
@@ -917,6 +1023,7 @@ class TaskService:
             "likely_misfire": task.likely_misfire,
             "completion_proof": task.completion_proof,
             "premise_notes": task.premise_notes,
+            "plan_doc": task.plan_doc,
             "stop_if": list(task.stop_if),
         }
         ste_rules = self._apply_ste(task)
