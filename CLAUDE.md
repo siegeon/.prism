@@ -11,6 +11,10 @@ Use Prism (MCP) for all project knowledge — do not create static architecture 
 - `brain_call_chain` — trace call flow and blast radius from the graph
 - `memory_store` — write decisions back the moment they're made; PRISM is the memory layer, chat is not
 
+## Writing standard for PRISM content
+
+Everything written INTO PRISM — task titles, descriptions, oracles, stop_if lines, memories, ontology labels and comments, rule messages — follows ASD-STE100 Simplified Technical English via the vendored `asd-ste100` skill (`.claude/skills/asd-ste100/SKILL.md`, owner 2026-08-26). Strict mode for instructions (oracle, stop_if, likely_misfire, error strings, tool descriptions); STE-flavored for descriptions and memories. The application enforces the regex-checkable subset itself: `prism_service/services/ste.py` normalises every task/memory write and returns a `style` block, and the ontology rule `text-is-plain` flags what survives on the Rules tab. Keep every hedge — a rewrite that turns "may have failed" into "failed" is a different claim, not a simplification.
+
 ## Working tasks
 
 All in-progress work is a PRISM task driven through the conductor — never bare `/api` pokes.
