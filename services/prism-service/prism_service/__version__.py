@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.90"
+PRISM_VERSION = "7.13.91"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7042,4 +7042,10 @@ PRISM_VERSION_NOTES += (
     "outside the three choke points. Tests: test_signals_align_on_arrival "
     "(13), test_plan_text_aligns_at_write (9), test_every_ingestion_path_"
     "aligns (14); re-anchors named in place."
+    "\n\n7.13.91: the Align language coverage registry labels the daemon seats "
+    "(gate_adjudicator, ship_worker, resume_actuator, conductor_service). On "
+    "the 7.13.90 live walk the card listed unknown:prism_service.services."
+    "gate_adjudicator with 30 hits: a real writer that goes through "
+    "TaskService (so its text is aligned) but had no label. The unknown "
+    "marker did its job. Now those seats read as known paths."
 )

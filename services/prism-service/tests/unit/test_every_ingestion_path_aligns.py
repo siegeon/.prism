@@ -554,3 +554,21 @@ def test_ensure_external_intake_raw_insert_is_a_named_exception():
     if not calls_apply_ste:
         assert NAMED_EXCEPTIONS["ensure_external_intake"] == (
             "import path re-aligns via _import_one (task 683e65eb)")
+
+
+# ── daemon seats are known paths (found live on 7.13.90: gate_adjudicator
+#    showed as unknown:... with 30 hits; labelled in 7.13.91) ────────────
+
+
+def test_daemon_seats_are_known_paths():
+    from prism_service.services import language_alignment as la
+
+    for module, label in (
+        ("prism_service.services.gate_adjudicator", "gate_adjudicator"),
+        ("prism_service.services.ship_worker", "ship_worker"),
+        ("prism_service.services.resume_actuator", "resume_actuator"),
+        ("prism_service.services.conductor_service", "conductor_service"),
+    ):
+        frames = [("prism_service.services.task_service", "_apply_ste", "", ""),
+                  (module, "run", "", "")]
+        assert la._path_label(frames) == label, (module, la._path_label(frames))

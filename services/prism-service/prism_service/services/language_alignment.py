@@ -229,6 +229,12 @@ _LABEL_RULES: list[tuple[str, str]] = [
     ("prism_service.services.work_item_sync", "work_item_sync"),
     ("prism_service.services.task_runner", "task_runner"),
     ("prism_service.api.conductor_flow", "conductor_flow"),
+    # Daemon seats that write task text through TaskService (found live on
+    # 7.13.90: gate_adjudicator showed as unknown with 30 hits, 7.13.91).
+    ("prism_service.services.gate_adjudicator", "gate_adjudicator"),
+    ("prism_service.services.ship_worker", "ship_worker"),
+    ("prism_service.services.resume_actuator", "resume_actuator"),
+    ("prism_service.services.conductor_service", "conductor_service"),
     ("prism_service.services.language_alignment_worker",
      "language_alignment_worker"),
     ("prism_service.services.event_handlers", "reflection"),
