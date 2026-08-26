@@ -21,6 +21,7 @@ best-effort and must never fail signal intake.
 
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -30,9 +31,20 @@ from prism_service.models.signal import Signal
 _STOPWORDS = {
     "a", "an", "the", "and", "or", "for", "to", "of", "in", "on", "is",
     "at", "by", "with", "about", "re", "fwd",
+    "can", "you", "before", "after", "it", "this", "that", "we", "our",
+    "please", "should", "would", "could", "will", "be", "are", "was",
+    "were", "from", "as", "do", "does",
 }
 
 _CAP = 5
+
+# related_tasks title-overlap scoring (task 461b7985): idf floor keeps a
+# tiny board (even N=1) from zeroing out every token's weight, and the
+# threshold requires more than one floor-weighted token's worth of score
+# so a lone, board-wide-common word can't match alone -- while a genuinely
+# rare token (real idf) still can.
+_MIN_TOKEN_IDF = 0.1
+_RELATED_SCORE_THRESHOLD = 0.15
 
 
 def resolve(project: str, signal: Signal) -> dict[str, Any]:
@@ -94,6 +106,16 @@ def _related_tasks(project: str, signal: Signal) -> list[dict]:
     tasks = get_project(project).task_svc.list()
     subject_text = f"{signal.subject or ''} {signal.body or ''}".lower()
     subject_tokens = _tokens(signal.subject)
+    title_tokens = {t.id: _tokens(t.title) for t in tasks}
+    n = len(tasks)
+    df: dict[str, int] = {}
+    for toks in title_tokens.values():
+        for tok in toks:
+            df[tok] = df.get(tok, 0) + 1
+
+    def _idf(tok: str) -> float:
+        return max(math.log(n / (1 + df.get(tok, 0))), _MIN_TOKEN_IDF)
+
     out: list[dict] = []
     for t in tasks:
         why = ""
@@ -102,9 +124,11 @@ def _related_tasks(project: str, signal: Signal) -> list[dict]:
         elif t.id and (t.id.lower() in subject_text or t.id[:8].lower() in subject_text):
             why = f"id-like token match ({t.id[:8]})"
         else:
-            overlap = subject_tokens & _tokens(t.title)
+            overlap = subject_tokens & title_tokens[t.id]
             if overlap:
-                why = f"title overlap: {', '.join(sorted(overlap))}"
+                score = sum(_idf(tok) for tok in overlap)
+                if score > _RELATED_SCORE_THRESHOLD:
+                    why = f"title overlap: {', '.join(sorted(overlap))}"
         if why:
             out.append({"id": t.id, "title": t.title, "why": why})
         if len(out) >= _CAP:
