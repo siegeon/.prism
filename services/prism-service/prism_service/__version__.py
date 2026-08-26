@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.67"
+PRISM_VERSION = "7.13.68"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6586,4 +6586,14 @@ PRISM_VERSION_NOTES += (
     "rail shows the class pill linking to /ontology?tab=structure&class=, "
     "the legend groups by class, edge labels are the ontology's property "
     "names; /ontology honours ?tab= and ?class=."
+    "\n\n7.13.68: the entity linker indexes EVERY ABox row. Live on 7.13.67 "
+    "no task id, task title or memory id ever linked: the index was built "
+    "through OntologyGraph.query(), whose default limit=500 (a UI cap) cut "
+    "the ABox off after the first 500 rows -- all documents -- so only class "
+    "names, terms and paths matched. The index now reads with an explicit "
+    "row limit far above any project, pinned by a regression test that "
+    "seeds 600 documents and still links a task id, a memory id and the last "
+    "document. Also filed: the code graph indexes built bundles (Function "
+    "instances named '$', '$1' from web_dist), which is why Explore has no "
+    "real symbol to classify yet (task 1a361686)."
 )
