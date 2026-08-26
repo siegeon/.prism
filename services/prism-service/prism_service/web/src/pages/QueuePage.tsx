@@ -22,6 +22,12 @@ type Signal = {
   state: string;
   task_id: string;
   matches?: Record<string, unknown>;
+  // Aligned text (task ed034701): the STE pipeline's output for
+  // subject/body, empty until SignalStore.create() runs. subject/body
+  // stay exactly as the signal arrived.
+  aligned_subject?: string;
+  aligned_body?: string;
+  style?: Record<string, unknown>;
 };
 
 function relTime(iso?: string): string {
@@ -151,7 +157,9 @@ function SignalRow({ signal, onPromote, onDrop }: {
   onPromote: (signalId: string, title: string, workflow: string) => void;
   onDrop: (signalId: string, reason: string) => void;
 }) {
-  const [title, setTitle] = useState(signal.subject);
+  const displaySubject = signal.aligned_subject || signal.subject;
+  const displayBody = signal.aligned_body || signal.body;
+  const [title, setTitle] = useState(displaySubject);
   const [workflow, setWorkflow] = useState("triage");
   const [dropping, setDropping] = useState(false);
   const [reason, setReason] = useState("");
@@ -161,15 +169,22 @@ function SignalRow({ signal, onPromote, onDrop }: {
     <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-3">
       <div className="flex items-center gap-2">
         <span className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>
-          <LinkedText text={signal.subject} />
+          <LinkedText text={displaySubject} />
         </span>
         <span className="text-2xs shrink-0" style={{ color: "var(--text-muted)" }}>
           {signal.sender} · {relTime(signal.arrived_at)}
         </span>
       </div>
       <div className="text-xs mt-1 line-clamp-2" style={{ color: "var(--text-secondary)" }}>
-        <LinkedText text={signal.body} />
+        <LinkedText text={displayBody} />
       </div>
+      <details className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>
+        <summary className="cursor-pointer select-none">As arrived</summary>
+        <div className="mt-1">
+          <div>{signal.subject}</div>
+          <div>{signal.body}</div>
+        </div>
+      </details>
       {matches.length > 0 && (
         <div className="text-2xs mt-1 flex flex-wrap gap-x-3" style={{ color: "var(--text-muted)" }}>
           {matches.map(([k, v]) => <span key={k}>{k}: {String(v)}</span>)}

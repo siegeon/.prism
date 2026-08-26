@@ -80,7 +80,11 @@ def test_create_aligns_subject_too(project):
     store.create(signal)
 
     assert signal.subject == "please open a ticket"
-    assert signal.aligned_subject == "Please open a Task"
+    # normalize() never capitalizes a sentence's first letter on its
+    # own (only after a semicolon-break it just introduced); it only
+    # fixes contractions/fillers/marketing words, so the raw casing
+    # here is untouched and only "ticket" -> "Task" changes.
+    assert signal.aligned_subject == "please open a Task"
 
 
 def test_style_names_the_rules_that_fired(project):
@@ -250,7 +254,7 @@ def test_graph_projects_aligned_body_as_rdfs_comment(project):
         "SELECT ?c WHERE { GRAPH ?g { ?s a o:Signal ; rdfs:comment ?c } }"
     )
     rows = list(graph._store.query(q, use_default_graph_as_union=True))
-    comments = {str(r[0]) for r in rows}
+    comments = {sol["c"].value for sol in rows}
     assert _EXPECTED_ALIGNED_BODY in comments, comments
 
 
