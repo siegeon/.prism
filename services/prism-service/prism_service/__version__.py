@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.94"
+PRISM_VERSION = "7.13.95"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7115,4 +7115,23 @@ PRISM_VERSION_NOTES += (
     "i.e. strictly forward motion, never backward. 320 passed, 1 skipped "
     "across every neighboring control_plane/gate-adjudicator/dirty-judge/"
     "worker-contract suite."
+)
+PRISM_VERSION_NOTES += (
+    "7.13.95: reachability_check.py's `_fresh_merge_base` (7.13.93) had "
+    "the identical backward-regression exposure as candidate_policy_edits' "
+    "`_fresh_diff_base`, just fixed in 7.13.94 -- origin/main can lag "
+    "BEHIND a task workspace's stored baseline when this repo's own "
+    "commit-then-push carve-out leaves local HEAD ahead of origin/main for "
+    "a few minutes, and blindly preferring merge-base(HEAD, origin/main) "
+    "there walks the diff base backward past a real, already-landed, "
+    "unrelated local commit and blames the candidate for its symbols. "
+    "`_fresh_merge_base` now takes the stored baseline and adopts the "
+    "fresh point only when the stored baseline is its ancestor (or equal) "
+    "-- strictly forward motion, never backward -- via `git merge-base "
+    "--is-ancestor`, falling back to the stored baseline otherwise. New "
+    "regression test builds a repo + bare origin, lands an unrelated "
+    "unpushed commit ahead of origin/main, and proves the naive fresh "
+    "merge-base alone false-positives on that commit's symbol while the "
+    "fix returns no refusal. 45 neighboring reachability/gate-adjudicator "
+    "tests green."
 )
