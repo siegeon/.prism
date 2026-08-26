@@ -232,17 +232,46 @@ function setLiveConventions(conventions) {
   ].join('\n')
 }
 
+// ENVIRONMENT COLLISION (cwd-isolation leak) doctrine - a Claude Code
+// HARNESS/PLATFORM bug, never a PRISM or task defect. Observed TWICE in one
+// real session: a step subagent's Bash tool was unconditionally refused mid-
+// step with "This session is isolated in the worktree <some worktree>, but
+// this command's working directory resolved to the shared checkout...
+// Refusing to run it there" - and the worktree NAMED belonged to a SIBLING
+// agent in the same session (once the MAIN session itself), never to the
+// blocked subagent's own context, which was never told to use that worktree
+// or any worktree at all. ExitWorktree also refused to help: "cannot be
+// called from a subagent with a cwd override... This agent is already
+// isolated." So a step subagent is structurally UNABLE to clear this itself.
+// Platform feedback on the harness bug has already been filed separately -
+// this constant is the PRISM-side mitigation only: recognize the signature,
+// stop cleanly, report it as a distinct greppable halt, never work around it.
+// Kept as its OWN constant (not folded silently into SELF_HEAL's prose) so it
+// can be injected into BOTH the worker preamble (SELF_HEAL, below - reaches
+// every workerPrompt/decompose/child-driver/locate/graph/settle agent) AND
+// gatePrompt directly (gate agents do NOT run through preamble()/SELF_HEAL at
+// all - see gatePrompt below) - every step agent, worker or gate, must
+// recognize this exact signature the same way.
+const ENV_COLLISION_DOCTRINE = [
+  'ENVIRONMENT COLLISION (cwd-isolation leak) - recognize this EXACT signature: a Bash call refused with a message starting "This session is isolated in the worktree ..." naming a worktree you were NEVER told to use (not your own job/workspace path from this prompt).',
+  '- This is a KNOWN Claude Code harness/platform bug (isolation state leaking across sibling agents in one session), NEVER a real task failure and NEVER something to work around cleverly. Do not retry the command via another tool. Do not try to fix the isolation state yourself - ExitWorktree structurally refuses a subagent with a cwd override ("cannot be called from a subagent... already isolated"); you cannot clear another agent\'s isolation from inside your own context, full stop.',
+  '- STOP the step immediately - do not climb the SELF-HEAL ladder for this case, there is no fix available to you. Report ok:false with halt_reason starting with the EXACT fixed prefix "ENVIRONMENT COLLISION (cwd-isolation leak): " followed by a one-line detail (the worktree path named in the refusal, the command you were running). That fixed prefix is what makes the halt instantly greppable/recognizable, instead of buried inside a long generic "couldn\'t complete this step" narrative.',
+  '- RECOVERY is always a FRESH relaunch of the whole drive, once no other agent in the session is mid-EnterWorktree - never resumeFromRunId (this repo\'s own CLAUDE.md: cached pre-flight verdicts replay stale). This is not yours to retry; report it and stop.',
+].join('\n')
+
 // SELF-HEAL doctrine (implement-workflow reliability). Injected into every step
 // agent's preamble so a failed step / genuine gate-reject / runtime error
 // triggers a knowledge-ladder climb instead of a dead halt. NOTE: the RESEARCH
 // rung is WebSearch/WebFetch today; Context7 MCP (clean library docs) is a
 // not-yet-wired follow-up.
 const SELF_HEAL = [
-  'SELF-HEAL DOCTRINE - when a step fails, a gate GENUINELY rejects (NOT the verifier-blind case above), or a tool/runtime error fires, climb the ladder before giving up:',
+  'SELF-HEAL DOCTRINE - when a step fails, a gate GENUINELY rejects (NOT the verifier-blind case above, and NOT the environment collision below), or a tool/runtime error fires, climb the ladder before giving up:',
   '1. PRISM-FIRST: brain_search + memory_recall for a known resolution. PRISM is the knowledge AND time authority - it server-stamps run timestamps; never reach for a client clock.',
   '2. RESEARCH: if PRISM has no answer, research best practices via WebSearch/WebFetch and cite sources.',
   '3. APPLY the smallest fix.',
   '4. RECORD: memory_store(type="failure", with file:line + the fix) so PRISM HAS THE ANSWER next time - failures become memories.',
+  '',
+  ENV_COLLISION_DOCTRINE,
 ].join('\n')
 
 const dryNote = DRY
@@ -618,6 +647,13 @@ function gatePrompt(job) {
     `   - a readiness saying receipt_ok:true with "your review is the sign-off" means the Approve is ALREADY clean and enabled. Say that, rather than telling a human they are blocked.`,
     '',
     'NEVER report a gate as machine-decided without reading its receipt first. A pass is a claim about evidence: open the evidence, quote the adapter and the tree sha, and confirm the tree is THIS task\'s.',
+    '',
+    // Gate agents do NOT run through preamble()/SELF_HEAL (this prompt is
+    // built standalone, above), so the environment-collision signature is
+    // injected directly here - a gate agent's Bash calls (readiness curl,
+    // gate/mint curl) are exactly as exposed to the harness cwd-isolation
+    // leak as any worker step's.
+    ENV_COLLISION_DOCTRINE,
     (STEP_EXTRA[step] ? `\nSTEP SPECIFICS:\n${STEP_EXTRA[step]}` : ''),
     telemetryInstr(step, 'gate'),
   ].join('\n')
