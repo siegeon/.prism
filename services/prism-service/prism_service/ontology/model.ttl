@@ -18,10 +18,10 @@
 # ---------------------------------------------------------------------
 
 o:Workspace a rdfs:Class ; rdfs:label "Workspace" ;
-    rdfs:comment "The root: everything below is scoped to one workspace/project." .
+    rdfs:comment "The root: every artifact under it belongs to one workspace or project." .
 
 o:Party a rdfs:Class ; rdfs:label "Party" ;
-    rdfs:comment "Who is involved and can be held responsible." .
+    rdfs:comment "Whoever takes part and owns the outcome." .
 o:Person a rdfs:Class ; rdfs:subClassOf o:Party ; rdfs:label "Person" ;
     rdfs:comment "Everyone, colleague or outside contact." .
 o:Group a rdfs:Class ; rdfs:subClassOf o:Party ; rdfs:label "Group" ;
@@ -30,7 +30,7 @@ o:OutsideParty a rdfs:Class ; rdfs:subClassOf o:Party ; rdfs:label "Outside part
     rdfs:comment "A company we actually deal with." .
 
 o:Product a rdfs:Class ; rdfs:label "Product" ;
-    rdfs:comment "What work is filed under." .
+    rdfs:comment "What work falls under." .
 
 o:Activity a rdfs:Class ; rdfs:label "Activity" ;
     rdfs:comment "Work (workstream, task step, ticket, PR) | Ask." .
@@ -45,6 +45,8 @@ o:Agent a rdfs:Class ; rdfs:label "Agent" ;
     rdfs:comment "One per person, team, product, workstream — a workflow catalog entry." .
 o:Skill a rdfs:Class ; rdfs:label "Skill" ;
     rdfs:comment "Packaged context an agent activates: purpose and triggers." .
+o:Term a rdfs:Class ; rdfs:label "Term" ;
+    rdfs:comment "A vocabulary word used across the project, with its meaning." .
 
 o:Provider a rdfs:Class ; rdfs:label "Provider" ;
     rdfs:comment "A surface exposing operations, which declares what it supports." .
@@ -57,9 +59,9 @@ o:Signal a rdfs:Class ; rdfs:subClassOf o:QueueItem ; rdfs:label "Signal" ;
     rdfs:comment "A queue item that may become a Task." .
 
 o:Artifact a rdfs:Class ; rdfs:label "Artifact" ;
-    rdfs:comment "Folder (where work is kept) | Document (what it produced)." .
+    rdfs:comment "Folder (where work sits) | Document (what work produced)." .
 o:Folder a rdfs:Class ; rdfs:subClassOf o:Artifact ; rdfs:label "Folder" ;
-    rdfs:comment "Where work is kept — brain.db's docs, grouped by parent path." .
+    rdfs:comment "Where work sits — brain.db's docs, grouped by parent path." .
 o:Document a rdfs:Class ; rdfs:subClassOf o:Artifact ; rdfs:label "Document" ;
     rdfs:comment "What work produced — a brain.db docs row's source_file." .
 
@@ -86,7 +88,7 @@ o:Variable a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Variable" ;
 # ---------------------------------------------------------------------
 
 o:inFolder a rdf:Property ; rdfs:domain o:Document ; rdfs:range o:Folder ;
-    rdfs:label "inFolder" ; rdfs:comment "Where a document is kept." .
+    rdfs:label "inFolder" ; rdfs:comment "Where a document sits." .
 o:insideFolder a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Folder ;
     rdfs:label "insideFolder" ; rdfs:comment "The folder above it." .
 o:keptBy a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Party ;
@@ -195,7 +197,7 @@ o:AskForReview a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for review
 o:AskForDeliverable a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for deliverable" ;
     rdfs:comment "Names a deliverable and/or a deadline." .
 o:AskFyi a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "FYI" ;
-    rdfs:comment "Informational only — nothing is asked." .
+    rdfs:comment "Informational only — it asks for nothing." .
 
 o:aboutTicket a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:JiraIssue ;
     rdfs:label "aboutTicket" ; rdfs:comment "The Jira issue a signal's text names." .

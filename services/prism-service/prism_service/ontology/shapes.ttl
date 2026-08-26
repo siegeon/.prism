@@ -192,9 +192,9 @@ o:agent-delegates-one-tier-down.target a sh:NodeShape ;
 
 o:agent-delegates-one-tier-down a sh:SPARQLConstraint ;
     rdfs:comment "Conway, enforced, per axis — the producing role cannot also be the role that decides the gate on its own work." ;
-    sh:name "A gate is decided one tier up" ;
+    sh:name "One tier up decides each gate" ;
     sh:description "The role that produced the work cannot also decide the gate on it." ;
-    sh:message "gate is decided by the same role that produced the work" ;
+    sh:message "the role that produced the work also decides its gate" ;
     sh:select """
         PREFIX o: <urn:prism:onto:>
         SELECT $this WHERE {
@@ -213,7 +213,7 @@ o:twin-classes.target a sh:NodeShape ;
     sh:sparql o:twin-classes .
 
 o:twin-classes a sh:SPARQLConstraint ;
-    rdfs:comment "Every structural bug in this model has been one concept with two representations." ;
+    rdfs:comment "Every structural bug in this model is one concept with two representations." ;
     sh:name "No two classes are twins" ;
     sh:description "Two classes sharing an identical instance set are one concept, twice." ;
     sh:message "shares an identical non-empty instance set with another class" ;
@@ -241,8 +241,8 @@ o:jira-issue-known-project.target a sh:NodeShape ;
     sh:sparql o:jira-issue-known-project .
 
 o:jira-issue-known-project a sh:SPARQLConstraint ;
-    rdfs:comment "Stops '10:00 AM-10:30' being read as ticket AM-10 — a JiraIssue the graph holds must come from a known project." ;
-    sh:name "Every Jira issue's project is known" ;
+    rdfs:comment "This stops '10:00 AM-10:30' from misreading as ticket AM-10 — a JiraIssue the graph holds must come from a known project." ;
+    sh:name "Every Jira issue names a known project" ;
     sh:description "A JiraIssue's project key is in the known set." ;
     sh:message "jira issue's project is not in the known set" ;
     sh:select """
@@ -283,12 +283,57 @@ o:signal-joins-on-address.target a sh:NodeShape ;
 o:signal-joins-on-address a sh:SPARQLConstraint ;
     rdfs:comment "An address is evidence, a name is a guess — every join is on an address where one exists." ;
     sh:name "An ask's person joins on an address" ;
-    sh:description "askedBy names a person who is joined by an address, not a bare display name." ;
+    sh:description "askedBy names a person that the address field identifies, not a bare display name." ;
     sh:message "askedBy target has no o:email — joined by name, not address" ;
     sh:select """
         PREFIX o: <urn:prism:onto:>
         SELECT $this WHERE {
             $this o:askedBy ?p .
             FILTER NOT EXISTS { ?p o:email ?e }
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# text-is-plain — a task title, decision name, term definition, or
+# agent description reads as plain English (task 5ac5d04c). Four small
+# target shapes share one SPARQLConstraint: each targets a class whose
+# real projection carries free text (o:Task/o:Decision get rdfs:label —
+# services/ontology_graph.py's _emit_tasks/_emit_memories only ever set
+# a label; o:Agent gets rdfs:comment from its skill description;
+# o:Term gets rdfs:comment for its definition). The shared sh:select
+# checks whichever of the two properties the instance actually carries,
+# so one rule covers all four without re-declaring the regex four
+# times. Regex-checkable subset of STE only: a semicolon, a contraction,
+# or a marketing adjective — sentence length, passive voice, and
+# present-perfect stay in services/ste.py, which needs real tokenizing
+# a SPARQL regex cannot do.
+# ---------------------------------------------------------------------
+
+o:text-is-plain-task.target a sh:NodeShape ;
+    sh:targetClass o:Task ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain-decision.target a sh:NodeShape ;
+    sh:targetClass o:Decision ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain-term.target a sh:NodeShape ;
+    sh:targetClass o:Term ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain-agent.target a sh:NodeShape ;
+    sh:targetClass o:Agent ;
+    sh:sparql o:text-is-plain .
+
+o:text-is-plain a sh:SPARQLConstraint ;
+    rdfs:comment "A semicolon, a contraction, or a marketing adjective reads as prompt noise, not plain English." ;
+    sh:name "Every description reads as plain English" ;
+    sh:description "A task title, decision name, term definition, or agent description has no semicolon, no contraction, and no marketing adjective." ;
+    sh:message "text is not plain English: it has a semicolon, a contraction, or a marketing word" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            { $this rdfs:label ?t } UNION { $this rdfs:comment ?t }
+            FILTER(REGEX(?t, ";|n't\\\\b|\\\\b(it|that|what|there)'s\\\\b|'re\\\\b|'ll\\\\b|'ve\\\\b|\\\\bI'm\\\\b|\\\\b(seamless(ly)?|robust|powerful|cutting-edge|effortless(ly)?|blazing-fast)\\\\b", "i"))
         }
     """ .
