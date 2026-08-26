@@ -596,3 +596,36 @@ def test_unknown_rows_fold_into_labels_the_registry_learned_later(tmp_path, monk
     assert rows["gate_adjudicator"]["known"] is True
     assert "unknown:prism_service.services.gate_adjudicator" not in rows
     assert rows["unknown:prism_service.services.nobody_knows"]["known"] is False
+
+
+def test_the_hook_never_runs_a_property_on_a_caller_local():
+    """7.13.93 regression: the hook read `self.project` with getattr, which
+    ran ProjectContext's lazy brain_svc property and opened sqlite inside
+    the observer. Plain attributes are read from __dict__ only."""
+    from prism_service.services import ste
+
+    class Trap:
+        def __init__(self):
+            self.project_id = "plain-attr"
+
+        @property
+        def project(self):
+            raise AssertionError("a property ran inside the observer")
+
+    def caller(self):  # noqa: ARG001 - `self` is the local the hook inspects
+        return ste.normalize("We don't do this.", "flavored")
+
+    fixed, rules = caller(Trap())
+    assert fixed == "We do not do this."
+    assert "contraction" in rules
+
+
+def test_the_hook_does_not_read_source_files():
+    """inspect.stack() reads source context per frame on every call. The
+    hook walks frame objects instead."""
+    import inspect
+    from prism_service.services import ste
+
+    src = inspect.getsource(ste._caller_frames)
+    assert "inspect.stack(" not in src
+    assert "_getframe" in src

@@ -170,11 +170,23 @@ def test_passing_browser_receipt_still_stays_pending(pinned_world, tmp_path,
 
 # ---------------------------------------------------------------------------
 # AC-3 — tried-and-FAILED evidence is never re-run (no mint loop)
+#
+# SUPERSEDED IN PART by task 8582921d (2026-08-26): the old contract below
+# asserted the adjudicator abstains forever and parks the gate `pending` on
+# a receipt already tried-and-failed at the CURRENT tree. Task 8582921d's
+# AC-2 deliberately replaces that abstention with a bounded automatic
+# backward edge: the task now REWINDS to workflow_step="implement_tasks"
+# (gate_state -> "none", an agent step) so a human is not stuck watching a
+# gate that can never self-clear. The one-attempt no-re-mint guard this test
+# was originally written to pin (`minted["called"] is False`) is UNCHANGED
+# and still asserted below; only the "stays pending forever" half is
+# retired, replaced by the "rewinds to implement_tasks" assertions.
 # ---------------------------------------------------------------------------
 
 
 def test_failed_receipt_is_not_retried(pinned_world, tmp_path, monkeypatch):
     from prism_service.services import oracle_spec as osp
+    from prism_service.services.conductor_service import ADJUDICATOR_SEAT
     repo, _ = pinned_world
     task_svc, task = _gated_task(
         tmp_path, oracle="pinned tests green", proof_type="test",
@@ -194,7 +206,28 @@ def test_failed_receipt_is_not_retried(pinned_world, tmp_path, monkeypatch):
     res = cond.adjudicate_green_gate(task.id)
     assert res is None
     assert minted["called"] is False, "one-attempt guard must block re-mint"
-    assert task_svc.get(task.id).gate_state == "pending"
+
+    after = task_svc.get(task.id)
+    # task 8582921d AC-2: a receipt tried-and-FAILED at the CURRENT tree
+    # rewinds to implement_tasks instead of parking pending forever.
+    assert after.workflow_step == "implement_tasks"
+    assert after.gate_state == "none"
+    assert "FAILED" in (after.gate_reason or "").upper()
+
+    hist = task_svc.history(task.id)
+    rewind_rows = [h for h in hist
+                  if getattr(h, "action", "") == "auto_rewind"]
+    assert len(rewind_rows) == 1, "exactly one auto_rewind row expected"
+    row = rewind_rows[0]
+    assert row.actor == ADJUDICATOR_SEAT
+    # the real TaskHistory dataclass (models/task.py) has no `model` column,
+    # so record_history(..., model="machine") raises TypeError and
+    # _record_seat_row falls back without it (see conductor_service.py
+    # _record_seat_row) — actor=ADJUDICATOR_SEAT is what this backing store
+    # can carry; the "never blank/'owner'" half of AC-6 is pinned on the
+    # stub TaskService in test_gate_rewind_transitions.py, which does model
+    # a `model` field.
+    assert tree[:12] in str(row.details) or "FAILED" in str(row.details)
 
 
 # ---------------------------------------------------------------------------

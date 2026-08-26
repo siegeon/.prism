@@ -48,6 +48,7 @@ into the shape a UI or an API response can render directly.
 from __future__ import annotations
 
 import inspect
+import sys
 import logging
 import re
 from dataclasses import dataclass
@@ -102,31 +103,34 @@ def _caller_frames(limit: int = 12) -> list[tuple[str, str, str, str]]:
     one directly), else the ``.project`` attribute of ``self._task_svc``
     (a MemoryService instance carries a TaskService there). Best-effort --
     a frame that carries none of these leaves it empty."""
+    # Walk raw frame objects. The inspect module's stack helper reads
+    # source context for EVERY frame on EVERY call, and this runs on every
+    # normalize(): on
+    # 7.13.93 it stalled a TaskService.create for 30 s and the suite died
+    # with rc=139. A hook that observes must never cost the observed path.
     frames: list[tuple[str, str, str, str]] = []
     try:
-        stack = inspect.stack()
+        frame = sys._getframe(1)
     except Exception:
         return frames
     try:
-        for record in stack:
-            module = record.frame.f_globals.get("__name__", "")
-            if module == __name__:
-                continue
-            function = record.function
-            local_vars = record.frame.f_locals
-            tool_hint = ""
-            try:
-                raw = local_vars.get("name")
-                if isinstance(raw, str):
-                    tool_hint = raw
-            except Exception:
-                pass
-            project_hint = _project_hint_from_locals(local_vars)
-            frames.append((module, function, tool_hint, project_hint))
-            if len(frames) >= limit:
-                break
+        while frame is not None and len(frames) < limit:
+            module = frame.f_globals.get("__name__", "")
+            if module != __name__:
+                function = frame.f_code.co_name
+                local_vars = frame.f_locals
+                tool_hint = ""
+                try:
+                    raw = local_vars.get("name")
+                    if isinstance(raw, str):
+                        tool_hint = raw
+                except Exception:
+                    pass
+                project_hint = _project_hint_from_locals(local_vars)
+                frames.append((module, function, tool_hint, project_hint))
+            frame = frame.f_back
     finally:
-        del stack
+        del frame
     return frames
 
 
@@ -142,18 +146,33 @@ def _project_hint_from_locals(local_vars: dict) -> str:
         owner = local_vars.get("self")
     except Exception:
         owner = None
+    # Read plain instance attributes ONLY (the object's own __dict__).
+    # getattr() runs properties, and a lazy property such as
+    # ProjectContext.brain_svc builds a BrainService and opens sqlite --
+    # a side effect inside an observer, on whatever thread called
+    # normalize(). That is what stalled TaskService.create on 7.13.93.
     if owner is not None:
-        project = getattr(owner, "project", None)
+        own = _plain_attrs(owner)
+        project = own.get("project")
         if isinstance(project, str) and project:
             return project
-        project_id = getattr(owner, "project_id", None)
+        project_id = own.get("project_id")
         if isinstance(project_id, str) and project_id:
             return project_id
-        task_svc = getattr(owner, "_task_svc", None)
-        project = getattr(task_svc, "project", None) if task_svc else None
+        task_svc = own.get("_task_svc")
+        project = _plain_attrs(task_svc).get("project") if task_svc is not None else None
         if isinstance(project, str) and project:
             return project
     return ""
+
+
+def _plain_attrs(obj) -> dict:
+    """The object's own attribute dict, never a property."""
+    try:
+        d = object.__getattribute__(obj, "__dict__")
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
 
 
 def _notify_listeners(mode: str) -> None:
