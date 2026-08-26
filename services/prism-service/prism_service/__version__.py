@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.60"
+PRISM_VERSION = "7.13.61"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6417,4 +6417,29 @@ PRISM_VERSION_NOTES += (
     "accepts every registered workflow (a triage task was walkable but not "
     "creatable over REST/MCP), and rewind_task walks the task's own "
     "sequence instead of the hardcoded default."
+    "\n\n7.13.61: THE QUEUE (epic 301e2aec) + KNOWLEDGE READS CLEARLY (part of "
+    "epic 3efbcd89). Owner correction: the queue is where SIGNALS come in "
+    "over their channels, go against the ontology, and become TASKS only "
+    "when the owner acts in the app; Work is tasks and is not the queue. "
+    "QUEUE: a persisted Signal (channel, channel_ref, subject, body, "
+    "sender, arrived_at, state open|became_task|dropped, matches) in "
+    "signals.db; POST/GET /api/signals; MCP signal_post (interactive "
+    "profile) for collectors; the hidden Inbox becomes Queue -- first "
+    "Activity entry above Work, /inbox redirects -- listing open signals "
+    "by channel with a typed-title 'Make it a task' (POST /promote: "
+    "creates the task carrying channel/channel_ref, workflow triage by "
+    "default, tags queue+channel; the signal reads 'became task <id>') "
+    "and Drop-with-reason (POST /drop). RESOLUTION: on arrival (and POST "
+    "/resolve) signal_resolver persists matches -- related tasks "
+    "(channel_ref / title tokens / brain), concepts via memory_svc.recall, "
+    "code via brain_svc.search, the Ask it raises (decision|reply|review|"
+    "deliverable|fyi|unknown, keyword heuristic), people via the actor "
+    "resolver -- empty legs state a reason, never raise. The ontology's "
+    "QueueItem class now counts SIGNALS, and Task is its own class. "
+    "KNOWLEDGE: three entries with visible subtitles -- Explore (the code "
+    "graph), Understand (concepts and memory), Ontology (classes, rules, "
+    "queries) -- and /ontology hosts the class rail, a Rules list and a "
+    "SPARQL box; the toggle inside Understand is gone. The RDF/SHACL "
+    "rebuild of the ontology store itself (rdflib+pyshacl+owlrl+pyoxigraph, "
+    "the Subsume stack) ships next."
 )
