@@ -319,6 +319,28 @@ def _uncommitted_files(workspace: Path) -> Optional[set[str]]:
     return {ln.strip() for ln in files if ln.strip()}
 
 
+def _fresh_diff_base(workspace: Path, stale_baseline: Optional[str]) -> Optional[str]:
+    """A fresh diff base for ``candidate_policy_edits``: merge-base(HEAD,
+    origin/main) computed NOW in the workspace, falling back to the stored
+    ``stale_baseline`` when the fresh resolution fails (no origin remote, git
+    error, timeout).
+
+    The stored ``baseline`` is set ONCE at worktree creation
+    (task_workspace.ensure_workspace) and never updated afterward — not even
+    when the worktree is legitimately rebased onto a newer origin/main. A
+    rebase folds the absorbed commits into the worktree's OWN first-parent
+    lineage (there is no merge commit for ``_first_parent_touched_files`` to
+    scope past), so diffing against the stale baseline blames the candidate
+    for every policy file ANY other task changed on main since that stale
+    point. merge-base(HEAD, origin/main) tracks the worktree's true "where
+    main and I last agreed" point without a ``git fetch`` — it reads whatever
+    origin/main ref the workspace's git already has cached."""
+    out = _git(workspace, "merge-base", "HEAD", "origin/main")
+    if out and out.strip():
+        return out.strip().splitlines()[0]
+    return stale_baseline
+
+
 def candidate_policy_edits(task_id: str) -> list[str]:
     """The gate-policy files the task's WORKTREE has modified vs its baseline
     (committed OR working-tree edits). Empty when the task has no worktree or
@@ -340,11 +362,19 @@ def candidate_policy_edits(task_id: str) -> list[str]:
     cannot have arrived via someone else's merge. When first-parent scoping
     can't be computed, fall back to the wider (pre-existing, more
     conservative) set so an environment where it's unresolvable never gets
-    MORE permissive than before."""
+    MORE permissive than before.
+
+    The DIFF BASE itself is resolved FRESH each call (``_fresh_diff_base``)
+    rather than trusting the stored ``baseline`` verbatim -- a worktree
+    legitimately rebased onto a newer origin/main after creation leaves the
+    stored baseline stale, and a stale baseline turns EVERY policy file any
+    OTHER task changed on main since that stale point into a false-positive
+    refusal (suspected live incident, task 3a3f90da, 2026-08-26)."""
     ws = _workspace_for(task_id)
     if not ws:
         return []
-    baseline = ws.get("baseline") or None
+    stale_baseline = ws.get("baseline") or None
+    baseline = _fresh_diff_base(Path(ws["path"]), stale_baseline)
     try:
         from prism_service.services.verifier_service import _git_changed_files
         changed = _git_changed_files(Path(ws["path"]), baseline)

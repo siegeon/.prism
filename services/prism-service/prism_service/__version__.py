@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.93"
+PRISM_VERSION = "7.13.94"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7079,4 +7079,31 @@ PRISM_VERSION_NOTES += (
     "false-positive on the sibling's symbol, and the task-level entry "
     "point (which applies the fix) does not. 44 neighboring reachability/"
     "gate-adjudicator tests green."
+    "\n\n7.13.94: candidate_policy_edits (control_plane.py) had the "
+    "identical stale-baseline defect as 7.13.93's reachability check, in "
+    "the security-sensitive candidate-controls-judge tooth: it read the "
+    "diff base straight from task_workspace.workspace_for(...)['baseline'] "
+    "-- stored ONCE at worktree creation, never updated. A worktree "
+    "legitimately rebased onto a newer origin/main folds the absorbed "
+    "commits into its OWN first-parent lineage (no merge commit for the "
+    "existing first-parent scoping to exempt them via), so the stale "
+    "baseline blamed the candidate for every policy file ANY other task "
+    "changed on main since -- a false 'candidate modified gate policy' "
+    "refusal. Suspected live incident: task 3a3f90da's red_gate showed "
+    "zero adjudicator activity for hours while sibling tasks were swept "
+    "normally, consistent with candidate_policy_edits raising on a "
+    "bloated stale-baseline diff inside adjudicate_test_red_gate's bare "
+    "except-returns-None. Fixed with the same shape as 7.13.93: a new "
+    "_fresh_diff_base(workspace, stale_baseline) resolves `git merge-base "
+    "HEAD origin/main` fresh each call and prefers it, falling back to "
+    "the stored baseline only when that git call fails (no fetch added). "
+    "resolve_control_ref's own baseline read was deliberately left "
+    "untouched -- it pins POLICY CONTENT to the commit the candidate "
+    "cannot have edited, a different purpose than diff-base scoping. New "
+    "regression test builds a repo + bare origin, rebases a candidate "
+    "worktree with its own non-policy commit onto an origin/main that "
+    "advanced with an unrelated authorized rubric change, and proves the "
+    "stale baseline alone false-positives while the fix returns no "
+    "flagged files. 311 passed, 1 skipped across every neighboring "
+    "control_plane/gate-adjudicator/dirty-judge suite."
 )
