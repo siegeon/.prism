@@ -22,7 +22,10 @@ _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 _SRC = _SERVICE_ROOT / "prism_service" / "web" / "src"
 _INDEX_CSS = _SRC / "index.css"
-_UNDERSTAND_PAGE = _SRC / "pages" / "UnderstandPage.tsx"
+# Re-anchored to OntologyPage.tsx (task eca23a10-2922-4b4d-b092-83b1d1d4c082):
+# the Ontology entry point moved off UnderstandPage's Concepts/Ontology
+# toggle onto its own /ontology page.
+_ONTOLOGY_PAGE = _SRC / "pages" / "OntologyPage.tsx"
 
 
 def _read(p: Path) -> str:
@@ -164,12 +167,13 @@ def test_api_serves_persisted_rows_and_rebuilds(project):
 
 
 # ---------------------------------------------------------------------------
-# AC-4: UnderstandPage renders an Ontology entry point with Subsume's
+# AC-4: OntologyPage renders an Ontology entry point with Subsume's
 # shape-carries-kind primitives, on additive tokens, PRISM fonts untouched.
+# Re-anchored from UnderstandPage to OntologyPage (task eca23a10).
 # ---------------------------------------------------------------------------
 
-def test_understand_page_renders_ontology_entry_point():
-    page = _read(_UNDERSTAND_PAGE)
+def test_ontology_page_renders_ontology_entry_point():
+    page = _read(_ONTOLOGY_PAGE)
     assert "OntologyPanel" in page
     assert '"Ontology"' in page or "'Ontology'" in page
 
