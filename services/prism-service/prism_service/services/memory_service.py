@@ -510,13 +510,17 @@ class MemoryService:
             entry_map[e.id] = e
 
         results = []
+        seen: set[str] = set()
         for hit in hits:
             doc_id = hit.get("doc_id", "")
-            # doc_id format: memory/{domain}/{mx-id}::main
-            parts = doc_id.replace("::main", "").split("/")
+            # doc_id format: memory/{domain}/{mx-id}::main or
+            # memory/{domain}/{mx-id}::win_N (sliding-window chunk of a
+            # long description). Strip ANY chunk suffix, not just ::main.
+            parts = doc_id.split("::", 1)[0].split("/")
             if len(parts) >= 3:
                 entry_id = parts[-1]
-                if entry_id in entry_map:
+                if entry_id in entry_map and entry_id not in seen:
+                    seen.add(entry_id)
                     results.append(entry_map[entry_id])
         return results
 
