@@ -68,8 +68,24 @@ def _provider_instances() -> list[str]:
     return list(PROVIDERS) + list(_EXTRA_PROVIDERS)
 
 
-def _queue_item_instances(project: str) -> list[tuple[str, str]]:
-    """QueueItem <- tasks: (id, title) pairs -- one instance per task."""
+def _queue_item_instances(project: str) -> list[tuple[str, str, str]]:
+    """QueueItem <- SIGNALS (task 785bb4ce, owner: the Queue is where
+    signals arrive, not tasks): (id, label, state) triples, one instance
+    per signal. Task moved to its own class below (`_task_instances`) so
+    nothing that used to live under QueueItem is lost."""
+    from prism_service.services.signal_store import SignalStore
+
+    store = SignalStore(project)
+    try:
+        signals = store.list(limit=2000)
+    finally:
+        store.close()
+    return [(s.id, s.subject or s.channel or s.id, s.state) for s in signals]
+
+
+def _task_instances(project: str) -> list[tuple[str, str]]:
+    """Task <- tasks: (id, title) pairs -- its own class (task 785bb4ce),
+    split out of QueueItem so real task rows are still projected."""
     ctx = get_project(project)
     return [(t.id, t.title) for t in ctx.task_svc.list()]
 
@@ -197,8 +213,17 @@ def rebuild(project: str) -> dict:
                _provider_instances())
 
     qi = _queue_item_instances(project)
-    _add_class(classes, instances, "QueueItem", "class", "tasks",
-               [title for _, title in qi], refs=[tid for tid, _ in qi])
+    # ontology_instances has no `state` column yet (task 785bb4ce) -- state
+    # is carried inline in the label until the sibling RDF-graph epic lands
+    # a real property for it.
+    _add_class(classes, instances, "QueueItem", "class", "signals",
+               [f"{label} · {state}" for _, label, state in qi],
+               refs=[sid for sid, _, _ in qi])
+
+    task_rows = _task_instances(project)
+    _add_class(classes, instances, "Task", "class", "tasks",
+               [title for _, title in task_rows],
+               refs=[tid for tid, _ in task_rows])
 
     docs = _document_paths(project)
     _add_class(classes, instances, "Document", "class", "brain", docs)

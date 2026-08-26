@@ -47,7 +47,34 @@ def post_signal(body: SignalCreate, project: str = Query("default")) -> dict:
         signal.arrived_at = body.arrived_at
     store = SignalStore(project)
     store.create(signal)
+    _resolve_best_effort(store, project, signal)
     return {"signal": signal.__dict__}
+
+
+# ── Ontology resolution (task 785bb4ce) ─────────────────────────────────────
+# Kept to a small, separate block so it merges cleanly alongside the sibling
+# queue-page slice's own additions (POST .../promote, .../drop) to this file.
+
+def _resolve_best_effort(store: SignalStore, project: str, signal: Signal) -> None:
+    """Resolve `signal` against the ontology and persist matches. Never
+    raises -- a resolver failure must not fail signal intake."""
+    try:
+        from prism_service.services.signal_resolver import resolve as resolve_signal
+        signal.matches = resolve_signal(project, signal)
+        store.update(signal.id, matches=signal.matches)
+    except Exception:
+        pass
+
+
+@router.post("/{signal_id}/resolve")
+def post_signal_resolve(signal_id: str, project: str = Query("default")) -> dict:
+    store = SignalStore(project)
+    signal = store.get(signal_id)
+    if signal is None:
+        raise HTTPException(status_code=404, detail="signal not found")
+    _resolve_best_effort(store, project, signal)
+    updated = store.get(signal_id)
+    return {"signal": updated.__dict__}
 
 
 @router.get("")
