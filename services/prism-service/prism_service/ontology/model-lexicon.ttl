@@ -1,0 +1,108 @@
+# prism_service/ontology/model-lexicon.ttl — the lexicon of canonical
+# terms (task 2ee65e14, epic df0eed4a, owner: "tasks converge on the
+# ontology's standard language"). A SEPARATE file from model.ttl,
+# loaded into the SAME shared TBox named graph by
+# services/ontology_graph.OntologyGraph.load_model(), which globs every
+# ontology/model-*.ttl alongside model.ttl.
+#
+# o:Term already exists in model.ttl as "a vocabulary word used across
+# the project, with its meaning" — this file populates it with the
+# canonical terms services/lexicon.py reads to align free text (owner
+# decision 2026-08-26: the act is called ALIGN, not converge).
+# o:altLabel names a synonym people actually write; o:denotes points at
+# the real domain class the term names, when one exists. A term whose
+# concept has no matching o:<Class> in the model carries no o:denotes,
+# rather than inventing a class for it.
+
+@prefix o: <urn:prism:onto:> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+o:altLabel a rdf:Property ; rdfs:domain o:Term ; rdfs:label "altLabel" ;
+    rdfs:comment "An alternate label people write for the term." .
+o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
+    rdfs:label "denotes" ;
+    rdfs:comment "The class the term names." .
+
+<urn:prism:onto:term/task> a o:Term ;
+    rdfs:label "Task" ;
+    rdfs:comment "A tracked unit of work with an owner and a status." ;
+    o:altLabel "ticket", "work item", "story", "card", "todo" ;
+    o:denotes o:Task .
+
+<urn:prism:onto:term/pull-request> a o:Term ;
+    rdfs:label "PullRequest" ;
+    rdfs:comment "A proposed code change under review for merge." ;
+    o:altLabel "PR", "pull request", "merge request", "MR" ;
+    o:denotes o:PullRequest .
+
+<urn:prism:onto:term/signal> a o:Term ;
+    rdfs:label "Signal" ;
+    rdfs:comment "An item that may become a task after triage." ;
+    o:altLabel "queue item", "inbox item", "incoming message" ;
+    o:denotes o:Signal .
+
+<urn:prism:onto:term/channel> a o:Term ;
+    rdfs:label "Channel" ;
+    rdfs:comment "Where a task or signal arrived from." ;
+    o:altLabel "source channel", "intake channel" ;
+    o:denotes o:Channel .
+
+<urn:prism:onto:term/workflow> a o:Term ;
+    rdfs:label "Workflow" ;
+    rdfs:comment "The named list of steps that drives one task." ;
+    o:altLabel "pipeline", "agent flow", "step list" .
+
+<urn:prism:onto:term/gate> a o:Term ;
+    rdfs:label "Gate" ;
+    rdfs:comment "A checkpoint where a distinct actor decides to proceed." ;
+    o:altLabel "checkpoint", "approval gate", "sign-off" .
+
+<urn:prism:onto:term/oracle> a o:Term ;
+    rdfs:label "Oracle" ;
+    rdfs:comment "The proof condition a task must satisfy to count as done." ;
+    o:altLabel "acceptance test", "proof condition" .
+
+<urn:prism:onto:term/evidence> a o:Term ;
+    rdfs:label "Evidence" ;
+    rdfs:comment "The proof a task presents to close its gate." ;
+    o:altLabel "proof", "receipt", "evidence packet" .
+
+<urn:prism:onto:term/concept> a o:Term ;
+    rdfs:label "Concept" ;
+    rdfs:comment "A curated memory entry worth remembering." ;
+    o:altLabel "memory", "memory entry", "expertise entry" ;
+    o:denotes o:Concept .
+
+<urn:prism:onto:term/decision> a o:Term ;
+    rdfs:label "Decision" ;
+    rdfs:comment "A choice with a reason that others should follow." ;
+    o:altLabel "ADR", "architecture decision" ;
+    o:denotes o:Decision .
+
+<urn:prism:onto:term/document> a o:Term ;
+    rdfs:label "Document" ;
+    rdfs:comment "A file that work produces or references." ;
+    o:altLabel "doc", "write-up" ;
+    o:denotes o:Document .
+
+<urn:prism:onto:term/agent> a o:Term ;
+    rdfs:label "Agent" ;
+    rdfs:comment "A catalog entry for one person, team, or automated worker." ;
+    o:altLabel "bot", "assistant" ;
+    o:denotes o:Agent .
+
+<urn:prism:onto:term/session> a o:Term ;
+    rdfs:label "Session" ;
+    rdfs:comment "One continuous span of work by an agent or a person." ;
+    o:altLabel "chat session", "drive session" .
+
+<urn:prism:onto:term/worktree> a o:Term ;
+    rdfs:label "Worktree" ;
+    rdfs:comment "An isolated checkout where one task's changes live." ;
+    o:altLabel "workspace checkout", "sandbox checkout" .
+
+<urn:prism:onto:term/epic> a o:Term ;
+    rdfs:label "Epic" ;
+    rdfs:comment "A parent task that groups smaller child tasks." ;
+    o:altLabel "parent task", "umbrella task" .

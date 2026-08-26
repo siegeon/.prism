@@ -671,25 +671,46 @@ def check(text: str, mode: str = "flavored") -> list[Finding]:
 
 
 def apply(text: str, mode: str = "flavored") -> tuple[str, list[Finding]]:
-    """Run normalize, then check the result. Returns the fixed text and
-    the findings that remain after the safe fixes ran."""
+    """Run normalize, then the lexicon aligner (task 2ee65e14 —
+    services.lexicon.align swaps a synonym for the ontology's canonical
+    term, e.g. "ticket" -> "Task"; owner decision 2026-08-26: the act is
+    called ALIGN, not converge), then check the result. Returns the
+    fully fixed text and the findings that remain.
+
+    The lexicon import is local, not module-level: services.lexicon
+    imports ste's own _protected_spans/_segments to skip code, URLs,
+    and quoted text, so a top-level import here would be circular.
+    """
     fixed_text, _rules = normalize(text, mode=mode)
-    findings = check(fixed_text, mode=mode)
-    return fixed_text, findings
+    from prism_service.services import lexicon
+    aligned_text, _applied = lexicon.align(fixed_text)
+    findings = check(aligned_text, mode=mode)
+    return aligned_text, findings
 
 
 def style_block(
     fields: dict[str, tuple[list[str], list[Finding]]]
+    | dict[str, tuple[list[str], list[Finding], list[dict]]]
 ) -> dict:
-    """Pack a per-field (rules, findings) report into one dict a UI or
-    an API response can render directly:
-    {"fixed": {field: [rule, ...]}, "findings": [{field, rule, message,
-    excerpt}, ...]}. A field with no applied rules is left out of
-    "fixed"; a field with no findings contributes nothing to
-    "findings"."""
+    """Pack a per-field report into one dict a UI or an API response can
+    render directly: {"fixed": {field: [rule, ...]}, "findings":
+    [{field, rule, message, excerpt}, ...], "aligned": [{field, from,
+    to}, ...]}. A field with no applied rules is left out of "fixed"; a
+    field with no findings contributes nothing to "findings"; a field
+    with no lexicon replacements contributes nothing to "aligned".
+
+    Each field's value is a (rules, findings) pair, or a (rules,
+    findings, aligned) triple when the caller also ran
+    services.lexicon.align on that field (task 2ee65e14) — the 2-tuple
+    form stays valid so an existing caller (MemoryService) does not
+    have to change.
+    """
     fixed: dict[str, list[str]] = {}
     findings_out: list[dict] = []
-    for field_name, (rules, findings) in fields.items():
+    aligned_out: list[dict] = []
+    for field_name, value in fields.items():
+        rules, findings = value[0], value[1]
+        aligned = value[2] if len(value) > 2 else []
         if rules:
             fixed[field_name] = list(rules)
         for f in findings:
@@ -699,4 +720,10 @@ def style_block(
                 "message": f.message,
                 "excerpt": f.excerpt,
             })
-    return {"fixed": fixed, "findings": findings_out}
+        for c in aligned:
+            aligned_out.append({
+                "field": field_name,
+                "from": c["from"],
+                "to": c["to"],
+            })
+    return {"fixed": fixed, "findings": findings_out, "aligned": aligned_out}

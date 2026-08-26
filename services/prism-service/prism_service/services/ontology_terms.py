@@ -15,6 +15,8 @@ from prism_service.models.signal import SIGNAL_STATES
 from prism_service.models.task import CHANNELS, PROOF_TYPES, STATUSES
 from prism_service.models.workflow import WORKFLOWS
 from prism_service.project_context import get_project
+from prism_service.services import lexicon
+from prism_service.services import ontology_graph
 from prism_service.services.signal_store import SignalStore
 
 # Declared elsewhere as inline comments, not as a named tuple (task.py's
@@ -42,6 +44,37 @@ _COMMENTS = {
     "ask": "What kind of request a signal is asking for.",
     "gate_state": "Whether a task's current gate has been decided.",
 }
+
+
+def _lexicon_vocabulary(project: str) -> dict:
+    """The lexicon vocabulary (task 2ee65e14): one row per canonical
+    term, carrying the synonyms it replaces and the count of real
+    instances of the class it denotes — 0 when the term denotes no
+    class, or when this project has no ontology graph yet (a pure read
+    must never create one, per ontology_graph.open_if_exists)."""
+    og = ontology_graph.open_if_exists(project)
+
+    def _count(denotes: str) -> int:
+        if not denotes or og is None:
+            return 0
+        return og._count(denotes)
+
+    rows = []
+    for term in lexicon.load_lexicon():
+        count = _count(term.denotes)
+        rows.append({
+            "value": term.label,
+            "count": count,
+            "in_use": count > 0,
+            "comment": term.definition,
+            "synonyms": list(term.alt_labels),
+            "denotes": term.denotes,
+        })
+    return {
+        "name": "lexicon",
+        "comment": "Canonical terms and the synonyms they replace.",
+        "terms": rows,
+    }
 
 
 def _rows(declared: tuple[str, ...], counts: Counter) -> list[dict]:
@@ -97,6 +130,11 @@ def terms(project: str) -> dict:
         {"name": name, "comment": _COMMENTS[name], "terms": _rows(declared, counts)}
         for name, declared, counts in vocab_specs
     ]
+    # The lexicon vocabulary (task 2ee65e14) is a separate shape (definition
+    # + synonyms + denoted class per term) — real code vocabularies above
+    # never carry those, so it is appended rather than folded into
+    # vocab_specs's declared/counts machinery.
+    vocabularies.append(_lexicon_vocabulary(project))
     held_back: list[dict] = []
     for name, declared, counts in vocab_specs:
         held_back.extend(_held_back(name, declared, counts))

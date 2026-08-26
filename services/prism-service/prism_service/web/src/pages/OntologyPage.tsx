@@ -62,7 +62,13 @@ type RulesPayload = { rules: Rule[]; need_decision: number; total: number };
 type RecordsClass = { id: string; name: string; count: number; sample: string[] };
 type RecordsPayload = { things: number; connections: number; values: number; classes: RecordsClass[] };
 
-type Term = { value: string; in_use: boolean; count: number };
+// The lexicon vocabulary's terms (task 2ee65e14) carry a definition and
+// the synonyms they replace, on top of the shared value/count shape
+// every other vocabulary's terms already carry.
+type Term = {
+  value: string; in_use: boolean; count: number;
+  comment?: string; synonyms?: string[]; denotes?: string;
+};
 type Vocabulary = { name: string; comment: string; terms: Term[] };
 type HeldBack = { vocabulary: string; value: string; count: number };
 type TermsPayload = { vocabularies: Vocabulary[]; held_back: HeldBack[] };
@@ -549,15 +555,33 @@ function TermsTab({ data, error }: { data: TermsPayload | null; error: string | 
                 </div>
                 <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
                   {v.terms.map((t) => (
-                    <span
-                      key={t.value}
-                      className="text-2xs px-2.5 py-0.5 rounded-full border"
-                      style={t.in_use
-                        ? { borderColor: "var(--social)", color: "var(--social)" }
-                        : { borderColor: "var(--border-default)", color: "var(--text-muted)" }}
-                    >
-                      {t.value}
-                    </span>
+                    t.synonyms ? (
+                      <div key={t.value} className="text-2xs px-2.5 py-1 rounded border max-w-full"
+                        style={t.in_use
+                          ? { borderColor: "var(--social)", color: "var(--social)" }
+                          : { borderColor: "var(--border-default)", color: "var(--text-muted)" }}
+                      >
+                        <div className="font-mono">{t.value}</div>
+                        {t.comment && (
+                          <div className="text-[11px] text-[color:var(--text-secondary)] font-sans">{t.comment}</div>
+                        )}
+                        {t.synonyms.length > 0 && (
+                          <div className="text-[11px] text-[color:var(--text-muted)] font-sans italic">
+                            also: {t.synonyms.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <span
+                        key={t.value}
+                        className="text-2xs px-2.5 py-0.5 rounded-full border"
+                        style={t.in_use
+                          ? { borderColor: "var(--social)", color: "var(--social)" }
+                          : { borderColor: "var(--border-default)", color: "var(--text-muted)" }}
+                      >
+                        {t.value}
+                      </span>
+                    )
                   ))}
                 </div>
                 <span className="text-2xs text-[color:var(--text-muted)] shrink-0">{v.terms.length} terms</span>

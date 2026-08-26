@@ -337,3 +337,38 @@ o:text-is-plain a sh:SPARQLConstraint ;
             FILTER(REGEX(?t, ";|n't\\\\b|\\\\b(it|that|what|there)'s\\\\b|'re\\\\b|'ll\\\\b|'ve\\\\b|\\\\bI'm\\\\b|\\\\b(seamless(ly)?|robust|powerful|cutting-edge|effortless(ly)?|blazing-fast)\\\\b", "i"))
         }
     """ .
+
+# ---------------------------------------------------------------------
+# text-uses-canonical-terms — a task or decision's label/comment carries
+# a lexicon synonym where a canonical term (model-lexicon.ttl, task
+# 2ee65e14) already names the same thing. Two target shapes share one
+# SPARQLConstraint, the same shape text-is-plain uses across its four
+# classes. The select is DYNAMIC over the lexicon itself (o:Term/
+# o:altLabel), never a hand-kept word list, so a new term in the
+# lexicon is enforced here for free. The trailing "s?" tolerates a
+# plain plural of the synonym ("tickets" as well as "ticket") since the
+# lexicon stores only the singular alt label.
+# ---------------------------------------------------------------------
+
+o:text-uses-canonical-terms-task.target a sh:NodeShape ;
+    sh:targetClass o:Task ;
+    sh:sparql o:text-uses-canonical-terms .
+
+o:text-uses-canonical-terms-decision.target a sh:NodeShape ;
+    sh:targetClass o:Decision ;
+    sh:sparql o:text-uses-canonical-terms .
+
+o:text-uses-canonical-terms a sh:SPARQLConstraint ;
+    rdfs:comment "A synonym in free text should read as the term the lexicon already names." ;
+    sh:name "Every description uses the canonical term" ;
+    sh:description "A task or decision uses a lexicon synonym where a canonical term already exists." ;
+    sh:message "text uses a synonym where the lexicon has a canonical term" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this rdfs:label|rdfs:comment ?c .
+            ?t a o:Term ; o:altLabel ?alt .
+            FILTER(REGEX(?c, CONCAT("\\\\b", ?alt, "s?\\\\b"), "i"))
+        }
+    """ .
