@@ -341,7 +341,8 @@ class OntologyGraph:
     def rebuild(self, rows: dict | None = None, *,
                 agent_descriptions: dict[str, str] | None = None,
                 signal_arrived_at: dict[str, str] | None = None,
-                signal_enrichment: dict[str, dict] | None = None) -> dict:
+                signal_enrichment: dict[str, dict] | None = None,
+                signal_body: dict[str, str] | None = None) -> dict:
         """Build the ABox from the SAME real rows ontology_prototype_
         projection reads (gather(project), reused rather than re-queried
         when the caller already has it) and replace the named ABox graph
@@ -350,12 +351,13 @@ class OntologyGraph:
         {"total_triples", "per_class"} — triple counts per catalog class,
         read straight back off the store after the swap.
 
-        agent_descriptions/signal_arrived_at/signal_enrichment (task
-        8eeb3e65's skill-description-* and flagged-signal-is-placed rules;
-        task 31b737fb's aboutTicket/aboutCode/askedBy/raises joins): real
-        data gather()'s own rows don't carry, fetched independently by
-        default (self._agent_descriptions/_signal_arrived_at/
-        _signal_enrichment) — never fabricated; callers (tests) may pass
+        agent_descriptions/signal_arrived_at/signal_enrichment/signal_body
+        (task 8eeb3e65's skill-description-* and flagged-signal-is-placed
+        rules; task 31b737fb's aboutTicket/aboutCode/askedBy/raises joins;
+        task ed034701's rdfs:comment on o:Signal): real data gather()'s
+        own rows don't carry, fetched independently by default (self.
+        _agent_descriptions/_signal_arrived_at/_signal_enrichment/
+        _signal_body) — never fabricated; callers (tests) may pass
         explicit dicts to control a fixture."""
         if rows is None:
             from prism_service.services import ontology_prototype_projection as proj
@@ -366,6 +368,8 @@ class OntologyGraph:
             signal_arrived_at = self._signal_arrived_at()
         if signal_enrichment is None:
             signal_enrichment = self._signal_enrichment()
+        if signal_body is None:
+            signal_body = self._signal_body()
 
         import rdflib
 
@@ -382,7 +386,7 @@ class OntologyGraph:
                                               agent_descriptions)
         self._emit_tasks(g, rows, U, CLS, RDF, RDFS)
         self._emit_signals(g, rows, U, CLS, RDF, RDFS, signal_arrived_at,
-                            signal_enrichment)
+                            signal_enrichment, signal_body)
         self._emit_documents_folders(g, rows, U, CLS, RDF, RDFS)
         self._emit_code_graph(g, rows, U, CLS, RDF, RDFS)
         self._emit_workflow_steps(g, U, CLS, RDF, RDFS)
@@ -485,11 +489,14 @@ class OntologyGraph:
     @staticmethod
     def _emit_signals(g, rows, U, CLS, RDF, RDFS,
                        signal_arrived_at: dict[str, str],
-                       signal_enrichment: dict[str, dict] | None = None) -> None:
+                       signal_enrichment: dict[str, dict] | None = None,
+                       signal_body: dict[str, str] | None = None) -> None:
         """Signal rows -> o:Signal (rdfs:subClassOf o:QueueItem in model.ttl,
         task 785bb4ce: the Queue holds SIGNALS, not tasks), with
         o:arrivedVia -> its o:Channel, o:state as a literal, o:arrivedAt
-        (task 8eeb3e65's flagged-signal-is-placed rule) when known, and
+        (task 8eeb3e65's flagged-signal-is-placed rule) when known,
+        rdfs:comment for its aligned body (task ed034701, mirrors
+        _emit_tasks projecting a task's description as rdfs:comment), and
         o:becameTask -> the o:Task it turned into once the owner acted.
         task 31b737fb: also projects the signal's persisted parse()
         Extraction (matches['extraction']) as aboutTicket/aboutCode/
@@ -498,11 +505,15 @@ class OntologyGraph:
         import rdflib
 
         signal_enrichment = signal_enrichment or {}
+        signal_body = signal_body or {}
         for s in rows.get("signals", []):
             u = U("signal", s["id"])
             g.add((u, RDF.type, CLS("Signal")))
             g.add((u, RDFS.label, rdflib.Literal(s["label"])))
             g.add((u, CLS("state"), rdflib.Literal(s.get("state") or "open")))
+            body = str(signal_body.get(s["id"]) or "").strip()
+            if body:
+                g.add((u, RDFS.comment, rdflib.Literal(body)))
             at = signal_arrived_at.get(s["id"])
             if at:
                 g.add((u, CLS("arrivedAt"),
@@ -585,6 +596,26 @@ class OntologyGraph:
             if deadlines:
                 g.add((au, CLS("dueBy"),
                        rdflib.Literal(deadlines[0], datatype=rdflib.XSD.date)))
+
+    def _signal_body(self) -> dict[str, str]:
+        """Signal id -> its ALIGNED body text (task ed034701), off the
+        real SignalStore (gather()'s own signal rows carry neither body
+        nor aligned_body) -- falls back to the raw body when a signal
+        predates alignment or the normaliser failed on it. Used by
+        _emit_signals to set rdfs:comment on the o:Signal node, the same
+        way _emit_tasks projects a task's description. Best effort: {}
+        -> no rdfs:comment emitted, same discipline as
+        _signal_arrived_at."""
+        try:
+            from prism_service.services.signal_store import SignalStore
+            store = SignalStore(self.project)
+            try:
+                return {s.id: (s.aligned_body or s.body)
+                        for s in store.list(limit=2000)}
+            finally:
+                store.close()
+        except Exception:
+            return {}
 
     def _signal_enrichment(self) -> dict[str, dict]:
         """Signal id -> its full persisted matches dict, off the real

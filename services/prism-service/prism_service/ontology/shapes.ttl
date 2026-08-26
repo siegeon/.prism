@@ -325,6 +325,12 @@ o:text-is-plain-agent.target a sh:NodeShape ;
     sh:targetClass o:Agent ;
     sh:sparql o:text-is-plain .
 
+# task ed034701: a signal's aligned body (services/ontology_graph.py
+# _emit_signals projects it as rdfs:comment) is free text too.
+o:text-is-plain-signal.target a sh:NodeShape ;
+    sh:targetClass o:Signal ;
+    sh:sparql o:text-is-plain .
+
 o:text-is-plain a sh:SPARQLConstraint ;
     rdfs:comment "A semicolon, a contraction, or a marketing adjective reads as prompt noise, not plain English." ;
     sh:name "Every description reads as plain English" ;
@@ -356,6 +362,14 @@ o:text-uses-canonical-terms-task.target a sh:NodeShape ;
 
 o:text-uses-canonical-terms-decision.target a sh:NodeShape ;
     sh:targetClass o:Decision ;
+    sh:sparql o:text-uses-canonical-terms .
+
+# task ed034701: a signal's aligned body already runs through
+# services.lexicon.align on arrival, so this should stay quiet on real
+# data -- it exists to catch a signal that predates alignment, or one
+# the normaliser failed on (stored with empty aligned fields).
+o:text-uses-canonical-terms-signal.target a sh:NodeShape ;
+    sh:targetClass o:Signal ;
     sh:sparql o:text-uses-canonical-terms .
 
 o:text-uses-canonical-terms a sh:SPARQLConstraint ;

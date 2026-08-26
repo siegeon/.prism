@@ -5,6 +5,11 @@ channel (slack, outlook, github, jira, mcp collectors...) and get resolved
 against the ontology. A signal is NOT a task -- it becomes one only when
 the owner acts in the app. This dataclass + its store (signal_store.py)
 are the walking skeleton: intake + list, nothing else.
+
+aligned_subject/aligned_body/style (task ed034701): SignalStore.create()
+runs the deterministic STE pipeline (services/ste.py) over subject/body
+and stores the result here. subject/body stay exactly as they arrived --
+the raw record never changes.
 """
 
 from __future__ import annotations
@@ -39,3 +44,12 @@ class Signal:
     # for this slice).
     matches: dict = field(default_factory=dict)
     drop_reason: str = ""
+    # Aligned text (task ed034701): the STE pipeline's output for
+    # subject/body. Empty until SignalStore.create() runs, or when the
+    # normaliser itself fails -- a normaliser bug must never drop a
+    # signal.
+    aligned_subject: str = ""
+    aligned_body: str = ""
+    # style_block() report for subject/body: {"fixed", "findings",
+    # "aligned"}. Round-trips as JSON text in the store.
+    style: dict = field(default_factory=dict)

@@ -68,7 +68,8 @@ def resolve(project: str, signal: Signal) -> dict[str, Any]:
     if code_reason:
         reasons["code"] = code_reason
     has_deadline = bool(extraction_dict.get("deadlines"))
-    ask = _classify_ask(signal.subject, signal.body, has_deadline=has_deadline)
+    match_subject, match_body = _match_text(signal)
+    ask = _classify_ask(match_subject, match_body, has_deadline=has_deadline)
     people, people_reason = _people(signal, extraction_dict)
     if people_reason:
         reasons["people"] = people_reason
@@ -136,6 +137,16 @@ def _tokens(text: str) -> set[str]:
             if t and t not in _STOPWORDS and len(t) > 2}
 
 
+def _match_text(signal: Signal) -> tuple[str, str]:
+    """(subject, body) to match against -- the ALIGNED text (task
+    ed034701) when SignalStore.create() produced it, else the raw text
+    as it arrived. A task titled with the lexicon's canonical term
+    ("Task") should still match a signal that arrived saying "ticket"."""
+    subject = signal.aligned_subject or signal.subject
+    body = signal.aligned_body or signal.body
+    return subject, body
+
+
 def _channel_match(signal: Signal) -> dict[str, Any]:
     from prism_service.models.task import CHANNELS
     return {"id": signal.channel, "known": signal.channel in CHANNELS}
@@ -169,8 +180,9 @@ def _related_tasks(project: str, signal: Signal,
 
     extracted_refs = _extraction_refs(extraction)
     tasks = get_project(project).task_svc.list()
-    subject_text = f"{signal.subject or ''} {signal.body or ''}".lower()
-    subject_tokens = _tokens(signal.subject)
+    match_subject, match_body = _match_text(signal)
+    subject_text = f"{match_subject} {match_body}".lower()
+    subject_tokens = _tokens(match_subject)
     title_tokens = {t.id: _tokens(t.title) for t in tasks}
     n = len(tasks)
     df: dict[str, int] = {}
@@ -228,7 +240,8 @@ def _related_tasks(project: str, signal: Signal,
 def _concepts(project: str, signal: Signal) -> tuple[list[dict], str]:
     """MemoryService.recall() -- memory_recall's own in-process dispatch
     target (mcp/tools.py calls the identical method)."""
-    query = f"{signal.subject or ''} {signal.body or ''}".strip()
+    match_subject, match_body = _match_text(signal)
+    query = f"{match_subject} {match_body}".strip()
     if not query:
         return [], "signal has no subject or body to search"
     try:
@@ -248,7 +261,8 @@ def _concepts(project: str, signal: Signal) -> tuple[list[dict], str]:
 def _code_matches(project: str, signal: Signal) -> tuple[list[dict], str]:
     """BrainService.search() -- brain_search's own in-process dispatch
     target (mcp/tools.py calls the identical method)."""
-    query = f"{signal.subject or ''} {signal.body or ''}".strip()
+    match_subject, match_body = _match_text(signal)
+    query = f"{match_subject} {match_body}".strip()
     if not query:
         return [], "signal has no subject or body to search"
     try:
