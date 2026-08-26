@@ -47,10 +47,150 @@ into the shape a UI or an API response can render directly.
 
 from __future__ import annotations
 
+import inspect
+import logging
 import re
 from dataclasses import dataclass
 
 MODES = ("strict", "flavored")
+
+# ----------------------------------------------------------------------
+# Coverage hook (task c7edf4e2, epic cc9a44c8 — "every text writer
+# registers with Align language and cannot drift"). A listener registers
+# with on_apply(callback); ste calls callback(mode, frames) every time it
+# actually normalises text, so a listener such as
+# services.language_alignment can prove which code paths run STE and
+# which do not.
+#
+# The listener fires from normalize() -- not, as the name might suggest,
+# only inside apply() -- because normalize() is the ONE function every
+# real write path in this codebase calls (TaskService._apply_ste calls it
+# once per field; MemoryService.store calls it once for description).
+# apply() itself calls normalize() as its first step, so apply() still
+# "invokes every listener" exactly as documented -- it just does so by
+# way of the same shared code path, instead of duplicating the call and
+# double-counting when a caller (a test, or the align-language dry-run
+# preview) uses apply() or normalize() directly.
+# ----------------------------------------------------------------------
+
+_LISTENERS: list = []
+
+
+def on_apply(callback) -> None:
+    """Register ``callback(mode, frames)`` to run after ste normalises a
+    piece of text. Not idempotent by id -- call once, e.g. at import time,
+    the way services.language_alignment does. A listener that raises is
+    caught and logged; it can never break a text write."""
+    _LISTENERS.append(callback)
+
+
+def _caller_frames(limit: int = 12) -> list[tuple[str, str, str, str]]:
+    """A short list of (module, function, tool_hint, project_hint) tuples
+    for the frames that called INTO ste, closest caller first. ste's own
+    frames are skipped, so a listener never sees "normalize"/"apply".
+
+    ``tool_hint`` is the frame's own local variable named ``name`` when it
+    holds a plain string -- this is how a caller can tell apart several
+    call shapes dispatched through ONE function (e.g. the MCP tool
+    dispatcher, which branches on ``if name == "task_create":`` rather
+    than calling a separate function per tool) without ste knowing
+    anything about MCP.
+
+    ``project_hint`` is the frame's own local variable named ``project``
+    or ``project_id`` when it holds a plain string, else the ``.project``
+    attribute of a local named ``self`` (a TaskService instance carries
+    one directly), else the ``.project`` attribute of ``self._task_svc``
+    (a MemoryService instance carries a TaskService there). Best-effort --
+    a frame that carries none of these leaves it empty."""
+    frames: list[tuple[str, str, str, str]] = []
+    try:
+        stack = inspect.stack()
+    except Exception:
+        return frames
+    try:
+        for record in stack:
+            module = record.frame.f_globals.get("__name__", "")
+            if module == __name__:
+                continue
+            function = record.function
+            local_vars = record.frame.f_locals
+            tool_hint = ""
+            try:
+                raw = local_vars.get("name")
+                if isinstance(raw, str):
+                    tool_hint = raw
+            except Exception:
+                pass
+            project_hint = _project_hint_from_locals(local_vars)
+            frames.append((module, function, tool_hint, project_hint))
+            if len(frames) >= limit:
+                break
+    finally:
+        del stack
+    return frames
+
+
+def _project_hint_from_locals(local_vars: dict) -> str:
+    for key in ("project", "project_id"):
+        try:
+            raw = local_vars.get(key)
+        except Exception:
+            raw = None
+        if isinstance(raw, str) and raw:
+            return raw
+    try:
+        owner = local_vars.get("self")
+    except Exception:
+        owner = None
+    if owner is not None:
+        project = getattr(owner, "project", None)
+        if isinstance(project, str) and project:
+            return project
+        project_id = getattr(owner, "project_id", None)
+        if isinstance(project_id, str) and project_id:
+            return project_id
+        task_svc = getattr(owner, "_task_svc", None)
+        project = getattr(task_svc, "project", None) if task_svc else None
+        if isinstance(project, str) and project:
+            return project
+    return ""
+
+
+def _notify_listeners(mode: str) -> None:
+    if not _LISTENERS:
+        return
+    frames = _caller_frames()
+    for callback in list(_LISTENERS):
+        try:
+            callback(mode, frames)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "an ste.on_apply listener raised; the write proceeds "
+                "unaffected.", exc_info=True)
+
+
+_bootstrapped = False
+
+
+def _ensure_coverage_listener_registered() -> None:
+    """Import services.language_alignment once, purely for its import-time
+    ``on_apply(...)`` side effect (task c7edf4e2). Lazy and local for the
+    same reason the lexicon import inside apply() below is local: a
+    top-level import here would be circular (language_alignment imports
+    ste). ste does not need language_alignment for its own logic -- this
+    bootstrap exists only so the coverage listener is registered before
+    the FIRST real write, without requiring every caller of normalize()
+    to import language_alignment itself first."""
+    global _bootstrapped
+    if _bootstrapped:
+        return
+    _bootstrapped = True
+    try:
+        from prism_service.services import language_alignment  # noqa: F401
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "could not register the align-language coverage listener",
+            exc_info=True)
 
 
 @dataclass(frozen=True)
@@ -384,6 +524,8 @@ def normalize(text: str, mode: str = "flavored") -> tuple[str, list[str]]:
             if rule not in applied_order:
                 applied_order.append(rule)
 
+    _ensure_coverage_listener_registered()
+    _notify_listeners(mode)
     return "".join(out_parts), applied_order
 
 
@@ -680,6 +822,14 @@ def apply(text: str, mode: str = "flavored") -> tuple[str, list[Finding]]:
     The lexicon import is local, not module-level: services.lexicon
     imports ste's own _protected_spans/_segments to skip code, URLs,
     and quoted text, so a top-level import here would be circular.
+
+    Any listener registered with on_apply (task c7edf4e2) already ran by
+    the time this returns -- normalize(), called below, is where the
+    listeners actually fire, since normalize() is the function every real
+    write path calls directly. apply() still "invokes every listener" as
+    documented; it just does so through the same shared call, rather than
+    firing a second time and double-counting a caller that already went
+    through normalize() on its own.
     """
     fixed_text, _rules = normalize(text, mode=mode)
     from prism_service.services import lexicon

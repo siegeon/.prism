@@ -1606,6 +1606,36 @@ export default function WorkflowsPage() {
                         </button>
                       );
                     })}
+                    {/* Ingestion paths (task c7edf4e2, epic cc9a44c8): only the
+                        align_language catalog entry carries `coverage` — the
+                        real write paths services.language_alignment has seen
+                        register STE, so "every text writer registers ... and
+                        cannot drift" is something a person can SEE, not just
+                        a claim in a docstring. Shown only while this entry is
+                        selected/expanded, same posture as its children above. */}
+                    {selected && workflow.coverage && workflow.coverage.length > 0 && (
+                      <div
+                        aria-label="Ingestion paths"
+                        className="mx-2 mb-2 mt-1 border border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-2 py-2"
+                      >
+                        <div className="px-1 pb-1 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] opacity-70">
+                          Ingestion paths
+                        </div>
+                        {workflow.coverage.map((row) => (
+                          <div
+                            key={row.path}
+                            className={`flex items-center gap-2 px-1 py-1 text-2xs ${row.known ? "text-[color:var(--nav-text)]" : "text-amber-400"}`}
+                            title={row.known ? "" : "This path has not been named in the coverage registry's label map yet."}
+                          >
+                            <span className="flex-1 truncate font-mono lowercase">{row.path}</span>
+                            <span className="shrink-0 font-mono opacity-80">{row.count}</span>
+                            <span className="shrink-0 font-mono opacity-60">
+                              {row.last_seen ? new Date(row.last_seen).toLocaleString() : "never"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
