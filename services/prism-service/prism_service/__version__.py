@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.80"
+PRISM_VERSION = "7.13.81"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6834,4 +6834,13 @@ PRISM_VERSION_NOTES += (
     "nested-bullet case. 124 rubric/gate/premise tests green, including "
     "the real story replayed through the fixed parser (all 9 ACs now "
     "correctly read as having oracles)."
+    "\n\n7.13.81: MemoryService._brain_recall dropped every Brain hit on a "
+    "sliding-window chunk of a long memory (doc_id ...::win_N) because it "
+    "stripped only the literal ::main suffix, so parts[-1] kept the ::win_N "
+    "tail and never matched entry_map. Now splits on the first '::' to "
+    "strip any chunk suffix, and dedupes multiple chunk hits for the same "
+    "entry_id so one long memory's windows do not crowd out other results. "
+    "New tests/unit/test_memory_recall_window_chunks.py pins both; 5/5 "
+    "green, neighbouring recall/activation-score/private-memory suites "
+    "unaffected."
 )
