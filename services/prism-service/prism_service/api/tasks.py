@@ -913,19 +913,29 @@ def get_task(task_id: str, project: str = Query("default"),
     return out
 
 
+_LINK_FIELDS = ("description", "oracle", "likely_misfire", "plan_doc",
+                "premise_notes", "completion_proof")
+
+
 @router.get("/{task_id}/links")
 def get_task_links(task_id: str, project: str = Query("default")) -> dict:
-    """Cross-clicking (task 6968cc39): every ontology-known entity this
-    task's description mentions, as entity_linker.link()'s non-overlapping
-    spans — one call so the task page doesn't hand-roll the SPARQL/regex
-    matching itself."""
+    """Cross-clicking (task 6968cc39, extended by task 2ec1e395): every
+    ontology-known entity this task's TEXT FIELDS mention, as
+    entity_linker.link()'s non-overlapping spans. `fields` carries spans
+    per field name (_LINK_FIELDS) so TaskDetailPage's oracle/plan/premise/
+    proof cards share ONE response instead of each hand-rolling their own
+    linker call — entity_linker's own index cache means these N link()
+    calls still cost only the FIRST request's SPARQL build, never one per
+    field. `spans` stays the bare description-only shape for old callers."""
     from prism_service.services import entity_linker
 
     svc = _svc(project)
     t = svc.get(task_id)
     if not t:
         raise HTTPException(404, "task not found")
-    return {"spans": entity_linker.link(project, t.description or "")}
+    fields = {name: entity_linker.link(project, getattr(t, name, "") or "")
+              for name in _LINK_FIELDS}
+    return {"spans": fields["description"], "fields": fields}
 
 
 @router.get("/{task_id}/trace")
