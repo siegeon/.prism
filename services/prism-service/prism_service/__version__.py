@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.61"
+PRISM_VERSION = "7.13.62"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6442,4 +6442,26 @@ PRISM_VERSION_NOTES += (
     "SPARQL box; the toggle inside Understand is gone. The RDF/SHACL "
     "rebuild of the ontology store itself (rdflib+pyshacl+owlrl+pyoxigraph, "
     "the Subsume stack) ships next."
+    "\n\n7.13.62: THE ONTOLOGY IS AN RDF GRAPH YOU CAN QUERY WITH SPARQL "
+    "(task 495d3a69, epic 3efbcd89 -- owner: 'use the ontology rules and "
+    "libraries we had in the subsume project'). New deps rdflib 7.6, "
+    "pyshacl 0.40, owlrl 7.6, pyoxigraph 0.5 (the prototype's exact stack). "
+    "prism_service/ontology/model.ttl is the TBox (urn:prism:onto:, 27 "
+    "classes with real subclass edges -- Party/Person/Group/OutsideParty, "
+    "Activity/Work/Ask/Task, QueueItem/Signal, Artifact/Folder/Document, "
+    "Code/Function/Class/Method/Module/Interface/Variable, Channel, Agent, "
+    "Provider, Skill, Script -- and 22 properties incl. arrivedVia, "
+    "becameTask, hasWorkflow and the code-graph edge kinds as relatesTo "
+    "sub-properties). services/ontology_graph.OntologyGraph is a per-project "
+    "pyoxigraph on-disk store (<data_dir>/ontology-graph/, one process-wide "
+    "handle per path -- RocksDB holds an exclusive lock) whose ABox is "
+    "rebuilt with rdflib from ONE gather() pass over the real rows and "
+    "replaced atomically in urn:prism:<project>/model; QueueItem instances "
+    "are o:Signal (the queue holds signals), Task is its own class. "
+    "GET /api/okf/ontology and /instances now answer from the graph via "
+    "SPARQL (the sqlite ontology.db is a thin cache, no longer a read path); "
+    "POST /api/okf/ontology/sparql runs SELECT/ASK with a bound limit -- "
+    "the /ontology page's Query box is live. MCP signal_post now resolves a "
+    "signal against the ontology on arrival like the REST create does. "
+    "SHACL shapes for the rules (pyshacl) are the next ship."
 )
