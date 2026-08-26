@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.64"
+PRISM_VERSION = "7.13.65"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6503,4 +6503,33 @@ PRISM_VERSION_NOTES += (
     "dependencies (and description) are editable after creation over MCP "
     "and PATCH, unknown update fields are refused loudly (task d67bca9f); "
     "web_dist_next (the Vite watch-build staging dir) is gitignored."
+    "\n\n7.13.65: THE ONTOLOGY GOVERNS INTAKE AND UNDERSTANDING (epic "
+    "3a652b3b; owner: 'make sure you are not overlooking anything in the "
+    "world of the python regex process when bringing in items off the "
+    "queue' and 'the ontology is respected throughout the system'). "
+    "INTAKE (task 31b737fb): services/signal_parse.py -- pydantic v2 "
+    "models with extra='allow' (unknown keys reported as drift, never "
+    "rejected), anchored regexes for Jira keys accepted ONLY when the "
+    "project key is known (PRISM_KNOWN_JIRA_PROJECTS + the Jira connector's "
+    "tracked projects; '10:00 AM-10:30' never becomes AM-10), GitHub PR/issue "
+    "refs, email addresses (people join on an ADDRESS, never a name), slack/"
+    "outlook permalinks as identity, deadlines resolved from arrived_at; "
+    "the enrichment gate validates every classifier output against the "
+    "vocabulary before it lands (held back with a reason otherwise); "
+    "vocab.json generated from the enums (python -m prism_service.ontology"
+    ".vocab --write/--check) with a drift test; the resolver matches tasks "
+    "on ticket keys/PR refs/permalinks; the graph carries aboutTicket/"
+    "aboutCode/askedBy/raises/dueBy with o:JiraIssue, o:PullRequest and the "
+    "five Ask subclasses; three new SHACL rules (jira-issue-known-project, "
+    "ask-names-a-person, signal-joins-on-address). UNDERSTANDING (task "
+    "f5352fa1): memory entries are in the graph as o:Decision/Pattern/"
+    "Convention/Failure under o:Concept with inDomain/cites/evidencedBy "
+    "(model-knowledge.ttl, shapes-knowledge.ttl: concept-names-its-domain, "
+    "concept-cites-only-known, decision-has-evidence); Understand's read "
+    "panel shows an 'In the ontology' strip (GET /api/okf/ontology/concept); "
+    "MCP memory_recall and brain_search results carry ontology_class; task "
+    "status and proof_type are validated on write against ONE vocabulary in "
+    "models.task (STATUSES incl. deleted/archived, PROOF_TYPES) that the "
+    "Terms tab now reads too. How-it-connects lists only object relations "
+    "between classes, counted in the project ABox."
 )
