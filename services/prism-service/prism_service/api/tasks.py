@@ -445,6 +445,28 @@ def next_task(project: str = Query("default")) -> dict:
     return {"next": _svc(project).next_task()}
 
 
+@router.post("/align-language")
+def trigger_align_language(
+    project: str = Query("default"), dry_run: bool = Query(True),
+) -> dict:
+    """Trigger the align-language workflow (task f07c9cea, owner rule
+    mx-f49a5c). A dry run (default) only previews: it creates no task and
+    writes nothing. dry_run=false always drives a real run through
+    services.language_alignment_worker.run_once_for(project, force=True)
+    — the SAME code path the daemon's own tick uses, so a person's click
+    and the daemon's own pass never diverge."""
+    from prism_service.services import language_alignment, language_alignment_worker
+
+    if dry_run:
+        report = language_alignment.align_language(project, apply=False)
+        return {"run_task_id": None, "report": report}
+    result = language_alignment_worker.run_once_for(project, force=True)
+    if "run_task_id" in result:
+        return {"run_task_id": result.get("run_task_id"),
+                "report": result.get("report")}
+    return {"run_task_id": None, "report": result}
+
+
 def _is_shipped_on_main(repo: str, task_id: str) -> bool:
     """Squash-safe shipped-ness: does a commit MESSAGE on origin/main carry
     the `[task:<id8>]` trailer? Reads commit messages on origin/main

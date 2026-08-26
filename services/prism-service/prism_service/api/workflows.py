@@ -109,6 +109,51 @@ TRIAGE_STEP_CONTENT = {
     "done": ("A decided item", "Close out triage for this item", "A triaged item"),
 }
 
+# Align-language workflow (task f07c9cea): step content for the catalog
+# entry, same role TRIAGE_STEP_CONTENT plays for triage — this workflow's
+# step ids (collect/align/verify/done) also are not in models.roles.
+# STEP_ROLES, so this dict again stands in for that persona lookup (see
+# _align_language_workflow below). No step here is a gate: the whole pass
+# is machine-run, per owner rule mx-f49a5c.
+ALIGN_LANGUAGE_STEP_CONTENT = {
+    "collect": (
+        "Every task in the project",
+        "Run a dry-run scan and count the tasks with loose language",
+        "A dry-run report: how many tasks would change, and why",
+    ),
+    "align": (
+        "The dry-run report",
+        "Rewrite each flagged task's free text into plain Simplified "
+        "Technical English through TaskService.update",
+        "The tasks actually changed, and the rule that fired on each one",
+    ),
+    "verify": (
+        "The tasks just aligned",
+        "Run the scan again and confirm no loose language remains",
+        "Rule counts from before and after, plus a clean second scan",
+    ),
+    "done": (
+        "A finished align-language pass",
+        "Close out this run",
+        "A completed align-language run",
+    ),
+}
+
+# Default align-language behaviour (task f07c9cea): every project starts
+# here until it calls provide_workflow_behavior("align_language", ...) to
+# override a field. Read by align_language_behavior_document below and by
+# services/language_alignment_worker.py (the daemon seat).
+DEFAULT_ALIGN_LANGUAGE_BEHAVIOR: dict = {
+    "enabled": True,
+    "mode": "apply",
+    "fields": [
+        "title", "description", "oracle", "likely_misfire", "stop_if",
+        "completion_proof", "premise_notes",
+    ],
+    "batch_size": 50,
+    "include_imported": True,
+}
+
 GATE_AUTHORITY = {
     "story_gate": (
         "Decided by an independent Steward — machine-adjudicable when the "
@@ -287,8 +332,40 @@ def _behavior_file(project: str, workflow_id: str) -> Path:
     return root / ".prism" / "behaviors" / f"{workflow_id}.json"
 
 
+def align_language_behavior_document(project: str) -> dict:
+    """The align-language workflow's current versioned behaviour for
+    `project`: DEFAULT_ALIGN_LANGUAGE_BEHAVIOR merged under whatever
+    .prism/behaviors/align_language.json (this project's own override
+    file, via _behavior_file) carries, plus its own behaviorVersion. A
+    missing or unreadable file reads as version 1 with every default
+    untouched -- never raises."""
+    path = _behavior_file(project, "align_language")
+    data: dict = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    document = dict(DEFAULT_ALIGN_LANGUAGE_BEHAVIOR)
+    for key in DEFAULT_ALIGN_LANGUAGE_BEHAVIOR:
+        if key in data:
+            document[key] = data[key]
+    try:
+        document["behaviorVersion"] = int(data.get("behaviorVersion") or 1)
+    except (TypeError, ValueError):
+        document["behaviorVersion"] = 1
+    return document
+
+
 def get_workflow_behavior(project: str, behavior_path: str = "validation") -> dict:
     workflow_id, _, step_id = behavior_path.strip("/").partition("/")
+    if workflow_id == "align_language":
+        # Flat behaviour, no child steps (unlike "validation/<step>" below).
+        if step_id:
+            raise HTTPException(
+                404, "the align_language behaviour has no child steps")
+        return {"path": workflow_id,
+                "behavior": align_language_behavior_document(project)}
     if workflow_id != "validation":
         raise HTTPException(404, "unknown workflow behavior")
     definition = ProjectWorkflow.model_validate(
@@ -308,6 +385,30 @@ def provide_workflow_behavior(
 ) -> dict:
     """Atomically provide a new child revision; siblings retain lineage."""
     workflow_id, separator, step_id = behavior_path.strip("/").partition("/")
+    if workflow_id == "align_language":
+        if separator or step_id:
+            raise HTTPException(
+                400, "the align_language behaviour has no child steps")
+        current = align_language_behavior_document(project)
+        if current["behaviorVersion"] != expected_version:
+            raise HTTPException(
+                409, f"behavior revision changed: expected "
+                     f"{expected_version}, current {current['behaviorVersion']}")
+        allowed = set(DEFAULT_ALIGN_LANGUAGE_BEHAVIOR)
+        unknown = set(behavior) - allowed
+        if unknown:
+            raise HTTPException(
+                422, f"unsupported behavior fields: {', '.join(sorted(unknown))}")
+        merged = dict(current)
+        merged.update({k: v for k, v in behavior.items() if k in allowed})
+        merged["behaviorVersion"] = current["behaviorVersion"] + 1
+        destination = _behavior_file(project, "align_language")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, destination)
+        return {"ok": True, "path": "align_language",
+                "version": merged["behaviorVersion"]}
     if workflow_id != "validation" or not separator or not step_id:
         raise HTTPException(400, "provide a child path such as validation/test")
     current = ProjectWorkflow.model_validate(
@@ -719,6 +820,49 @@ def _triage_workflow(project: str, svc=None) -> dict:
     }
 
 
+def _align_language_workflow(project: str, svc=None) -> dict:
+    """The align-language workflow's own catalog entry (task f07c9cea,
+    owner rule mx-f49a5c): a fourth, first-class entry beside conductor
+    and triage, built from models.workflow.WORKFLOWS["align_language"]
+    the same way _triage_workflow above builds triage's. Every step's
+    persona resolves off the step's own `agent` (falling back to "sm"),
+    and no step carries an `authority` string, because this workflow has
+    no gate — the whole pass is machine-run end to end."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    steps = []
+    for step in WORKFLOWS["align_language"]:
+        persona = step["agent"] or "sm"
+        content = ALIGN_LANGUAGE_STEP_CONTENT[step["id"]]
+        steps.append({
+            "id": step["id"],
+            "agent": step["agent"],
+            "type": step["type"],
+            "validation": step["validation"],
+            "persona": persona,
+            "persona_label": _persona_label(persona),
+            "purpose": step["id"].replace("_", " ").capitalize(),
+            "input": content[0],
+            "action": content[1],
+            "output": content[2],
+            "authority": "",
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
+    return {
+        "id": "align_language",
+        "name": "Align language",
+        "description": (
+            "Bring loose task text into plain Simplified Technical "
+            "English — a fully machine-run pass, no owner stop"
+        ),
+        "steps": steps,
+        "bots": [],
+        "occupancy": occupancy,
+    }
+
+
 @router.get("")
 def get_workflows(project: str = Query("default")) -> dict:
     """The conductor FSM, the bots that drive it, and who is standing where."""
@@ -807,7 +951,11 @@ def get_workflows(project: str = Query("default")) -> dict:
     # conductor -- not one of conductor's own nested capabilities, so it
     # gets no parent_id, same as conductor and validation above.
     triage = _triage_workflow(project, svc=_svc)
-    catalog = [conductor, validation, triage, *conductor_behaviors]
+    # align_language (task f07c9cea): a fifth root workflow, same posture
+    # as triage above -- no parent_id, since it is not one of conductor's
+    # own nested capabilities.
+    align_language = _align_language_workflow(project, svc=_svc)
+    catalog = [conductor, validation, triage, align_language, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)

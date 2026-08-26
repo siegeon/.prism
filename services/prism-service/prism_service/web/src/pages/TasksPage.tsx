@@ -4,6 +4,8 @@ import {
   api,
   listWorkspaces,
   listIntegrationEntities,
+  getOntologyRules,
+  alignLanguage,
   type ExternalEntity,
 } from "@/lib/api";
 import { useProject } from "@/lib/project";
@@ -324,8 +326,113 @@ export default function TasksPage() {
     api.post(`/api/tasks/${it.id}/conductor/work?project=${project}`, {}).catch(() => {});
   }, [project]);
 
+  // Align-language backlog banner (task f07c9cea, owner rule mx-f49a5c):
+  // the count is the number of DISTINCT task focus IRIs the two ontology
+  // rules (text-is-plain, text-uses-canonical-terms — the latter may not
+  // exist yet, and simply contributes nothing) flag. The button is a thin
+  // trigger over the SAME server-driven run the daemon's own tick uses
+  // (services/language_alignment_worker.py:run_once_for) — it never
+  // rewrites anything client-side.
+  const [alignBacklog, setAlignBacklog] = useState<number | null>(null);
+  const [alignPreview, setAlignPreview] = useState<number | null>(null);
+  const [alignRunTaskId, setAlignRunTaskId] = useState<string | null>(null);
+  const [alignBusy, setAlignBusy] = useState(false);
+
+  const loadAlignBacklog = useCallback(() => {
+    getOntologyRules(project)
+      .then((d) => {
+        const taskIris = new Set<string>();
+        for (const rule of d.rules ?? []) {
+          if (rule.name === "text-is-plain" || rule.name === "text-uses-canonical-terms") {
+            for (const f of rule.focus ?? []) {
+              if (f.iri && f.iri.includes("/task/")) taskIris.add(f.iri);
+            }
+          }
+        }
+        setAlignBacklog(taskIris.size);
+      })
+      .catch(() => setAlignBacklog(null));
+  }, [project]);
+
+  useEffect(() => { loadAlignBacklog(); }, [loadAlignBacklog]);
+
+  // First click: dry run, just a preview. Second click: the real run —
+  // creates and drives a visible task, then refreshes the backlog count.
+  const onAlignLanguageClick = useCallback(() => {
+    if (alignBusy) return;
+    setAlignBusy(true);
+    if (alignPreview === null) {
+      alignLanguage(project, true)
+        .then((res) => setAlignPreview(res.report.would_change ?? 0))
+        .catch(() => setAlignPreview(0))
+        .finally(() => setAlignBusy(false));
+    } else {
+      alignLanguage(project, false)
+        .then((res) => {
+          setAlignRunTaskId(res.run_task_id ?? null);
+          setAlignPreview(null);
+          loadAlignBacklog();
+        })
+        .catch(() => {})
+        .finally(() => setAlignBusy(false));
+    }
+  }, [alignBusy, alignPreview, project, loadAlignBacklog]);
+
   return (
     <Page>
+      {alignBacklog !== null && alignBacklog > 0 && (
+        <div
+          data-align-language-banner
+          className="flex flex-wrap items-center gap-1.5 mb-2 px-3 py-2 rounded-md border border-[color:var(--border-default)]"
+          style={{ background: "var(--surface-1)" }}
+        >
+          {alignPreview === null ? (
+            <>
+              <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                {alignBacklog} tasks use language not yet aligned with the ontology
+              </span>
+              <span aria-hidden="true" className="text-xs" style={{ color: "var(--text-muted)" }}>·</span>
+              <button
+                type="button"
+                data-align-language-button
+                disabled={alignBusy}
+                onClick={onAlignLanguageClick}
+                className="text-xs font-semibold underline decoration-dotted underline-offset-2"
+                style={{ color: "var(--accent-teal-fg)" }}
+              >
+                Align language
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+                {alignPreview} tasks would change
+              </span>
+              <span aria-hidden="true" className="text-xs" style={{ color: "var(--text-muted)" }}>—</span>
+              <button
+                type="button"
+                data-align-language-button
+                disabled={alignBusy}
+                onClick={onAlignLanguageClick}
+                className="text-xs font-semibold underline decoration-dotted underline-offset-2"
+                style={{ color: "var(--accent-teal-fg)" }}
+              >
+                Align language now
+              </button>
+            </>
+          )}
+          {alignRunTaskId && (
+            <Link
+              to={`/tasks/${alignRunTaskId}`}
+              data-align-language-run-link
+              className="text-xs underline decoration-dotted underline-offset-2 ml-1"
+              style={{ color: "var(--accent-teal-fg)" }}
+            >
+              View run
+            </Link>
+          )}
+        </div>
+      )}
       {/* Task-surface control bar: My Tasks / Team attention toggle + provider
           and assignee filters spanning native / GitHub / Jira. */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
