@@ -8,7 +8,6 @@ import { typeToneHashed, toneVar, type Tone } from "@/lib/domainTone";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip, GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
-import OntologyPanel from "@/components/ontology/OntologyPanel";
 
 // Understand — the domain-first knowledge drill (owner doctrine): Understand
 // starts at the DOMAIN layer and drills DOWN. It never opens on a concept.
@@ -77,10 +76,6 @@ export default function UnderstandPage() {
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(params.get("concept"));
   const [bump, setBump] = useState(0);
-  // Ontology entry point (task 15c06516, owner top priority: "i dont see
-  // the ontology stuff") — a second lens on this SAME Understand page, not
-  // a new nav item (Knowledge stays two surfaces: /understand and /brain).
-  const [view, setView] = useState<"concepts" | "ontology">("concepts");
 
   useEffect(() => {
     setLoaded(false);
@@ -201,25 +196,6 @@ export default function UnderstandPage() {
 
   return (
     <div className="p-6 h-full flex flex-col gap-4 min-w-[720px]">
-      <div className="flex items-center gap-1 text-[12px]">
-        <button
-          onClick={() => setView("concepts")}
-          className={`px-2.5 py-1 rounded-md ${view === "concepts" ? "bg-[color:var(--surface-2)] text-[color:var(--text-primary)] font-semibold" : "text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"}`}
-        >
-          Concepts
-        </button>
-        <button
-          onClick={() => setView("ontology")}
-          className={`px-2.5 py-1 rounded-md ${view === "ontology" ? "bg-[color:var(--surface-2)] text-[color:var(--text-primary)] font-semibold" : "text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"}`}
-        >
-          {"Ontology"}
-        </button>
-      </div>
-
-      {view === "ontology" ? (
-        <OntologyPanel project={project} />
-      ) : (
-      <>
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -239,8 +215,6 @@ export default function UnderstandPage() {
           onBack={toDomains}
           onOpen={goToConcept}
         />
-      )}
-      </>
       )}
     </div>
   );

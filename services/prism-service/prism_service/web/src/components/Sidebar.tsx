@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Bot, Brain, Eye, FolderTree, Inbox, Info,
   KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
-  Radio, ScrollText, Search, Settings, Sparkles, Workflow,
+  Radio, ScrollText, Search, Settings, Shapes, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -29,6 +29,11 @@ type Item = {
   // live pill and make the live icon in the activity view green") — a
   // one-off, not a reusable mechanism, same precedent as isNew above.
   isLiveIndicator?: boolean;
+  // A one-line subtitle rendered under the label (task eca23a10, owner:
+  // "the explore and the understand and the ontology under knowledge is
+  // not super clear"). Only Knowledge's three items set this; every other
+  // section is untouched.
+  hint?: string;
 };
 
 type Section = { label?: string; items: Item[] };
@@ -60,14 +65,18 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Knowledge",
     items: [
-      // Knowledge collapsed to TWO surfaces (task 89a1ddef): Brain is the
-      // Sigma graphvis (code connections + search + context bundle; /graph +
-      // /explore redirect here). Understand is the unified wiki — memory + OKF
-      // + understanding as one OKF-style concept graph + read panel + links.
-      // The old /memory and /okf entries fold into Understand (still
-      // deep-linkable: /memory and /okf redirect, /memory/:id preselects).
-      { to: "/brain", label: "Explore", icon: Brain, staleKey: "brain" },
-      { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
+      // Knowledge is THREE surfaces (task eca23a10, superseding the prior
+      // two-surface collapse at 89a1ddef): Brain is the Sigma graphvis (code
+      // connections + search + context bundle; /graph + /explore redirect
+      // here). Understand is the unified concept wiki — memory + OKF as one
+      // OKF-style concept graph + read panel + links. Ontology is its own
+      // surface now (moved out of Understand's toggle): classes/instances/
+      // properties/axioms/rules/SPARQL. The old /memory and /okf entries
+      // still fold into Understand (deep-linkable: /memory and /okf
+      // redirect, /memory/:id preselects).
+      { to: "/brain", label: "Explore", icon: Brain, staleKey: "brain", hint: "the code graph" },
+      { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand", hint: "concepts and memory" },
+      { to: "/ontology", label: "Ontology", icon: Shapes, hint: "classes, rules, queries" },
     ],
   },
   {
@@ -249,7 +258,7 @@ export default function Sidebar() {
                 {section.label}
               </div>
             )}
-            {section.items.map(({ to, label, icon: Icon, staleKey, isNew, isLiveIndicator }) => {
+            {section.items.map(({ to, label, icon: Icon, staleKey, isNew, isLiveIndicator, hint }) => {
               const isStale = staleKey ? stale[staleKey] : false;
               // While the drainer has work in flight, the surfaces it
               // populates (Brain, Graph, Understand — every item with a
@@ -291,7 +300,14 @@ export default function Sidebar() {
                       isLiveNow && "text-[color:var(--accent-sage-fg)] animate-pulse",
                     )}
                   />
-                  <span className="flex-1">{label}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block">{label}</span>
+                    {hint && (
+                      <span className="block normal-case tracking-normal text-2xs text-[color:var(--nav-text)] opacity-70">
+                        {hint}
+                      </span>
+                    )}
+                  </span>
                   {isNew && <Lozenge tone="new">New</Lozenge>}
                   {isScanning ? (
                     <span
