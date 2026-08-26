@@ -11,6 +11,7 @@
 @prefix o: <urn:prism:onto:> .
 @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 # ---------------------------------------------------------------------
 # Classes — "The shape" (ontology-SKILL.md)
@@ -123,3 +124,41 @@ o:uses a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "uses" .
 o:method a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "method" .
 o:rationale_for a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
     rdfs:label "rationale_for" .
+
+# ---------------------------------------------------------------------
+# The rules are SHACL shapes (task 8eeb3e65, epic 3efbcd89) — Step/Rule
+# classes + the properties shapes.ttl's rules validate against or persist
+# a report through. o:Step/o:decidedBy/o:producedBy are the
+# agent-delegates-one-tier-down rule's own data (emitted from
+# WORKFLOW_STEPS + STEP_ROLES, never fabricated); o:Rule/o:lookedAt/
+# o:violations/o:focus/o:message/o:validatedAt are the report shape
+# services/ontology_rules.py persists into urn:prism:<project>/report.
+# ---------------------------------------------------------------------
+
+o:Step a rdfs:Class ; rdfs:label "Step" ;
+    rdfs:comment "One WORKFLOW_STEPS entry — an agent step or a gate." .
+o:Rule a rdfs:Class ; rdfs:label "Rule" ;
+    rdfs:comment "One SHACL shape's validated report row." .
+
+o:arrivedAt a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:dateTime ;
+    rdfs:label "arrivedAt" .
+o:state a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:string ;
+    rdfs:label "state" .
+o:decidedBy a rdf:Property ; rdfs:domain o:Step ; rdfs:range xsd:string ;
+    rdfs:label "decidedBy" ; rdfs:comment "The role that decides this gate." .
+o:producedBy a rdf:Property ; rdfs:domain o:Step ; rdfs:range xsd:string ;
+    rdfs:label "producedBy" ;
+    rdfs:comment "The role whose work this gate is deciding on." .
+
+o:description a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
+    rdfs:label "description" .
+o:lookedAt a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:integer ;
+    rdfs:label "lookedAt" .
+o:violations a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:integer ;
+    rdfs:label "violations" .
+o:focus a rdf:Property ; rdfs:domain o:Rule ; rdfs:label "focus" ;
+    rdfs:comment "One offending instance node this rule's report names." .
+o:message a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
+    rdfs:label "message" .
+o:validatedAt a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:dateTime ;
+    rdfs:label "validatedAt" .

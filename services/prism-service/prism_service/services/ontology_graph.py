@@ -89,6 +89,26 @@ def read_only_query_type(sparql: str) -> str | None:
     return m.group(1).upper() if m else None
 
 
+def _ox_term_to_rdflib(term):
+    """pyoxigraph term -> rdflib term — used by OntologyGraph.to_rdflib()
+    (task 8eeb3e65) to hand the store's triples to owlrl/pyshacl, neither
+    of which understands pyoxigraph's own term types."""
+    import rdflib
+
+    if isinstance(term, ox.NamedNode):
+        return rdflib.URIRef(term.value)
+    if isinstance(term, ox.BlankNode):
+        return rdflib.BNode(term.value)
+    if isinstance(term, ox.Literal):
+        if term.language:
+            return rdflib.Literal(term.value, lang=term.language)
+        dt = term.datatype
+        if dt is not None and dt.value != "http://www.w3.org/2001/XMLSchema#string":
+            return rdflib.Literal(term.value, datatype=rdflib.URIRef(dt.value))
+        return rdflib.Literal(term.value)
+    raise TypeError(f"unexpected pyoxigraph term: {type(term)}")
+
+
 # pyoxigraph.Store is an exclusive RocksDB lock on its directory — a second
 # Store opened on the SAME path while the first is still alive raises
 # "lock hold by current process". OntologyGraph is constructed fresh at
@@ -131,17 +151,62 @@ class OntologyGraph:
         q = f"ASK {{ GRAPH <{self._abox_iri.value}> {{ ?s ?p ?o }} }}"
         return not bool(self._store.query(q))
 
-    def rebuild(self, rows: dict | None = None) -> dict:
+    def to_rdflib(self) -> "rdflib.Graph":
+        """TBox (model.ttl, reloaded fresh) + this project's ABox,
+        combined into one throwaway rdflib.Graph — the scratch graph
+        services.ontology_rules.validate() runs owlrl + pyshacl over
+        (task 8eeb3e65). Reads straight off the pyoxigraph store's two
+        named graphs; never re-parses model.ttl a second way."""
+        import rdflib
+
+        self.load_model()
+        g = rdflib.Graph()
+        for gi in (self._model_iri, self._abox_iri):
+            for s, p, o, _ in self._store.quads_for_pattern(None, None, None, gi):
+                g.add((_ox_term_to_rdflib(s), _ox_term_to_rdflib(p),
+                        _ox_term_to_rdflib(o)))
+        return g
+
+    def replace_graph(self, iri: str, nt: str) -> None:
+        """Replace any named graph (by full IRI) atomically — remove_graph
+        + bulk_load, the same discipline rebuild() uses for the ABox.
+        Used by ontology_rules.py to persist the SHACL report without
+        reaching into the store directly."""
+        node = ox.NamedNode(iri)
+        self._store.remove_graph(node)
+        if nt.strip():
+            self._store.bulk_load(input=nt, format=ox.RdfFormat.N_TRIPLES,
+                                   to_graph=node)
+
+    def read_graph(self, iri: str) -> list[tuple[str, str, str]]:
+        """Every (s, p, o) triple in a named graph, as plain strings."""
+        node = ox.NamedNode(iri)
+        return [(s.value, p.value, o.value) for s, p, o, _ in
+                self._store.quads_for_pattern(None, None, None, node)]
+
+    def rebuild(self, rows: dict | None = None, *,
+                agent_descriptions: dict[str, str] | None = None,
+                signal_arrived_at: dict[str, str] | None = None) -> dict:
         """Build the ABox from the SAME real rows ontology_prototype_
         projection reads (gather(project), reused rather than re-queried
         when the caller already has it) and replace the named ABox graph
         atomically: remove_graph + bulk_load, never an incremental add —
         a second rebuild must not double the triple count. Returns
         {"total_triples", "per_class"} — triple counts per catalog class,
-        read straight back off the store after the swap."""
+        read straight back off the store after the swap.
+
+        agent_descriptions/signal_arrived_at (task 8eeb3e65's skill-
+        description-* and flagged-signal-is-placed rules): real data
+        gather()'s own rows don't carry, fetched independently by default
+        (self._agent_descriptions/_signal_arrived_at) — never fabricated;
+        callers (tests) may pass explicit dicts to control a fixture."""
         if rows is None:
             from prism_service.services import ontology_prototype_projection as proj
             rows = proj.gather(self.project)
+        if agent_descriptions is None:
+            agent_descriptions = self._agent_descriptions()
+        if signal_arrived_at is None:
+            signal_arrived_at = self._signal_arrived_at()
 
         import rdflib
 
@@ -154,11 +219,13 @@ class OntologyGraph:
         def CLS(local: str) -> "rdflib.URIRef":
             return rdflib.URIRef(NS + local)
 
-        self._emit_channels_agents_providers(g, rows, U, CLS, RDF, RDFS)
+        self._emit_channels_agents_providers(g, rows, U, CLS, RDF, RDFS,
+                                              agent_descriptions)
         self._emit_tasks(g, rows, U, CLS, RDF, RDFS)
-        self._emit_signals(g, rows, U, CLS, RDF, RDFS)
+        self._emit_signals(g, rows, U, CLS, RDF, RDFS, signal_arrived_at)
         self._emit_documents_folders(g, rows, U, CLS, RDF, RDFS)
         self._emit_code_graph(g, rows, U, CLS, RDF, RDFS)
+        self._emit_workflow_steps(g, U, CLS, RDF, RDFS)
 
         nt = g.serialize(format="nt")
         self._store.remove_graph(self._abox_iri)
@@ -171,10 +238,45 @@ class OntologyGraph:
             n = self._count(cls_local)
             if n:
                 per_class[f"CodeGraph::{cls_local}"] = n
+
+        # SHACL re-validation (task 8eeb3e65): every rebuild re-validates,
+        # so the persisted report never trails the ABox it describes.
+        from prism_service.services import ontology_rules
+        ontology_rules.validate(self.project)
+
         return {"total_triples": len(g), "per_class": per_class}
 
+    def _agent_descriptions(self) -> dict[str, str]:
+        """Agent id -> description, from the SAME catalog_entries source
+        the skill-description-* SHACL rules mean to check (the workflow/
+        behavior catalog's real 'description' text) — never fabricated.
+        Best effort: any failure -> {} (rules then read as no comment)."""
+        try:
+            from prism_service.services import ontology_prototype_projection as proj
+            entries = proj.axiom_context(self.project).get("catalog_entries", [])
+            return {e.get("id"): e.get("description", "")
+                    for e in entries if e.get("id")}
+        except Exception:
+            return {}
+
+    def _signal_arrived_at(self) -> dict[str, str]:
+        """Signal id -> arrived_at ISO timestamp, off the real SignalStore
+        (gather()'s own signal rows don't carry it) — used by flagged-
+        signal-is-placed's 7-day-old check. Best effort: {} -> the rule
+        falls back to 'any open signal', per its own spec."""
+        try:
+            from prism_service.services.signal_store import SignalStore
+            store = SignalStore(self.project)
+            try:
+                return {s.id: s.arrived_at for s in store.list(limit=2000)}
+            finally:
+                store.close()
+        except Exception:
+            return {}
+
     @staticmethod
-    def _emit_channels_agents_providers(g, rows, U, CLS, RDF, RDFS) -> None:
+    def _emit_channels_agents_providers(g, rows, U, CLS, RDF, RDFS,
+                                         agent_descriptions: dict[str, str]) -> None:
         import rdflib
         for name in rows["channels"]:
             u = U("channel", name)
@@ -184,6 +286,9 @@ class OntologyGraph:
             u = U("agent", aid)
             g.add((u, RDF.type, CLS("Agent")))
             g.add((u, RDFS.label, rdflib.Literal(aid)))
+            desc = agent_descriptions.get(aid, "")
+            if desc:
+                g.add((u, RDFS.comment, rdflib.Literal(desc)))
         for name in rows["providers"]:
             u = U("provider", name)
             g.add((u, RDF.type, CLS("Provider")))
@@ -214,10 +319,12 @@ class OntologyGraph:
             g.add((u, CLS("arrivedVia"), cu))
 
     @staticmethod
-    def _emit_signals(g, rows, U, CLS, RDF, RDFS) -> None:
+    def _emit_signals(g, rows, U, CLS, RDF, RDFS,
+                       signal_arrived_at: dict[str, str]) -> None:
         """Signal rows -> o:Signal (rdfs:subClassOf o:QueueItem in model.ttl,
         task 785bb4ce: the Queue holds SIGNALS, not tasks), with
-        o:arrivedVia -> its o:Channel, o:state as a literal, and
+        o:arrivedVia -> its o:Channel, o:state as a literal, o:arrivedAt
+        (task 8eeb3e65's flagged-signal-is-placed rule) when known, and
         o:becameTask -> the o:Task it turned into once the owner acted."""
         import rdflib
 
@@ -226,6 +333,10 @@ class OntologyGraph:
             g.add((u, RDF.type, CLS("Signal")))
             g.add((u, RDFS.label, rdflib.Literal(s["label"])))
             g.add((u, CLS("state"), rdflib.Literal(s.get("state") or "open")))
+            at = signal_arrived_at.get(s["id"])
+            if at:
+                g.add((u, CLS("arrivedAt"),
+                       rdflib.Literal(at, datatype=rdflib.XSD.dateTime)))
             channel = str(s.get("channel") or "").strip()
             if channel:
                 cu = U("channel", channel)
@@ -237,6 +348,12 @@ class OntologyGraph:
 
     @staticmethod
     def _emit_documents_folders(g, rows, U, CLS, RDF, RDFS) -> None:
+        """Document -> o:inFolder -> Folder. A path with no folder
+        component (Path(path).parent == '.') is loose in the root and
+        gets NO inFolder edge — task 8eeb3e65's no-artifacts-in-the-root
+        rule needs that absence to be real, never papered over by a
+        fictitious '.' folder (mirrors document_tree.classify's own
+        loose_in_root: a path with a single segment)."""
         import rdflib
 
         seen_folders: set[str] = set()
@@ -245,6 +362,8 @@ class OntologyGraph:
             g.add((u, RDF.type, CLS("Document")))
             g.add((u, RDFS.label, rdflib.Literal(path)))
             parent = str(Path(path).parent)
+            if parent in (".", ""):
+                continue  # loose in the root — no inFolder edge, by design
             fu = U("folder", parent)
             if parent not in seen_folders:
                 seen_folders.add(parent)
@@ -262,6 +381,30 @@ class OntologyGraph:
                 u = U("code", f"{kind}/{name}")
                 g.add((u, RDF.type, CLS(cls_local)))
                 g.add((u, RDFS.label, rdflib.Literal(name)))
+
+    @staticmethod
+    def _emit_workflow_steps(g, U, CLS, RDF, RDFS) -> None:
+        """Gate-step decidedBy/producedBy facts (task 8eeb3e65's
+        agent-delegates-one-tier-down rule) — WORKFLOW_STEPS + STEP_ROLES
+        (models/workflow.py, models/roles.py) are the real source of
+        truth for who produces a step's work and who decides the gate
+        right after it; never fabricated. Only gate steps carry both
+        properties — an agent step has no 'decider' distinct from its own
+        producer, so it is not this rule's concern."""
+        import rdflib
+        from prism_service.models.roles import role_for_step
+        from prism_service.models.workflow import WORKFLOW_STEPS
+
+        prev_id = None
+        for step in WORKFLOW_STEPS:
+            sid = step["id"]
+            if step.get("type") == "gate" and prev_id is not None:
+                u = U("step", sid)
+                g.add((u, RDF.type, CLS("Step")))
+                g.add((u, RDFS.label, rdflib.Literal(sid)))
+                g.add((u, CLS("decidedBy"), rdflib.Literal(role_for_step(sid))))
+                g.add((u, CLS("producedBy"), rdflib.Literal(role_for_step(prev_id))))
+            prev_id = sid
 
     def _count(self, cls_local: str) -> int:
         q = (f"PREFIX o: <{NS}> SELECT (COUNT(?i) AS ?n) "
@@ -367,24 +510,19 @@ class OntologyGraph:
         return out
 
     def axioms(self) -> list[dict]:
-        """Placeholder pending the SHACL slice (8eeb3e65 fills this from
-        the graph itself + member-shapes.ttl) — for now bridged to the same
-        arc_governance.evaluate_axioms(context) real-row evaluation
-        ontology_prototype_projection's sqlite cache already uses, so the
-        Understand axioms rail is never empty in this slice. Called fresh
-        (not cached), so it always reflects the project's CURRENT rows."""
-        from prism_service.services import ontology_prototype_projection as proj
-        from prism_service.services.arc_governance import evaluate_axioms
+        """The rules are SHACL shapes that can fail (task 8eeb3e65) —
+        reads the persisted validation report (shapes.ttl over the o:
+        model), replacing the arc_governance.PROTOTYPE_AXIOMS bridge this
+        docstring used to describe. A fast read: rebuild() already called
+        validate() at the end of the last ABox swap, so this never
+        re-validates on a request path."""
+        from prism_service.services import ontology_rules
 
-        out = []
-        for name in proj.axiom_names(self.project):
-            out.append({"id": f"axiom::{name}", "name": name,
-                         "description": "", "state": "quiet", "detail": ""})
-        for a in evaluate_axioms(proj.axiom_context(self.project)):
-            out.append({"id": f"axiom::{a['name']}", "name": a["name"],
-                         "description": a["description"], "state": a["state"],
-                         "detail": a["detail"]})
-        return out
+        return [{"id": f"axiom::{a['name']}", "name": a["name"],
+                 "description": a["description"], "state": a["state"],
+                 "looked_at": a["looked_at"], "violations": a["violations"],
+                 "detail": a["detail"]}
+                for a in ontology_rules.evaluate(self.project)]
 
     def query(self, sparql: str, limit: int = 500) -> dict:
         """SELECT/ASK only (400 on anything else, at the caller). Named
