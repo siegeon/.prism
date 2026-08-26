@@ -1723,22 +1723,33 @@ export default function TaskDetailPage() {
           and the ONLY real parent link lived in a Card far down the page,
           past the whole SDLC trace (owner: "i see no way to see the parent
           to navigate to the parent"). */}
-      <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
-        <button
-          onClick={() =>
-            task?.parent_id
-              ? navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })
-              : navigate(from)
-          }
-          className="hover:text-[color:var(--text-secondary)]"
-          title={task?.parent_id ? "back to parent" : backLabel}
-        >
-          {task?.parent_id
-            ? "Parent"
-            : from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
-        </button>
-        <span className="opacity-50">/</span>
-        <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
+          <button
+            onClick={() =>
+              task?.parent_id
+                ? navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })
+                : navigate(from)
+            }
+            className="hover:text-[color:var(--text-secondary)]"
+            title={task?.parent_id ? "back to parent" : backLabel}
+          >
+            {task?.parent_id
+              ? "Parent"
+              : from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
+          </button>
+          <span className="opacity-50">/</span>
+          <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+        </div>
+        {conductorOn && (
+          <Link
+            to={`/workflows?task=${task.id}`}
+            aria-label="Open this task's conductor flow"
+            className="text-xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
+          >
+            ↗ Flow
+          </Link>
+        )}
       </div>
 
       <AnimatePresence>
