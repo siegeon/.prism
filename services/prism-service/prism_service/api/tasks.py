@@ -1929,6 +1929,12 @@ class TaskUpdate(BaseModel):
     stop_if: Optional[list[str]] = None
     plan_doc: Optional[str] = None
     plan_diagram: Optional[str] = None
+    # premise_notes was settable at create but had no PATCH field at all
+    # (task dc676e24, found live 2026-08-26): a PATCH carrying only
+    # premise_notes fell through to "no fields to update" (400) below,
+    # the same shape as the dependencies/description gaps noted above.
+    # TaskService.update already accepts it.
+    premise_notes: Optional[str] = None
     # Which PRISM workflow drives this task (task af396b2c). Validated
     # against models.task.WORKFLOW_ALIASES below before the write.
     workflow: Optional[str] = None
