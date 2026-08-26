@@ -232,6 +232,84 @@ def test_gate_not_refused_when_only_nonpolicy_edited(tmp_path):
     assert task_svc.get(t.id).workflow_step != "story_gate"
 
 
+def test_gate_not_refused_when_policy_file_only_arrives_via_clean_merge(tmp_path):
+    """A long-running candidate branch merges the integration branch (dev)
+    forward to stay shippable / resolve conflicts before landing. If that
+    merge brings in an UNRELATED task's own, already-authorized policy-file
+    change on the merge's second-parent side -- and the candidate's own
+    commits never touch that file -- the gate must not refuse: the candidate
+    never edited its own judge, it only carried an already-approved edit
+    forward (task e14680ba, 2026-08-26 false positive: merging dev absorbed
+    conductor_service.py/arc_governance.py changes from unrelated, already-
+    shipped tasks and tripped this exact refusal)."""
+    task_svc, cond = _services(tmp_path)
+    repo, baseline, wt = _policy_repo(tmp_path)
+
+    # "dev" moves forward with ANOTHER task's real, authorized policy change.
+    dev_wt = tmp_path / "dev_wt"
+    _git(repo, "branch", "dev-sim", baseline)
+    _git(repo, "worktree", "add", "-q", str(dev_wt), "dev-sim")
+    _write(dev_wt, _RUBRIC_REL, _LOOSENED_RUBRIC)
+    _git(dev_wt, "commit", "-qam", "unrelated task: authorized rubric change")
+    dev_tip = _git(dev_wt, "rev-parse", "HEAD")
+
+    # The candidate makes its OWN, non-policy commit...
+    _write(wt, _NONPOLICY_REL, "# non-policy source\nX = 2  # candidate edit\n")
+    _git(wt, "commit", "-qam", "candidate: own non-policy change")
+    # ...then merges dev forward -- absorbing the other task's policy edit
+    # purely via the merge's second parent, with no conflict.
+    _git(wt, "merge", "-q", "--no-edit", dev_tip)
+    # Sanity: a blind diff against baseline WOULD show the rubric as changed
+    # -- this is exactly the shape that used to false-refuse.
+    assert cp.is_policy_file(_RUBRIC_REL)
+
+    t = task_svc.create(title="long-running feature task that merges dev in")
+    _register_ws(t.id, wt, baseline, repo)
+    assert cp.candidate_policy_edits(t.id) == []
+    _advance_to(cond, t.id, "story_gate")
+    res = cond.gate_decide(t.id, "approve", reason="story looks good",
+                           override=True, actor="s1", session_id="s1")
+    assert res["ok"] is True, res
+    assert res["gate_state"] == "passed"
+
+
+def test_gate_still_refuses_a_genuine_conflict_resolution_edit(tmp_path):
+    """The other side of the same fix: if the candidate's OWN merge-conflict
+    resolution introduces policy content that matches NEITHER parent (a real,
+    candidate-authored edit hiding inside a merge commit), the gate must
+    still refuse -- narrowing to first-parent-touched files must not become
+    a blanket exemption for anything merge-shaped."""
+    task_svc, cond = _services(tmp_path)
+    repo, baseline, wt = _policy_repo(tmp_path)
+
+    dev_wt = tmp_path / "dev_wt2"
+    _git(repo, "branch", "dev-sim2", baseline)
+    _git(repo, "worktree", "add", "-q", str(dev_wt), "dev-sim2")
+    _write(dev_wt, _RUBRIC_REL, "story_complete:\n  required_sections:\n    - Other\n")
+    _git(dev_wt, "commit", "-qam", "unrelated task: a different rubric change")
+    dev_tip = _git(dev_wt, "rev-parse", "HEAD")
+
+    # Candidate directly edits the rubric itself (its own commit)...
+    _write(wt, _RUBRIC_REL, _LOOSENED_RUBRIC)
+    _git(wt, "commit", "-qam", "candidate: loosens the rubric directly")
+    # ...then merges dev in, hitting a conflict, and resolves with ITS OWN
+    # (still-loosened) content -- matching neither parent.
+    subprocess.run(["git", "merge", "--no-edit", dev_tip], cwd=str(wt),
+                   capture_output=True, text=True)
+    _write(wt, _RUBRIC_REL, _LOOSENED_RUBRIC)
+    _git(wt, "add", _RUBRIC_REL)
+    _git(wt, "commit", "-qm", "merge: resolve keeping candidate's loosened rubric")
+
+    t = task_svc.create(title="feature task that loosens the rubric via a merge")
+    _register_ws(t.id, wt, baseline, repo)
+    assert _RUBRIC_REL in cp.candidate_policy_edits(t.id)
+    _advance_to(cond, t.id, "story_gate")
+    res = cond.gate_decide(t.id, "approve", reason="story looks good",
+                           override=True, actor="s1", session_id="s1")
+    assert res["ok"] is False and res["gate_state"] == "failed"
+    assert "governance_rubrics.yaml" in res["reason"]
+
+
 def test_authorized_policy_change_env_allowed(tmp_path, monkeypatch):
     task_svc, cond = _services(tmp_path)
     repo, baseline, wt = _policy_repo(tmp_path)
