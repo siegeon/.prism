@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.86"
+PRISM_VERSION = "7.13.87"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6971,4 +6971,21 @@ PRISM_VERSION_NOTES += (
     "align. The affected tasks are re-aligned from the before text that the "
     "ste_normalise history rows kept, through the normal TaskService path, so "
     "the repair itself is on each task's history (epic cc9a44c8)."
+    "\n\n7.13.87: red_gate is the ONE gate a human owner is NEVER routed "
+    "to (unlike story_gate/plan_gate/green_gate, whose GATE_AUTHORITY "
+    "text each carry a human path) -- but the SPA's shared honest-state "
+    "map, the conductor tile pill, and the burn graph all rendered the "
+    "SAME amber 'awaiting review' claim for it as for a genuinely human-"
+    "owed gate. Caught live 2026-08-26: the owner watched task 3a3f90da's "
+    "red_gate read 'awaiting review' on their own screen via remote "
+    "assist and said 'dont show the user things that are not real'. "
+    "Fixed: api/workflows.py now serves a machine_only_gate bool per "
+    "step (MACHINE_ONLY_GATES = {red_gate}); useWorkflowDef.ts's cached "
+    "RailStep carries it through; SdlcProgress.tsx's ACTIVITY_META gains "
+    "a non-alarm 'machine deciding' state for it (same tone as working/"
+    "driving -- there is nothing for the owner to do); ConductorPage.tsx "
+    "and TokenTurns.tsx apply the identical override so the tile pill and "
+    "burn-graph caption agree with the task page. New regression test "
+    "pins all four surfaces. 5 new + 54 neighboring gate/conductor UI "
+    "tests green; real `npm run build` clean."
 )

@@ -40,6 +40,11 @@ export type WorkflowStepDef = {
   /** Gate steps only — who may decide it and how to recover from a wrong
    * decision. Empty for non-gate steps. */
   authority?: string;
+  /** Gate steps only — true when a human owner is NEVER the decider,
+   * regardless of task/proof_type (e.g. red_gate). Absent/false elsewhere.
+   * Lets the SPA stop claiming "awaiting review" (a human-owed decision)
+   * for a gate that is unconditionally machine-adjudicated. */
+  machine_only_gate?: boolean;
   execution: "connected" | "scripted" | "definition_only";
   linked_workflow_id?: string | null;
   linked_workflow_step_count?: number;
@@ -135,7 +140,7 @@ export type WorkflowRun = {
 /** The shape the conductor rail renders. Deliberately the same {id, persona,
  * type} triple the rail already consumed, so moving the SOURCE of the list
  * costs its consumers one line each and changes nothing downstream. */
-export type RailStep = { id: string; persona: string; type: WorkflowStepType };
+export type RailStep = { id: string; persona: string; type: WorkflowStepType; machine_only_gate?: boolean };
 
 /** `intake` is NOT a conductor step: it is the pre-conductor state a task
  * sits in before the first agent step, which is why models/workflow.py has
@@ -339,7 +344,7 @@ export function fetchConductorRunFromTask(project: string, task: ConductorRunTas
 }
 
 function railFrom(steps: WorkflowStepDef[]): RailStep[] {
-  return [INTAKE, ...steps.map((s) => ({ id: s.id, persona: s.persona, type: s.type }))];
+  return [INTAKE, ...steps.map((s) => ({ id: s.id, persona: s.persona, type: s.type, machine_only_gate: s.machine_only_gate }))];
 }
 
 // Tab-lifetime cache: the ordering is identical for every project and never

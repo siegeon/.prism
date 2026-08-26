@@ -178,6 +178,18 @@ GATE_AUTHORITY = {
         "gate — a passed gate can't be Rejected, only rewound."),
 }
 
+# Gates a human owner is NEVER routed to, regardless of task/proof_type
+# (owner rule: "red_gate belongs to the MACHINE seat and must NEVER be
+# routed to a human" — unlike story_gate/plan_gate/green_gate, whose
+# GATE_AUTHORITY text above each carries a human path). The SPA reads this
+# to stop rendering the "awaiting review" pill — which claims a human
+# reviewer is owed a decision — while a machine-only gate is simply
+# waiting on the adjudicator's next sweep (task be158613 follow-on, found
+# live 2026-08-26 when the owner watched red_gate read "awaiting review"
+# on their own screen via remote assist and asked not to be shown a state
+# that isn't real).
+MACHINE_ONLY_GATES = {"red_gate"}
+
 AOS_WORKFLOWS_URL = os.environ.get("AOS_WORKFLOWS_URL", "http://127.0.0.1:5273").rstrip("/")
 
 
@@ -881,6 +893,7 @@ def get_workflows(project: str = Query("default")) -> dict:
             "action": STEP_ACTIONS[step["id"]][1],
             "output": STEP_ACTIONS[step["id"]][2],
             "authority": GATE_AUTHORITY.get(step["id"], ""),
+            "machine_only_gate": step["id"] in MACHINE_ONLY_GATES,
             "execution": "connected",
             "linked_workflow_id": (
                 "validation" if step["id"] == "verify_green_state"
