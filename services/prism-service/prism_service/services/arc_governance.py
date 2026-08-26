@@ -567,6 +567,17 @@ def seed_prism_principles(memory_svc: Any) -> list:
 # evaluated state onto OntologyStore's ontology_axioms rows, which the
 # Understand ontology view (OntologyPanel.tsx) already renders quietly in
 # graphite and spends --alarm only when state == 'violated'.
+#
+# SUPERSEDED as the GET /api/okf/ontology axioms SOURCE by task 8eeb3e65
+# "the rules are SHACL shapes that can fail": services/ontology_rules.py
+# now runs REAL SHACL shapes (prism_service/ontology/shapes.ttl) over the
+# o: RDF model, and OntologyGraph.axioms() reads ITS report, not this
+# section's evaluate_axioms(). PROTOTYPE_AXIOMS/evaluate_axioms are left
+# in place, unchanged, ONLY because ontology_prototype_projection.rebuild()
+# still writes them into OntologyStore's sqlite cache (a file outside
+# 8eeb3e65's allowed_files) and tests/unit/test_prototype_axioms.py's
+# sqlite-cache assertions still exercise that path — this is not the
+# ontology's live axioms read path any more.
 # ----------------------------------------------------------------------
 
 PROTOTYPE_AXIOMS: list[dict] = [
