@@ -109,6 +109,15 @@ def ontology_rebuild(project: str = Query("default")) -> dict:
     return ontology_prototype_projection.rebuild(project)["graph"]
 
 
+@router.get("/ontology/rules")
+def ontology_rules(project: str = Query("default")) -> dict:
+    """The rules are SHACL shapes that can fail (task 8eeb3e65) — the full
+    persisted validation report, per rule: focus nodes capped at 20."""
+    from prism_service.services import ontology_rules as rules_svc
+
+    return rules_svc.full_report(project)
+
+
 @router.post("/ontology/sparql")
 def ontology_sparql(payload: dict, project: str = Query("default")) -> dict:
     """SELECT/ASK only, bounded LIMIT, real rows from the live graph."""

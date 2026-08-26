@@ -167,7 +167,8 @@ def seeded_project():
     from prism_service.services.signal_store import SignalStore
 
     store = SignalStore(pid)
-    store.create(Signal(project=pid, channel="mcp", subject="unplaced"))
+    store.create(Signal(project=pid, channel="mcp", subject="unplaced",
+                         arrived_at=_OLD_TS))  # >7 days old, still open
     store.close()
 
     return pid

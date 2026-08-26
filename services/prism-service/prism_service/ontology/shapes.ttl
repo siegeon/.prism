@@ -1,0 +1,213 @@
+# prism_service/ontology/shapes.ttl — the rules ARE SHACL shapes (task
+# 8eeb3e65, epic 3efbcd89) that can actually fail, over the o: model
+# (model.ttl). Retires arc_governance.PROTOTYPE_AXIOMS as the axioms()
+# source (see arc_governance.py's own comment on that section).
+#
+# Keyed exactly as ontology-SKILL.md's "Adding to the model / A new rule"
+# prescribes: the PROPERTY shape (or, for a SPARQL-constrained rule, the
+# sh:SPARQLConstraint node) carries the rule's own IRI, and the node
+# shape doing the targeting is <rule>.target — an inline blank node works
+# but the violation cannot be mapped back to which rule fired, so it
+# silently reports nothing. services/ontology_rules.py reads this file
+# back as the RULE CATALOG (name/description/message/target class) via
+# SPARQL over the shapes graph itself, so this file is the one place a
+# rule is defined — never a second hand-kept list that can drift from
+# what actually validates ("the failure mode to watch for").
+#
+# pyshacl runs this in advanced=True mode (sh:sparql / sh:SPARQLConstraint
+# require it) against a scratch rdflib.Graph that already has owlrl RDFS
+# entailment applied, so o:Signal instances also carry o:QueueItem (its
+# rdfs:subClassOf parent in model.ttl) before any shape is checked.
+
+@prefix o: <urn:prism:onto:> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------------------------------------------------
+# task-names-its-channel — o:Task without o:arrivedVia. Plain property
+# shape (sh:minCount), the simple keying case.
+# ---------------------------------------------------------------------
+
+o:task-names-its-channel.target a sh:NodeShape ;
+    sh:targetClass o:Task ;
+    sh:property o:task-names-its-channel .
+
+o:task-names-its-channel a sh:PropertyShape ;
+    rdfs:comment "Every task row names the channel it arrived through — a blank channel is a rule with no way to fail." ;
+    sh:path o:arrivedVia ;
+    sh:minCount 1 ;
+    sh:message "task has no arrivedVia channel" .
+
+# ---------------------------------------------------------------------
+# ask-comes-from-the-queue — a Task that is the object of some Signal's
+# o:becameTask must share that Signal's o:arrivedVia channel. SPARQL
+# constraint: guards the join so the two halves cannot drift apart.
+# ---------------------------------------------------------------------
+
+o:ask-comes-from-the-queue.target a sh:NodeShape ;
+    sh:targetClass o:Signal ;
+    sh:sparql o:ask-comes-from-the-queue .
+
+o:ask-comes-from-the-queue a sh:SPARQLConstraint ;
+    rdfs:comment "A task's channel must match the signal it became — guards the join, so the two halves cannot drift apart." ;
+    sh:message "task's channel drifted from the signal it came from" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:becameTask ?task ; o:arrivedVia ?sigChan .
+            ?task o:arrivedVia ?taskChan .
+            FILTER(?sigChan != ?taskChan)
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# flagged-signal-is-placed — an open Signal with no o:becameTask: pending
+# placement. Violates only when older than 7 days IF o:arrivedAt is
+# present; a signal with no arrivedAt (arrived_at could not be read)
+# violates on ANY open+unplaced state, per the rule's own spec.
+# ---------------------------------------------------------------------
+
+o:flagged-signal-is-placed.target a sh:NodeShape ;
+    sh:targetClass o:Signal ;
+    sh:sparql o:flagged-signal-is-placed .
+
+o:flagged-signal-is-placed a sh:SPARQLConstraint ;
+    rdfs:comment "What a connector could not place, waiting on a person — pending placement past a week is a rule that fires." ;
+    sh:message "open signal is pending placement" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT $this WHERE {
+            $this o:state "open" .
+            FILTER NOT EXISTS { $this o:becameTask ?t }
+            OPTIONAL { $this o:arrivedAt ?at }
+            BIND( (NOW() - "P7D"^^xsd:dayTimeDuration) AS ?cutoff )
+            FILTER( !BOUND(?at) || ?at < ?cutoff )
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# no-artifacts-in-the-root — o:Document without o:inFolder. Plain
+# property shape, same keying shape as task-names-its-channel.
+# ---------------------------------------------------------------------
+
+o:no-artifacts-in-the-root.target a sh:NodeShape ;
+    sh:targetClass o:Document ;
+    sh:property o:no-artifacts-in-the-root .
+
+o:no-artifacts-in-the-root a sh:PropertyShape ;
+    rdfs:comment "Every document lives inside a folder — one sitting loose in the root breaks the file-tree grammar." ;
+    sh:path o:inFolder ;
+    sh:minCount 1 ;
+    sh:message "document has no inFolder — loose in the root" .
+
+# ---------------------------------------------------------------------
+# dated-folder-uses-one-format — an o:Folder whose label looks dated
+# (^\d{4}-(Q\d|\d{2})$) but is not YYYY-MM-DD. SPARQL constraint: regex
+# needs two conditions ANDed, past what sh:pattern alone expresses.
+# ---------------------------------------------------------------------
+
+o:dated-folder-uses-one-format.target a sh:NodeShape ;
+    sh:targetClass o:Folder ;
+    sh:sparql o:dated-folder-uses-one-format .
+
+o:dated-folder-uses-one-format a sh:SPARQLConstraint ;
+    rdfs:comment "One folder dated 2026-Q1 among 34 written YYYY-MM-DD — the tree commits to one date format." ;
+    sh:message "dated folder does not use YYYY-MM-DD" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this rdfs:label ?label .
+            FILTER(REGEX(?label, "[0-9]{4}-(Q[0-9]|[0-9]{2})$")
+                   && !REGEX(?label, "[0-9]{4}-[0-9]{2}-[0-9]{2}$"))
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# skill-description-says-when — an o:Agent whose rdfs:comment lacks
+# when/use-when/trigger phrasing (or has no comment at all — a missing
+# description says WHEN even less than a bad one does).
+# ---------------------------------------------------------------------
+
+o:skill-description-says-when.target a sh:NodeShape ;
+    sh:targetClass o:Agent ;
+    sh:sparql o:skill-description-says-when .
+
+o:skill-description-says-when a sh:SPARQLConstraint ;
+    rdfs:comment "A skill nothing ever triggers is a skill we do not have — discovery is on the description." ;
+    sh:message "description gives no when/trigger condition" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            OPTIONAL { $this rdfs:comment ?c }
+            FILTER( !BOUND(?c) || !REGEX(?c, "when|trigger", "i") )
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# skill-description-has-no-markup — rdfs:comment containing '<' or '>'.
+# ---------------------------------------------------------------------
+
+o:skill-description-has-no-markup.target a sh:NodeShape ;
+    sh:targetClass o:Agent ;
+    sh:sparql o:skill-description-has-no-markup .
+
+o:skill-description-has-no-markup a sh:SPARQLConstraint ;
+    rdfs:comment "'<monday>' in a description is markup in a prompt." ;
+    sh:message "description contains angle-bracket markup" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this rdfs:comment ?c .
+            FILTER(CONTAINS(?c, "<") || CONTAINS(?c, ">"))
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# agent-delegates-one-tier-down — a gate step's deciding role must differ
+# from the role that produced the work it is deciding on. o:Step/
+# o:decidedBy/o:producedBy are emitted by OntologyGraph from WORKFLOW_
+# STEPS + STEP_ROLES (models/roles.py) — real conductor doctrine, never
+# fabricated. Conway, enforced, per axis.
+# ---------------------------------------------------------------------
+
+o:agent-delegates-one-tier-down.target a sh:NodeShape ;
+    sh:targetClass o:Step ;
+    sh:sparql o:agent-delegates-one-tier-down .
+
+o:agent-delegates-one-tier-down a sh:SPARQLConstraint ;
+    rdfs:comment "Conway, enforced, per axis — the producing role cannot also be the role that decides the gate on its own work." ;
+    sh:message "gate is decided by the same role that produced the work" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this o:decidedBy ?d ; o:producedBy ?p .
+            FILTER(?d = ?p)
+        }
+    """ .
+
+# ---------------------------------------------------------------------
+# twin-classes — two o: classes with identical non-empty instance sets:
+# one concept, two representations. SPARQL constraint over rdfs:Class.
+# ---------------------------------------------------------------------
+
+o:twin-classes.target a sh:NodeShape ;
+    sh:targetClass rdfs:Class ;
+    sh:sparql o:twin-classes .
+
+o:twin-classes a sh:SPARQLConstraint ;
+    rdfs:comment "Every structural bug in this model has been one concept with two representations." ;
+    sh:message "shares an identical non-empty instance set with another class" ;
+    sh:select """
+        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+        SELECT $this WHERE {
+            $this a rdfs:Class .
+            FILTER EXISTS { ?i a $this }
+            FILTER EXISTS {
+                ?other a rdfs:Class . FILTER(?other != $this)
+                FILTER NOT EXISTS { ?i2 a $this . FILTER NOT EXISTS { ?i2 a ?other } }
+                FILTER NOT EXISTS { ?i3 a ?other . FILTER NOT EXISTS { ?i3 a $this } }
+            }
+        }
+    """ .
