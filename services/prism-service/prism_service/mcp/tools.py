@@ -2063,6 +2063,24 @@ def _json(obj: Any) -> str:
     return json.dumps(_serialise(obj), indent=2, default=str)
 
 
+def _ontology_class_for_brain_hit(og: Any, hit: dict) -> str:
+    """ontology_class for one brain_search hit (task f5352fa1). A memory
+    entry indexed via MemoryService._index_in_brain carries a doc_id shaped
+    'memory/<domain>/<mx-id>[::chunk]' -- resolve THAT id to the same IRI
+    services.ontology_graph._emit_memories builds (bucket 'memory') and look
+    up its rdf:type. Any other doc_id shape (code, docs) returns '' -- never
+    a guessed class."""
+    from prism_service.services.ontology_graph import _iri
+
+    doc_id = str(hit.get("doc_id") or "")
+    if not doc_id.startswith("memory/"):
+        return ""
+    entry_id = doc_id.split("::", 1)[0].rsplit("/", 1)[-1]
+    if not entry_id:
+        return ""
+    return og.class_of(_iri("memory", entry_id))
+
+
 def _resolve_real_session_id() -> str:
     """STRICT resolver for the conductor session gate (ef81fc15): the REAL
     active transcript session for the request's project, or '' when none
@@ -3661,6 +3679,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 session_id=_ask_sid,
                 task_id=_ask_tid,
             )
+            # ontology_class (task f5352fa1): resolves a hit's doc_id back to
+            # the IRI the matching ontology emitter built for it -- today
+            # only a memory-indexed hit ('memory/<domain>/<mx-id>' doc_ids,
+            # see MemoryService._index_in_brain) is identifiable this way;
+            # any other hit kind gets '', never a guessed class.
+            from prism_service.services.ontology_graph import OntologyGraph
+            _og = OntologyGraph(project_id)
+            for _r in results:
+                if isinstance(_r, dict):
+                    _r["ontology_class"] = _ontology_class_for_brain_hit(_og, _r)
             _body = _json(results)
             # Honest retrieval savings (task 7ee022cc). Emitted as a
             # SEPARATE content block so block 0 stays exactly the results
@@ -4346,7 +4374,19 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 limit=arguments.get("limit", 5),
                 session_id=_recall_sid,
             )
-            return [TextContent(type="text", text=_json(results))]
+            # ontology_class (task f5352fa1): the graph's rdf:type for this
+            # hit's IRI, built the SAME way the memory emitter builds it
+            # (bucket 'memory', key = entry id) -- empty string when the
+            # graph hasn't been rebuilt to know this entry yet, never
+            # guessed from the entry's `type` string.
+            from prism_service.services.ontology_graph import OntologyGraph, _iri
+            _og = OntologyGraph(project_id)
+            _rows = []
+            for e in results:
+                row = _serialise(e)
+                row["ontology_class"] = _og.class_of(_iri("memory", e.id))
+                _rows.append(row)
+            return [TextContent(type="text", text=_json(_rows))]
 
         # ------------------------------------------------------------------
         # OKF tools — read-only projection of memory + brain as an OKF wiki
@@ -4511,6 +4551,15 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 return [TextContent(type="text", text=_json({
                     "error": "workflow_validation_failed", "detail": str(exc),
                 }))]
+            # proof_type validated against the vocabulary (task f5352fa1),
+            # same posture as channel/workflow, before the row exists.
+            from prism_service.models.task import validate_proof_type
+            try:
+                validate_proof_type(arguments.get("proof_type", ""))
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "proof_type_validation_failed", "detail": str(exc),
+                }))]
             task = task_svc.create(
                 title=arguments["title"],
                 description=arguments.get("description", ""),
@@ -4674,6 +4723,24 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 except ValueError as exc:
                     return [TextContent(type="text", text=_json({
                         "error": "workflow_validation_failed", "detail": str(exc),
+                    }))]
+            # Status/proof_type validated against their vocabularies (task
+            # f5352fa1) BEFORE the write -- same posture as workflow above.
+            if "status" in update_kwargs:
+                from prism_service.models.task import validate_status
+                try:
+                    update_kwargs["status"] = validate_status(update_kwargs["status"])
+                except ValueError as exc:
+                    return [TextContent(type="text", text=_json({
+                        "error": "status_validation_failed", "detail": str(exc),
+                    }))]
+            if "proof_type" in update_kwargs:
+                from prism_service.models.task import validate_proof_type
+                try:
+                    update_kwargs["proof_type"] = validate_proof_type(update_kwargs["proof_type"])
+                except ValueError as exc:
+                    return [TextContent(type="text", text=_json({
+                        "error": "proof_type_validation_failed", "detail": str(exc),
                     }))]
             # dependencies validated BEFORE the write (task d67bca9f): every
             # id must exist in this project, and a task cannot depend on
