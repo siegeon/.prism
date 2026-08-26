@@ -209,19 +209,24 @@ def test_api_serves_persisted_rows_and_rebuilds(project):
 # Re-anchored from UnderstandPage to OntologyPage (task eca23a10).
 # ---------------------------------------------------------------------------
 
+# Re-anchored by task 6d470cea ("the Ontology page is the four-tab
+# document"): OntologyPanel.tsx is deleted (nothing else imported it) and
+# the rail+pills layout was replaced by Structure/Rules/Records/Terms tabs
+# directly in OntologyPage.tsx -- see test_ontology_page_four_tabs.py for
+# the full pin.
+
 def test_ontology_page_renders_ontology_entry_point():
     page = _read(_ONTOLOGY_PAGE)
-    assert "OntologyPanel" in page
     assert '"Ontology"' in page or "'Ontology'" in page
+    assert '{ key: "structure", label: "Structure" }' in page
 
 
 def test_ontology_panel_carries_shape_by_kind_primitives():
-    panel = _read(_SRC / "components" / "ontology" / "OntologyPanel.tsx")
-    assert 'data-kind="class"' in panel
-    assert 'data-kind="instance"' in panel
-    assert 'data-kind="property"' in panel
-    assert 'data-kind="abstract"' in panel
-    assert "more" in panel.lower()  # "+N more" rollup
+    page = _read(_ONTOLOGY_PAGE)
+    assert 'data-kind="class"' in page
+    assert 'data-kind="instance"' in page
+    assert 'data-abstract={c.abstract' in page
+    assert "more" in page.lower()  # "+N more" rollup
 
 
 def test_ontology_tokens_are_additive_and_prism_fonts_are_untouched():

@@ -83,13 +83,19 @@ def test_app_routes_ontology_to_ontology_page():
 
 
 # ---------------------------------------------------------------------------
-# OntologyPage.tsx — hosts OntologyPanel, a Rules section bound to
-# looked_at, and a SPARQL query box + error line.
+# OntologyPage.tsx — the four-tab document (re-anchored by task 6d470cea:
+# OntologyPanel's rail+pills layout was replaced by Structure/Rules/Records/
+# Terms tabs; see test_ontology_page_four_tabs.py for the full pin). Rules
+# still reads looked_at, and the SPARQL query box + error line moved to the
+# bottom of Records but is still present in the source.
 # ---------------------------------------------------------------------------
 
-def test_ontology_page_hosts_ontology_panel():
+def test_ontology_page_renders_the_four_tab_strip():
     page = _read(_ONTOLOGY_PAGE)
-    assert "<OntologyPanel" in page
+    assert '{ key: "structure", label: "Structure" }' in page
+    assert '{ key: "rules", label: "Rules" }' in page
+    assert '{ key: "records", label: "Records" }' in page
+    assert '{ key: "terms", label: "Terms" }' in page
 
 
 def test_ontology_page_rules_section_reads_looked_at():
