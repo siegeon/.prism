@@ -36,6 +36,21 @@ case-insensitively but only once it is >= 2 tokens (so a one-word title
 can never hijack ordinary prose). A single-token match under 3
 characters, or in a small stopword set, is never linked. Spans never
 overlap.
+
+Lexicon synonyms (task 8a6f175b, epic df0eed4a): every o:Term in the
+TBox (ontology/model-lexicon.ttl, loaded into the same `model` named
+graph the class query already reads — see services.lexicon) adds its
+rdfs:label and every o:altLabel (singular and a plain plural, the same
+_pluralize rule services.lexicon.align() uses) to the index, pointed at
+`/ontology?tab=terms&term=<label>`. A synonym is matched case-
+insensitively at ANY length, including one token ("PR", "MR") — the
+short-token and stopword filters above apply only to plain instance
+titles, never to this curated vocabulary. An INSTANCE match always wins
+a same-length tie over a synonym (a task titled "PR triage" links to
+that task, never to the PullRequest term) because instance lookups are
+tried first at every candidate length; a synonym never overwrites an
+existing instance key. To avoid link soup, a synonym links at most once
+per paragraph (blank-line-separated) — the first occurrence only.
 """
 
 from __future__ import annotations
@@ -44,7 +59,7 @@ import re
 from typing import Callable
 from urllib.parse import quote
 
-from prism_service.services import signal_parse
+from prism_service.services import lexicon, signal_parse
 from prism_service.services.ontology_graph import NS, OntologyGraph, _iri, _ref_of, open_if_exists
 
 _STOPWORDS = {
@@ -104,7 +119,9 @@ class _Entry:
         self.iri = iri
 
 
-_CACHE: dict[str, tuple[str, dict, dict, int]] = {}
+_CACHE: dict[str, tuple[str, dict, dict, dict, int]] = {}
+
+_TERM_LINK_PREFIX = "/ontology?tab=terms&term="
 
 
 def _tokens(text: str) -> list[str]:
@@ -150,10 +167,11 @@ def _register(exact: dict, ci: dict, text: str, entry: "_Entry") -> int:
 _INDEX_ROW_LIMIT = 1_000_000
 
 
-def _build_index(project: str) -> tuple[dict, dict, int]:
+def _build_index(project: str) -> tuple[dict, dict, dict, int]:
     """One SPARQL pass over the ABox for real instances (tasks/documents/
-    folders/agents/memories), one over the TBox for class names, and one
-    ontology_terms.terms() call for the four requested vocabularies."""
+    folders/agents/memories), one over the TBox for class names, one
+    ontology_terms.terms() call for the four requested vocabularies, and
+    one over the TBox for o:Term/o:altLabel (the lexicon, task 8a6f175b)."""
     graph = OntologyGraph(project)
     exact: dict[tuple[str, ...], _Entry] = {}
     ci: dict[tuple[str, ...], _Entry] = {}
@@ -210,10 +228,57 @@ def _build_index(project: str) -> tuple[dict, dict, int]:
             if value:
                 add(value, _Entry("Term", "/ontology?tab=terms", value))
 
-    return exact, ci, min(max_len, _MAX_PHRASE)
+    syn_ci, syn_max = _build_synonym_index(graph, model)
+    max_len = max(max_len, syn_max)
+
+    return exact, ci, syn_ci, min(max_len, _MAX_PHRASE)
 
 
-def _index(project: str) -> tuple[dict, dict, int]:
+def _build_synonym_index(graph: "OntologyGraph", model: str) -> tuple[dict, int]:
+    """Every o:Term's rdfs:label and o:altLabel values, read straight off
+    the TBox `model` named graph the class query above already reads
+    (model-lexicon.ttl loads into it too — see services.lexicon). Falls
+    back to lexicon.load_lexicon() when the graph carries no o:Term rows
+    (a store that never ran OntologyGraph.rebuild(), so load_model() was
+    never called). Each alt label, and its plain plural (services.lexicon
+    ._pluralize — the SAME rule align() uses), maps to the term's
+    rdfs:label VERBATIM, never a pluralized label: the ontology has one
+    Term per concept, singular or plural surface text alike."""
+    alt_by_label: dict[str, set[str]] = {}
+
+    qt = ("PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
+          f"SELECT ?t ?label ?alt WHERE {{ GRAPH <{model}> {{ "
+          f"?t a <{NS}Term> . ?t rdfs:label ?label . "
+          f"OPTIONAL {{ ?t <{NS}altLabel> ?alt }} }} }}")
+    for row in graph.query(qt, limit=_INDEX_ROW_LIMIT)["bindings"]:
+        label = row.get("label") or ""
+        if not label:
+            continue
+        bucket = alt_by_label.setdefault(label, set())
+        alt = row.get("alt")
+        if alt:
+            bucket.add(alt)
+
+    if not alt_by_label:
+        for term in lexicon.load_lexicon():
+            if term.label:
+                alt_by_label.setdefault(term.label, set()).update(term.alt_labels)
+
+    syn_ci: dict[tuple[str, ...], _Entry] = {}
+    max_len = 1
+    for label, alts in alt_by_label.items():
+        entry = _Entry("Term", f"{_TERM_LINK_PREFIX}{quote(label, safe='')}", label)
+        for alt in alts:
+            for surface in (alt, lexicon._pluralize(alt)):
+                toks = tuple(t.lower() for t in _tokens(surface))
+                if not toks:
+                    continue
+                syn_ci.setdefault(toks, entry)
+                max_len = max(max_len, len(toks))
+    return syn_ci, max_len
+
+
+def _index(project: str) -> tuple[dict, dict, dict, int]:
     """Cached per project, invalidated on the graph's own validated_at
     stamp — never re-queries SPARQL for a request that lands between two
     rebuilds. Auto-rebuilds an absent/empty graph ONCE (the same posture
@@ -228,10 +293,10 @@ def _index(project: str) -> tuple[dict, dict, int]:
     stamp = ontology_rules.last_validated_at(project)
     cached = _CACHE.get(project)
     if cached is not None and cached[0] == stamp:
-        return cached[1], cached[2], cached[3]
-    exact, ci, max_len = _build_index(project)
-    _CACHE[project] = (stamp, exact, ci, max_len)
-    return exact, ci, max_len
+        return cached[1], cached[2], cached[3], cached[4]
+    exact, ci, syn_ci, max_len = _build_index(project)
+    _CACHE[project] = (stamp, exact, ci, syn_ci, max_len)
+    return exact, ci, syn_ci, max_len
 
 
 def _jira_href(key: str) -> str:
@@ -293,6 +358,22 @@ def _ticket_and_pr_spans(text: str) -> list[tuple[int, int, _Entry, str]]:
     return out
 
 
+def _is_synonym_entry(entry: "_Entry") -> bool:
+    return entry.cls == "Term" and entry.href.startswith(_TERM_LINK_PREFIX)
+
+
+def _paragraph_ranges(text: str) -> list[tuple[int, int]]:
+    """Blank-line-separated paragraph offset ranges, covering the whole
+    text — a text with no blank line is one paragraph."""
+    ranges = []
+    start = 0
+    for m in re.finditer(r"\n[ \t]*\n", text):
+        ranges.append((start, m.start()))
+        start = m.end()
+    ranges.append((start, len(text)))
+    return ranges
+
+
 def link(project: str, text: str) -> list[dict]:
     """Every ontology-known entity `text` mentions, as non-overlapping
     spans in reading order: [{start, end, text, kind, iri, cls, href,
@@ -300,7 +381,7 @@ def link(project: str, text: str) -> list[dict]:
     if not text or not text.strip():
         return []
 
-    exact, ci, max_len = _index(project)
+    exact, ci, syn_ci, max_len = _index(project)
     positions = _positions(text)
 
     candidates: list[tuple[int, int, _Entry, str]] = []
@@ -311,6 +392,8 @@ def link(project: str, text: str) -> list[dict]:
             entry = exact.get(toks)
             if entry is None and length >= 2:
                 entry = ci.get(tuple(t.lower() for t in toks))
+            if entry is None:
+                entry = syn_ci.get(tuple(t.lower() for t in toks))
             if entry is not None:
                 start, end = positions[i][1], positions[i + length - 1][2]
                 candidates.append((start, end, entry, text[start:end]))
@@ -329,8 +412,46 @@ def link(project: str, text: str) -> list[dict]:
         accepted.append(cand)
     accepted.sort(key=lambda c: c[0])
 
+    # Link soup guard: a lexicon synonym links at most once per paragraph
+    # (first occurrence only) -- an instance/class/vocabulary span is
+    # never subject to this and always links every time it appears.
+    paragraphs = _paragraph_ranges(text)
+    seen_syn: set[tuple[int, str]] = set()
+    deduped: list[tuple[int, int, _Entry, str]] = []
+    for cand in accepted:
+        start, entry = cand[0], cand[2]
+        if _is_synonym_entry(entry):
+            para = next(i for i, (s, e) in enumerate(paragraphs) if s <= start <= e)
+            key = (para, entry.label)
+            if key in seen_syn:
+                continue
+            seen_syn.add(key)
+        deduped.append(cand)
+
     return [
         {"start": s, "end": e, "text": t, "kind": entry.cls.lower(),
          "iri": entry.iri, "cls": entry.cls, "href": entry.href, "label": entry.label}
-        for s, e, entry, t in accepted
+        for s, e, entry, t in deduped
     ]
+
+
+def vocabulary_of(spans: list[dict]) -> dict:
+    """The lexicon synonyms and canonical labels reached by one field's
+    spans (task 8a6f175b): {"canonical": [label, ...], "synonyms":
+    [{"text", "canonical"}, ...]} -- built from `spans` alone (the same
+    href-prefix marker link() stamps a lexicon-synonym span with), so a
+    caller never needs a second index lookup. `canonical` is the labels
+    seen, order of first appearance, no duplicates; `synonyms` is one
+    entry per synonym span, in the same order as `spans`."""
+    canonical: list[str] = []
+    seen: set[str] = set()
+    synonyms: list[dict] = []
+    for span in spans:
+        if span["cls"] != "Term" or not span["href"].startswith(_TERM_LINK_PREFIX):
+            continue
+        label = span["label"]
+        if label not in seen:
+            seen.add(label)
+            canonical.append(label)
+        synonyms.append({"text": span["text"], "canonical": label})
+    return {"canonical": canonical, "synonyms": synonyms}
