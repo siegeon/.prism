@@ -132,3 +132,48 @@ def test_graph_phase_heartbeats():
         "the Graph phase runs minutes of call-graph work between Locate and "
         "Drive - without beats the board reads it as idle"
     )
+
+
+def test_draft_story_instructs_the_nested_oracle_shape_and_a_self_check():
+    """Task 3a3f90da (2026-08-26): a drive's own draft_story step wrote a
+    story where every one of 9 ACs had a correctly-placed nested oracle
+    line, and it STILL stalled story_gate - the rubric parser had a real
+    bug (fixed the same day, arc_governance.py's _ac_lines). Fixing the
+    reader alone is a one-sided fix: the WRITER'S instructions must also
+    state the exact expected shape unambiguously and tell the agent to
+    verify its own indentation before submitting, so this class of defect
+    is caught before it ever reaches the rubric."""
+    src = _source()
+    draft_at = src.index("draft_story: [")
+    verify_plan_at = src.index("verify_plan: [")
+    draft_block = src[draft_at:verify_plan_at]
+    assert "MORE INDENTED THAN ITS AC" in draft_block, (
+        "draft_story must state the oracle line must be MORE indented than "
+        "its AC, not merely 'a line' - that ambiguity is what let the real "
+        "story pass a human read while failing the rubric"
+    )
+    assert "SELF-CHECK BEFORE YOU REPORT" in draft_block, (
+        "draft_story must instruct the agent to verify its own indentation "
+        "before sending proof=, not just describe the correct shape"
+    )
+    assert "3a3f90da" in draft_block, (
+        "the real incident should be named so a future editor understands "
+        "why this instruction is this specific and this strict"
+    )
+
+
+def test_review_previous_notes_instructs_the_same_nested_citation_shape():
+    """Same bug class, second rubric (premise_grounded / _claim_lines,
+    fixed the same day as _ac_lines): a citation written as a nested child
+    bullet under its claim must be named explicitly, or review_previous_notes
+    can reproduce the exact story that stalled 3a3f90da."""
+    src = _source()
+    review_at = src.index("review_previous_notes: [")
+    draft_at = src.index("draft_story: [")
+    review_block = src[review_at:draft_at]
+    assert "premise_grounded" in review_block
+    assert "nested child bullet" in review_block or "nested" in review_block.lower(), (
+        "review_previous_notes must warn about a citation written as a "
+        "nested sub-bullet, the same shape that broke draft_story's oracle "
+        "lines"
+    )

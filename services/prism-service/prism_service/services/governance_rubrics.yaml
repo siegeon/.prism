@@ -17,7 +17,15 @@ story_complete:
   ac_section: Acceptance Criteria
   # Every AC bullet must carry an AC-<n> id...
   ac_id_pattern: 'AC-\d+'
-  # ...and an observable oracle ("— oracle: <check>") on the same bullet.
+  # ...and an observable oracle marker ("oracle:") on that AC's own entry —
+  # EITHER on the same bullet line, or (the canonical, instructed shape —
+  # see .claude/workflows/implement.js's draft_story contract) as a nested
+  # "- oracle: <check>" child bullet, MORE INDENTED than the AC bullet.
+  # _ac_lines (arc_governance.py) folds a deeper-indented continuation line
+  # into the entry above it; a same-or-lesser-indented line never folds and
+  # starts an untracked entry of its own (task 3a3f90da, 2026-08-26 — this
+  # comment previously said "on the same bullet" only, which is why that
+  # bug went unnoticed: the doc and the code disagreed with each other).
   require_oracle: true
   oracle_marker: 'oracle:'
 

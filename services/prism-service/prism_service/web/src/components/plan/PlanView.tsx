@@ -89,15 +89,39 @@ function acOrder(t: PinTest): number {
 // the Tests tab can show the oracle tied to the ACs it covers. A plan lists
 // them as bullet lines that name an AC id ("AC-1, AC-2 -> assertion_source_for
 // …"); we take those, stripped of markdown bullets, in document order.
+//
+// FOLDS a nested oracle sub-bullet into its AC (task 3a3f90da, 2026-08-26):
+// the drive is instructed (.claude/workflows/implement.js) to write each
+// criterion so it "ends with a line `- oracle: <observable check>`" — a
+// separate, MORE-INDENTED child bullet under the AC, not a same-line
+// suffix. The old version only ever matched a raw line starting with
+// "AC-\d", so that canonical nested oracle line (which starts with
+// "oracle:", not "AC-") was silently dropped — a human on this page saw
+// every AC with NO oracle shown, the same bug arc_governance.py's
+// _ac_lines had on the machine side (fixed the same day). Mirrors that
+// fix: a bullet more indented than the AC line above it is a continuation
+// of that AC, never a sibling entry of its own.
 function parseAcLines(planDoc?: string): string[] {
   if (!planDoc) return [];
   const out: string[] = [];
+  let acIndent: number | null = null;
   for (const raw of planDoc.split("\n")) {
+    if (!raw.trim()) { acIndent = null; continue; }
+    const indent = raw.length - raw.trimStart().length;
     // Only the mapping lines — a bullet that STARTS with an AC id, e.g.
     // "- AC-1, AC-2 -> assertion_source_for (...)". Prose that merely mentions
     // "Covers AC-3" is not an AC definition and must not be swept in.
     const line = raw.trim().replace(/^[-*+]\s*/, "").replace(/`/g, "").trim();
-    if (/^AC-\d/.test(line)) out.push(line);
+    if (/^AC-\d/.test(line)) {
+      out.push(line);
+      acIndent = indent;
+      continue;
+    }
+    if (acIndent !== null && out.length > 0 && indent > acIndent) {
+      out[out.length - 1] += " " + line;
+    } else {
+      acIndent = null;
+    }
   }
   return out;
 }
