@@ -513,9 +513,9 @@ class MemoryService:
         seen: set[str] = set()
         for hit in hits:
             doc_id = hit.get("doc_id", "")
-            # doc_id format: memory/{domain}/{mx-id}::main, or ::win_N when
-            # the memory was indexed as several windows (epic 95474ec7 AC-3):
-            # strip ANY chunk suffix, and hydrate each memory once.
+            # doc_id format: memory/{domain}/{mx-id}::main or
+            # memory/{domain}/{mx-id}::win_N (sliding-window chunk of a
+            # long description). Strip ANY chunk suffix, not just ::main.
             parts = doc_id.split("::", 1)[0].split("/")
             if len(parts) >= 3:
                 entry_id = parts[-1]

@@ -1,7 +1,8 @@
 """The rules are SHACL shapes that can fail (task 8eeb3e65, epic 3efbcd89).
 
-shapes.ttl (prism_service/ontology/shapes.ttl) declares 13 SHACL shapes
-(task 5ac5d04c added text-is-plain) over the o: model, keyed per
+shapes.ttl (prism_service/ontology/shapes.ttl) declares 14 SHACL shapes
+(task 5ac5d04c added text-is-plain, task 2ee65e14 added
+text-uses-canonical-terms) over the o: model, keyed per
 ontology-SKILL.md's "Adding to the model / A new rule": the property
 (or SPARQLConstraint) shape carries the rule's own IRI, the node shape
 is <rule>.target. "A rule that cannot fail is decoration" — every rule
@@ -21,14 +22,20 @@ import rdflib
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 _MODEL_TTL = _SERVICE_ROOT / "prism_service" / "ontology" / "model.ttl"
+# task 2ee65e14: text-uses-canonical-terms' select joins on o:Term/
+# o:altLabel, which only model-lexicon.ttl declares — load it into the
+# TBox the same way model.ttl is loaded, so that rule's fixtures are not
+# vacuous (an empty join would never fire on ANY snippet).
+_MODEL_LEXICON_TTL = _SERVICE_ROOT / "prism_service" / "ontology" / "model-lexicon.ttl"
 _SHAPES_TTL = _SERVICE_ROOT / "prism_service" / "ontology" / "shapes.ttl"
 
 
 def _graph(snippet: str) -> rdflib.Graph:
-    """TBox (model.ttl) + a small ABox snippet — the fixture shape the
-    task instructs: 'small rdflib Graphs + the TBox'."""
+    """TBox (model.ttl + model-lexicon.ttl) + a small ABox snippet — the
+    fixture shape the task instructs: 'small rdflib Graphs + the TBox'."""
     g = rdflib.Graph()
     g.parse(str(_MODEL_TTL), format="turtle")
+    g.parse(str(_MODEL_LEXICON_TTL), format="turtle")
     g.parse(data=snippet, format="turtle", publicID="urn:prism:onto:")
     return g
 
@@ -122,6 +129,16 @@ RULE_FIXTURES: dict[str, tuple[str, str, str]] = {
         'o:term1 a o:Term ; rdfs:comment "A task is one unit of tracked work." . '
         'o:a1 a o:Agent ; rdfs:comment "Use when the user asks for X." .',
         _PREFIXES + 'o:t1 a o:Task ; rdfs:comment "don\'t; it\'s robust" .',
+        "t1",
+    ),
+    # task 2ee65e14: the select joins on o:Term/o:altLabel, so the
+    # compliant fixture must load model-lexicon.ttl too (done in _graph()
+    # above) or the join is empty and the rule can never fire on either
+    # fixture — vacuously "passing" the compliant case for the wrong
+    # reason.
+    "text-uses-canonical-terms": (
+        _PREFIXES + 'o:t1 a o:Task ; rdfs:label "Open a Task for review." .',
+        _PREFIXES + 'o:t1 a o:Task ; rdfs:label "Open a ticket for review." .',
         "t1",
     ),
 }

@@ -152,8 +152,10 @@ def test_terms_seven_vocabularies_and_held_back_status(project):
 
     out = okf.ontology_terms(project=project)
     names = {v["name"] for v in out["vocabularies"]}
+    # Re-anchored for task 2ee65e14 (epic df0eed4a): the lexicon of
+    # canonical terms and their synonyms is the eighth vocabulary.
     assert names == {"channel", "signal_state", "task_status", "workflow",
-                      "proof_type", "ask", "gate_state"}
+                      "proof_type", "ask", "gate_state", "lexicon"}
 
     for v in out["vocabularies"]:
         assert v["comment"]

@@ -1149,6 +1149,27 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="task_align_language",
+        description=(
+            "Trigger the align-language workflow (task f07c9cea, owner rule "
+            "mx-f49a5c): a top-level, system-controlled pass that brings "
+            "loose task text into plain Simplified Technical English. "
+            "dry_run=true (default) only previews and creates no task. "
+            "dry_run=false drives a real, visible run task through the "
+            "conductor — the same code path the daemon's own tick uses."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "dry_run": {
+                    "type": "boolean", "default": True,
+                    "description": "Preview only (true) or actually run and "
+                                    "create a driven task (false).",
+                },
+            },
+        },
+    ),
+    Tool(
         name="workflow_fix_request",
         description=(
             "Queue a governed repair for an authoritative failed scripted workflow step. "
@@ -1877,6 +1898,7 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "principles_seed",
     "prism_onboard",
     "task_create",
+    "task_align_language",
     "workflow_fix_request",
     "workflow_behavior_get",
     "workflow_behavior_provide",
@@ -4616,6 +4638,30 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             if _spec_summary is not None:
                 _out["oracle_spec"] = _spec_summary
             return [TextContent(type="text", text=_json(_out))]
+
+        if name == "task_align_language":
+            # Same shape as POST /api/tasks/align-language (task f07c9cea):
+            # dry_run (default true) only previews; dry_run=false always
+            # drives a real run through run_once_for(force=True) — the SAME
+            # code path the daemon's own tick uses.
+            from prism_service.services import (
+                language_alignment, language_alignment_worker,
+            )
+            _dry_run = arguments.get("dry_run", True)
+            if _dry_run:
+                _report = language_alignment.align_language(
+                    project_id, apply=False)
+                return [TextContent(type="text", text=_json(
+                    {"run_task_id": None, "report": _report}))]
+            _result = language_alignment_worker.run_once_for(
+                project_id, force=True)
+            if "run_task_id" in _result:
+                return [TextContent(type="text", text=_json({
+                    "run_task_id": _result.get("run_task_id"),
+                    "report": _result.get("report"),
+                }))]
+            return [TextContent(type="text", text=_json(
+                {"run_task_id": None, "report": _result}))]
 
         if name == "task_list":
             _status = arguments.get("status")

@@ -157,8 +157,13 @@ def test_stub_only_task_gets_the_real_body_backfilled(tmp_path):
     assert task_after.description != stub_description
     # provenance (the old stub content) still reachable as a trailer
     assert "#222" in task_after.description
-    # the safety line: title is NEVER refreshed from the remote
-    assert task_after.title == "Gate the ticket's premise, not just its form"
+    # the safety line: title is NEVER refreshed from the remote.
+    # Re-anchored (task 683e65eb): the lexicon aligns "ticket" to "Task" on
+    # every task write (task 2ee65e14) — assert against the aligner's own
+    # output so the fixture and the aligner cannot drift apart again.
+    from prism_service.services import ste
+    expected_title, _findings = ste.apply("Gate the ticket's premise, not just its form")
+    assert task_after.title == expected_title
     assert task_after.title != "raw github headline"
 
 
@@ -182,7 +187,12 @@ def test_hand_edited_description_is_left_untouched(tmp_path):
 
     task_after = tasks.get(link.task_id)
     assert task_after.description == "some human note, definitely not the stub"
-    assert task_after.title == "Gate the ticket's premise, not just its form"
+    # Re-anchored (task 683e65eb): the lexicon aligns "ticket" to "Task" on
+    # every task write (task 2ee65e14) — assert against the aligner's own
+    # output so the fixture and the aligner cannot drift apart again.
+    from prism_service.services import ste
+    expected_title, _findings = ste.apply("Gate the ticket's premise, not just its form")
+    assert task_after.title == expected_title
 
 
 # ── AC-3: a backfilled row converges - a further sync does not re-fire ─────

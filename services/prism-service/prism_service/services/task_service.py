@@ -18,7 +18,7 @@ from prism_service.models.task import (
     validate_channel,
     validate_workflow,
 )
-from prism_service.services import ste
+from prism_service.services import lexicon, ste
 
 
 # Callable signature for LL-03's embedder injection. Returns packed
@@ -532,8 +532,15 @@ class TaskService:
 
         def _process(name: str, value: str, mode: str) -> str:
             fixed, rules = ste.normalize(value, mode=mode)
+            # Lexicon alignment (task 2ee65e14, owner decision 2026-08-26:
+            # the act is called ALIGN, not converge): a synonym becomes
+            # the ontology's canonical term ("ticket" -> "Task") after
+            # the style fixes, before the field is checked.
+            fixed, aligned = lexicon.align(fixed)
+            if aligned:
+                rules = list(rules) + ["lexicon"]
             findings = ste.check(fixed, mode=mode)
-            fields[name] = (rules, findings)
+            fields[name] = (rules, findings, aligned)
             _remember(rules)
             return fixed
 
@@ -552,16 +559,21 @@ class TaskService:
             if task.stop_if:
                 stop_rules: list[str] = []
                 stop_findings: list[ste.Finding] = []
+                stop_aligned: list[dict] = []
                 new_stop_if: list[str] = []
                 for entry in task.stop_if:
                     fixed_entry, rules = ste.normalize(entry, mode="strict")
+                    fixed_entry, aligned = lexicon.align(fixed_entry)
+                    if aligned:
+                        rules = list(rules) + ["lexicon"]
+                        stop_aligned.extend(aligned)
                     new_stop_if.append(fixed_entry)
                     for rule in rules:
                         if rule not in stop_rules:
                             stop_rules.append(rule)
                     stop_findings.extend(ste.check(fixed_entry, mode="strict"))
                 task.stop_if = new_stop_if
-                fields["stop_if"] = (stop_rules, stop_findings)
+                fields["stop_if"] = (stop_rules, stop_findings, stop_aligned)
                 _remember(stop_rules)
 
             # Check-only fields (task 36283d72): never rewritten.
@@ -641,7 +653,17 @@ class TaskService:
         # STE normalisation (task 36283d72): rewrite the safe fields BEFORE
         # the insert below, so the stored row already carries the fixed
         # text. Never blocks the write — _apply_ste swallows its own
-        # errors.
+        # errors. ste_before (task 2ee65e14) snapshots the pre-normalise
+        # text so the ste_normalise history row can carry what changed.
+        ste_before = {
+            "title": task.title,
+            "description": task.description,
+            "oracle": task.oracle,
+            "likely_misfire": task.likely_misfire,
+            "completion_proof": task.completion_proof,
+            "premise_notes": task.premise_notes,
+            "stop_if": list(task.stop_if),
+        }
         ste_rules = self._apply_ste(task)
         self._db.execute(
             "INSERT INTO tasks "
@@ -687,8 +709,12 @@ class TaskService:
         self._db.commit()
         self._record_history(task.id, "created", f"title={title!r}")
         if ste_rules:
+            changed_before = {
+                f: v for f, v in ste_before.items() if getattr(task, f) != v}
             self._record_history(
-                task.id, "ste_normalise", "rules=" + ",".join(ste_rules))
+                task.id, "ste_normalise",
+                "rules=" + ",".join(ste_rules)
+                + " before=" + json.dumps(changed_before))
         # LL-03: embed title+description so LL-06's similarity retrieval
         # has something to search over. Silent on embedder-offline —
         # the row still exists, just without a vector.
@@ -961,8 +987,12 @@ class TaskService:
         self._db.commit()
         self._record_history(task.id, "updated", "; ".join(changes))
         if ste_rules:
+            changed_before = {
+                f: v for f, v in ste_before.items() if getattr(task, f) != v}
             self._record_history(
-                task.id, "ste_normalise", "rules=" + ",".join(ste_rules))
+                task.id, "ste_normalise",
+                "rules=" + ",".join(ste_rules)
+                + " before=" + json.dumps(changed_before))
         # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
         # it — the write already committed above, so a publish failure
         # (bus down, serialization) must never surface as a write failure.

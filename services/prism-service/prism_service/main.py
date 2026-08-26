@@ -626,6 +626,16 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.task_runner import start_task_runner
         start_task_runner()
 
+        # Task f07c9cea (owner rule mx-f49a5c) — the align-language seat:
+        # a top-level, system-controlled workflow that brings loose task
+        # text into plain Simplified Technical English. Own thread (same
+        # footprint as task_runner); default OFF —
+        # PRISM_LANGUAGE_ALIGNMENT_WORKER=on opts an environment in.
+        from prism_service.services.language_alignment_worker import (
+            start_language_alignment_worker,
+        )
+        start_language_alignment_worker()
+
         # Task 5b6aefc1 (owner 2026-08-18) — the ship seat: an owner's
         # green_gate approve LANDS the branch (push -> PR -> CI -> merge)
         # instead of being refused for not having landed yet. Deterministic

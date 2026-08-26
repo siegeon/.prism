@@ -445,6 +445,28 @@ def next_task(project: str = Query("default")) -> dict:
     return {"next": _svc(project).next_task()}
 
 
+@router.post("/align-language")
+def trigger_align_language(
+    project: str = Query("default"), dry_run: bool = Query(True),
+) -> dict:
+    """Trigger the align-language workflow (task f07c9cea, owner rule
+    mx-f49a5c). A dry run (default) only previews: it creates no task and
+    writes nothing. dry_run=false always drives a real run through
+    services.language_alignment_worker.run_once_for(project, force=True)
+    — the SAME code path the daemon's own tick uses, so a person's click
+    and the daemon's own pass never diverge."""
+    from prism_service.services import language_alignment, language_alignment_worker
+
+    if dry_run:
+        report = language_alignment.align_language(project, apply=False)
+        return {"run_task_id": None, "report": report}
+    result = language_alignment_worker.run_once_for(project, force=True)
+    if "run_task_id" in result:
+        return {"run_task_id": result.get("run_task_id"),
+                "report": result.get("report")}
+    return {"run_task_id": None, "report": result}
+
+
 def _is_shipped_on_main(repo: str, task_id: str) -> bool:
     """Squash-safe shipped-ness: does a commit MESSAGE on origin/main carry
     the `[task:<id8>]` trailer? Reads commit messages on origin/main
@@ -923,14 +945,18 @@ _LINK_FIELDS = ("description", "oracle", "likely_misfire", "plan_doc",
 
 @router.get("/{task_id}/links")
 def get_task_links(task_id: str, project: str = Query("default")) -> dict:
-    """Cross-clicking (task 6968cc39, extended by task 2ec1e395): every
-    ontology-known entity this task's TEXT FIELDS mention, as
-    entity_linker.link()'s non-overlapping spans. `fields` carries spans
-    per field name (_LINK_FIELDS) so TaskDetailPage's oracle/plan/premise/
-    proof cards share ONE response instead of each hand-rolling their own
-    linker call — entity_linker's own index cache means these N link()
-    calls still cost only the FIRST request's SPARQL build, never one per
-    field. `spans` stays the bare description-only shape for old callers."""
+    """Cross-clicking (task 6968cc39, extended by task 2ec1e395, then task
+    8a6f175b): every ontology-known entity this task's TEXT FIELDS
+    mention, as entity_linker.link()'s non-overlapping spans. `fields`
+    carries spans per field name (_LINK_FIELDS) so TaskDetailPage's
+    oracle/plan/premise/proof cards share ONE response instead of each
+    hand-rolling their own linker call — entity_linker's own index cache
+    means these N link() calls still cost only the FIRST request's SPARQL
+    build, never one per field. `spans` stays the bare description-only
+    shape for old callers. `vocabulary`, per field, names the lexicon
+    synonyms and canonical labels that field's spans reached
+    (entity_linker.vocabulary_of) — old callers reading only `spans`/
+    `fields` see no shape change."""
     from prism_service.services import entity_linker
 
     svc = _svc(project)
@@ -939,7 +965,9 @@ def get_task_links(task_id: str, project: str = Query("default")) -> dict:
         raise HTTPException(404, "task not found")
     fields = {name: entity_linker.link(project, getattr(t, name, "") or "")
               for name in _LINK_FIELDS}
-    return {"spans": fields["description"], "fields": fields}
+    vocabulary = {name: entity_linker.vocabulary_of(spans)
+                  for name, spans in fields.items()}
+    return {"spans": fields["description"], "fields": fields, "vocabulary": vocabulary}
 
 
 @router.get("/{task_id}/trace")

@@ -51,7 +51,9 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # already-open browser tab live; plan peaceful-seeking-octopus).
     # + signal_post (task a6858911 — Queue intake: a collector posting a
     # signal over MCP is the primary path, unlike documents_place).
-    assert len(names) == 33
+    # 34 since task f07c9cea (epic df0eed4a): task_align_language joined the
+    # interactive profile as the trigger for the Align language workflow.
+    assert len(names) == 34
     # Pin the INTENT, not just the number: the loop verb is served and the
     # legacy drivers stay off the default surface (tool-surface reduction).
     assert "conductor_work" in names
