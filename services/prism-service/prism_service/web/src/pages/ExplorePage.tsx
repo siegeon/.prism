@@ -23,6 +23,11 @@ type MeshNode = {
   // outer ring). `via` is the first-hop token a second-hop node hangs off, so
   // the mesh draws its edge to the right parent instead of the center.
   hop?: number; via?: string | null;
+  // Explore applies the ontology (task 139a8131): the o: class this node's
+  // entity is typed with (GET /api/xref/neighbors), '' when the ontology
+  // graph doesn't know it yet -- rendered honestly as "unclassified", never
+  // guessed.
+  ontology_class?: string;
 };
 // The center additionally carries last_motion (task rows only) for the
 // Selected card; it never appears on neighbors.
@@ -31,7 +36,9 @@ type MeshCenter = MeshNode & { last_motion?: string | null };
 // + hop1 + hop2), not just center-touching spokes -- memory<->memory
 // wikilinks, code<->code calls, session<->gate, session<->code, plus the
 // implicit spokes themselves. `from`/`to` are node tokens (see MeshNode.token).
-type MeshEdge = { from: string; to: string; label: string };
+// ontology_property is the o: relation this edge's label maps to (o:calls,
+// o:imports, ... or the honest o:relatesTo catch-all).
+type MeshEdge = { from: string; to: string; label: string; ontology_property?: string };
 type MeshData = { center: MeshCenter; neighbors: MeshNode[]; edges: MeshEdge[] };
 // The 6 canonical node shapes the mesh draws; anything else falls back to a
 // neutral dot. Mirrors EntityChip's EntityKind + the --et-* token set.
@@ -1100,6 +1107,18 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
   const twoHopCount = useMemo(
     () => (data?.neighbors ?? []).filter((n) => n.hop === 2).length, [data]);
   const lastMotion = relTime(data?.center.last_motion);
+  // Explore applies the ontology (task 139a8131): the legend groups by
+  // ontology_class (with counts) once the ontology graph has classified at
+  // least one visible node; otherwise it falls back to the plain kind key.
+  const ontologyLegend = useMemo(() => {
+    const counts = new Map<string, number>();
+    const bump = (n?: MeshNode) => {
+      if (n?.ontology_class) counts.set(n.ontology_class, (counts.get(n.ontology_class) ?? 0) + 1);
+    };
+    bump(center);
+    visible.forEach(bump);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [center, visible]);
 
   // Single click re-centers (wander the mesh); double click opens the page.
   // A short timer disambiguates the two without a jarring double-fire. A
@@ -1220,14 +1239,19 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                 const b = renderPos.get(e.to)!;
                 const spoke = center && (e.from === center.token || e.to === center.token);
                 const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+                // Explore applies the ontology (task 139a8131): the on-canvas
+                // label reads the o: property (o:calls, o:relatesTo, ...);
+                // the tooltip keeps the original human relation for context.
+                const prop = e.ontology_property;
                 return (
                   <g key={`${e.from}->${e.to}`}>
+                    <title>{prop ? `${e.label} · o:${prop}` : e.label}</title>
                     <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
                       stroke={spoke ? "var(--border-strong)" : "var(--border-default)"}
                       strokeWidth={spoke ? 1.1 : 0.9} opacity={spoke ? 1 : 0.6} />
                     {(spoke || renderEdges.length <= 28) && (
                       <text {...HALO} x={mx} y={my - 3} textAnchor="middle" fontSize={spoke ? 11 : 10}
-                        fill="var(--text-label)" opacity={spoke ? 1 : 0.85}>{e.label}</text>
+                        fill="var(--text-label)" opacity={spoke ? 1 : 0.85}>{prop ?? e.label}</text>
                     )}
                   </g>
                 );
@@ -1276,13 +1300,23 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
           )}
         </div>
 
-        {/* legend */}
+        {/* legend -- ontology classes once Explore has classified something
+            here, else the plain kind-shape key */}
         <div className="flex flex-wrap gap-3 px-3 py-2 border-t border-[color:var(--border-default)] text-2xs text-[color:var(--text-label)]">
-          {MESH_KINDS.map((k) => (
-            <span key={k} className="inline-flex items-center gap-1 capitalize">
-              <GlyphIcon kind={k} size={10} /> {k}
-            </span>
-          ))}
+          {ontologyLegend.length > 0 ? (
+            ontologyLegend.map(([cls, n]) => (
+              <span key={cls} className="ont-node" data-kind="class">
+                <i className="ont-glyph" />{cls}
+                <span className="text-2xs font-mono tabular-nums opacity-70">{n}</span>
+              </span>
+            ))
+          ) : (
+            MESH_KINDS.map((k) => (
+              <span key={k} className="inline-flex items-center gap-1 capitalize">
+                <GlyphIcon kind={k} size={10} /> {k}
+              </span>
+            ))
+          )}
           <span className="ml-auto">scroll = zoom · drag = pan · click a node to re-center · double-click opens it</span>
         </div>
       </div>
@@ -1307,6 +1341,20 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
                 <div className="flex items-center gap-2">
                   <span className="opacity-50 uppercase tracking-wider w-[72px] shrink-0">Last motion</span>
                   <span className="text-[color:var(--text-secondary)]">{lastMotion}</span>
+                </div>
+              )}
+              {center.ontology_class !== undefined && (
+                <div className="flex items-center gap-2">
+                  <span className="opacity-50 uppercase tracking-wider w-[72px] shrink-0">Ontology</span>
+                  {center.ontology_class ? (
+                    <a href={`/ontology?tab=structure&class=${encodeURIComponent(center.ontology_class)}`}
+                      onClick={(ev) => { ev.preventDefault(); onOpen(`/ontology?tab=structure&class=${encodeURIComponent(center.ontology_class!)}`); }}
+                      className="ont-node" data-kind="class">
+                      <i className="ont-glyph" />{center.ontology_class}
+                    </a>
+                  ) : (
+                    <span className="text-[color:var(--text-muted)] italic">unclassified</span>
+                  )}
                 </div>
               )}
             </div>

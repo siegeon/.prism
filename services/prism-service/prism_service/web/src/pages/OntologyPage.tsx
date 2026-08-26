@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, ApiError } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Button } from "@/components/ui";
@@ -21,10 +22,14 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: "terms", label: "Terms" },
 ];
 
+function isTabKey(v: string | null): v is TabKey {
+  return v === "structure" || v === "rules" || v === "records" || v === "terms";
+}
+
 function readStoredTab(): TabKey {
   try {
     const v = localStorage.getItem(TAB_STORAGE_KEY);
-    if (v === "structure" || v === "rules" || v === "records" || v === "terms") return v;
+    if (isTabKey(v)) return v;
   } catch {
     // private mode / storage disabled — fall through to the default
   }
@@ -97,7 +102,17 @@ function DotLabel({
 
 export default function OntologyPage() {
   const [project] = useProject();
-  const [tab, setTab] = useState<TabKey>(readStoredTab);
+  // Explore applies the ontology (task 139a8131): a class pill in the Explore
+  // rail deep-links here as /ontology?tab=structure&class=<cls> -- tab from
+  // the URL wins over the localStorage default; class scrolls/highlights the
+  // matching Structure row once it loads. Read-only: never written back.
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<TabKey>(() => {
+    const qp = searchParams.get("tab");
+    return isTabKey(qp) ? qp : readStoredTab();
+  });
+  const highlightClass = searchParams.get("class");
+  const highlightRef = useRef<HTMLDivElement | null>(null);
 
   const [legacy, setLegacy] = useState<LegacyPayload | null>(null);
   const [structure, setStructure] = useState<StructurePayload | null>(null);
@@ -152,6 +167,12 @@ export default function OntologyPage() {
   useEffect(() => {
     try { localStorage.setItem(TAB_STORAGE_KEY, tab); } catch { /* private mode / storage disabled */ }
   }, [tab]);
+
+  useEffect(() => {
+    if (highlightClass && highlightRef.current) {
+      highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightClass, structure]);
 
   const rebuild = () => {
     setRebuilding(true);
@@ -225,7 +246,10 @@ export default function OntologyPage() {
         </div>
       </div>
 
-      {tab === "structure" && <StructureTab data={structure} error={structureErr} />}
+      {tab === "structure" && (
+        <StructureTab data={structure} error={structureErr}
+          highlightClass={highlightClass} highlightRef={highlightRef} />
+      )}
       {tab === "rules" && <RulesTab data={rules} error={rulesErr} />}
       {tab === "records" && (
         <RecordsTab
@@ -240,7 +264,10 @@ export default function OntologyPage() {
   );
 }
 
-function StructureTab({ data, error }: { data: StructurePayload | null; error: string | null }) {
+function StructureTab({ data, error, highlightClass, highlightRef }: {
+  data: StructurePayload | null; error: string | null;
+  highlightClass?: string | null; highlightRef?: RefObject<HTMLDivElement | null>;
+}) {
   if (error) return <Card><Empty>{error}</Empty></Card>;
   if (!data) return <Card><Empty>Loading structure…</Empty></Card>;
   return (
@@ -256,7 +283,10 @@ function StructureTab({ data, error }: { data: StructurePayload | null; error: s
           {data.classes.length === 0 ? <Empty>No classes yet.</Empty> : (
             <div className="space-y-1.5">
               {data.classes.map((c) => (
-                <div key={c.id} className="flex items-center gap-2" style={{ paddingLeft: c.depth * 16 }}>
+                <div key={c.id} data-class={c.name}
+                  ref={highlightClass === c.name ? highlightRef : undefined}
+                  className={`flex items-center gap-2 ${highlightClass === c.name ? "ring-2 ring-[color:var(--accent-teal-fg)] rounded" : ""}`}
+                  style={{ paddingLeft: c.depth * 16 }}>
                   <span className="ont-node" data-kind="class" data-abstract={c.abstract ? "true" : undefined}>
                     <i className="ont-glyph" />{c.name}
                     <span className="text-2xs font-mono tabular-nums opacity-70">{c.count}</span>

@@ -110,7 +110,12 @@ def _resolve_symbol(brain_svc, token: str) -> Optional[dict]:
                 chosen = r
                 break
     return {"file": chosen.get("source_file") or "",
-            "name": chosen.get("entity_name") or leaf}
+            "name": chosen.get("entity_name") or leaf,
+            # entity_kind (docs table) mirrors graph.db entities.kind for
+            # the same symbol -- the ontology IRI-building code (Explore
+            # applies the ontology, task 139a8131) uses it to resolve this
+            # symbol's ontology_class without a second lookup.
+            "entity_kind": chosen.get("entity_kind") or ""}
 
 
 def _resolve_file(brain_svc, token: str) -> Optional[str]:
@@ -355,6 +360,22 @@ _UI_KIND = {
     "task": "task", "session": "session", "gate": "gate",
     "test": "test", "retrieval": "retrieval",
 }
+
+# Explore applies the ontology (task 139a8131): edge kinds the graph.db
+# indexer actually emits, matching model.ttl's o:relatesTo sub-properties
+# 1:1 (o:calls, o:imports, ...). A mesh edge label outside this set (most
+# of them -- "drove", "recalled", "called by", ...) is real relatedness
+# the ontology hasn't been given its own property for yet, so it honestly
+# rolls up to o:relatesTo rather than a guessed/fabricated name.
+_ONTOLOGY_EDGE_PROPERTIES = frozenset({
+    "calls", "imports", "imports_from", "inherits",
+    "contains", "uses", "method", "rationale_for",
+})
+
+
+def _ontology_property_for(label: Optional[str]) -> str:
+    key = (label or "").strip().lower()
+    return key if key in _ONTOLOGY_EDGE_PROPERTIES else "relatesTo"
 
 
 def _field(obj, name, default=None):
@@ -650,7 +671,11 @@ def _code_neighbors(p, sym: dict, out: list) -> None:
             cf = r.get("file") or r.get("source_file") or ""
             if cn:
                 href = f"/artifact?focus={cf}&symbol={cn}" if cf else None
-                out.append(_nb("code", cn, href, "called by", cn))
+                nb = _nb("code", cn, href, "called by", cn)
+                # caller_kind is graph.db entities.kind for the caller --
+                # the raw material for this neighbor's ontology_class.
+                nb["_code_ref"] = (r.get("caller_kind") or "", cn)
+                out.append(nb)
     except Exception:
         pass
     try:
@@ -661,7 +686,9 @@ def _code_neighbors(p, sym: dict, out: list) -> None:
     for e in edges:
         to = e.get("to")
         if to and to != name:
-            out.append(_nb("code", to, f"/artifact?focus={to}", "calls", to))
+            nb = _nb("code", to, f"/artifact?focus={to}", "calls", to)
+            nb["_code_ref"] = (e.get("kind") or "", to)
+            out.append(nb)
 
 
 def _file_neighbors(p, file: str, out: list) -> None:
@@ -680,8 +707,11 @@ def _file_neighbors(p, file: str, out: list) -> None:
         # tolerate `name` for older/fake shapes.
         nm = (s.get("entity_name") or s.get("name")) if isinstance(s, dict) else None
         if nm:
-            out.append(_nb("code", nm, f"/artifact?focus={file}&symbol={nm}",
-                           "defines", nm))
+            nb = _nb("code", nm, f"/artifact?focus={file}&symbol={nm}",
+                     "defines", nm)
+            ek = s.get("entity_kind") if isinstance(s, dict) else None
+            nb["_code_ref"] = (ek or "", nm)
+            out.append(nb)
 
 
 def _gate_neighbors(p, token: str, out: list) -> None:
@@ -848,8 +878,10 @@ HOP2_TOTAL = 140
 def _expand(token: str, p) -> tuple:
     """Resolve `token` and gather its typed 1-hop neighbors via the guarded
     per-kind gatherers. Returns (resolved_center, neighbors, center_domain,
-    center_type, kind) -- the single reusable hop the 1- and 2-hop builds share.
-    Pure; unit-testable with fake services."""
+    center_type, kind, center_code_ref) -- the single reusable hop the 1-
+    and 2-hop builds share. Pure; unit-testable with fake services.
+    center_code_ref is (entity_kind, name) for a symbol center, else None --
+    the ontology_class resolver's raw material for the CENTER node itself."""
     center = resolve_token(
         token, p.memory_svc, p.brain_svc, getattr(p, "graph_svc", None),
         task_svc=getattr(p, "task_svc", None),
@@ -859,6 +891,7 @@ def _expand(token: str, p) -> tuple:
     out: list = []
     center_domain: Optional[str] = None
     center_type: Optional[str] = None
+    center_code_ref: Optional[tuple] = None
     if kind == "task":
         task = _task_lookup(getattr(p, "task_svc", None), token)
         if task is not None:
@@ -878,12 +911,15 @@ def _expand(token: str, p) -> tuple:
             center_domain = cm.get("domain")
             center_type = cm.get("type")
     elif kind == "symbol":
-        _code_neighbors(p, _resolve_symbol(p.brain_svc, token) or {}, out)
+        sym = _resolve_symbol(p.brain_svc, token) or {}
+        _code_neighbors(p, sym, out)
+        if sym.get("name"):
+            center_code_ref = (sym.get("entity_kind") or "", sym["name"])
     elif kind == "file":
         _file_neighbors(p, center.get("label") or token, out)
     elif kind == "gate":
         _gate_neighbors(p, token, out)
-    return center, out, center_domain, center_type, kind
+    return center, out, center_domain, center_type, kind, center_code_ref
 
 
 def _dedupe(neighbors: list) -> list:
@@ -899,6 +935,45 @@ def _dedupe(neighbors: list) -> list:
     return deduped
 
 
+def _resolve_ontology_classes(project_id: Optional[str], nodes: list) -> None:
+    """One pass: attach `ontology_class` to every node in `nodes` (the
+    center dict + every neighbor dict, mutated in place). A node carries a
+    resolvable `_code_ref` (entity_kind, name) hint -- popped either way --
+    only when it came through a code-graph source (_code_neighbors/
+    _file_neighbors/symbol center); the IRI mirrors _emit_code_graph's own
+    shape exactly (ontology_graph.py, bucket 'code', key '<kind>/<name>').
+    A SINGLE SPARQL VALUES query resolves every IRI at once -- never one
+    class_of() call per node. open_if_exists never creates a store, so an
+    unbuilt/missing ontology graph just leaves every node '' -- honest,
+    same as an IRI the graph has no rdf:type triple for."""
+    from prism_service.services.ontology_graph import NS, _iri, open_if_exists
+
+    iri_of: dict = {}
+    for n in nodes:
+        ref = n.pop("_code_ref", None)
+        n["ontology_class"] = ""
+        if ref and ref[0] and ref[1]:
+            iri_of[id(n)] = _iri("code", f"{ref[0]}/{ref[1]}")
+    if not iri_of:
+        return
+    og = open_if_exists(project_id) if project_id else None
+    if og is None:
+        return
+    iris = sorted(set(iri_of.values()))
+    values = " ".join(f"<{i}>" for i in iris)
+    q = f"SELECT ?iri ?c WHERE {{ VALUES ?iri {{ {values} }} GRAPH ?g {{ ?iri a ?c }} }}"
+    try:
+        result = og.query(q, limit=len(iris))
+    except Exception:
+        return
+    cls_of = {}
+    for row in result.get("bindings", []):
+        c = row.get("c") or ""
+        cls_of[row.get("iri")] = c[len(NS):] if c.startswith(NS) else c
+    for n in nodes:
+        n["ontology_class"] = cls_of.get(iri_of.get(id(n)), "")
+
+
 def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
     """Build the typed neighborhood for `token`. hops=1 is the 1-hop ego net;
     hops=2 additionally expands each first-hop node's OWN neighborhood onto an
@@ -909,7 +984,7 @@ def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
     mesh -- implicit spokes PLUS any inter-neighbor edges found among the
     collected node set (see _build_mesh_edges) -- so the client renders one
     edge list instead of assuming every edge touches the center."""
-    center, out, center_domain, center_type, kind = _expand(token, p)
+    center, out, center_domain, center_type, kind, center_code_ref = _expand(token, p)
     hop1 = _dedupe(out)[: max(1, int(limit))]
     for n in hop1:
         n["hop"] = 1
@@ -920,6 +995,8 @@ def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
         "href": center.get("href"),
         "token": token,
     }
+    if center_code_ref:
+        center_out["_code_ref"] = center_code_ref
     if center_domain:
         center_out["domain"] = center_domain
     if center_type:
@@ -944,7 +1021,7 @@ def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
         for parent in hop1:
             if len(hop2) >= HOP2_TOTAL:
                 break
-            _, pout, _pd, _pt, _pk = _expand(parent["token"], p)
+            _, pout, _pd, _pt, _pk, _pcr = _expand(parent["token"], p)
             added = 0
             for nb in pout:
                 if added >= HOP2_PER_NODE or len(hop2) >= HOP2_TOTAL:
@@ -959,7 +1036,11 @@ def neighbors_for(token: str, p, limit: int = 24, hops: int = 1) -> dict:
                 added += 1
         neighbors.extend(hop2)
 
+    _resolve_ontology_classes(getattr(p, "project_id", None),
+                               [center_out] + neighbors)
     edges = _build_mesh_edges(p, center_out, neighbors)
+    for e in edges:
+        e["ontology_property"] = _ontology_property_for(e.get("label"))
     return {"center": center_out, "neighbors": neighbors, "edges": edges}
 
 
