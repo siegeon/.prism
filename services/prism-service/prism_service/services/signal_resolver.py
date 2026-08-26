@@ -53,16 +53,23 @@ def resolve(project: str, signal: Signal) -> dict[str, Any]:
     this as best-effort and persist whatever comes back."""
     reasons: dict[str, str] = {}
 
+    # task 31b737fb: parse() once here -- the graph projection reads this
+    # persisted extraction back off the signal, never re-parses.
+    extraction = _safe(lambda: _parse_signal(signal), None)
+    extraction_dict = extraction.model_dump() if extraction is not None else {}
+
     channel = _channel_match(signal)
-    related_tasks = _safe(lambda: _related_tasks(project, signal), [])
+    related_tasks = _safe(
+        lambda: _related_tasks(project, signal, extraction_dict), [])
     concepts, concepts_reason = _concepts(project, signal)
     if concepts_reason:
         reasons["concepts"] = concepts_reason
     code, code_reason = _code_matches(project, signal)
     if code_reason:
         reasons["code"] = code_reason
-    ask = _classify_ask(signal.subject, signal.body)
-    people, people_reason = _people(signal)
+    has_deadline = bool(extraction_dict.get("deadlines"))
+    ask = _classify_ask(signal.subject, signal.body, has_deadline=has_deadline)
+    people, people_reason = _people(signal, extraction_dict)
     if people_reason:
         reasons["people"] = people_reason
 
@@ -73,11 +80,48 @@ def resolve(project: str, signal: Signal) -> dict[str, Any]:
         "code": code,
         "ask": ask,
         "people": people,
+        "extraction": extraction_dict,
         "resolved_at": datetime.now(timezone.utc).isoformat(),
     }
     if reasons:
         matches["reasons"] = reasons
+    _apply_enrichment_gate(matches, ask, signal)
     return matches
+
+
+def _parse_signal(signal: Signal):
+    from prism_service.services.signal_parse import parse as parse_signal
+    return parse_signal(signal)
+
+
+def _derive_bucket(ask_kind: str | None) -> str:
+    """A plain, testable heuristic feeding gate_enrichment -- the gate
+    itself (never this heuristic) is what the vocabulary is checked
+    against (task 31b737fb)."""
+    if ask_kind in ("decision", "review", "deliverable"):
+        return "needs_attention"
+    if ask_kind == "fyi":
+        return "team_updates"
+    return "low_priority"
+
+
+def _apply_enrichment_gate(matches: dict[str, Any], ask: dict[str, str],
+                            signal: Signal) -> None:
+    """Best-effort: validate a classifier-shaped view of this signal
+    (ask_kind/bucket/channel) through gate_enrichment, persisting whatever
+    it holds back onto matches['held_back'] (SignalStore.update persists
+    it) -- never raises, never blocks intake."""
+    def _run():
+        from prism_service.services.signal_parse import HeldBack, gate_enrichment
+        raw = {"ask_kind": ask.get("kind"),
+               "bucket": _derive_bucket(ask.get("kind")),
+               "channel": signal.channel}
+        result = gate_enrichment(raw)
+        if isinstance(result, HeldBack):
+            matches["held_back"] = result.held
+        else:
+            matches["enrichment"] = result.model_dump()
+    _safe(_run, None)
 
 
 def _safe(fn, default):
@@ -97,12 +141,33 @@ def _channel_match(signal: Signal) -> dict[str, Any]:
     return {"id": signal.channel, "known": signal.channel in CHANNELS}
 
 
-def _related_tasks(project: str, signal: Signal) -> list[dict]:
+def _extraction_refs(extraction: dict | None) -> set[str]:
+    """Every reference parse() found (ticket keys, PR/issue refs,
+    permalinks) as a flat set of strings a task's channel_ref might equal
+    (task 31b737fb: related_tasks also matches on what was extracted)."""
+    extraction = extraction or {}
+    refs: set[str] = {t.get("key") for t in extraction.get("tickets", [])
+                       if t.get("key")}
+    for c in extraction.get("code_refs", []):
+        number = c.get("number")
+        if number is None:
+            continue
+        if c.get("repo"):
+            refs.add(f"{c['repo']}#{number}")
+        refs.add(f"#{number}")
+    refs.update(p for p in extraction.get("permalinks", []) if p)
+    return refs
+
+
+def _related_tasks(project: str, signal: Signal,
+                    extraction: dict | None = None) -> list[dict]:
     """Real TASKS rows (TaskService), never the ontology sqlite tables:
-    same channel_ref, then title/subject token overlap incl. an id-like
-    token in the subject, capped at 5."""
+    same channel_ref, an extracted reference (ticket key / PR ref /
+    permalink) equal to a task's channel_ref, then title/subject token
+    overlap incl. an id-like token in the subject, capped at 5."""
     from prism_service.project_context import get_project
 
+    extracted_refs = _extraction_refs(extraction)
     tasks = get_project(project).task_svc.list()
     subject_text = f"{signal.subject or ''} {signal.body or ''}".lower()
     subject_tokens = _tokens(signal.subject)
@@ -121,6 +186,8 @@ def _related_tasks(project: str, signal: Signal) -> list[dict]:
         why = ""
         if signal.channel_ref and t.channel_ref and t.channel_ref == signal.channel_ref:
             why = "same channel_ref"
+        elif t.channel_ref and t.channel_ref in extracted_refs:
+            why = f"matched extracted reference ({t.channel_ref})"
         elif t.id and (t.id.lower() in subject_text or t.id[:8].lower() in subject_text):
             why = f"id-like token match ({t.id[:8]})"
         else:
@@ -203,10 +270,14 @@ def _word_in(text: str, *words: str) -> bool:
     return any(re.search(rf"\b{re.escape(w)}\b", text) for w in words)
 
 
-def _classify_ask(subject: str, body: str) -> dict[str, str]:
+def _classify_ask(subject: str, body: str,
+                   has_deadline: bool = False) -> dict[str, str]:
     """Documented keyword heuristic, checked in a fixed priority order so a
     subject/body that trips more than one bucket lands on the most
-    actionable reading (a decision beats a plain FYI)."""
+    actionable reading (a decision beats a plain FYI). has_deadline (task
+    31b737fb): true when parse()'s own deadline extraction (before
+    Friday/EOD tomorrow/ISO dates) found one -- a real deadline is a
+    deliverable signal even when 'by <date>' isn't the literal phrasing."""
     text = f"{subject or ''} {body or ''}".lower()
 
     if _word_in(text, "approve", "decide", "choose"):
@@ -218,6 +289,9 @@ def _classify_ask(subject: str, body: str) -> dict[str, str]:
     if _word_in(text, "deliver", "send") or re.search(r"\bby\s+\w", text):
         return {"kind": "deliverable",
                 "reason": "names a deliverable/deadline (deliver/send/by <date>)"}
+    if has_deadline:
+        return {"kind": "deliverable",
+                "reason": "a deadline was resolved from the signal's text"}
     if "?" in text or "can you" in text or "please reply" in text:
         return {"kind": "reply",
                 "reason": "asks a question or requests a reply"}
@@ -226,17 +300,23 @@ def _classify_ask(subject: str, body: str) -> dict[str, str]:
     return {"kind": "unknown", "reason": "no keyword heuristic matched"}
 
 
-def _people(signal: Signal) -> tuple[list[dict], str]:
+def _people(signal: Signal,
+            extraction: dict | None = None) -> tuple[list[dict], str]:
     """ActorService.resolve() -- the same email/name resolver Task and
-    TaskHistory actors go through (services/actor_service.py)."""
-    if not signal.sender:
+    TaskHistory actors go through (services/actor_service.py). Resolves
+    by ADDRESS only, never by a display name: signal.sender first, and
+    (task 31b737fb) an address parse() found in the body when there is no
+    sender -- 'an address is evidence, a name is a guess'."""
+    address = signal.sender or next(
+        iter((extraction or {}).get("addresses", [])), "")
+    if not address:
         return [], "signal has no sender"
     try:
         from prism_service.models.actor import ActorKind
         from prism_service.services.actor_service import get_actor_service
-        actor = get_actor_service().resolve(signal.sender)
+        actor = get_actor_service().resolve(address)
     except Exception as exc:  # pragma: no cover - defensive
         return [], f"actor resolution failed: {exc}"
     if actor.kind != ActorKind.HUMAN:
-        return [], f"sender '{signal.sender}' did not resolve to a known actor"
+        return [], f"sender '{address}' did not resolve to a known actor"
     return [{"name": actor.display_name, "actor_id": actor.id}], ""

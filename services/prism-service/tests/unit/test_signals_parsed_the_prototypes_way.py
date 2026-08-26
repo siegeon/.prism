@@ -69,15 +69,15 @@ def test_parse_extracts_the_prototypes_way_on_the_oracle_sample():
 
     extraction = parse(_sample_signal())
 
-    keys = {t["key"] for t in extraction.tickets}
+    keys = {t.key for t in extraction.tickets}
     assert "PLAT-42" in keys
     assert "AM-10" not in keys
-    plat = next(t for t in extraction.tickets if t["key"] == "PLAT-42")
-    assert plat["project"] == "PLAT"
-    assert plat["known"] is True
+    plat = next(t for t in extraction.tickets if t.key == "PLAT-42")
+    assert plat.project == "PLAT"
+    assert plat.known is True
 
-    prs = [c for c in extraction.code_refs if c["kind"] == "pr"]
-    assert any(c["number"] == 17 for c in prs)
+    prs = [c for c in extraction.code_refs if c.kind == "pr"]
+    assert any(c.number == 17 for c in prs)
 
     assert "jane.doe@example.com" in extraction.addresses
     assert any("slack.com/archives" in p for p in extraction.permalinks)
@@ -256,8 +256,8 @@ def test_graph_carries_aboutticket_askedby_raises_for_a_seeded_signal():
 
     q_person = (
         "PREFIX o: <urn:prism:onto:> "
-        "SELECT ?p WHERE { GRAPH ?g { ?ask a o:Ask ; o:askedBy ?p . "
-        "?p o:email ?e } }"
+        "SELECT ?p WHERE { GRAPH ?g { ?s a o:Signal ; o:raises ?ask . "
+        "?ask o:askedBy ?p . ?p o:email ?e } }"
     )
     rows2 = list(graph._store.query(q_person, use_default_graph_as_union=True))
     assert rows2, "expected askedBy -> a Person with an o:email"

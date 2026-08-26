@@ -94,6 +94,25 @@ RULE_FIXTURES: dict[str, tuple[str, str, str]] = {
         'o:x1 a o:ClassA, o:ClassB .',
         "ClassA",
     ),
+    # task 31b737fb: signals are parsed the prototype's way into the
+    # ontology — three new rules over the aboutTicket/askedBy joins
+    # signal_parse's regex extraction feeds into the graph.
+    "jira-issue-known-project": (
+        _PREFIXES + 'o:i1 a o:JiraIssue ; o:projectKnown true .',
+        _PREFIXES + 'o:i1 a o:JiraIssue ; o:projectKnown false .',
+        "i1",
+    ),
+    "ask-names-a-person": (
+        _PREFIXES + 'o:ask1 a o:Ask ; o:askedBy o:p1 .',
+        _PREFIXES + 'o:ask1 a o:Ask .',
+        "ask1",
+    ),
+    "signal-joins-on-address": (
+        _PREFIXES + 'o:ask1 a o:Ask ; o:askedBy o:p1 . '
+        'o:p1 a o:Person ; o:email "a@b.com" .',
+        _PREFIXES + 'o:ask1 a o:Ask ; o:askedBy o:p1 . o:p1 a o:Person .',
+        "ask1",
+    ),
 }
 
 
