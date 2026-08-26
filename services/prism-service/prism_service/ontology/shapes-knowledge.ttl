@@ -23,7 +23,7 @@ o:concept-names-its-domain.target a sh:NodeShape ;
     sh:property o:concept-names-its-domain .
 
 o:concept-names-its-domain a sh:PropertyShape ;
-    rdfs:comment "Every concept names the domain it's filed under — a concept with no domain can never be found by drilling in from Understand's front door." ;
+    rdfs:comment "Every concept names its own domain. Understand's domain-first drill-in cannot find a concept with no domain." ;
     sh:name "Every concept names its domain" ;
     sh:description "A concept with no domain is unreachable from Understand's domain-first drill." ;
     sh:path o:inDomain ;
@@ -64,9 +64,9 @@ o:decision-has-evidence.target a sh:NodeShape ;
     sh:property o:decision-has-evidence .
 
 o:decision-has-evidence a sh:PropertyShape ;
-    rdfs:comment "A decision with no evidence is an assertion, not a decision — the rule that governs everything else: an address is evidence, a name is a guess." ;
+    rdfs:comment "A decision with no evidence is an assertion, not a decision. This is the rule that governs everything else: an address is evidence, a name is a guess." ;
     sh:name "Every decision has evidence" ;
-    sh:description "A decision names the Task or Document it's evidenced by." ;
+    sh:description "A decision names the Task or Document that serves as its evidence." ;
     sh:path o:evidencedBy ;
     sh:minCount 1 ;
     sh:message "decision has no evidencedBy" .

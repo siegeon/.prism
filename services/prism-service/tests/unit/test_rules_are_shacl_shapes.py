@@ -1,12 +1,12 @@
 """The rules are SHACL shapes that can fail (task 8eeb3e65, epic 3efbcd89).
 
-shapes.ttl (prism_service/ontology/shapes.ttl) declares 9 SHACL shapes
-over the o: model, keyed per ontology-SKILL.md's "Adding to the model /
-A new rule": the property (or SPARQLConstraint) shape carries the rule's
-own IRI, the node shape is <rule>.target. "A rule that cannot fail is
-decoration" — every rule below gets BOTH a compliant fixture (validates
-clean) and a violating one (reports exactly that rule, by IRI, with the
-offending focus node).
+shapes.ttl (prism_service/ontology/shapes.ttl) declares 13 SHACL shapes
+(task 5ac5d04c added text-is-plain) over the o: model, keyed per
+ontology-SKILL.md's "Adding to the model / A new rule": the property
+(or SPARQLConstraint) shape carries the rule's own IRI, the node shape
+is <rule>.target. "A rule that cannot fail is decoration" — every rule
+below gets BOTH a compliant fixture (validates clean) and a violating
+one (reports exactly that rule, by IRI, with the offending focus node).
 """
 
 from __future__ import annotations
@@ -112,6 +112,17 @@ RULE_FIXTURES: dict[str, tuple[str, str, str]] = {
         'o:p1 a o:Person ; o:email "a@b.com" .',
         _PREFIXES + 'o:ask1 a o:Ask ; o:askedBy o:p1 . o:p1 a o:Person .',
         "ask1",
+    ),
+    # task 5ac5d04c: one instance of each of the four target classes
+    # (Task/Decision/Term/Agent), so looked_at is non-zero for every
+    # one of them, not just whichever class the SPARQL result lands on.
+    "text-is-plain": (
+        _PREFIXES + 'o:t1 a o:Task ; rdfs:label "Review the plan before you start work." . '
+        'o:dec1 a o:Decision ; rdfs:label "Use SQLite for local caching." . '
+        'o:term1 a o:Term ; rdfs:comment "A task is one unit of tracked work." . '
+        'o:a1 a o:Agent ; rdfs:comment "Use when the user asks for X." .',
+        _PREFIXES + 'o:t1 a o:Task ; rdfs:comment "don\'t; it\'s robust" .',
+        "t1",
     ),
 }
 
