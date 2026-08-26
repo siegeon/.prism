@@ -7054,4 +7054,8 @@ PRISM_VERSION_NOTES += (
     "hits as unknown before 7.13.91 labelled those seats. The count carries "
     "over and the later last_seen wins, so the Ingestion paths block does "
     "not keep a red row for a path that is known now."
+    "\n\n7.13.88 (task 8582921d): green_gate can send a task BACK. The "
+    "machine seat rewinds a red-at-tree receipt to implement_tasks and a "
+    "stale one to verify_green_state (max 3 consecutive), never crossing "
+    "a human reject."
 )
