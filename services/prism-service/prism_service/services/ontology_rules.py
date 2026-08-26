@@ -28,6 +28,10 @@ calls validate() at the end so every rebuild re-validates.
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
@@ -140,10 +144,55 @@ def _rule_catalog_impl() -> list[dict]:
     return out
 
 
+# PROCESS ISOLATION for the owlrl + pyshacl pass. After the lock, the LRU,
+# store-independent term copies and a 512 MiB thread, the unit suite still
+# died with SIGSEGV inside rdflib's SPARQL machinery on the validation
+# thread (2026-08-25, task aa7fd8fb) — a native fault nobody could pin to a
+# Python frame (faulthandler's dump itself dies walking that thread). The
+# validation is pure (graph in, graph + violations out), so it runs in a
+# child interpreter over N-Triples on stdin/stdout: whatever the fault is,
+# it can no longer take the daemon or the test process down — it becomes a
+# RuntimeError with the child's stderr attached. Set
+# PRISM_SHACL_IN_PROCESS=1 to run in-process (debugging only).
+_WORKER_TIMEOUT_S = 900
+
+
 def run_shapes(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[str]]]:
-    """owlrl closure + pyshacl over shapes*.ttl, on a big-stack thread (see
-    _run_with_big_stack) — the tests call this directly with fixture graphs."""
-    return _run_with_big_stack(_run_shapes_impl, data_graph)
+    """owlrl closure + pyshacl over shapes*.ttl in an isolated child process
+    (see the note above) — the tests call this directly with fixture graphs."""
+    if os.environ.get("PRISM_SHACL_IN_PROCESS") == "1":
+        return _run_with_big_stack(_run_shapes_impl, data_graph)
+    nt = data_graph.serialize(format="nt")
+    proc = subprocess.run(
+        [sys.executable, "-m", "prism_service.services.ontology_rules", "--worker"],
+        input=nt.encode("utf-8"), capture_output=True, timeout=_WORKER_TIMEOUT_S,
+        env=os.environ.copy(),
+    )
+    if proc.returncode != 0:
+        tail = proc.stderr.decode("utf-8", "replace")[-4000:]
+        raise RuntimeError(f"SHACL worker failed rc={proc.returncode}: {tail}")
+    payload = json.loads(proc.stdout.decode("utf-8"))
+    inferred = rdflib.Graph()
+    inferred.parse(data=payload["inferred_nt"], format="nt")
+    return inferred, {k: list(v) for k, v in payload["violations"].items()}
+
+
+def _worker_main() -> int:
+    """Child-process entry: N-Triples on stdin -> JSON on stdout."""
+    data = rdflib.Graph()
+    data.parse(data=sys.stdin.read(), format="nt")
+    inferred, violations = _run_with_big_stack(_run_shapes_impl, data)
+    # owlrl's RDFS closure asserts `<literal> rdf:type rdfs:Resource`; rdflib
+    # holds literal subjects in memory but no RDF syntax can carry them, and
+    # the parent's N-Triples parser rejects the line — drop them here.
+    out = rdflib.Graph()
+    for s, p, o in inferred:
+        if not isinstance(s, rdflib.Literal):
+            out.add((s, p, o))
+    sys.stdout.write(json.dumps({"inferred_nt": out.serialize(format="nt"),
+                                 "violations": violations}))
+    sys.stdout.flush()
+    return 0
 
 
 def _run_shapes_impl(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[str]]]:
@@ -179,6 +228,10 @@ def _run_shapes_impl(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, 
             name = name[: -len(".target")]
         violations.setdefault(name, []).append(str(focus))
     return g, violations
+
+
+if __name__ == "__main__" and "--worker" in sys.argv:
+    sys.exit(_worker_main())
 
 
 def looked_at_counts(data_graph: rdflib.Graph, catalog: list[dict]) -> dict[str, int]:
