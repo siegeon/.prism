@@ -325,3 +325,48 @@ export async function connectJiraApiToken(
   return api.post("/api/integrations/connect/jira/api-token",
     { site_url: siteUrl, email, api_token: apiToken });
 }
+
+// ── Ontology cross-linking (task 6968cc39) ─────────────────────────────
+// entity_linker.link()'s span shape — every ontology-known entity a piece
+// of text mentions, non-overlapping, in reading order. LinkedText.tsx
+// renders these directly; TaskDetailPage/UnderstandPage splice them into
+// markdown source instead (spliceLinkedMarkdown below).
+
+export type LinkedSpan = {
+  start: number; end: number; text: string; kind: string;
+  iri: string; cls: string; href: string; label: string;
+};
+
+/** POST so a long task/memory body never hits a URL length limit — the
+ * GET twin (services/entity_linker.py's own doc) is for short strings. */
+export async function linkText(project: string, text: string): Promise<LinkedSpan[]> {
+  if (!text || !text.trim()) return [];
+  const d = await api.post<{ spans: LinkedSpan[] }>(
+    `/api/okf/ontology/link?project=${encodeURIComponent(project)}`, { text });
+  return d.spans ?? [];
+}
+
+/** Splice `[text](href)` markdown links into raw markdown SOURCE for every
+ * span with a real href that does not fall inside an existing `[...](...)`
+ * link or a backtick code span — so the existing Markdown component
+ * renders the result exactly as it already renders any other link, never
+ * a second renderer (task 6968cc39). Spans are assumed non-overlapping
+ * and in reading order (entity_linker.link()'s own contract). */
+export function spliceLinkedMarkdown(text: string, spans: LinkedSpan[]): string {
+  if (!text || spans.length === 0) return text;
+  const guarded: [number, number][] = [];
+  for (const re of [/\[[^\]]*\]\([^)\s]+\)/g, /`[^`]*`/g]) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) guarded.push([m.index, m.index + m[0].length]);
+  }
+  let out = "";
+  let last = 0;
+  for (const s of spans) {
+    if (!s.href) continue;
+    if (guarded.some(([a, b]) => s.start < b && s.end > a)) continue;
+    out += text.slice(last, s.start);
+    out += `[${text.slice(s.start, s.end)}](${s.href})`;
+    last = s.end;
+  }
+  return out + text.slice(last);
+}

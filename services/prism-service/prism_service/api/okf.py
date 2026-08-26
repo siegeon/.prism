@@ -160,6 +160,25 @@ def ontology_concept(project: str = Query("default"), id: str = Query(...)) -> d
     return graph.concept_info(_iri("memory", id))
 
 
+@router.get("/ontology/link")
+def ontology_link(project: str = Query("default"), text: str = Query("")) -> dict:
+    """Cross-clicking (task 6968cc39): every ontology-known entity `text`
+    mentions, as non-overlapping spans. Short strings only (query-string
+    length) — see the POST twin for a task/memory body."""
+    from prism_service.services import entity_linker
+
+    return {"spans": entity_linker.link(project, text)}
+
+
+@router.post("/ontology/link")
+def ontology_link_post(payload: dict, project: str = Query("default")) -> dict:
+    """POST twin of GET /ontology/link for text too long for a query
+    string (a task description, a memory body)."""
+    from prism_service.services import entity_linker
+
+    return {"spans": entity_linker.link(project, payload.get("text") or "")}
+
+
 @router.post("/ontology/sparql")
 def ontology_sparql(payload: dict, project: str = Query("default")) -> dict:
     """SELECT/ASK only, bounded LIMIT, real rows from the live graph."""

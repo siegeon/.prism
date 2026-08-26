@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
-import { api, approveDesignPacket } from "@/lib/api";
+import { api, approveDesignPacket, linkText, spliceLinkedMarkdown } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
@@ -12,6 +12,7 @@ import DecisionPacket from "@/components/plan/DecisionPacket";
 import DesignPacket from "@/components/plan/DesignPacket";
 import { stepLabel } from "@/lib/workflowChips";
 import Markdown from "@/components/Markdown";
+import LinkedText from "@/components/LinkedText";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
@@ -952,6 +953,13 @@ export default function TaskDetailPage() {
       : "back to tasks";
   const [project] = useProject();
   const [task, setTask] = useState<Task | null>(null);
+  // Cross-clicked description (task 6968cc39): the markdown SOURCE with
+  // ontology-known entities spliced in as real `[text](href)` markdown
+  // links, so <Markdown> renders them exactly as it already renders any
+  // other link — never a second renderer. Falls back to the raw
+  // description on any fetch failure; never blocks the description from
+  // showing.
+  const [linkedDescription, setLinkedDescription] = useState("");
   // Doc-column tab (artifact .itabs): Overview = the existing content, Trace =
   // the drive-scoped token trace, Evidence = the gate decision packet (task
   // d9f082fe follow-up, owner live 2026-08-24: "this evidence stuff should
@@ -1347,6 +1355,20 @@ export default function TaskDetailPage() {
     })();
     return () => { cancelled = true; };
   }, [docTab, trace, id, project]);
+
+  // Cross-clicked description (task 6968cc39): link() over the RAW markdown
+  // source, then splice `[text](href)` links in — <Markdown> below renders
+  // the result exactly as it renders any other markdown link. A fetch
+  // failure leaves linkedDescription empty and the render falls back to
+  // the untouched description, never a blocked card.
+  useEffect(() => {
+    let cancelled = false;
+    if (!task?.description) { setLinkedDescription(""); return; }
+    linkText(project, task.description)
+      .then((spans) => { if (!cancelled) setLinkedDescription(spliceLinkedMarkdown(task.description!, spans)); })
+      .catch(() => { if (!cancelled) setLinkedDescription(""); });
+    return () => { cancelled = true; };
+  }, [task?.description, project]);
 
   useEffect(() => {
     if (!notice) return;
@@ -2097,7 +2119,9 @@ export default function TaskDetailPage() {
                     summaryStyle={{ color: "var(--accent-amber-fg)" }}
                     summary="how a pass could still be wrong"
                   >
-                    <div className="mt-1.5 leading-relaxed text-[color:var(--text-secondary)]">{task.likely_misfire}</div>
+                    <div className="mt-1.5 leading-relaxed text-[color:var(--text-secondary)]">
+                      <LinkedText text={task.likely_misfire} />
+                    </div>
                   </Disclosure>
                 )}
               </div>
@@ -2519,7 +2543,7 @@ export default function TaskDetailPage() {
           <SectionLabel>Description</SectionLabel>
           {task.description ? (
             <div className="mt-2">
-              <Markdown text={task.description} />
+              <Markdown text={linkedDescription || task.description} />
             </div>
           ) : (
             <Empty>No description.</Empty>

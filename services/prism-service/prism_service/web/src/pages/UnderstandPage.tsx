@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Network } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, linkText, spliceLinkedMarkdown } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Card, Empty } from "@/components/ui";
 import { typeToneHashed, toneVar, type Tone } from "@/lib/domainTone";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip, GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
+import LinkedText from "@/components/LinkedText";
 
 // Understand — the domain-first knowledge drill (owner doctrine): Understand
 // starts at the DOMAIN layer and drills DOWN. It never opens on a concept.
@@ -430,6 +431,11 @@ function DetailPanel({
   const [actionBusy, setActionBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [ontologyInfo, setOntologyInfo] = useState<OntologyConceptInfo | null>(null);
+  // Cross-clicked body (task 6968cc39): link() over the concept's raw
+  // markdown source, spliced into `[text](href)` links so WovenMarkdown's
+  // existing renderer draws them exactly like any other markdown link —
+  // memory bodies name tasks/files constantly and none of it was clickable.
+  const [linkedBody, setLinkedBody] = useState("");
 
   useEffect(() => {
     setConcept(null); setEditing(false); setNote(null);
@@ -451,6 +457,16 @@ function DetailPanel({
       `/api/okf/ontology/concept?project=${encodeURIComponent(project)}&id=${encodeURIComponent(conceptId)}`,
     ).then((o) => setOntologyInfo(o)).catch(() => setOntologyInfo(null));
   }, [conceptId, project]);
+
+  const body = concept?.body ?? "";
+  useEffect(() => {
+    let alive = true;
+    if (!body) { setLinkedBody(""); return; }
+    linkText(project, body)
+      .then((spans) => { if (alive) setLinkedBody(spliceLinkedMarkdown(body, spans)); })
+      .catch(() => { if (alive) setLinkedBody(""); });
+    return () => { alive = false; };
+  }, [body, project]);
 
   if (!path) {
     return <Empty>Select a concept to read it, follow its links, and edit it.</Empty>;
@@ -513,7 +529,9 @@ function DetailPanel({
         {tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {tags.map((t) => (
-              <span key={t} className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-2)] text-[color:var(--text-muted)]">{t}</span>
+              <span key={t} className="text-2xs uppercase tracking-wider font-mono px-1.5 py-0.5 rounded bg-[color:var(--surface-2)] text-[color:var(--text-muted)]">
+                <LinkedText text={t} />
+              </span>
             ))}
           </div>
         )}
@@ -552,7 +570,7 @@ function DetailPanel({
           </div>
         </div>
       ) : (
-        <WovenMarkdown text={concept.body} onSelect={onSelect} />
+        <WovenMarkdown text={linkedBody || concept.body} onSelect={onSelect} />
       )}
 
       <div className="border-t border-[color:var(--border-default)] pt-3">
