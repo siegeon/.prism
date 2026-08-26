@@ -577,13 +577,24 @@ class OntologyGraph:
             name = p_iri[len(NS):] if p_iri.startswith(NS) else p_iri
             dom, rng = sol["domain"], sol["range"]
             label, comment = sol["label"], sol["comment"]
+            # "How it connects" is the OBJECT relations between classes
+            # (live check 2026-08-25 on 7780 showed the SHACL report's own
+            # bookkeeping — Rule->focus/lookedAt/message — and every
+            # literal-valued property listed as cards). Skip datatype-range
+            # properties and the report vocabulary; count edges in THIS
+            # project's ABox only, never the report graph.
+            if rng is not None and rng.value.startswith("http://www.w3.org/2001/XMLSchema#"):
+                continue
+            if dom is not None and dom.value == NS + "Rule":
+                continue
+            abox = self._abox_iri.value
             n = 0
-            count_q = f"SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH ?g {{ ?s <{p_iri}> ?o }} }}"
+            count_q = f"SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{abox}> {{ ?s <{p_iri}> ?o }} }}"
             for csol in self._store.query(count_q):
                 n = int(csol["n"].value)
             example = None
             if n:
-                ex_q = f"SELECT ?s ?o WHERE {{ GRAPH ?g {{ ?s <{p_iri}> ?o }} }} LIMIT 1"
+                ex_q = f"SELECT ?s ?o WHERE {{ GRAPH <{abox}> {{ ?s <{p_iri}> ?o }} }} LIMIT 1"
                 for esol in self._store.query(ex_q):
                     o_term = esol["o"]
                     to_label = (o_term.value if isinstance(o_term, ox.Literal)
