@@ -272,6 +272,23 @@ class WorkItemSyncService:
             channel=connection.provider,
             channel_ref=url,
         )
+        # STE + lexicon ALIGN the freshly imported body (task 683e65eb,
+        # epic df0eed4a). ensure_external_intake writes description with a
+        # raw INSERT (task_service.py) and never runs the align pass, so a
+        # first import would otherwise store the raw upstream text and skip
+        # the ste_normalise history row entirely — the original text would
+        # be lost with no `before` record of it. Route the CREATE path
+        # through TaskService.update() once: it re-runs the SAME normaliser
+        # every other task field already goes through, and its own
+        # ste_before/after bookkeeping records the untouched original body
+        # under `before` on the ste_normalise row. Only pre_existing is
+        # None (a genuinely NEW row) ever reaches this — an existing row
+        # stays covered by the no-clobber contract above, and must never be
+        # rewritten here: a later remote edit must not clobber a
+        # hand-edited local description (task 4db228ec AC-3,
+        # test_human_edited_task_survives_a_resync).
+        if pre_existing is None and body:
+            self._intake.update(task_id, description=body)
         # Backfill task 82223365: a row imported BEFORE 4db228ec keeps its
         # bare mirror-pointer stub forever, because the ensure_external_intake
         # call above is a no-op once the row exists. Converge it exactly
