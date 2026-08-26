@@ -228,3 +228,57 @@ def test_version_patch_bumped_for_the_reconciled_gate_panel() -> None:
         "user-visible change ⇒ patch-bump to at least "
         f"{'.'.join(str(n) for n in _VERSION_FLOOR)} in the same commit")
     assert "v7.1.26:" in ver, "add a PRISM_VERSION_NOTES line for 7.1.26"
+
+
+# ---------------------------------------------------------------------------
+# 7 · parseAcLines folds a nested oracle sub-bullet into its AC (task
+#     3a3f90da, 2026-08-26) — the FRONTEND half of a fix whose backend half
+#     (arc_governance.py's _ac_lines) landed the same day. A drive is
+#     instructed (.claude/workflows/implement.js:540) to write each
+#     criterion so it "ends with a line `- oracle: <observable check>`" — a
+#     separate, more-indented CHILD bullet, not a same-line suffix. Before
+#     this fix, parseAcLines only ever matched a raw line starting with
+#     "AC-\d", so that canonical nested oracle line (which starts with
+#     "oracle:") was silently dropped: a human on the Tests tab saw every
+#     AC in a 9-AC story with NO oracle text at all, even though the
+#     rubric-side bug (already fixed) meant the gate was about to pass
+#     that very story. Fixing only the machine-facing parser and leaving
+#     this one broken would have been a one-sided fix — the page a human
+#     actually reads would still show a lie.
+# ---------------------------------------------------------------------------
+
+def test_parse_ac_lines_folds_a_nested_oracle_bullet_into_its_ac() -> None:
+    src = _read(_PLANVIEW)
+    fn_at = src.index("function parseAcLines(")
+    next_fn_at = src.index("\nfunction ", fn_at + 1)
+    body = src[fn_at:next_fn_at]
+
+    # The fold must key off indentation, not merely "is this a bullet" —
+    # that was the exact shape of the original bug: any bulleted line,
+    # regardless of nesting, was eligible to become its own entry (and a
+    # nested oracle sub-bullet doesn't even start with "AC-\d", so under
+    # the OLD code it was not merely mis-grouped — it was dropped outright).
+    assert re.search(r"const indent\s*=", body), (
+        "parseAcLines must compute each line's indentation")
+    assert re.search(r"acIndent\s*=\s*indent\b", body), (
+        "an AC line must record its OWN indentation as the fold threshold "
+        "for whatever follows it"
+    )
+    fold_m = re.search(
+        r"if\s*\(\s*acIndent\s*!==\s*null[^)]*indent\s*>\s*acIndent\s*\)\s*\{"
+        r"\s*out\[out\.length\s*-\s*1\]\s*\+=",
+        body,
+    )
+    assert fold_m, (
+        "a line MORE indented than its AC must be appended onto that AC's "
+        "own entry (out[out.length - 1] +=), not pushed as a new, separate "
+        "entry and not silently dropped — this is the exact fold the "
+        "backend's _ac_lines fix (arc_governance.py, same day) also needed"
+    )
+    # A blank line resets the fold state — a paragraph break must not let
+    # unrelated later content silently glue onto a stale AC.
+    assert re.search(r"if\s*\(\s*!raw\.trim\(\)\s*\)\s*\{\s*acIndent\s*=\s*null",
+                      body), (
+        "a blank line must reset acIndent so unrelated content after a "
+        "paragraph break never folds into a stale AC entry"
+    )

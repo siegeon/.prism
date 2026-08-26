@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.83"
+PRISM_VERSION = "7.13.84"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6915,4 +6915,30 @@ PRISM_VERSION_NOTES += (
     "test_lexicon_aligns_task_text, test_align_language_workflow (13), "
     "test_synonyms_link_to_canonical_terms, test_imported_tasks_align, "
     "text-uses-canonical-terms fixtures; four re-anchors named in place."
+    "\n\n7.13.84: closed the loop on 7.13.80's rubric-parser fix, per owner "
+    "instruction: 'make sure that the process that helps create these "
+    "tasks helps create a task in a way we can read it here [and] the fix "
+    "is not just one sided ever.' Three follow-ups, all same-day, same "
+    "root incident (task 3a3f90da): (1) PlanView.tsx's OWN AC parser "
+    "(parseAcLines, feeds the Tests tab's 'oracle -- observable completion "
+    "signal' panel a human actually reads) had the identical bug in a "
+    "different shape -- it never folded continuation lines at all, so a "
+    "nested oracle bullet was silently dropped from the human-facing view "
+    "even after the backend gate correctly passed the same story. Fixed "
+    "with the same indentation-fold logic as arc_governance.py's "
+    "_ac_lines, new source-reading regression test (this repo has no JS "
+    "test runner). (2) governance_rubrics.yaml's own comment said the "
+    "oracle marker belongs 'on the same bullet' -- flatly wrong relative "
+    "to the actual instructed shape and to what the code already claimed "
+    "to do; corrected so the doc and the code agree. (3) "
+    ".claude/workflows/implement.js's draft_story and "
+    "review_previous_notes STEP_EXTRA prompts now state the nested-bullet "
+    "shape UNAMBIGUOUSLY (oracle/citation line must be MORE indented than "
+    "its AC/claim, never same-line-or-less) and instruct the authoring "
+    "agent to SELF-CHECK its own indentation before submitting proof= -- "
+    "so a future drive is far less likely to reproduce the exact story "
+    "that stalled 3a3f90da for a full gate-wait window, rather than "
+    "relying solely on the rubric to catch it after the fact. Two new "
+    "regression tests pin both STEP_EXTRA additions. 70 tests green "
+    "across the touched files."
 )
