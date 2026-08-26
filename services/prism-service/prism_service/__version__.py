@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.75"
+PRISM_VERSION = "7.13.76"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6726,4 +6726,27 @@ PRISM_VERSION_NOTES += (
     "owner override that superseded it, and replaced it with a positive "
     "pin on the new body-fill lines. 121 workflows-page tests green, "
     "`npm run build` clean."
+    "\n\n7.13.76: origin/main went red on PR #2344 (an unrelated task, "
+    "39244a32) with 4 failures none of which touched that task's diff. "
+    "2 were transient/flaky (test_control_plane_pinned.py::"
+    "test_gate_still_refuses_a_genuine_conflict_resolution_edit, "
+    "test_premise_notes_seeded_across_fixtures.py::"
+    "test_no_fixture_stalls_at_review_previous_notes_for_premise_reasons "
+    "-- both pass standalone, no code change needed). The other 2 were "
+    "genuinely stale literal-string assertions on TaskDetailPage.tsx, "
+    "each superseded by a legitimate refactor from a DIFFERENT task: "
+    "task 2ec1e395 wrapped the bare-URL auto-linker's tail slice in "
+    "renderInline(...) (so trailing text after a linked URL goes through "
+    "the same entity-linker as the rest of the oracle text) -- "
+    "test_escaped_slash_regex_literal_is_not_read_as_a_line_comment still "
+    "pinned the pre-refactor bare `{lead.slice(...)}` shape. Task 6968cc39 "
+    "added `linkedDescription ||` as a fallback ahead of `task.description` "
+    "in the <Markdown> call -- test_detail_description_uses_markdown_not_pre "
+    "still pinned the pre-refactor exact-literal call. Both tests' actual "
+    "CONTRACT (closing JSX tokens survive the comment stripper; the "
+    "description renders through <Markdown>, never a raw <pre>) was true "
+    "the whole time -- only the literal shape moved. Updated both "
+    "assertions to match current code with a comment naming what "
+    "superseded them, per this file's own established pattern. No TSX/app "
+    "behavior changed -- test-only fix. 18/18 green across both files."
 )
