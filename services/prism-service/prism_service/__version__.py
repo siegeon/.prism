@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.71"
+PRISM_VERSION = "7.13.72"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6640,7 +6640,7 @@ PRISM_VERSION_NOTES += (
     "test_gate_still_refuses_a_genuine_conflict_resolution_edit) plus the "
     "full existing control_plane/dirty-judge/adjudicator suites (42 tests) "
     "still green."
-    "\n\n7.13.71: content written into PRISM reads as Simplified Technical "
+    "\n\n7.13.72: content written into PRISM reads as Simplified Technical "
     "English (epic b2acfa16, owner: use danyuchn/asd-ste100-skill and give the "
     "application a regex fix when creating ontology, understand and task "
     "members). The skill is vendored at .claude/skills/asd-ste100 and named in "
