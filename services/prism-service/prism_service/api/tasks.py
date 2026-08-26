@@ -390,7 +390,11 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         channel_ref=(body.channel_ref or "").strip() or sid,
         workflow=workflow,
     )
-    out: dict = {"task": task, "advanced": None}
+    # STE style block (task 6e611531): every write path returns the report
+    # from the SAME TaskService instance that just performed this write, so
+    # a caller can see what the normaliser fixed and what still needs a
+    # human look.
+    out: dict = {"task": task, "advanced": None, "style": ctx.task_svc.last_style}
     if spec_summary is not None:
         out["oracle_spec"] = spec_summary
     if sid:
@@ -1981,4 +1985,6 @@ def update_task(
     t = svc.update(task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")
-    return {"task": t, "history": svc.history(task_id)}
+    # STE style block (task 6e611531): svc.last_style reflects THIS write —
+    # svc is the same TaskService instance that just ran svc.update above.
+    return {"task": t, "history": svc.history(task_id), "style": svc.last_style}
