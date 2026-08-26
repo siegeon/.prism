@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.88"
+PRISM_VERSION = "7.13.89"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7003,4 +7003,19 @@ PRISM_VERSION_NOTES += (
     "125 neighboring conductor/workflow UI, one pre-existing assertion "
     "updated in place for the superseded literal string); real "
     "`npm run build` clean."
+    "\n\n7.13.89: the 7.13.88 p95 fix was correct but incomplete -- a "
+    "LINKED CHILD node (verify_green_state's \"Build and test\", whose own "
+    "steps \"build\"/\"test\" come from the external AOS engine) never "
+    "appears in selectedWorkflow.steps (the conductor's own 10 steps), so "
+    "BOTH the p95 lookup (scoped to the conductor's own run history) AND "
+    "the average_duration_seconds lookup missed every time, falling all "
+    "the way through to the indeterminate 18s sawtooth wiggle. Owner, "
+    "live screenshot: \"Build and test\" stuck cycling at ~23% fill after "
+    "4m51s of real elapsed time. Fixed: the step lookup now falls back to "
+    "searching the full connected workflow catalog (`workflows` state) "
+    "when selectedWorkflow.steps misses, so a linked child's real "
+    "average_duration_seconds is found. `workflows` added to the frame "
+    "effect's dependency array. 5 tests green (1 new + 3 updated for the "
+    "wider source window + 1 unaffected); 825 neighboring conductor/"
+    "workflow/gate tests green; real `npm run build` clean."
 )
