@@ -2,11 +2,18 @@
 
 "A rule that cannot fail is decoration" — four evaluable axioms, each with a
 real violation case in PRISM data: task-names-its-channel, no-artifacts-in-
-the-root, dated-folder-uses-one-format, skill-description-says-when. Pure
-data + pure evaluate_axioms(context) in arc_governance.py (unit-testable
-without a live daemon); ontology_prototype_projection persists the
-EVALUATED state so the Understand ontology view (OntologyPanel.tsx) lights
-the violated ones (--alarm, index.css .ont-axiom[data-state="violated"]).
+the-root, dated-folder-uses-one-format, skill-description-says-when.
+
+RE-ANCHORED at task 8eeb3e65 "the rules are SHACL shapes that can fail":
+these four are now SHACL shapes over the o: RDF model (prism_service/
+ontology/shapes.ttl, services/ontology_rules.py) — GET /api/okf/ontology's
+axioms() no longer reads arc_governance.evaluate_axioms directly (see that
+module's own comment on the section). The two PURE behavioural tests below
+now drive ontology_rules.evaluate() against a hand-built ABox instead of
+calling evaluate_axioms(context) directly. arc_governance.PROTOTYPE_AXIOMS/
+evaluate_axioms are UNCHANGED and still exercised by the sqlite-cache tests
+further down (ontology_prototype_projection.rebuild's OntologyStore cache
+sits outside 8eeb3e65's allowed_files).
 """
 
 from __future__ import annotations
@@ -15,65 +22,69 @@ import uuid
 
 import pytest
 
-COMPLIANT_CONTEXT = {
+COMPLIANT_ROWS = {
+    "channels": ["ui"], "agents": ["c1"], "providers": [],
     "tasks": [{"id": "t1", "title": "channelled task", "channel": "ui"}],
-    "document_paths": [
+    "signals": [],
+    "documents": [
         "engineering/weekly-reports/2026-08-18/report.md",
         "engineering/weekly-reports/2026-08-25/report.md",
     ],
-    "catalog_entries": [
-        {"id": "c1", "description": "Use when the user asks to review a PR."},
-    ],
+    "code_kinds": [],
 }
+COMPLIANT_DESCRIPTIONS = {"c1": "Use when the user asks to review a PR."}
 
-VIOLATION_CONTEXT = {
+VIOLATION_ROWS = {
+    "channels": [], "agents": ["skill-x"], "providers": [],
     "tasks": [{"id": "t1", "title": "legacy task", "channel": ""}],
-    "document_paths": [
+    "signals": [],
+    "documents": [
         "README.md",
         "engineering/weekly-reports/2026-Q1/report.md",
         "engineering/weekly-reports/2026-08-18/report.md",
     ],
-    "catalog_entries": [
-        {"id": "skill-x", "description": "Reviews PRs and leaves comments."},
-    ],
+    "code_kinds": [],
 }
+VIOLATION_DESCRIPTIONS = {"skill-x": "Reviews PRs and leaves comments."}
+
+
+def _rebuild_and_evaluate(rows: dict, agent_descriptions: dict) -> dict:
+    from prism_service.services import ontology_rules
+    from prism_service.services.ontology_graph import OntologyGraph
+
+    pid = f"shacl-axioms-{uuid.uuid4().hex[:8]}"
+    OntologyGraph(pid).rebuild(rows=rows, agent_descriptions=agent_descriptions,
+                                signal_arrived_at={})
+    return {a["name"]: a for a in ontology_rules.evaluate(pid)}
 
 
 # ---------------------------------------------------------------------------
-# evaluate_axioms is pure — quiet on compliant seed data
+# ontology_rules.evaluate is quiet on compliant seed data
 # ---------------------------------------------------------------------------
 
 def test_axioms_quiet_on_compliant_seed_data():
-    from prism_service.services.arc_governance import evaluate_axioms
-
-    axioms = {a["name"]: a for a in evaluate_axioms(COMPLIANT_CONTEXT)}
-    assert set(axioms) == {
-        "task-names-its-channel", "no-artifacts-in-the-root",
-        "dated-folder-uses-one-format", "skill-description-says-when",
-    }
-    for name, a in axioms.items():
-        assert a["state"] == "quiet", (name, a)
-        assert a["detail"] == ""
+    axioms = _rebuild_and_evaluate(COMPLIANT_ROWS, COMPLIANT_DESCRIPTIONS)
+    for name in ("task-names-its-channel", "no-artifacts-in-the-root",
+                 "dated-folder-uses-one-format", "skill-description-says-when"):
+        assert axioms[name]["state"] == "quiet", (name, axioms[name])
+        assert axioms[name]["detail"] == ""
 
 
 # ---------------------------------------------------------------------------
-# evaluate_axioms names the offending row on violation seed data
+# ontology_rules.evaluate names the offending row on violation seed data
 # ---------------------------------------------------------------------------
 
 def test_axioms_violated_on_violation_seed_data_names_the_row():
-    from prism_service.services.arc_governance import evaluate_axioms
-
-    axioms = {a["name"]: a for a in evaluate_axioms(VIOLATION_CONTEXT)}
+    axioms = _rebuild_and_evaluate(VIOLATION_ROWS, VIOLATION_DESCRIPTIONS)
 
     assert axioms["task-names-its-channel"]["state"] == "violated"
-    assert "legacy task" in axioms["task-names-its-channel"]["detail"]
+    assert "t1" in axioms["task-names-its-channel"]["detail"]
 
     assert axioms["no-artifacts-in-the-root"]["state"] == "violated"
     assert "README.md" in axioms["no-artifacts-in-the-root"]["detail"]
 
     assert axioms["dated-folder-uses-one-format"]["state"] == "violated"
-    assert "engineering/weekly-reports/2026-Q1" in \
-        axioms["dated-folder-uses-one-format"]["detail"]
+    assert "2026-Q1" in axioms["dated-folder-uses-one-format"]["detail"]
 
     assert axioms["skill-description-says-when"]["state"] == "violated"
     assert "skill-x" in axioms["skill-description-says-when"]["detail"]
@@ -139,7 +150,9 @@ def test_projection_persists_evaluated_axiom_states(axiom_project):
 
 
 # ---------------------------------------------------------------------------
-# GET /api/okf/ontology serves the axiom rows (understand read path)
+# GET /api/okf/ontology serves the axiom rows (understand read path) — now
+# sourced from ontology_rules.evaluate (SHACL), not arc_governance directly
+# (task 8eeb3e65); the seeded task/document rows still trip the same rules.
 # ---------------------------------------------------------------------------
 
 def test_axiom_rows_served_on_get_ontology(axiom_project):
