@@ -51,6 +51,7 @@
     "archived"
   ],
   "workflow": [
+    "align_language",
     "implement",
     "triage"
   ]
