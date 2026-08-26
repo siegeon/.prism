@@ -129,6 +129,25 @@ def _ox_term_to_rdflib(term):
 _STORES: dict[str, ox.Store] = {}
 
 
+def graph_exists(project: str) -> bool:
+    """True when this project already has an ontology store ON DISK. A read
+    path (memory_recall / brain_search attaching `ontology_class`) must never
+    CREATE a RocksDB store as a side effect: the full unit suite segfaulted
+    (rc=139, 2026-08-25) once every test project that called those tools
+    opened a store in a tmp dir pytest then deleted under the cached handle."""
+    try:
+        p = project_data_dir(project) / "ontology-graph"
+        return p.is_dir() and any(p.iterdir())
+    except Exception:
+        return False
+
+
+def open_if_exists(project: str) -> "OntologyGraph | None":
+    """OntologyGraph(project) when the store already exists, else None —
+    the only way a pure READ should obtain a graph."""
+    return OntologyGraph(project) if graph_exists(project) else None
+
+
 class OntologyGraph:
     """The pyoxigraph store for one project's ontology (TBox + ABox)."""
 
@@ -137,9 +156,15 @@ class OntologyGraph:
         self._model_iri = ox.NamedNode(NS + "model")
         self._abox_iri = ox.NamedNode(f"urn:prism:{project}/model")
         store_path = project_data_dir(project) / "ontology-graph"
-        store_path.mkdir(parents=True, exist_ok=True)
         key = str(store_path)
         store = _STORES.get(key)
+        # A cached handle whose directory was deleted (a test's tmp project
+        # torn down) is poison — touching it can segfault RocksDB. Evict
+        # and reopen instead of reusing it.
+        if store is not None and not store_path.is_dir():
+            _STORES.pop(key, None)
+            store = None
+        store_path.mkdir(parents=True, exist_ok=True)
         if store is None:
             store = ox.Store(key)
             _STORES[key] = store

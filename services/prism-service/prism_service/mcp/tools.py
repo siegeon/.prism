@@ -2072,6 +2072,8 @@ def _ontology_class_for_brain_hit(og: Any, hit: dict) -> str:
     a guessed class."""
     from prism_service.services.ontology_graph import _iri
 
+    if og is None:
+        return ""
     doc_id = str(hit.get("doc_id") or "")
     if not doc_id.startswith("memory/"):
         return ""
@@ -3684,11 +3686,14 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # only a memory-indexed hit ('memory/<domain>/<mx-id>' doc_ids,
             # see MemoryService._index_in_brain) is identifiable this way;
             # any other hit kind gets '', never a guessed class.
-            from prism_service.services.ontology_graph import OntologyGraph
-            _og = OntologyGraph(project_id)
+            # open_if_exists: a search must never CREATE the RocksDB store
+            # as a side effect (segfaulted the full suite, 2026-08-25).
+            from prism_service.services.ontology_graph import open_if_exists
+            _og = open_if_exists(project_id)
             for _r in results:
                 if isinstance(_r, dict):
-                    _r["ontology_class"] = _ontology_class_for_brain_hit(_og, _r)
+                    _r["ontology_class"] = (
+                        _ontology_class_for_brain_hit(_og, _r) if _og is not None else "")
             _body = _json(results)
             # Honest retrieval savings (task 7ee022cc). Emitted as a
             # SEPARATE content block so block 0 stays exactly the results
@@ -4379,12 +4384,15 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # (bucket 'memory', key = entry id) -- empty string when the
             # graph hasn't been rebuilt to know this entry yet, never
             # guessed from the entry's `type` string.
-            from prism_service.services.ontology_graph import OntologyGraph, _iri
-            _og = OntologyGraph(project_id)
+            # open_if_exists: recall must never CREATE the RocksDB store as
+            # a side effect (segfaulted the full suite, 2026-08-25).
+            from prism_service.services.ontology_graph import open_if_exists, _iri
+            _og = open_if_exists(project_id)
             _rows = []
             for e in results:
                 row = _serialise(e)
-                row["ontology_class"] = _og.class_of(_iri("memory", e.id))
+                row["ontology_class"] = (
+                    _og.class_of(_iri("memory", e.id)) if _og is not None else "")
                 _rows.append(row)
             return [TextContent(type="text", text=_json(_rows))]
 
