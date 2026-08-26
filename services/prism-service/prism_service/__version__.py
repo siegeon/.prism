@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.84"
+PRISM_VERSION = "7.13.85"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6941,4 +6941,24 @@ PRISM_VERSION_NOTES += (
     "relying solely on the rubric to catch it after the fact. Two new "
     "regression tests pin both STEP_EXTRA additions. 70 tests green "
     "across the touched files."
+    "\n\n7.13.85: relaunching task 3a3f90da's drive hit a real, live-"
+    "breaking bug: implement.js's own pre-flight CLOCK-CLEAN check "
+    "(a blunt bash grep for Date.now/new Date() patterns, no comment "
+    "exception) matched a COMMENT plainly documenting the ban itself -- "
+    "so the file's own documentation of the rule tripped the rule, "
+    "blocking every drive's pre-flight. The pinned lint "
+    "(test_workflow_scripts_no_datenow.py) has ALWAYS correctly exempted "
+    "comments ('comment lines... are allowed so the ban can be "
+    "documented'); the live pre-flight instruction never matched that "
+    "scope. Fixed both sides: reworded the offending comment so it no "
+    "longer contains the literal banned substrings (spelled apart, still "
+    "documents the rule), and rewrote the CLOCK-CLEAN pre-flight "
+    "instruction to explicitly exempt comment-only hits, matching the "
+    "pinned lint's own documented scope, with a cross-reference so the "
+    "two can't silently drift apart again. New regression test pins the "
+    "instruction text's comment exemption. Separately: task 3a3f90da's "
+    "own worktree (data_dir/task_workspaces) was rebased onto current "
+    "origin/main, preserving its uncommitted red test and premise notes "
+    "via stash -- unrelated to this file, just resolving why the drive "
+    "halted in the first place. 9 tests green."
 )
