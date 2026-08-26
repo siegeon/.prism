@@ -187,6 +187,14 @@ def _code_graph_kinds(project: str) -> list[tuple[str, int, list[str]]]:
         conn.close()
 
 
+def _memory_rows(project: str) -> list[dict]:
+    """Memory entries as ontology rows (task f5352fa1) -- delegated to
+    services.ontology_memory_projection, which owns cross-link resolution
+    via okf_host so this file never re-derives it."""
+    from prism_service.services import ontology_memory_projection
+    return ontology_memory_projection.memory_rows(project)
+
+
 def axiom_context(project: str) -> dict:
     """The real-row context arc_governance.evaluate_axioms(context) needs —
     shared by rebuild()'s sqlite cache write and OntologyGraph.axioms()
@@ -212,6 +220,7 @@ def gather(project: str) -> dict:
         "signals": _signal_rows(project),
         "documents": _document_paths(project),
         "code_kinds": _code_graph_kinds(project),
+        "memories": _memory_rows(project),
     }
 
 

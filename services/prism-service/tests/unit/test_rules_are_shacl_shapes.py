@@ -98,7 +98,11 @@ RULE_FIXTURES: dict[str, tuple[str, str, str]] = {
 
 
 # ---------------------------------------------------------------------------
-# shapes.ttl itself parses, and declares exactly the 9 rules above
+# shapes.ttl itself parses, and declares exactly the 9 rules above.
+# ontology_rules.rule_catalog() now merges EVERY ontology/shapes*.ttl file
+# (task f5352fa1's shapes-knowledge.ttl sibling) into one catalog, so its
+# result is a SUPERSET of shapes.ttl's own 9 rules, not an exact match --
+# shapes.ttl itself still declares exactly these 9.
 # ---------------------------------------------------------------------------
 
 def test_shapes_ttl_parses_and_declares_the_rule_catalog():
@@ -110,7 +114,7 @@ def test_shapes_ttl_parses_and_declares_the_rule_catalog():
 
     catalog = ontology_rules.rule_catalog()
     names = {r["name"] for r in catalog}
-    assert names == set(RULE_FIXTURES)
+    assert set(RULE_FIXTURES) <= names
     for r in catalog:
         assert r["target_class"], r["name"]
 

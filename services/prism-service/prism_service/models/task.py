@@ -76,6 +76,54 @@ def normalize_workflow(workflow: str) -> str:
     return (workflow or "").strip().lower() or DEFAULT_WORKFLOW
 
 
+# Status vocabulary (task f5352fa1, epic 3a652b3b: "the ontology is
+# respected throughout the system") -- the lifecycle values a task row may
+# hold. Defined ONCE here; validated on WRITE only (REST create/update, MCP
+# task_create/task_update) -- a legacy row is never re-validated on read,
+# same posture as validate_channel/validate_workflow above. "deleted" and
+# "archived" are real statuses conductor_service.py itself transitions rows
+# through (soft-delete / archival), confirmed live via the Terms tab's
+# held_back list (30 deleted + 2 archived rows) -- declaring only the
+# "visible" five would refuse those genuine transitions.
+STATUSES: tuple[str, ...] = (
+    "pending", "in_progress", "blocked", "done", "cancelled",
+    "deleted", "archived",
+)
+
+
+def validate_status(status: str) -> str:
+    """Return the normalized status or raise ValueError for an unknown one.
+    Blank passes through unchanged (a write that doesn't touch status)."""
+    value = (status or "").strip().lower()
+    if value and value not in STATUSES:
+        raise ValueError(
+            f"unknown status {status!r}; expected one of {', '.join(STATUSES)}"
+        )
+    return value
+
+
+# Proof-type vocabulary (task f5352fa1) -- the kind of completion evidence a
+# task's green_gate demands (see Task.proof_type below). Kept in sync with
+# the values mcp/tools.py's task_create/task_update schemas already
+# document (test|demo|artifact|metric|review|source_backed_answer|decision).
+PROOF_TYPES: tuple[str, ...] = (
+    "test", "demo", "artifact", "metric", "review",
+    "source_backed_answer", "decision",
+)
+
+
+def validate_proof_type(proof_type: str) -> str:
+    """Return the normalized proof_type or raise ValueError for an unknown
+    one. Blank passes through unchanged (proof_type is optional)."""
+    value = (proof_type or "").strip().lower()
+    if value and value not in PROOF_TYPES:
+        raise ValueError(
+            f"unknown proof_type {proof_type!r}; expected one of "
+            f"{', '.join(PROOF_TYPES)}"
+        )
+    return value
+
+
 @dataclass
 class Task:
     """A work item tracked through the PRISM workflow."""

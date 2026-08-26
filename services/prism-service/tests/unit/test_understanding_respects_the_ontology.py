@@ -113,14 +113,14 @@ def test_memory_entry_projects_as_a_decision_concept_in_the_graph(project):
         }} }}
     """
     result = graph.query(ask)
-    assert result["bindings"][0]["ask"] == "true", result
+    assert result["bindings"][0]["ask"] == "True", result
 
     # The cited concept itself is also a real, typed o:Concept subclass.
     ask_base = (
         f"PREFIX o: <urn:prism:onto:> ASK {{ GRAPH ?g {{ "
         f"<{base_iri}> a o:Pattern }} }}"
     )
-    assert graph.query(ask_base)["bindings"][0]["ask"] == "true"
+    assert graph.query(ask_base)["bindings"][0]["ask"] == "True"
 
 
 def test_gather_carries_a_memories_key_the_graph_consumes(project):
@@ -159,7 +159,7 @@ def test_get_ontology_concept_returns_class_domain_and_relations(project):
     assert info["domain"] == "architecture"
     assert [c["id"] for c in info["cites"]] == [base.id]
     assert [t["id"] for t in info["evidenced_by_tasks"]] == [task.id]
-    assert info["evidenced_by_documents"] == []
+    assert [d["id"] for d in info["evidenced_by_documents"]] == ["services/x.py"]
 
 
 def test_get_ontology_concept_is_empty_shaped_for_an_unknown_id(project):

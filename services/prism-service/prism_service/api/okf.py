@@ -147,6 +147,19 @@ def ontology_rules(project: str = Query("default")) -> dict:
     return rules_svc.full_report(project)
 
 
+@router.get("/ontology/concept")
+def ontology_concept(project: str = Query("default"), id: str = Query(...)) -> dict:
+    """The Understand 'In the ontology' strip (task f5352fa1): one memory
+    concept's o: class, o:inDomain, and its o:cites / o:evidencedBy
+    relations, resolved via the live graph."""
+    from prism_service.services.ontology_graph import _iri
+
+    graph = OntologyGraph(project)
+    if graph.is_empty():
+        ontology_prototype_projection.rebuild(project)
+    return graph.concept_info(_iri("memory", id))
+
+
 @router.post("/ontology/sparql")
 def ontology_sparql(payload: dict, project: str = Query("default")) -> dict:
     """SELECT/ASK only, bounded LIMIT, real rows from the live graph."""

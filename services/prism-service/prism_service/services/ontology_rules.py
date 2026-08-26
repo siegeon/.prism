@@ -38,7 +38,8 @@ import rdflib
 
 from prism_service.services.ontology_graph import NS, OntologyGraph
 
-_SHAPES_TTL = Path(__file__).resolve().parent.parent / "ontology" / "shapes.ttl"
+_ONTOLOGY_DIR = Path(__file__).resolve().parent.parent / "ontology"
+_SHAPES_TTL = _ONTOLOGY_DIR / "shapes.ttl"
 _SH = rdflib.Namespace("http://www.w3.org/ns/shacl#")
 _RDFS = rdflib.RDFS
 _RDF = rdflib.RDF
@@ -50,9 +51,20 @@ def _local_name(iri: str) -> str:
     return iri[len(NS):] if iri.startswith(NS) else iri
 
 
+def _shapes_paths() -> list[Path]:
+    """Every rule file: shapes.ttl plus any ontology/shapes*.ttl extension
+    (task f5352fa1's shapes-knowledge.ttl) -- sorted so load order is
+    deterministic across runs."""
+    return sorted(_ONTOLOGY_DIR.glob("shapes*.ttl"))
+
+
 def _shapes_graph() -> rdflib.Graph:
+    """Every shapes*.ttl file merged into one graph -- rule_catalog() and
+    run_shapes() both read this, so a new rule file is picked up by both
+    without a second load path that could drift."""
     g = rdflib.Graph()
-    g.parse(str(_SHAPES_TTL), format="turtle")
+    for path in _shapes_paths():
+        g.parse(str(path), format="turtle")
     return g
 
 
@@ -99,7 +111,7 @@ def run_shapes(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[s
     owlrl.DeductiveClosure(owlrl.RDFS_Semantics).expand(g)
 
     _conforms, report_graph, _text = pyshacl.validate(
-        data_graph=g, shacl_graph=str(_SHAPES_TTL),
+        data_graph=g, shacl_graph=_shapes_graph(),
         data_graph_format=None, shacl_graph_format="turtle",
         advanced=True, meta_shacl=False, inference="none",
     )

@@ -354,9 +354,17 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         raise HTTPException(422, domain_errors[0])
     # Channel validated BEFORE the row is inserted so a refusal never
     # orphans a task (same posture as the oracle check above).
-    from prism_service.models.task import validate_channel, validate_workflow
+    from prism_service.models.task import (
+        validate_channel, validate_proof_type, validate_workflow,
+    )
     try:
         channel = validate_channel(body.channel) or "ui"
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # proof_type validated against the vocabulary (task f5352fa1) -- same
+    # posture as channel/workflow, before the row exists.
+    try:
+        validate_proof_type(body.proof_type)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     # Workflow validated the same way, BEFORE the row is inserted (task
@@ -1892,6 +1900,21 @@ def update_task(
         from prism_service.models.task import DEFAULT_WORKFLOW, validate_workflow
         try:
             kwargs["workflow"] = validate_workflow(kwargs["workflow"]) or DEFAULT_WORKFLOW
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    # Status/proof_type validated against their vocabularies (task
+    # f5352fa1) BEFORE the write -- legacy rows are never re-validated on
+    # read, only a write that touches the field is checked.
+    if "status" in kwargs:
+        from prism_service.models.task import validate_status
+        try:
+            kwargs["status"] = validate_status(kwargs["status"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    if "proof_type" in kwargs:
+        from prism_service.models.task import validate_proof_type
+        try:
+            kwargs["proof_type"] = validate_proof_type(kwargs["proof_type"])
         except ValueError as exc:
             raise HTTPException(400, str(exc))
     # dependencies validated BEFORE the write (task d67bca9f): every id

@@ -35,7 +35,8 @@ from prism_service.config import project_data_dir
 
 NS = "urn:prism:onto:"
 _RDFS = "http://www.w3.org/2000/01/rdf-schema#"
-_MODEL_TTL = Path(__file__).resolve().parent.parent / "ontology" / "model.ttl"
+_ONTOLOGY_DIR = Path(__file__).resolve().parent.parent / "ontology"
+_MODEL_TTL = _ONTOLOGY_DIR / "model.ttl"
 
 # The prototype's flat class catalog (api/okf.py's response shape, unchanged
 # since task 15c06516/c1d0ee70), mapped onto the TBox classes model.ttl
@@ -62,6 +63,13 @@ _CODE_KIND_CLASS = {
     "variable": "Variable", "constant": "Variable",
 }
 CODE_CLASSES = ["Function", "Class", "Method", "Module", "Interface", "Variable", "Code"]
+
+# Memory ExpertiseEntry.type -> o: subclass of o:Concept (model-knowledge.ttl,
+# task f5352fa1). An unmapped/blank type still gets the generic o:Concept.
+_MEMORY_TYPE_CLASS = {
+    "pattern": "Pattern", "convention": "Convention",
+    "failure": "Failure", "decision": "Decision",
+}
 
 
 def _code_class_for_kind(kind: str) -> str:
@@ -138,13 +146,19 @@ class OntologyGraph:
         self._store = store
 
     def load_model(self) -> int:
-        """Parse model.ttl and replace the shared TBox named graph. Returns
-        the triple count loaded — always called at the start of rebuild()
-        so the TBox never drifts from the file on disk."""
+        """Parse model.ttl AND every ontology/model-*.ttl extension (task
+        f5352fa1: model-knowledge.ttl's o:Concept/o:Domain layer) into the
+        SAME shared TBox named graph, replacing it whole. Returns the
+        triple count loaded — always called at the start of rebuild() so
+        the TBox never drifts from the files on disk."""
         self._store.remove_graph(self._model_iri)
         ttl = _MODEL_TTL.read_text(encoding="utf-8")
         self._store.load(input=ttl, format=ox.RdfFormat.TURTLE,
                           base_iri=NS, to_graph=self._model_iri)
+        for extra in sorted(_ONTOLOGY_DIR.glob("model-*.ttl")):
+            extra_ttl = extra.read_text(encoding="utf-8")
+            self._store.load(input=extra_ttl, format=ox.RdfFormat.TURTLE,
+                              base_iri=NS, to_graph=self._model_iri)
         return sum(1 for _ in self._store.quads_for_pattern(
             None, None, None, self._model_iri))
 
@@ -227,6 +241,7 @@ class OntologyGraph:
         self._emit_documents_folders(g, rows, U, CLS, RDF, RDFS)
         self._emit_code_graph(g, rows, U, CLS, RDF, RDFS)
         self._emit_workflow_steps(g, U, CLS, RDF, RDFS)
+        self._emit_memories(g, rows, U, CLS, RDF, RDFS)
 
         nt = g.serialize(format="nt")
         self._store.remove_graph(self._abox_iri)
@@ -407,6 +422,40 @@ class OntologyGraph:
                 g.add((u, CLS("producedBy"), rdflib.Literal(role_for_step(prev_id))))
             prev_id = sid
 
+    @staticmethod
+    def _emit_memories(g, rows, U, CLS, RDF, RDFS) -> None:
+        """Memory entries -> ontology triples (task f5352fa1, epic 3a652b3b:
+        "the ontology is respected throughout the system"). Real rows from
+        services.ontology_memory_projection.memory_rows, never fabricated:
+        o:Concept subclassed per type (o:Pattern/o:Convention/o:Failure/
+        o:Decision under o:Concept in model-knowledge.ttl -- an unmapped
+        type still gets the generic o:Concept), o:inDomain -> o:Domain(name),
+        o:cites -> another o:Concept (the entry's real [[wikilink]] cross-
+        links, already resolved by okf_host -- a dangling link stays
+        absent), o:evidencedBy -> o:Task / o:Document. IRI bucket 'memory',
+        key = the entry id -- the same shape every other emitter here uses."""
+        import rdflib
+
+        for m in rows.get("memories", []):
+            u = U("memory", m["id"])
+            cls_local = _MEMORY_TYPE_CLASS.get(
+                str(m.get("type") or "").strip().lower(), "Concept")
+            g.add((u, RDF.type, CLS(cls_local)))
+            g.add((u, RDFS.label, rdflib.Literal(m.get("name") or m["id"])))
+            domain = str(m.get("domain") or "").strip()
+            if domain:
+                du = U("domain", domain)
+                g.add((du, RDF.type, CLS("Domain")))
+                g.add((du, RDFS.label, rdflib.Literal(domain)))
+                g.add((u, CLS("inDomain"), du))
+            for target_id in m.get("cites") or []:
+                g.add((u, CLS("cites"), U("memory", target_id)))
+            task_id = str(m.get("evidence_task") or "").strip()
+            if task_id:
+                g.add((u, CLS("evidencedBy"), U("task", task_id)))
+            for path in m.get("evidence_files") or []:
+                g.add((u, CLS("evidencedBy"), U("document", path)))
+
     def _count(self, cls_local: str) -> int:
         q = (f"PREFIX o: <{NS}> SELECT (COUNT(?i) AS ?n) "
              f"WHERE {{ GRAPH ?g {{ ?i a o:{cls_local} }} }}")
@@ -440,6 +489,18 @@ class OntologyGraph:
         for sol in self._store.query(q):
             return sol["l"].value
         return iri_value.rsplit("/", 1)[-1]
+
+    def class_of(self, iri_value: str) -> str:
+        """rdf:type's local name for one IRI (task f5352fa1) -- the cheap
+        per-hit `ontology_class` lookup memory_recall/brain_search attach to
+        a result. Empty string when the IRI has no ABox rdf:type triple yet
+        (the graph hasn't been rebuilt since this row was written) -- never
+        guessed from the row's own fields."""
+        q = f"SELECT ?c WHERE {{ GRAPH ?g {{ <{iri_value}> a ?c }} }} LIMIT 1"
+        for sol in self._store.query(q):
+            c = sol["c"].value
+            return c[len(NS):] if c.startswith(NS) else c
+        return ""
 
     def classes(self) -> list[dict]:
         """The prototype's classes() shape (id/name/kind/parent_id/
@@ -694,6 +755,44 @@ class OntologyGraph:
 
         return {"things": len(typed), "connections": connections, "values": values,
                 "classes": classes}
+
+    def concept_info(self, iri_value: str) -> dict:
+        """GET /api/okf/ontology/concept (task f5352fa1) -- the Understand
+        'In the ontology' strip: this concept's o: class, its o:inDomain
+        label, and its o:cites / o:evidencedBy relations, all read straight
+        off the graph. Every field is '' / [] when the concept has no ABox
+        triples yet (the graph hasn't been rebuilt) -- never fabricated."""
+        cls_local = self.class_of(iri_value)
+
+        domain = ""
+        q_domain = (f"PREFIX o: <{NS}> PREFIX rdfs: <{_RDFS}> SELECT ?d ?label WHERE "
+                    f"{{ GRAPH ?g {{ <{iri_value}> o:inDomain ?d . "
+                    f"OPTIONAL {{ ?d rdfs:label ?label }} }} }} LIMIT 1")
+        for sol in self._store.query(q_domain):
+            label = sol["label"]
+            domain = label.value if label is not None else self.label_of(sol["d"].value)
+
+        cites = []
+        q_cites = (f"PREFIX o: <{NS}> SELECT ?t WHERE "
+                   f"{{ GRAPH ?g {{ <{iri_value}> o:cites ?t }} }}")
+        for sol in self._store.query(q_cites):
+            t = sol["t"].value
+            cites.append({"id": _ref_of("memory", t), "label": self.label_of(t)})
+
+        tasks, documents = [], []
+        q_ev = (f"PREFIX o: <{NS}> SELECT ?e WHERE "
+                f"{{ GRAPH ?g {{ <{iri_value}> o:evidencedBy ?e }} }}")
+        for sol in self._store.query(q_ev):
+            e = sol["e"].value
+            if e.startswith(f"{NS}instance/task/"):
+                tasks.append({"id": _ref_of("task", e), "label": self.label_of(e)})
+            elif e.startswith(f"{NS}instance/document/"):
+                documents.append({"id": _ref_of("document", e), "label": self.label_of(e)})
+
+        return {
+            "class": cls_local, "domain": domain, "cites": cites,
+            "evidenced_by_tasks": tasks, "evidenced_by_documents": documents,
+        }
 
     def query(self, sparql: str, limit: int = 500) -> dict:
         """SELECT/ASK only (400 on anything else, at the caller). Named
