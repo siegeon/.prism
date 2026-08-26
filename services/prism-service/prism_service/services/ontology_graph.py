@@ -148,9 +148,35 @@ _STORES_MAX = 8
 _STORE_LOCK = threading.RLock()
 
 
+def _copy_term(t):
+    """A store-INDEPENDENT copy of a pyoxigraph term. Result rows and quads
+    handed out by the store borrow from the store's own memory; keeping the
+    originals alive past the lock — and past a store's eviction/drop — is
+    a use-after-free that surfaced as heap corruption in unrelated
+    allocation-heavy code (rdflib's SPARQL parser), rc=139. Copies own
+    their bytes."""
+    if t is None:
+        return None
+    if isinstance(t, ox.NamedNode):
+        return ox.NamedNode(t.value)
+    if isinstance(t, ox.BlankNode):
+        return ox.BlankNode(t.value)
+    if isinstance(t, ox.Literal):
+        if t.language:
+            return ox.Literal(t.value, language=t.language)
+        dt = t.datatype
+        if dt is not None:
+            return ox.Literal(t.value, datatype=ox.NamedNode(dt.value))
+        return ox.Literal(t.value)
+    if isinstance(t, ox.DefaultGraph):
+        return ox.DefaultGraph()
+    return t
+
+
 class _Solutions(list):
-    """A SELECT result materialised under the lock; keeps `.variables` so
-    OntologyGraph.query() reads columns the same way as before."""
+    """A SELECT result materialised under the lock as plain dicts of COPIED
+    terms (name -> term or None for an unbound OPTIONAL); keeps `.variables`
+    so OntologyGraph.query() reads columns the same way as before."""
 
     def __init__(self, rows, variables):
         super().__init__(rows)
@@ -171,12 +197,20 @@ class _LockedStore:
             # hand back a plain bool. SELECT/CONSTRUCT are iterables.
             if isinstance(r, bool) or not hasattr(r, "__iter__"):
                 return bool(r)
-            variables = getattr(r, "variables", None)
-            return _Solutions(list(r), variables)
+            variables = list(getattr(r, "variables", None) or [])
+            names = [v.value for v in variables]
+            rows = []
+            for sol in r:
+                # copied terms only — nothing borrowed from the store
+                # survives this block (see _copy_term).
+                rows.append({name: _copy_term(sol[name]) for name in names})
+            return _Solutions(rows, variables)
 
     def quads_for_pattern(self, *a, **k):
         with _STORE_LOCK:
-            return list(self._s.quads_for_pattern(*a, **k))
+            return [(_copy_term(q.subject), _copy_term(q.predicate),
+                     _copy_term(q.object), _copy_term(q.graph_name))
+                    for q in self._s.quads_for_pattern(*a, **k)]
 
     def __getattr__(self, name):
         attr = getattr(self._s, name)
