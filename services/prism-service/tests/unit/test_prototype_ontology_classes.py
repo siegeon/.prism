@@ -144,23 +144,32 @@ def test_projection_populates_from_real_rows(project):
 
 # ---------------------------------------------------------------------------
 # AC-3: GET /api/okf/ontology* serves the persisted rows; rebuild re-runs it
+#
+# Re-anchored by task 495d3a69 ("the ontology is an RDF graph you can query
+# with SPARQL"): api/okf.py's ontology routes now answer from
+# services/ontology_graph.OntologyGraph (a pyoxigraph SPARQL store), not
+# OntologyStore's sqlite cache — so class_id is "Task" (the TBox class real
+# task rows are typed with, per model.ttl) rather than the old flat
+# "QueueItem" catalog id, and POST /rebuild returns the graph's own
+# triple-counts-per-class shape, not the old {classes,instances,...} counts.
 # ---------------------------------------------------------------------------
 
 def test_api_serves_persisted_rows_and_rebuilds(project):
     from prism_service.api import okf
 
     okf._HOSTS.clear()
-    out = okf.ontology(project=project)  # empty tables -> auto-runs once (AC-5)
+    out = okf.ontology(project=project)  # empty graph -> auto-runs once (AC-5)
     assert out["classes"]
     assert any(c["id"] == "Channel" for c in out["classes"])
     assert out["properties"]
     assert out["axioms"]
 
-    inst = okf.ontology_instances(project=project, class_id="QueueItem", limit=10)
+    inst = okf.ontology_instances(project=project, class_id="Task", limit=10)
     assert len(inst["instances"]) == 3
 
     summary = okf.ontology_rebuild(project=project)
-    assert summary["classes"] >= 7
+    assert summary["total_triples"] > 0
+    assert len(summary["per_class"]) >= 7
 
 
 # ---------------------------------------------------------------------------
