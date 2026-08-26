@@ -100,24 +100,24 @@ const RUN_RAIL_PILLS = 72;
 
 type ReplayEvent = NonNullable<WorkflowRun["timeline"]>[number];
 
-function replayStepMs(event: ReplayEvent): number {
+function replayStepMs(event: ReplayEvent, speed: number = REPLAY_SPEED): number {
   const elapsed = event.endedAt
     ? Math.max(0, Date.parse(event.endedAt) - Date.parse(event.startedAt))
     : REPLAY_MIN_STEP_MS;
-  return Math.min(REPLAY_MAX_STEP_MS, Math.max(REPLAY_MIN_STEP_MS, elapsed / REPLAY_SPEED));
+  return Math.min(REPLAY_MAX_STEP_MS, Math.max(REPLAY_MIN_STEP_MS, elapsed / speed));
 }
 
-function replayGapMs(event: ReplayEvent, next?: ReplayEvent): number {
+function replayGapMs(event: ReplayEvent, next?: ReplayEvent, speed: number = REPLAY_SPEED): number {
   if (!next?.startedAt || !event.endedAt) return 0;
   const gap = Math.max(0, Date.parse(next.startedAt) - Date.parse(event.endedAt));
-  return Math.min(REPLAY_MAX_GAP_MS, gap / REPLAY_SPEED);
+  return Math.min(REPLAY_MAX_GAP_MS, gap / speed);
 }
 
-function replaySpanMs(event: ReplayEvent, next?: ReplayEvent): number {
+function replaySpanMs(event: ReplayEvent, next?: ReplayEvent, speed: number = REPLAY_SPEED): number {
   // Keep the clock moving continuously until the next recorded event. A
   // separate post-fill delay made short steps look complete long before the
   // replay advanced, which falsely read as a stalled workflow.
-  return Math.min(REPLAY_MAX_STEP_MS, replayStepMs(event) + replayGapMs(event, next));
+  return Math.min(REPLAY_MAX_STEP_MS, replayStepMs(event, speed) + replayGapMs(event, next, speed));
 }
 
 function pillIndexTitle(index: number, offset: number, runs: WorkflowRun[]): string | undefined {
@@ -313,6 +313,16 @@ export default function WorkflowsPage() {
   const [testStep, setTestStep] = useState<number | null>(null);
   const testWorkflowRef = useRef<WorkflowCatalogEntry | null>(null);
   const testModeRef = useRef<"runtime" | "replay" | null>(null);
+  // AC-7: a real, user-adjustable playback speed for a done-task replay --
+  // previously REPLAY_SPEED was a hardcoded constant only ever rendered as a
+  // label with nothing to click. The ref is what the timing functions below
+  // actually read (they're plain functions, not hooks); the state re-renders
+  // the control and its label.
+  const [replaySpeed, setReplaySpeed] = useState(REPLAY_SPEED);
+  const replaySpeedRef = useRef(REPLAY_SPEED);
+  useEffect(() => {
+    replaySpeedRef.current = replaySpeed;
+  }, [replaySpeed]);
   const replayStepStartedRef = useRef(0);
   const replayStepDurationRef = useRef(REPLAY_MIN_STEP_MS);
   const replayTimelineRef = useRef<ReplayEvent[]>([]);
@@ -873,7 +883,7 @@ export default function WorkflowsPage() {
     graphRef.current.setDef({ ...workflow, occupancy: { ...occupancy, __start__: 0, __complete__: 0 } });
     graphRef.current.sendTransition(replayEventIndex === 0 ? "__start__" : timeline[replayEventIndex - 1].step, event.step);
     setTestStep(stepIndex);
-    const duration = replaySpanMs(event, timeline[replayEventIndex + 1]);
+    const duration = replaySpanMs(event, timeline[replayEventIndex + 1], replaySpeedRef.current);
     replayStepStartedRef.current = performance.now();
     replayStepDurationRef.current = duration;
     // A retried step (flow_report_failure/advance_refused/a rejected gate
@@ -1632,10 +1642,10 @@ export default function WorkflowsPage() {
               {replayStoppedAt
                 ? `Replay stopped · ${replayStoppedAt.step.replace(/_/g, " ")} ${replayStoppedAt.status.replace(/_/g, " ")}`
                 : testStep < 0
-                ? testModeRef.current === "replay" ? `Replay ${REPLAY_SPEED}× · start` : "Testing · start"
+                ? testModeRef.current === "replay" ? `Replay ${replaySpeed}× · start` : "Testing · start"
                 : testStep < selectedWorkflow.steps.length
-                  ? `${testModeRef.current === "replay" ? `Replay ${REPLAY_SPEED}×` : "Testing"} · ${selectedWorkflow.steps[testStep].id.replace(/_/g, " ")}`
-                : testModeRef.current === "replay" ? `Replay ${REPLAY_SPEED}× · complete` : "Flow complete"}
+                  ? `${testModeRef.current === "replay" ? `Replay ${replaySpeed}×` : "Testing"} · ${selectedWorkflow.steps[testStep].id.replace(/_/g, " ")}`
+                : testModeRef.current === "replay" ? `Replay ${replaySpeed}× · complete` : "Flow complete"}
             </span>
           )}
           {selectedHistoryRun ? (
@@ -1655,7 +1665,7 @@ export default function WorkflowsPage() {
                   title="Open this task's own detail page"
                   className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
                 >
-                  Open task ↗
+                  ↗ Task
                 </Link>
               )}
             </>
@@ -1685,16 +1695,46 @@ export default function WorkflowsPage() {
                   ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
                   : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
             </div>
+          </div>
+        )}
+        {/* AC-6: the timeline content (SdlcProgress for a live run, the
+            speed control for a done-instance replay) lives in its OWN bottom
+            bar, separate from the box above which now holds only the
+            run's title/identification -- previously both were crammed into
+            the same top-left overlay (owner, live, 2026-08-25). Sits just
+            above the pill-rail bar (bottom-10, that bar is h-10). */}
+        {(conductorLivePhase || replayEventIndex !== null) && (
+          <div className="absolute bottom-10 left-0 right-0 z-20 h-9 border-t border-white/10 bg-[#08090b] px-3 flex items-center gap-4">
             {conductorLivePhase && (
-              <div className="mt-2">
-                <SdlcProgress
-                  step={workflowRun?.data.conductorTask?.workflowStep ?? undefined}
-                  phase={conductorLivePhase}
-                  status={workflowRun?.data.conductorTask?.status}
-                  activity={conductorLiveActivity}
-                  reduced={reduced}
-                  hideTokens
-                />
+              <SdlcProgress
+                step={workflowRun?.data.conductorTask?.workflowStep ?? undefined}
+                phase={conductorLivePhase}
+                status={workflowRun?.data.conductorTask?.status}
+                activity={conductorLiveActivity}
+                reduced={reduced}
+                hideTokens
+              />
+            )}
+            {replayEventIndex !== null && (
+              <div className="flex items-center gap-3 ml-auto text-2xs uppercase tracking-wider text-[color:var(--text-secondary)]">
+                <span>Replay {replaySpeed}×</span>
+                <div role="group" aria-label="Playback speed" className="flex items-center gap-1">
+                  {[30, 120, 240].map((speed) => (
+                    <button
+                      key={speed}
+                      type="button"
+                      onClick={() => setReplaySpeed(speed)}
+                      aria-pressed={replaySpeed === speed}
+                      className={`rounded border px-2 py-1 font-mono ${
+                        replaySpeed === speed
+                          ? "border-[color:var(--accent-solid)] text-[color:var(--accent-solid)]"
+                          : "border-[color:var(--border-default)] text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
+                      }`}
+                    >
+                      {speed}×
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1754,7 +1794,11 @@ export default function WorkflowsPage() {
                 aria-label={pill.ariaLabel}
                 title={pill.title}
                 onClick={pill.onClick}
-                className={`h-9 min-w-1 max-w-[10px] flex-1 rounded-none transition-colors duration-500 ${pill.ringHighlighted ? "ring-2 ring-inset ring-white" : ""} ${pill.tone}`}
+                className={`h-9 min-w-1 max-w-[10px] flex-1 rounded-none transition-all duration-500 ${
+                  pill.ringHighlighted
+                    ? "ring-[3px] ring-inset ring-white shadow-[0_0_10px_2px_rgba(255,255,255,0.7)] scale-y-125 relative z-10"
+                    : ""
+                } ${pill.tone}`}
               />
             ))}
           </div>

@@ -66,34 +66,43 @@ def _function_body(src: str, signature: str) -> str:
 # ---------------------------------------------------------------------------
 
 def test_trace_view_receives_the_task_identity_it_needs_to_link_out():
-    """TraceView is called today with only trace/loading/spend -- it has no
-    way to link anywhere because it was never given the task's own id/status.
-    Oracle: "a visible control opens that task's own run on the Workflows
-    page"."""
+    """SUPERSEDED PLACEMENT (owner, live, 2026-08-25, twice): the control
+    was first built inside TraceView (keyed by taskId/taskStatus props),
+    then the owner moved it to the Overview/Trace/Evidence tab row, then
+    moved it AGAIN to the task detail page's own top breadcrumb bar so it is
+    visible from every tab, not just Trace -- a page-level affordance needs
+    no props threaded into TraceView at all, since it reads `task.id`
+    directly in the page's own render. Oracle unchanged: "a visible control
+    opens that task's own run on the Workflows page" -- just re-anchored to
+    where that control actually lives now.
+    """
     page = _read("pages", "TaskDetailPage.tsx")
+    assert "task?.id" in page or "task.id" in page, "task id not in scope for the breadcrumb link"
+    # TraceView itself must NOT have been re-widened back to needing these --
+    # that would be the old, owner-rejected placement creeping back in.
     call = re.search(r'<TraceView\s+([^>]*?)/>', page)
     assert call, "TaskDetailPage.tsx no longer renders <TraceView ... />"
-    props = call.group(1)
-    assert "taskId={task.id}" in props, (
-        "TraceView must receive the task id -- the Workflows page deep "
-        "link is keyed off it")
-    assert "taskStatus={taskStatus}" in props, (
-        "TraceView must receive the task's status -- a done task opens in "
-        "playback, an in-flight task opens live, and the control cannot "
-        "tell which without it")
+    assert "taskId=" not in call.group(1), (
+        "TraceView should not receive taskId again -- the deep-link control "
+        "lives in the page's breadcrumb bar now, not inside the Trace tab")
 
 
 def test_trace_view_renders_a_control_that_deep_links_to_the_workflows_page():
-    """The control itself: a real, clickable affordance inside TraceView's
-    own render, not a comment describing one."""
+    """The control itself: a real, clickable affordance in the task detail
+    page's own breadcrumb row (re-anchored per the second owner placement
+    revision above), not inside TraceView and not a comment describing one.
+    """
     page = _read("pages", "TaskDetailPage.tsx")
-    body = _function_body(page, "function TraceView(")
-    assert 'aria-label="Open this task\'s conductor flow"' in body, (
-        "TraceView has no discoverable control to open the task's own "
-        "conductor run")
-    assert re.search(r'to=\{`/workflows\?task=\$\{taskId\}`\}', body), (
+    assert 'aria-label="Open this task\'s conductor flow"' in page, (
+        "no discoverable control to open the task's own conductor run")
+    assert re.search(r'to=\{`/workflows\?task=\$\{task\.id\}`\}', page), (
         "the control must deep-link to /workflows?task=<id> -- the same "
         "?workflow= deep-link convention WorkflowsPage already honors")
+    # It must live in the page's own render, not TraceView's.
+    trace_body = _function_body(page, "function TraceView(")
+    assert 'aria-label="Open this task\'s conductor flow"' not in trace_body, (
+        "the control moved OUT of TraceView per the owner's placement "
+        "revisions -- it should not also still be rendered inside it")
 
 
 # ---------------------------------------------------------------------------

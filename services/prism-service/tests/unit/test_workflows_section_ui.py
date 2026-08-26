@@ -944,10 +944,14 @@ def test_historical_run_can_be_replayed_on_the_graph_at_animation_frame_rate():
     assert "requestAnimationFrame(frame)" in page
     assert "elapsedMs / replayStepDurationRef.current" in page
     assert 'type ReplayEvent = NonNullable<WorkflowRun["timeline"]>[number]' in page
-    assert "replayStepMs(event)" in page
+    # AC-7 (task e14680ba) made replay speed user-adjustable, so the call site
+    # now threads a `speed` arg through (default REPLAY_SPEED preserved on the
+    # function signatures) instead of the hardcoded constant read at the call --
+    # the underlying elapsed/speed math this test guards is unchanged.
+    assert "replayStepMs(event, speed)" in page
     assert "replayGapMs(event" in page
     assert "replaySpanMs(event" in page
-    assert "Replay ${REPLAY_SPEED}×" in page
+    assert "Replay ${replaySpeed}×" in page
     assert "run.data.definition?.steps" in page
     assert 'event.status !== "skipped"' in page
     assert 'result.status.replace("_", " ").toUpperCase()' in page
@@ -1016,7 +1020,9 @@ def test_replay_step_fill_spans_execution_and_inter_step_wait_without_a_pause():
 
     assert "REPLAY_MIN_STEP_MS = 1500" in page
     assert "REPLAY_MAX_STEP_MS = 5000" in page
-    assert "replayStepMs(event) + replayGapMs(event, next)" in page
+    # See the comment above test_historical_run_can_be_replayed_...: AC-7
+    # (task e14680ba) added a `speed` arg to both calls; same span math.
+    assert "replayStepMs(event, speed) + replayGapMs(event, next, speed)" in page
     assert "setReplayEventIndex((index) => (index ?? 0) + 1), duration" in page
 
 

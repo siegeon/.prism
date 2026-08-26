@@ -863,9 +863,7 @@ function ProofShots({ text, className }: { text?: string; className?: string }) 
 
 // The Trace tab body: 4 KPI tiles + a per-session tree (session header row →
 // indented step rows). Honest empty state when the task has no agent_runs.
-type TraceViewProps = { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null; taskId?: string; taskStatus?: string; project?: string };
-function TraceView(props: TraceViewProps) {
-  const { trace, loading, spend, taskId, taskStatus } = props;
+function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading: boolean; spend?: SpendData | null }) {
   if (loading && !trace) return <Card><Empty>Loading trace…</Empty></Card>;
   if (!trace || trace.sessions.length === 0) {
     return <Card><Empty>No trace yet — this task has no recorded agent runs.</Empty></Card>;
@@ -875,15 +873,6 @@ function TraceView(props: TraceViewProps) {
   return (
     <div className="space-y-4">
       <SpendPanel spend={spend} />
-      {taskId && (
-        <Link
-          to={`/workflows?task=${taskId}`}
-          aria-label="Open this task's conductor flow"
-          className="px-3 py-2 rounded-md bg-[color:var(--accent-blue-bg)] text-[color:var(--accent-blue-fg)] hover:opacity-90 text-sm font-medium"
-        >
-          Open on Workflows → {taskStatus === "done" ? "(playback)" : "(live)"}
-        </Link>
-      )}
       <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
         <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
         <TraceKpi label="Steps" value={String(t.steps)} />
@@ -1731,22 +1720,33 @@ export default function TaskDetailPage() {
           and the ONLY real parent link lived in a Card far down the page,
           past the whole SDLC trace (owner: "i see no way to see the parent
           to navigate to the parent"). */}
-      <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
-        <button
-          onClick={() =>
-            task?.parent_id
-              ? navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })
-              : navigate(from)
-          }
-          className="hover:text-[color:var(--text-secondary)]"
-          title={task?.parent_id ? "back to parent" : backLabel}
-        >
-          {task?.parent_id
-            ? "Parent"
-            : from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
-        </button>
-        <span className="opacity-50">/</span>
-        <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-1.5 text-xs text-[color:var(--text-muted)]">
+          <button
+            onClick={() =>
+              task?.parent_id
+                ? navigate(`/tasks/${task.parent_id}`, { state: { from: "/tasks" } })
+                : navigate(from)
+            }
+            className="hover:text-[color:var(--text-secondary)]"
+            title={task?.parent_id ? "back to parent" : backLabel}
+          >
+            {task?.parent_id
+              ? "Parent"
+              : from.startsWith("/tasks/") ? "Parent" : from === "/conductor" ? "Conductor" : "Tasks"}
+          </button>
+          <span className="opacity-50">/</span>
+          <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
+        </div>
+        {conductorOn && (
+          <Link
+            to={`/workflows?task=${task.id}`}
+            aria-label="Open this task's conductor flow"
+            className="text-xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
+          >
+            ↗ Flow
+          </Link>
+        )}
       </div>
 
       <AnimatePresence>
@@ -1920,7 +1920,7 @@ export default function TaskDetailPage() {
         ))}
       </div>
 
-      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} taskId={task.id} taskStatus={taskStatus} project={project} />}
+      {docTab === "trace" && <TraceView trace={trace} loading={traceLoading} spend={task.spend} />}
 
       {docTab === "evidence" && conductorOn && (
         <div id="gate-recovery" className="rounded-md border overflow-hidden mb-6" style={{ borderColor: "var(--border-default)" }}>

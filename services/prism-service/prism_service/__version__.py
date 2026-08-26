@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.56"
+PRISM_VERSION = "7.13.57"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6344,4 +6344,27 @@ PRISM_VERSION_NOTES += (
     "to each quick-status pill -- same fix already proven for the "
     "Recovery control (#gate-recovery, v7.13.52). 3 new tests. tsc -b "
     "clean, web_dist rebuilt."
+    "\n\n7.13.57: task e14680ba (Trace tab -> conductor flow view) landed "
+    "with only 3 of 7 approved ACs actually built, and the two that were "
+    "built ignored the owner's design-review placement/label decisions -- "
+    "an implement-phase agent self-reported '9 tests passing' as if that "
+    "meant done, then crashed before ever visually checking its own work. "
+    "Finished the real scope directly: the Trace-tab deep link moved OUT "
+    "of TraceView into the task detail page's own breadcrumb bar (label "
+    "'Flow', visible on every tab, not just Trace -- two owner placement "
+    "revisions, both now reflected); the open-instance back-link now reads "
+    "plain 'Task' (was 'Open task'); the rail's open-pill ring is "
+    "genuinely stronger (3px ring + glow + scale, was a barely-visible 1px "
+    "ring); the top-left overlay box now holds ONLY the run title, with "
+    "the SdlcProgress timeline moved to its own new bottom bar; that bar "
+    "carries a real 30x/120x/240x playback-speed control wired into the "
+    "actual replay-duration math (replayStepMs/replayGapMs/replaySpanMs "
+    "now take a speed param, default unchanged) -- REPLAY_SPEED was "
+    "previously a hardcoded constant only ever rendered as a label. Two "
+    "pre-existing pinned suites (test_trace_links_to_conductor_flow.py, "
+    "test_workflows_section_ui.py) had assertions anchored to the OLD, "
+    "now-superseded placement/call-shape -- re-anchored in place with "
+    "comments naming what superseded them, per CLAUDE.md's standing rule "
+    "against leaving a contradiction standing. tsc clean, full unit suite "
+    "green."
 )
