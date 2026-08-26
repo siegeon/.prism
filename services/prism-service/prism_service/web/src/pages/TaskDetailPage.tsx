@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import { motion, AnimatePresence, useReducedMotion } from "motion/react";
-import { api, approveDesignPacket, linkText, spliceLinkedMarkdown } from "@/lib/api";
+import { api, approveDesignPacket, linkTaskFields, spliceLinkedMarkdown, type TaskLinkFields } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, type PillTone } from "@/components/ui";
 import { Lozenge, type LozengeTone } from "@/components/Lozenge";
@@ -11,7 +11,7 @@ import PlanView, { parseAc, gateEvidenceLines } from "@/components/plan/PlanView
 import DecisionPacket from "@/components/plan/DecisionPacket";
 import DesignPacket from "@/components/plan/DesignPacket";
 import { stepLabel } from "@/lib/workflowChips";
-import Markdown from "@/components/Markdown";
+import Markdown, { renderInline } from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
@@ -77,6 +77,9 @@ type Task = {
   stop_if?: string[];
   plan_doc?: string;
   plan_diagram?: string;
+  // Review-previous-notes' report (task 2ec1e395: cross-clicked like every
+  // other task text field, in the Design/plan card below).
+  premise_notes?: string;
   phase_progress?: PhaseProgress | null;
   // Honest work state — rides top-level on the detail response (see load()).
   activity?: Activity | null;
@@ -960,6 +963,10 @@ export default function TaskDetailPage() {
   // description on any fetch failure; never blocks the description from
   // showing.
   const [linkedDescription, setLinkedDescription] = useState("");
+  // Every OTHER text field's spans from the SAME one-shot fetch (task
+  // 2ec1e395) -- oracle/plan_doc/premise_notes/completion_proof splice off
+  // this instead of each hitting the linker on their own.
+  const [linkFields, setLinkFields] = useState<TaskLinkFields | null>(null);
   // Doc-column tab (artifact .itabs): Overview = the existing content, Trace =
   // the drive-scoped token trace, Evidence = the gate decision packet (task
   // d9f082fe follow-up, owner live 2026-08-24: "this evidence stuff should
@@ -1356,19 +1363,47 @@ export default function TaskDetailPage() {
     return () => { cancelled = true; };
   }, [docTab, trace, id, project]);
 
-  // Cross-clicked description (task 6968cc39): link() over the RAW markdown
-  // source, then splice `[text](href)` links in — <Markdown> below renders
-  // the result exactly as it renders any other markdown link. A fetch
-  // failure leaves linkedDescription empty and the render falls back to
-  // the untouched description, never a blocked card.
+  // Cross-clicked task text (task 6968cc39, extended by 2ec1e395): ONE
+  // fetch per task load resolves description/oracle/likely_misfire/
+  // plan_doc/premise_notes/completion_proof together (linkTaskFields ->
+  // GET /api/tasks/{id}/links) -- <Markdown>/renderInline below splice the
+  // results into each card's own source, never a second renderer and
+  // never a separate call per field. Deps are the field VALUES, so an
+  // unchanged poll never refetches; a real edit to any one field refetches
+  // once. A fetch failure leaves every field unspliced, never a blocked
+  // card.
   useEffect(() => {
     let cancelled = false;
-    if (!task?.description) { setLinkedDescription(""); return; }
-    linkText(project, task.description)
-      .then((spans) => { if (!cancelled) setLinkedDescription(spliceLinkedMarkdown(task.description!, spans)); })
-      .catch(() => { if (!cancelled) setLinkedDescription(""); });
+    if (!id || !task) { setLinkFields(null); setLinkedDescription(""); return; }
+    linkTaskFields(project, id)
+      .then((f) => {
+        if (cancelled) return;
+        setLinkFields(f);
+        setLinkedDescription(task.description ? spliceLinkedMarkdown(task.description, f.description) : "");
+      })
+      .catch(() => { if (!cancelled) { setLinkFields(null); setLinkedDescription(""); } });
     return () => { cancelled = true; };
-  }, [task?.description, project]);
+  }, [id, project, task?.description, task?.oracle, task?.likely_misfire,
+      task?.plan_doc, task?.premise_notes, task?.completion_proof]);
+
+  // Spliced markdown SOURCE for the other fields, computed once linkFields
+  // lands -- each falls back to the raw field on no spans / no fetch yet.
+  const linkedOracle = useMemo(
+    () => (task?.oracle && linkFields ? spliceLinkedMarkdown(task.oracle, linkFields.oracle) : ""),
+    [task?.oracle, linkFields],
+  );
+  const linkedPlanDoc = useMemo(
+    () => (task?.plan_doc && linkFields ? spliceLinkedMarkdown(task.plan_doc, linkFields.plan_doc) : ""),
+    [task?.plan_doc, linkFields],
+  );
+  const linkedPremiseNotes = useMemo(
+    () => (task?.premise_notes && linkFields ? spliceLinkedMarkdown(task.premise_notes, linkFields.premise_notes) : ""),
+    [task?.premise_notes, linkFields],
+  );
+  const linkedCompletionProof = useMemo(
+    () => (task?.completion_proof && linkFields ? spliceLinkedMarkdown(task.completion_proof, linkFields.completion_proof) : ""),
+    [task?.completion_proof, linkFields],
+  );
 
   useEffect(() => {
     if (!notice) return;
@@ -2080,13 +2115,19 @@ export default function TaskDetailPage() {
                 <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>what you're approving</div>
                 <div className="text-[15px] font-semibold text-[color:var(--text-primary)]">{task.title}</div>
                 {task.oracle && (() => {
-                  const dot = task.oracle!.indexOf(". ");
-                  const lead = dot > 0 ? task.oracle!.slice(0, dot + 1) : task.oracle!;
-                  const rest = dot > 0 ? task.oracle!.slice(dot + 1).trim() : "";
+                  // task 2ec1e395: split on the SPLICED source (entity spans
+                  // already turned into `[text](href)` markdown) so
+                  // renderInline below turns those into real links too —
+                  // the bare-URL auto-link stays for a raw https:// the
+                  // linker itself doesn't know about.
+                  const src = linkedOracle || task.oracle!;
+                  const dot = src.indexOf(". ");
+                  const lead = dot > 0 ? src.slice(0, dot + 1) : src;
+                  const rest = dot > 0 ? src.slice(dot + 1).trim() : "";
                   const m = /(https?:\/\/\S+)/.exec(lead);
                   const leadNode = m
-                    ? (<>{lead.slice(0, m.index)}<a href={m[1]} target="_blank" rel="noreferrer" className="font-mono underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>{m[1].replace(/^https?:\/\//, "")}</a>{lead.slice(m.index + m[1].length)}</>)
-                    : lead;
+                    ? (<>{renderInline(lead.slice(0, m.index))}<a href={m[1]} target="_blank" rel="noreferrer" className="font-mono underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>{m[1].replace(/^https?:\/\//, "")}</a>{renderInline(lead.slice(m.index + m[1].length))}</>)
+                    : renderInline(lead);
                   return (
                     <>
                       <div className="text-[13px] leading-relaxed text-[color:var(--text-secondary)]">{leadNode}</div>
@@ -2097,7 +2138,7 @@ export default function TaskDetailPage() {
                           summary={<>Acceptance criteria{pinTests.length > 0 ? ` (${pinTests.length} assertions)` : ""}</>}
                         >
                           <div className="mt-1.5 space-y-1.5 text-[color:var(--text-secondary)] leading-relaxed">
-                            {rest && <div>{rest}</div>}
+                            {rest && <div>{renderInline(rest)}</div>}
                             {pinTests.length > 0 && (
                               <button type="button" onClick={showTests} className="underline decoration-dotted underline-offset-2" style={{ color: "var(--accent)" }}>
                                 each assertion is a pinned test → view them with their latest outcomes
@@ -2495,7 +2536,7 @@ export default function TaskDetailPage() {
           )}
           <PlanView
             diagram={task.plan_diagram}
-            doc={task.plan_doc}
+            doc={linkedPlanDoc || task.plan_doc}
             prototypeSrc={task.has_prototype
               ? `/api/tasks/${id}/prototype?project=${encodeURIComponent(project)}`
               : undefined}
@@ -2510,7 +2551,7 @@ export default function TaskDetailPage() {
             project={project}
             proofType={task.proof_type}
             oracle={gatePanelOwnsOracle ? undefined : task.oracle}
-            completionProof={task.completion_proof}
+            completionProof={linkedCompletionProof || task.completion_proof}
             likelyMisfire={task.likely_misfire}
             fullOutcomeComplete={task.full_outcome_complete}
             isAwaitingDesignApproval={isAwaitingDesignApproval}
@@ -2534,6 +2575,20 @@ export default function TaskDetailPage() {
           />
         </Card>
         </div>
+        </Stagger>
+      )}
+
+      {/* Plan notes (task 2ec1e395): premise_notes had no render surface at
+          all — this is its first one, cross-clicked like plan_doc/oracle
+          from the same one-shot fetch above. */}
+      {!!task.premise_notes && (
+        <Stagger i={0.5} reduced={reduced}>
+        <Card>
+          <SectionLabel>Plan notes</SectionLabel>
+          <div className="mt-2">
+            <Markdown text={linkedPremiseNotes || task.premise_notes} />
+          </div>
+        </Card>
         </Stagger>
       )}
 

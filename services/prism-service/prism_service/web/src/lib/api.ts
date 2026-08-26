@@ -346,6 +346,26 @@ export async function linkText(project: string, text: string): Promise<LinkedSpa
   return d.spans ?? [];
 }
 
+// One combined per-task-load fetch (task 2ec1e395) -- GET /api/tasks/{id}/
+// links now returns spans PER FIELD in one response, so TaskDetailPage's
+// oracle/plan/premise/proof cards share a single linker call instead of
+// each hitting linkText separately, never one call per field per poll.
+export type TaskLinkFields = {
+  description: LinkedSpan[]; oracle: LinkedSpan[]; likely_misfire: LinkedSpan[];
+  plan_doc: LinkedSpan[]; premise_notes: LinkedSpan[]; completion_proof: LinkedSpan[];
+};
+
+const EMPTY_LINK_FIELDS: TaskLinkFields = {
+  description: [], oracle: [], likely_misfire: [],
+  plan_doc: [], premise_notes: [], completion_proof: [],
+};
+
+export async function linkTaskFields(project: string, taskId: string): Promise<TaskLinkFields> {
+  const d = await api.get<{ spans: LinkedSpan[]; fields?: Partial<TaskLinkFields> }>(
+    `/api/tasks/${taskId}/links?project=${encodeURIComponent(project)}`);
+  return { ...EMPTY_LINK_FIELDS, ...(d.fields ?? {}) };
+}
+
 /** Splice `[text](href)` markdown links into raw markdown SOURCE for every
  * span with a real href that does not fall inside an existing `[...](...)`
  * link or a backtick code span — so the existing Markdown component

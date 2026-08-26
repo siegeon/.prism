@@ -244,7 +244,9 @@ def test_page_imports_and_uses_linked_text(page):
 def test_task_detail_page_keeps_markdown_for_the_description():
     src = (_web_src() / "pages" / "TaskDetailPage.tsx").read_text(encoding="utf-8")
     assert "<Markdown text={linkedDescription || task.description} />" in src
-    assert 'import Markdown from "@/components/Markdown"' in src
+    # task 2ec1e395 additionally imports renderInline (named) alongside the
+    # same default Markdown import -- the default import itself is untouched.
+    assert 'import Markdown, { renderInline } from "@/components/Markdown"' in src
     assert "spliceLinkedMarkdown" in src
 
 
