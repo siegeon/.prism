@@ -543,7 +543,7 @@ export default function WorkflowsPage() {
   // a second, slower phase_progress fetch (scope=full, ~30s cold) -- the
   // same tradeoff the canvas's own activeProgress already makes.
   const conductorLivePhase = useMemo<PhaseProgress | null>(() => {
-    if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
+    if (!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
     const step = selectedWorkflow?.steps.find((candidate) => candidate.id === workflowRun.runtime?.currentStep);
     const typical = step?.average_duration_seconds ?? undefined;
     const startedAt = workflowRun.runtime.startedAt;
@@ -554,7 +554,7 @@ export default function WorkflowsPage() {
       in_step_s: inStepS,
       typical_s: typical,
     };
-  }, [selectedWorkflowId, workflowRun, selectedWorkflow]);
+  }, [isStateMachineWorkflow, workflowRun, selectedWorkflow]);
   const conductorLiveActivity = useMemo<Activity | null>(() => {
     const t = conductorLivePhase && workflowRun?.data.conductorTask;
     if (!t) return null;
@@ -1014,6 +1014,24 @@ export default function WorkflowsPage() {
       openConductorInstance(task);
     }
   }, [searchParams, conductorManaged, openConductorInstance]);
+
+  // The whole state-machine family's own version of validation's "reattach
+  // after reload/navigation" effect below: land on ANY bot-family canvas
+  // (not just the top "conductor" one) with a task genuinely in flight on
+  // one of its steps right now, and its fill/clock should already be
+  // playing -- no click needed -- the same way "Build and test" has always
+  // auto-attached to its own active run (owner: "each step here should
+  // have a playback mode... look at how we did it with build and test").
+  // Skips when ?task= is already being handled above, so the two effects
+  // never race onto different pills for the same canvas.
+  useEffect(() => {
+    if (!isStateMachineWorkflow || workflowRun || searchParams.get("task")) return;
+    const live = [...conductorRailTasks].reverse().find((task) =>
+      task.status !== "done"
+      && (task.gate_state === "pending" || task.gate_state === "failed"
+        || task.activity?.state === "working" || task.activity?.state === "driving"));
+    if (live) openConductorInstance(live);
+  }, [isStateMachineWorkflow, workflowRun, searchParams, conductorRailTasks, openConductorInstance]);
 
   useEffect(() => {
     // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore

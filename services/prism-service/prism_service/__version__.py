@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.73"
+PRISM_VERSION = "7.13.74"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6686,4 +6686,27 @@ PRISM_VERSION_NOTES += (
     "swallowed the ';'. A trailing . , ; : ! ? ) ] quote now belongs to the "
     "sentence, so the semicolon rule splits it and a contraction inside the "
     "URL or path still survives (two regression tests in test_ste_normaliser)."
+    "\n\n7.13.74: the Workflows page's left-to-right fill/clock playback -- "
+    "the same one 'Build and test' has always auto-shown with no click -- "
+    "only ever lit up on the literal top-level 'conductor' canvas and only "
+    "auto-attached for validation's own scripted run (owner: 'each step "
+    "here should have a playback mode where the workflow it is on is "
+    "filling from left to right... look at how we did it with build and "
+    "test'). Two leftover hardcoded checks, both caught by a prior owner "
+    "task (3baadd19) that had already generalized the rail/click-to-open "
+    "path but missed these: (1) conductorLivePhase (WorkflowsPage.tsx) "
+    "gated the SdlcProgress fill bar on `selectedWorkflowId === "
+    "\"conductor\"` -- widened to `isStateMachineWorkflow` so every "
+    "bot-family behavior canvas (green-gate-status, write-failing-tests-"
+    "loop, etc.) gets the same live fill a task's own conductor instance "
+    "already got. (2) added a new reattach-on-navigate effect, mirroring "
+    "validation's own (line ~780), that auto-opens the most recently "
+    "updated in-flight task on any state-machine-family canvas via the "
+    "existing openConductorInstance/conductorRailTasks machinery -- no "
+    "click needed, skipped when a ?task= param is already handled. Updated "
+    "the two source-reading tests that pinned the old literal guard string "
+    "(test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_"
+    "instance, test_sdlc_progress_reuse_never_touches_validation_or_a_"
+    "finished_replay) and added a new one pinning the auto-attach effect. "
+    "`npm run build` clean, 121 workflows-page tests green."
 )

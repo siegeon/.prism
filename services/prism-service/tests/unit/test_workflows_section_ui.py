@@ -1406,7 +1406,14 @@ def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
         page,
         'const conductorLivePhase = useMemo<PhaseProgress | null>(() => {',
     )
-    assert 'selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable"' in phase_memo
+    # Generalized off the literal "conductor" id to the whole state-machine
+    # family (owner: "each step here should have a playback mode... look at
+    # how we did it with build and test") -- every bot-family behavior
+    # canvas (green-gate-status, write-failing-tests-loop, etc.) gets the
+    # SAME live fill a task's own conductor instance already got, not just
+    # the top-level "conductor" bot. isStateMachineWorkflow already excludes
+    # "validation" (line ~532), so that exclusion still holds here too.
+    assert '!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable"' in phase_memo
     assert "step?.average_duration_seconds" in phase_memo
 
     activity_memo = _function_body(page, "const conductorLiveActivity = useMemo<Activity | null>(() => {")
@@ -1427,12 +1434,43 @@ def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
 def test_sdlc_progress_reuse_never_touches_validation_or_a_finished_replay():
     page = _read("pages", "WorkflowsPage.tsx")
 
-    # Null for anything but a LIVE (Runnable, i.e. not yet done) conductor
-    # instance -- validation's own live-run badge and a finished conductor
-    # replay must render exactly as before.
+    # Null for anything but a LIVE (Runnable, i.e. not yet done) instance of
+    # a state-machine-family workflow -- validation's own live-run badge and
+    # a finished replay must render exactly as before. Superseded the old
+    # literal `selectedWorkflowId !== "conductor"` guard (isStateMachineWorkflow
+    # already excludes "validation", see test above) so every bot-family
+    # canvas gets the same fill, not just the top-level "conductor" bot.
     phase_memo = _function_body(page, "const conductorLivePhase = useMemo<PhaseProgress | null>(() => {")
-    guard = phase_memo.index('if (selectedWorkflowId !== "conductor" || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;')
+    guard = phase_memo.index('if (!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;')
     assert guard == phase_memo.index("if (")
+
+
+def test_every_bot_family_canvas_auto_attaches_its_own_live_task():
+    # Owner: "each step here should have a playback mode where the workflow
+    # it is on is filling from left to right... look at how we did it with
+    # build and test". Build and test (validation) has always auto-reattached
+    # to its own in-flight run with no click (see the effect right above this
+    # one); every other bot-family canvas required an explicit rail-pill
+    # click to ever show a fill. This pins the generalized counterpart.
+    page = _read("pages", "WorkflowsPage.tsx")
+    attach = _function_body_like(
+        page,
+        "if (!isStateMachineWorkflow || workflowRun || searchParams.get(\"task\")) return;",
+        "}, [isStateMachineWorkflow, workflowRun, searchParams, conductorRailTasks, openConductorInstance]);",
+    )
+    # Skips when the ?task= handler (the effect immediately above) already
+    # owns opening a specific instance, so the two never race onto
+    # different pills for the same canvas.
+    assert 'searchParams.get("task")' in attach
+    # Only a task genuinely IN FLIGHT right now counts -- a done task is
+    # history, and clicking into history stays an explicit rail action
+    # (mirrors validation, which never auto-replays a finished run either).
+    assert 'task.status !== "done"' in attach
+    assert '"pending"' in attach and '"working"' in attach and '"driving"' in attach
+    assert "openConductorInstance(live)" in attach
+    # Most-recently-updated live task wins, not the oldest -- conductorRailTasks
+    # is sorted ascending, so this must walk it in reverse.
+    assert "[...conductorRailTasks].reverse()" in attach
 
 
 def test_version_bumped_for_the_conductor_live_instance_legibility_fix():
