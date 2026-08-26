@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.63"
+PRISM_VERSION = "7.13.64"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6484,4 +6484,23 @@ PRISM_VERSION_NOTES += (
     "fire: root-level documents were emitted inFolder a fictitious '.' "
     "folder. Also: related-task matches in the signal resolver ignore "
     "stopwords and weight rare tokens (task 461b7985)."
+    "\n\n7.13.64: ONTOLOGY READS LIKE THE PROTOTYPE'S FOUR TABS (epic "
+    "e39027d3, owner: 'not quite there with ontology'). /ontology is now "
+    "the prototype's document, not a class rail: STRUCTURE (What is in "
+    "here: the taxonomy tree with rolled-up counts and one-line meanings; "
+    "How it connects: one card per relation with its edge count and a real "
+    "example), RULES (need a decision first; title + id, meaning, the "
+    "failing things as chips, N CHECKED / M FAILED; header pill + Refresh), "
+    "RECORDS (things / connections / values; per-class samples with an "
+    "INSTANCES expander; SPARQL box), TERMS (the seven vocabularies -- "
+    "channel, signal_state, task_status, workflow, proof_type, ask, "
+    "gate_state -- with in-use counts and a HELD BACK list of values seen "
+    "in the data but not declared). Backend: GET /api/okf/ontology/"
+    "structure, /records, /terms, all answered by SPARQL over the graph "
+    "(services/ontology_terms.py counts from real rows); every SHACL shape "
+    "carries sh:name/sh:description so /rules serves human titles and "
+    "focus labels with need_decision/total. Also in this build: task "
+    "dependencies (and description) are editable after creation over MCP "
+    "and PATCH, unknown update fields are refused loudly (task d67bca9f); "
+    "web_dist_next (the Vite watch-build staging dir) is gitignored."
 )
