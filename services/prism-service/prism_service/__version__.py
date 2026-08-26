@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.77"
+PRISM_VERSION = "7.13.78"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6779,4 +6779,24 @@ PRISM_VERSION_NOTES += (
     "15/15 + 1/1 green locally (unchanged from before; this fix can't "
     "regress the local-identity path, only add coverage for the absent-"
     "identity one)."
+    "\n\n7.13.78: fixed the real conductor-flow bug, not another one-off "
+    "task patch. Owner: 'lets fix the programatic behabiuors in the "
+    "cundor flow so this does not stop our user journey again.' On "
+    "2026-08-26 the machine gate adjudicator legitimately finished task "
+    "39244a32 (status: in_progress -> done, full_outcome_complete=True) at "
+    "18:03:29. A SEPARATE relaunched `implement` drive raced in right "
+    "after, and its Claim phase (.claude/workflows/implement.js) blindly "
+    "called task_update(status='in_progress') with zero check for the "
+    "task's current state, clobbering the correct done back over. That "
+    "drive then hit an unrelated stale-branch pre-flight halt, whose "
+    "own un-claim handler blindly set status='pending' -- same bug, same "
+    "shape, second write path. Both handlers now do a GUARD READ "
+    "(task_list status) before writing: Claim short-circuits the ENTIRE "
+    "drive (returns already_done=true, done=true immediately, never "
+    "reaches Pre-flight/Locate/Drive) if status is already 'done'; the "
+    "pre-flight halt's un-claim skips the pending write under the same "
+    "condition. Two new regression tests in "
+    "test_implement_workflow_claim_first.py pin the guard-before-write "
+    "ordering in both prompts. 5/5 green in that file, 138 additional "
+    "implement.js-adjacent tests unaffected."
 )
