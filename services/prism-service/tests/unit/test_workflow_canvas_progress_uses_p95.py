@@ -56,18 +56,44 @@ def test_p95_reads_from_the_same_dataset_the_pill_rail_counts():
 def test_frame_pacing_prefers_p95_over_the_plain_mean():
     src = _src()
     frame_at = src.index("const frame = (now: number) => {")
-    # The old direct assignment must be gone from the pacing block.
+    # The old direct assignment must be gone from the pacing block. Window
+    # widened from 900 -> 2000 chars (2026-08-26 follow-up to the p95 fix above):
+    # the catalog-fallback comment block pushed the pacing lines further
+    # from the block's start; 900 no longer reaches them.
     old_block_start = src.index("if (runtime?.status === \"running\"", frame_at)
-    old_block = src[old_block_start:old_block_start + 900]
+    old_block = src[old_block_start:old_block_start + 2000]
     assert "const average = step?.average_duration_seconds;" not in old_block
     assert "const p95 = p95StepDurationSeconds(" in old_block
     assert "const pacing = p95 ?? step?.average_duration_seconds;" in old_block
     assert "elapsedSeconds / pacing" in old_block
 
 
-def test_frame_effect_depends_on_run_history_so_p95_stays_fresh():
+def test_frame_effect_depends_on_run_history_and_catalog_so_pacing_stays_fresh():
+    # SUPERSEDES the prior exact-string check (task <linked-node-progress
+    # fix>): `workflows` (the full connected catalog) joined the deps list
+    # alongside workflowRunHistory so a linked child step's catalog-wide
+    # fallback lookup (see test_linked_child_step_falls_back_to_the_full_
+    # catalog below) doesn't run on a stale closure.
     src = _src()
     assert (
         "}, [selectedNodeId, selectedWorkflow, workflowRun, testStep, "
-        "replayStoppedAt, workflowRunHistory]);"
+        "replayStoppedAt, workflowRunHistory, workflows]);"
+    ) in src
+
+
+def test_linked_child_step_falls_back_to_the_full_catalog():
+    """A linked CHILD node (e.g. verify_green_state's "Build and test",
+    whose own steps "build"/"test" never appear in selectedWorkflow.steps,
+    the CONDUCTOR's own 10 steps) must not silently fall through to the
+    indeterminate wiggle just because the direct lookup misses -- it
+    should search the full connected catalog (`workflows` state) too.
+    Owner 2026-08-26, live screenshot: "Build and test" stuck cycling at
+    ~23% fill after 4m51s of real elapsed time, because BOTH the p95 AND
+    average lookups were scoped to the wrong workflow's step list."""
+    src = _src()
+    assert (
+        "const step = selectedWorkflow.steps.find((candidate) => "
+        "candidate.id === runtime.currentStep)\n          ?? "
+        "workflows.flatMap((wf) => wf.steps).find((candidate) => "
+        "candidate.id === runtime.currentStep);"
     ) in src

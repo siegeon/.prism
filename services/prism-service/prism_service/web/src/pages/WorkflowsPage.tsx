@@ -1169,12 +1169,25 @@ export default function WorkflowsPage() {
       let activeProgress: ActiveNodeProgress | null = null;
       const runtime = workflowRun?.runtime;
       if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
-        const step = selectedWorkflow.steps.find((candidate) => candidate.id === runtime.currentStep);
+        // A linked CHILD node (e.g. verify_green_state's "Build and test",
+        // whose own steps are "build"/"test" from the external AOS engine)
+        // never appears in selectedWorkflow.steps (the CONDUCTOR's own 10
+        // steps) -- search the full connected catalog as a fallback so its
+        // real average_duration_seconds is found instead of silently
+        // falling through to the indeterminate wiggle every time (owner
+        // 2026-08-26, screenshot showing "Build and test" stuck cycling at
+        // ~23% after 4m51s of real elapsed time).
+        const step = selectedWorkflow.steps.find((candidate) => candidate.id === runtime.currentStep)
+          ?? workflows.flatMap((wf) => wf.steps).find((candidate) => candidate.id === runtime.currentStep);
         const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(runtime.startedAt)) / 1000);
         // p95 of this step's real recent durations paces the bar when
         // there is enough history; the server's plain mean is the
         // fallback for a step still short on same-step samples, and the
-        // indeterminate wiggle is the last resort with neither.
+        // indeterminate wiggle is the last resort with neither. p95 stays
+        // scoped to the conductor's OWN run history (visibleRunHistory) --
+        // a linked child step's timeline never appears there, so it
+        // correctly returns null and pacing falls through to `step`
+        // (now catalog-wide) above.
         const p95 = p95StepDurationSeconds(visibleRunHistory, runtime.currentStep);
         const pacing = p95 ?? step?.average_duration_seconds;
         activeProgress = {
@@ -1230,7 +1243,7 @@ export default function WorkflowsPage() {
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
