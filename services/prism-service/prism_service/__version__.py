@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.92"
+PRISM_VERSION = "7.13.93"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7058,4 +7058,25 @@ PRISM_VERSION_NOTES += (
     "machine seat rewinds a red-at-tree receipt to implement_tasks and a "
     "stale one to verify_green_state (max 3 consecutive), never crossing "
     "a human reject."
+    "\n\n7.13.93: unreachable_entry_point_reason (reachability_check.py) "
+    "read a task's diff base from task_workspace.workspace_for(...)"
+    "['baseline'] -- a value stored ONCE at worktree creation and never "
+    "updated afterward, so it goes stale the moment a worktree is "
+    "legitimately rebased onto a newer origin/main. Live incident, task "
+    "8582921d, 2026-08-26: a 3-day-stale baseline produced a 168-file / "
+    "+26093-line / 213-commit diff for a real 4-file change and refused "
+    "green_gate on symbols (OntologyStore.is_empty/list_axioms/"
+    "list_classes/list_instances/list_properties) the task never touched "
+    "-- stranding it at green_gate with no way to clear through the app. "
+    "Fixed: the check now computes a fresh `git merge-base HEAD "
+    "origin/main` in the workspace and prefers it over the stored "
+    "baseline, falling back to the stored value only if that git call "
+    "fails (no fetch added -- uses whatever origin/main the workspace "
+    "already has cached). New regression test builds a real git repo "
+    "with an origin remote, has a sibling task land unrelated work on "
+    "origin/main after divergence, fast-forwards the candidate worktree "
+    "onto it, and proves both halves: the stale baseline alone DOES "
+    "false-positive on the sibling's symbol, and the task-level entry "
+    "point (which applies the fix) does not. 44 neighboring reachability/"
+    "gate-adjudicator tests green."
 )

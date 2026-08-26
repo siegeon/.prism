@@ -285,6 +285,30 @@ def unreachable_entry_point_reason_for_diff(workspace, baseline: str) -> str:
         "nothing wiring it into the running system")
 
 
+def _fresh_merge_base(workspace: Path) -> str:
+    """Fresh diff base against origin/main's current tip, computed locally
+    (no fetch -- whatever origin/main the workspace already has cached from
+    its last fetch). A task's stored `baseline` is set once at worktree
+    creation (task_workspace.ensure_workspace) and never updated afterward
+    by any code path -- so it goes stale the moment the workspace is
+    legitimately rebased onto a newer origin/main, and the stale baseline
+    then diffs against every OTHER task's landed work too, misattributing
+    it to this candidate (live incident: task 8582921d, 2026-08-26, a
+    3-day-stale baseline produced a 168-file / +26093-line / 213-commit
+    diff for a 4-file change and refused green_gate on symbols the task
+    never touched). Returns "" on any failure so the caller falls back to
+    the stored baseline unchanged -- never raise, never refuse blind."""
+    try:
+        out = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=str(workspace), capture_output=True, text=True, timeout=10)
+    except Exception:
+        return ""
+    if out.returncode != 0:
+        return ""
+    return out.stdout.strip()
+
+
 def unreachable_entry_point_reason(task) -> str:
     """Task-level entry point for ConductorService.adjudicate_green_gate.
 
@@ -311,6 +335,7 @@ def unreachable_entry_point_reason(task) -> str:
     try:
         if not Path(path).is_dir():
             return ""
+        baseline = _fresh_merge_base(Path(path)) or baseline
         return unreachable_entry_point_reason_for_diff(Path(path), baseline)
     except Exception:
         return ""
