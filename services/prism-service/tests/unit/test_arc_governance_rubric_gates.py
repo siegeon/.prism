@@ -111,6 +111,49 @@ def test_story_missing_oracle_fails_citing_ac_id():
     assert "AC-2" in res["reason"], res
 
 
+STORY_NESTED_ORACLE_BULLETS = """# Story: governance sample, nested oracle bullets
+
+## Summary
+Same shape a real drive wrote (task 3a3f90da, 2026-08-26): each AC as its
+own top-level bullet, with the oracle as an INDENTED CHILD bullet beneath
+it, not a same-line suffix.
+
+## Requirements
+- FR-1: rubric scoring is a pure function of (evidence, rubric)
+
+## Acceptance Criteria
+- AC-1: first acceptance criterion, oracle text lives one line below
+  - oracle: pytest tests/unit/test_arc_governance_rubric_gates.py::test_a
+- AC-2: second acceptance criterion, same nested shape
+  - oracle: pytest tests/unit/test_arc_governance_rubric_gates.py::test_b
+"""
+
+
+def test_nested_oracle_sub_bullet_folds_into_its_own_ac_not_a_sibling_entry():
+    """Live bug (task 3a3f90da, 2026-08-26): a '- oracle: ...' bullet
+    indented UNDER its AC was matched as a bullet in its own right and
+    started a NEW entry instead of folding into the AC above it, so a
+    story where every AC correctly carried a nested oracle line still
+    read as 100% oracle-less. _ac_lines must attribute the oracle marker
+    back to the AC it is nested under."""
+    g = _gov()
+    sections = g._sections(STORY_NESTED_ORACLE_BULLETS)
+    ac_section = g._find_section(sections, "acceptance criteria") or ""
+    acs = g._ac_lines(ac_section)
+    ids = [ac_id for ac_id, _ in acs]
+    assert ids == ["AC-1", "AC-2"], (
+        f"expected exactly two entries, one per AC, got {ids!r} - a nested "
+        "oracle bullet must not become its own untracked entry")
+    for ac_id, line in acs:
+        assert "oracle:" in line.lower(), (
+            f"{ac_id}'s nested oracle sub-bullet was not folded into its "
+            f"entry: {line!r}")
+
+    res = g.score_story_complete(
+        {"story_md": STORY_NESTED_ORACLE_BULLETS}, _rubrics()["story_complete"])
+    assert res["ok"] is True, res
+
+
 def test_story_without_sections_fails():
     g = _gov()
     res = g.score_story_complete(

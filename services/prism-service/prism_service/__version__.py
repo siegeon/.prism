@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.79"
+PRISM_VERSION = "7.13.80"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6814,4 +6814,24 @@ PRISM_VERSION_NOTES += (
     "tests, previously failing in this fresh worktree only because "
     "web_dist did not exist yet -- npm run build fixed that, unrelated to "
     "this change)."
+    "\n\n7.13.80: found while investigating why a freshly-driven child task "
+    "(3a3f90da) sat stuck at story_gate -- a real, systemic rubric-parser "
+    "bug, not a story defect. arc_governance.py's _ac_lines and "
+    "_claim_lines (story_complete and premise_grounded rubrics) matched "
+    "ANY bulleted line as the start of a new entry, with no check on "
+    "indentation. A nested '- oracle: ...' or '- <citation>' sub-bullet "
+    "written UNDER its parent AC/claim -- the natural, instructed shape, "
+    "an indented CHILD bullet, not a same-line suffix -- was matched too, "
+    "so it started its own untracked sibling entry instead of folding "
+    "into the parent the docstring already claimed it would. Every one "
+    "of 3a3f90da's 9 ACs had a correctly-placed nested oracle line and "
+    "still read as 100% oracle-less; one nested oracle even got "
+    "mis-attributed to a different AC because its own prose happened to "
+    "contain that AC's id as a substring. Fixed both functions by "
+    "tracking each entry's starting indentation: a bullet only opens a "
+    "NEW entry when it is not MORE indented than the entry currently "
+    "being built. Two new regression tests (one per function) pin the "
+    "nested-bullet case. 124 rubric/gate/premise tests green, including "
+    "the real story replayed through the fixed parser (all 9 ACs now "
+    "correctly read as having oracles)."
 )
