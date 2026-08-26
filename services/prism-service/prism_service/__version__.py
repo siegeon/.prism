@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.66"
+PRISM_VERSION = "7.13.67"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6564,4 +6564,26 @@ PRISM_VERSION_NOTES += (
     "inside it (worker threads raced a rebuild against a query on the same "
     "RocksDB handle -- the unit suite segfaulted rc=139 three times), the "
     "store cache is an LRU of 8, and a read never creates a store."
+    "\n\n7.13.67: EVERY NOUN IN A TASK LINKS TO ITS ONTOLOGY DATA (epic "
+    "47bba8fe; owner: 'apply the ontology to explore and make sure we have "
+    "cross clicking on every noun/verb in the tasks -- many words in the "
+    "descriptions show none of the linked data'). services/entity_linker "
+    "resolves a text against the RDF graph's label index (ABox instance "
+    "labels + class names + the Terms vocabularies, cached per project on "
+    "the graph's validated_at): task ids and titles -> /tasks/<id>, memory "
+    "ids -> /understand?concept=, document/folder paths -> /files?path=, "
+    "classes and terms -> /ontology, agents -> /workflows, ticket keys / PR "
+    "refs via signal_parse; whole-token, longest match wins, exact case for "
+    "ids/paths, titles only when >= 2 tokens, plain words never link. GET/"
+    "POST /api/okf/ontology/link and GET /api/tasks/{id}/links. The task "
+    "description and Understand's concept body keep the one Markdown "
+    "renderer -- links are spliced into the markdown source (never inside "
+    "an existing link or code span); LinkedText renders plain-text surfaces "
+    "(Queue subject/body, likely_misfire, tags) with data-cls + a tooltip. "
+    "EXPLORE applies the ontology: /api/xref/neighbors carries "
+    "ontology_class per node (one VALUES query over the graph; '' when "
+    "unknown, never guessed) and ontology_property per edge; the detail "
+    "rail shows the class pill linking to /ontology?tab=structure&class=, "
+    "the legend groups by class, edge labels are the ontology's property "
+    "names; /ontology honours ?tab= and ?class=."
 )
