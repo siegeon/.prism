@@ -5,7 +5,7 @@ import { resolveInitialProject } from "@/lib/project";
 import { api, ApiError } from "@/lib/api";
 import ClaimPage from "@/pages/ClaimPage";
 import KeyGatePage from "@/pages/KeyGatePage";
-import Sidebar, { INBOX_ENABLED } from "@/components/Sidebar";
+import Sidebar from "@/components/Sidebar";
 import PageHeader from "@/components/PageHeader";
 import Backdrop from "@/components/Backdrop";
 import LiveStatusStrip from "@/components/LiveStatusStrip";
@@ -56,7 +56,7 @@ function lazyRoute<T extends { default: ComponentType }>(key: string, loader: ()
 }
 
 const ExplorePage = lazyRoute("explore", () => import("@/pages/ExplorePage"));
-const InboxPage = lazyRoute("inbox", () => import("@/pages/InboxPage"));
+const QueuePage = lazyRoute("queue", () => import("@/pages/QueuePage"));
 const TasksPage = lazyRoute("tasks", () => import("@/pages/TasksPage"));
 const CompletedTasksPage = lazyRoute("completed", () => import("@/pages/CompletedTasksPage"));
 const TaskDetailPage = lazyRoute("task-detail", () => import("@/pages/TaskDetailPage"));
@@ -189,11 +189,12 @@ export default function App() {
               element={<MemoryConceptRedirect />}
             />
             <Route path="/okf" element={<Navigate to="/understand" replace />} />
-            {/* Hidden behind INBOX_ENABLED while under development (task
-                d1854966) — a typed/bookmarked /inbox redirects to the
-                Dashboard until the flag flips; InboxPage stays imported
-                and wired for that flip. */}
-            <Route path="/inbox" element={INBOX_ENABLED ? <InboxPage /> : <Navigate to="/" replace />} />
+            {/* Queue is where signals arrive over their channel; a signal
+                becomes a task only on the owner's word (memory mx-0889e4,
+                task 01d05bff). /inbox is a stale bookmark for the retired
+                INBOX_ENABLED prototype (task d1854966) — redirect it. */}
+            <Route path="/queue" element={<QueuePage />} />
+            <Route path="/inbox" element={<Navigate to="/queue" replace />} />
             <Route path="/tasks" element={<TasksPage />} />
             {/* Completed work lives on its own surface, off the active board
                 (feedback: done-tasks-off-board). Static segment ranks above
