@@ -317,8 +317,33 @@ def _load_coverage(project: str) -> dict[str, dict]:
             data = json.loads(path.read_text(encoding="utf-8")) or {}
     except Exception:
         data = {}
+    data = _fold_now_known(data)
     _coverage_cache[project] = data
     return data
+
+
+def _fold_now_known(data: dict[str, dict]) -> dict[str, dict]:
+    """Merge an "unknown:<module>" row into its label when a later release
+    taught the registry that module (7.13.91 labelled the daemon seats
+    after 7.13.90 had recorded thousands of gate_adjudicator hits as
+    unknown). The count carries over. The later last_seen wins. A row for
+    a module that is still unknown stays as it is."""
+    out: dict[str, dict] = {}
+    for path, row in data.items():
+        target = path
+        if path.startswith("unknown:"):
+            module = path[len("unknown:"):]
+            for wanted_module, label in _LABEL_RULES:
+                if module == wanted_module or module.startswith(wanted_module + "."):
+                    target = label
+                    break
+        if target in out:
+            merged = out[target]
+            merged["count"] = int(merged.get("count", 0)) + int(row.get("count", 0))
+            merged["last_seen"] = max(str(merged.get("last_seen", "")), str(row.get("last_seen", "")))
+        else:
+            out[target] = dict(row)
+    return out
 
 
 def _write_coverage(project: str, force: bool = False) -> None:

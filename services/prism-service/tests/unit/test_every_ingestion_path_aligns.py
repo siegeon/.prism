@@ -572,3 +572,24 @@ def test_daemon_seats_are_known_paths():
         frames = [("prism_service.services.task_service", "_apply_ste", "", ""),
                   (module, "run", "", "")]
         assert la._path_label(frames) == label, (module, la._path_label(frames))
+
+
+def test_unknown_rows_fold_into_labels_the_registry_learned_later(tmp_path, monkeypatch):
+    """7.13.90 recorded gate_adjudicator hits as unknown:<module>; 7.13.91
+    labelled the seat. Loading folds the old rows into the label so the
+    card does not keep a red row for a path that is known now."""
+    from prism_service.services import language_alignment as la
+
+    monkeypatch.setattr(la, "_coverage_path", lambda project: tmp_path / "cov.json")
+    la._coverage_cache.pop("fold-test", None)
+    (tmp_path / "cov.json").write_text(json.dumps({
+        "unknown:prism_service.services.gate_adjudicator": {"count": 2913, "last_seen": "2026-08-26T21:00:00+00:00"},
+        "gate_adjudicator": {"count": 30, "last_seen": "2026-08-26T21:30:00+00:00"},
+        "unknown:prism_service.services.nobody_knows": {"count": 1, "last_seen": "2026-08-26T20:00:00+00:00"},
+    }))
+    rows = {r["path"]: r for r in la.coverage("fold-test")}
+    assert rows["gate_adjudicator"]["count"] == 2943
+    assert rows["gate_adjudicator"]["last_seen"] == "2026-08-26T21:30:00+00:00"
+    assert rows["gate_adjudicator"]["known"] is True
+    assert "unknown:prism_service.services.gate_adjudicator" not in rows
+    assert rows["unknown:prism_service.services.nobody_knows"]["known"] is False

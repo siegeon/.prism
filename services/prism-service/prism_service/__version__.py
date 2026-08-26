@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.91"
+PRISM_VERSION = "7.13.92"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7048,4 +7048,10 @@ PRISM_VERSION_NOTES += (
     "gate_adjudicator with 30 hits: a real writer that goes through "
     "TaskService (so its text is aligned) but had no label. The unknown "
     "marker did its job. Now those seats read as known paths."
+    "\n\n7.13.92: an Align language coverage row recorded as unknown:<module> "
+    "folds into its label when a later release taught the registry that "
+    "module. 7.13.90 had recorded 2913 gate_adjudicator and 220 ship_worker "
+    "hits as unknown before 7.13.91 labelled those seats. The count carries "
+    "over and the later last_seen wins, so the Ingestion paths block does "
+    "not keep a red row for a path that is known now."
 )
