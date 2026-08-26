@@ -555,6 +555,149 @@ def seed_prism_principles(memory_svc: Any) -> list:
     return stored
 
 
+
+# ----------------------------------------------------------------------
+# Prototype rules become axioms (task c1d0ee70) — "a rule that cannot
+# fail is decoration". Four EVALUABLE axioms, each with a real violation
+# case in PRISM data, as data + a pure evaluate_axioms(context) so this is
+# unit-testable without a live daemon. ADDITIVE ONLY: no existing
+# principle/rubric/gate behaviour above is touched by this section.
+# ontology_prototype_projection.rebuild wires the real context (task rows,
+# document paths, workflow/behavior catalog entries) and persists the
+# evaluated state onto OntologyStore's ontology_axioms rows, which the
+# Understand ontology view (OntologyPanel.tsx) already renders quietly in
+# graphite and spends --alarm only when state == 'violated'.
+#
+# SUPERSEDED as the GET /api/okf/ontology axioms SOURCE by task 8eeb3e65
+# "the rules are SHACL shapes that can fail": services/ontology_rules.py
+# now runs REAL SHACL shapes (prism_service/ontology/shapes.ttl) over the
+# o: RDF model, and OntologyGraph.axioms() reads ITS report, not this
+# section's evaluate_axioms(). PROTOTYPE_AXIOMS/evaluate_axioms are left
+# in place, unchanged, ONLY because ontology_prototype_projection.rebuild()
+# still writes them into OntologyStore's sqlite cache (a file outside
+# 8eeb3e65's allowed_files) and tests/unit/test_prototype_axioms.py's
+# sqlite-cache assertions still exercise that path — this is not the
+# ontology's live axioms read path any more.
+# ----------------------------------------------------------------------
+
+PROTOTYPE_AXIOMS: list[dict] = [
+    {"name": "task-names-its-channel",
+     "description": "Every task row names the channel it arrived through "
+                     "— a blank channel is a rule with no way to fail."},
+    {"name": "no-artifacts-in-the-root",
+     "description": "Every document lives inside a folder — one sitting "
+                     "loose in the project root breaks the file-tree "
+                     "grammar (document_tree.classify's loose_in_root)."},
+    {"name": "dated-folder-uses-one-format",
+     "description": "Every dated folder uses YYYY-MM-DD — a folder dated "
+                     "any other way (2026-Q1, 2026-08) breaks the one "
+                     "format the tree commits to (date_format_breaks)."},
+    {"name": "skill-description-says-when",
+     "description": "Every workflow/behavior catalog entry's description "
+                     "says WHEN to use it — one with no 'use when'/'when'/"
+                     "'triggers' phrasing gives no trigger condition."},
+]
+
+_AXIOM_DETAIL_CAP = 5
+
+
+def _cap_detail(label: str, rows: list[str]) -> str:
+    shown = rows[:_AXIOM_DETAIL_CAP]
+    more = len(rows) - len(shown)
+    suffix = f" (+{more} more)" if more > 0 else ""
+    return f"{label}: {', '.join(shown)}{suffix}"
+
+
+def _row_get(row: Any, key: str, default: Any = "") -> Any:
+    """Read `key` off a plain dict OR an attribute-bearing row object —
+    evaluate_axioms stays usable both from hand-built test context dicts
+    and from real PRISM rows (Task objects) without a conversion step."""
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
+
+
+def _eval_task_names_its_channel(context: dict) -> tuple[str, str]:
+    blank = []
+    for t in context.get("tasks") or []:
+        channel = str(_row_get(t, "channel") or "").strip()
+        if channel:
+            continue
+        label = (str(_row_get(t, "title") or "").strip()
+                 or str(_row_get(t, "id") or "").strip() or "?")
+        blank.append(label)
+    if blank:
+        return "violated", _cap_detail("task(s) with a blank channel", blank)
+    return "quiet", ""
+
+
+def _eval_no_artifacts_in_root(context: dict) -> tuple[str, str]:
+    from prism_service.services import document_tree
+
+    paths = list(context.get("document_paths") or [])
+    loose = document_tree.classify(paths)["loose_in_root"]
+    if loose:
+        return "violated", _cap_detail("document(s) loose in the root", loose)
+    return "quiet", ""
+
+
+def _eval_dated_folder_uses_one_format(context: dict) -> tuple[str, str]:
+    from prism_service.services import document_tree
+
+    paths = list(context.get("document_paths") or [])
+    breaks = document_tree.classify(paths)["date_format_breaks"]
+    if breaks:
+        return "violated", _cap_detail(
+            "folder(s) not dated YYYY-MM-DD", breaks)
+    return "quiet", ""
+
+
+_WHEN_RE = re.compile(r"\bwhen\b|\btrigger", re.IGNORECASE)
+
+
+def _eval_skill_description_says_when(context: dict) -> tuple[str, str]:
+    missing = []
+    for e in context.get("catalog_entries") or []:
+        desc = str(_row_get(e, "description") or "")
+        if _WHEN_RE.search(desc):
+            continue
+        label = str(_row_get(e, "id") or desc[:30] or "?")
+        missing.append(label)
+    if missing:
+        return "violated", _cap_detail(
+            "catalog entr(y/ies) with no when/triggers phrasing", missing)
+    return "quiet", ""
+
+
+_AXIOM_EVALUATORS = {
+    "task-names-its-channel": _eval_task_names_its_channel,
+    "no-artifacts-in-the-root": _eval_no_artifacts_in_root,
+    "dated-folder-uses-one-format": _eval_dated_folder_uses_one_format,
+    "skill-description-says-when": _eval_skill_description_says_when,
+}
+
+
+def evaluate_axioms(context: dict) -> list[dict]:
+    """Evaluate the four prototype axioms against `context` (pure).
+
+    context carries the rows each axiom checks: {"tasks": [...],
+    "document_paths": [...], "catalog_entries": [...]}. Each row may be a
+    plain dict or an attribute-bearing object (Task rows work directly).
+    Returns [{"name","description","state":'quiet'|'violated',"detail"}],
+    one row per PROTOTYPE_AXIOMS entry in order. A missing context key
+    reads as no rows to check, i.e. quiet — an axiom needs an ACTUAL
+    violating row to fire, never the absence of data.
+    """
+    out = []
+    for axiom in PROTOTYPE_AXIOMS:
+        state, detail = _AXIOM_EVALUATORS[axiom["name"]](context)
+        out.append({
+            "name": axiom["name"], "description": axiom["description"],
+            "state": state, "detail": detail,
+        })
+    return out
+
+
 def load_principles(memory_svc: Any) -> list[dict]:
     """Read machine-checkable principles back from memory data.
     Empty store -> [] (the misfire guard upstream refuses to pass)."""

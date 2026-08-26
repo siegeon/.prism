@@ -175,9 +175,14 @@ def _step_token_totals(history: list, sessions: list, project: str) -> dict:
 _MIRROR_URL_RE = re.compile(r"(https://(?:github\.com|[\w.-]+\.atlassian\.net)/\S+)")
 
 
-def _mirror_url(description: str) -> str:
+def _mirror_url(description: str, channel_ref: str = "") -> str:
+    """Legacy provenance-trailer regex, plus a fallback for the channel/
+    channel_ref home the trailer text is being retired to (task fb7edc46):
+    a NEW import no longer writes "Mirrored from ..." into description, so
+    the badge must fall back to the task's own channel_ref rather than go
+    blank. Existing rows still carry the trailer and keep matching it."""
     m = _MIRROR_URL_RE.search(description or "")
-    return m.group(1) if m else ""
+    return m.group(1) if m else (channel_ref or "")
 
 
 # artifact_url (task 3c1a326b): turns the has_prototype boolean (below, and
@@ -240,7 +245,8 @@ def list_tasks(project: str = Query("default"),
             row = {}
             for f in field_list:
                 if f == "mirror_url":
-                    row[f] = _mirror_url(getattr(t, "description", "") or "")
+                    row[f] = _mirror_url(getattr(t, "description", "") or "",
+                                          getattr(t, "channel_ref", "") or "")
                 elif f == "artifact_url":
                     row[f] = _artifact_url(getattr(t, "id", ""))
                 elif f == "mirrors":
@@ -301,6 +307,17 @@ class TaskCreate(BaseModel):
     # enter_conductor is true so a task can never be handed to the conductor
     # without a session.
     session_id: Optional[str] = None
+    # Channel provenance (task b480eb15): WHERE this task came from. Defaults
+    # to "ui" on this route (the SPA is the REST caller); a collector posting
+    # over REST may name its own channel (models.task.CHANNELS). channel_ref
+    # defaults to the caller's session id when the body carries one.
+    channel: str = ""
+    channel_ref: str = ""
+    # Which PRISM workflow drives this task (task af396b2c). Blank resolves
+    # to models.task.DEFAULT_WORKFLOW ("implement") inside TaskService.create
+    # -- unknown names (outside models.task.WORKFLOW_ALIASES) are refused
+    # below before the row exists.
+    workflow: str = ""
 
 
 @router.post("")
@@ -335,6 +352,19 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     )
     if domain_errors:
         raise HTTPException(422, domain_errors[0])
+    # Channel validated BEFORE the row is inserted so a refusal never
+    # orphans a task (same posture as the oracle check above).
+    from prism_service.models.task import validate_channel, validate_workflow
+    try:
+        channel = validate_channel(body.channel) or "ui"
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    # Workflow validated the same way, BEFORE the row is inserted (task
+    # af396b2c) -- blank is left to TaskService.create's own default.
+    try:
+        workflow = validate_workflow(body.workflow)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     ctx = get_project(project)
     task = ctx.task_svc.create(
         title=body.title.strip(),
@@ -348,6 +378,9 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
         verify=body.verify,
         allowed_files=body.allowed_files,
         stop_if=body.stop_if,
+        channel=channel,
+        channel_ref=(body.channel_ref or "").strip() or sid,
+        workflow=workflow,
     )
     out: dict = {"task": task, "advanced": None}
     if spec_summary is not None:
@@ -1831,6 +1864,9 @@ class TaskUpdate(BaseModel):
     stop_if: Optional[list[str]] = None
     plan_doc: Optional[str] = None
     plan_diagram: Optional[str] = None
+    # Which PRISM workflow drives this task (task af396b2c). Validated
+    # against models.task.WORKFLOW_ALIASES below before the write.
+    workflow: Optional[str] = None
 
 
 @router.patch("/{task_id}")
@@ -1844,6 +1880,15 @@ def update_task(
     kwargs = {k: v for k, v in body.dict().items() if v is not None}
     if not kwargs:
         raise HTTPException(400, "no fields to update")
+    # Workflow validated BEFORE the write (task af396b2c) -- an unknown
+    # name is refused rather than silently persisted; blank resolves to
+    # the default driver so a PATCH can never leave the row un-driven.
+    if "workflow" in kwargs:
+        from prism_service.models.task import DEFAULT_WORKFLOW, validate_workflow
+        try:
+            kwargs["workflow"] = validate_workflow(kwargs["workflow"]) or DEFAULT_WORKFLOW
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
     # Conductor session gate (ef81fc15): flipping a task to in_progress
     # hands it to the conductor (intake lane on /conductor). Refuse the
     # TRANSITION when no session is linked — this exact sessionless PATCH

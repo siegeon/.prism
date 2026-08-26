@@ -75,6 +75,11 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
    * of the catalog entry this one is disclosed under (e.g. a bot's own
    * FSM/Behavior entries nest under that bot's top-level entry). */
   parent_id?: string | null;
+  /** Active (pending|in_progress|blocked) tasks bound to this entry,
+   * joined server-side through models.task.WORKFLOW_ALIASES (task
+   * af396b2c) — the queue behind this agent. Absent only for an older
+   * service. */
+  task_count?: number;
 };
 
 export type WorkflowStepResult = {

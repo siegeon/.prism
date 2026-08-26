@@ -24,12 +24,18 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 WS_A = "workspace-a"
+SCOPE = "personal-local-user"  # what current_principal resolves to in local
+                                # mode (api/integrations_connect.personal_scope),
+                                # so a sync at this workspace_id is where the
+                                # API layer's mirror lookups actually look.
 
 ISSUE_BODY = (
     "Where the hole is, from the source\n\n"
@@ -115,13 +121,74 @@ def _import_task(tmp_path, body=ISSUE_BODY, url="https://github.com/siegeon/.pri
 
 
 # ── AC-1: the real body lands in the description, provenance retained ──
+#
+# The three assertions this originally pinned -- "#222" and the issue URL
+# appended as description prose -- are retired by task fb7edc46: channel=
+# provider + channel_ref=url (task b480eb15) now carry that provenance, and
+# a fresh import writes the body ALONE into description, no trailer. What
+# survives from the original oracle (the real body lands in the task) is
+# kept below; the provenance half moves to channel/channel_ref, and
+# mirror_url/mirrors[].url resolving from those fields is pinned in the
+# API-level test right after this one.
 
-def test_imported_description_carries_the_real_body_and_provenance(tmp_path):
+def test_imported_description_carries_the_real_body_channel_carries_provenance(tmp_path):
     _, _, _, _, task = _import_task(tmp_path)
 
-    assert "Where the hole is, from the source" in task.description
-    assert "#222" in task.description
-    assert "https://github.com/siegeon/.prism/issues/222" in task.description
+    assert task.description == ISSUE_BODY
+    assert "Mirrored from" not in task.description
+    assert task.channel == "github"
+    assert task.channel_ref == "https://github.com/siegeon/.prism/issues/222"
+
+
+def test_mirror_url_and_mirrors_resolve_with_no_description_trailer(monkeypatch, tmp_path):
+    """Same fresh-import shape as the test above, but through the real API
+    layer (task fb7edc46): with no provenance prose in description any
+    more, GET /api/tasks?fields=mirror_url must fall back to channel_ref,
+    and GET /api/tasks/{id} must still report mirrors[] from the store."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from prism_service.api import tasks as tasks_api
+    from prism_service.services.integration_store import (
+        IntegrationStore, set_integration_store)
+    from prism_service.services.workspace_service import (
+        WorkspaceService, set_workspace_service)
+
+    monkeypatch.setenv("PRISM_AUTH_MODE", "local")
+    tasks = _task_svc(tmp_path)
+
+    class _Ctx:
+        task_svc = tasks
+
+    monkeypatch.setattr(tasks_api, "get_project", lambda p: _Ctx())
+    set_workspace_service(WorkspaceService(tmp_path / "workspace.db"))
+    store = IntegrationStore(str(tmp_path / "integrations.db"))
+    set_integration_store(store)
+    try:
+        conn = store.ensure_connection(SCOPE, "github", "install-1")
+        cont = store.ensure_container(SCOPE, conn.id, "repository", ".prism")
+        adapter = _scripted_adapter("github", [{"entities": [
+            {"remote_id": "gh-222", "display_key": "#222", "title": "raw github headline",
+             "body": ISSUE_BODY, "url": "https://github.com/siegeon/.prism/issues/222"},
+        ]}])
+        svc = _sync(store, tasks, adapter)
+        svc.pull_container(SCOPE, conn, cont)
+        link = store.list_links(SCOPE)[0]
+        task_id = link.task_id
+
+        app = FastAPI()
+        app.include_router(tasks_api.router, prefix="/api/tasks")
+        with TestClient(app) as client:
+            r = client.get("/api/tasks", params={"fields": "id,mirror_url"})
+            row = next(x for x in r.json()["tasks"] if x["id"] == task_id)
+            assert row["mirror_url"] == "https://github.com/siegeon/.prism/issues/222"
+
+            body = client.get(f"/api/tasks/{task_id}").json()
+            assert len(body.get("mirrors") or []) == 1, body.get("mirrors")
+            assert body["mirrors"][0]["url"] == "https://github.com/siegeon/.prism/issues/222"
+    finally:
+        set_integration_store(None)
+        set_workspace_service(None)
 
 
 # ── AC-2: a second sync of the same remote item does not duplicate the body ──

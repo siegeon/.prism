@@ -1,0 +1,164 @@
+# prism_service/ontology/model.ttl — the ontology TBox (task 495d3a69,
+# epic 3efbcd89, owner: "it does not look like you used the ontology
+# rules and libraries we had in the subsume project"). Namespace
+# urn:prism:onto: (prefix o:), merged from the Subsume prototype's shape
+# (ontology-SKILL.md "The shape") with PRISM's own kinds (Task/Signal/
+# Channel/Agent/Provider/Skill/Script/Folder/Document/code-graph kinds).
+# Loaded into the pyoxigraph store's shared urn:prism:onto:model named
+# graph by services/ontology_graph.OntologyGraph.load_model() — replaced
+# whole on every call, never appended to.
+
+@prefix o: <urn:prism:onto:> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------------------------------------------------
+# Classes — "The shape" (ontology-SKILL.md)
+# ---------------------------------------------------------------------
+
+o:Workspace a rdfs:Class ; rdfs:label "Workspace" ;
+    rdfs:comment "The root: everything below is scoped to one workspace/project." .
+
+o:Party a rdfs:Class ; rdfs:label "Party" ;
+    rdfs:comment "Who is involved and can be held responsible." .
+o:Person a rdfs:Class ; rdfs:subClassOf o:Party ; rdfs:label "Person" ;
+    rdfs:comment "Everyone, colleague or outside contact." .
+o:Group a rdfs:Class ; rdfs:subClassOf o:Party ; rdfs:label "Group" ;
+    rdfs:comment "Department | Team | Forum." .
+o:OutsideParty a rdfs:Class ; rdfs:subClassOf o:Party ; rdfs:label "Outside party" ;
+    rdfs:comment "A company we actually deal with." .
+
+o:Product a rdfs:Class ; rdfs:label "Product" ;
+    rdfs:comment "What work is filed under." .
+
+o:Activity a rdfs:Class ; rdfs:label "Activity" ;
+    rdfs:comment "Work (workstream, task step, ticket, PR) | Ask." .
+o:Work a rdfs:Class ; rdfs:subClassOf o:Activity ; rdfs:label "Work" ;
+    rdfs:comment "A workstream, task step, ticket or PR." .
+o:Ask a rdfs:Class ; rdfs:subClassOf o:Activity ; rdfs:label "Ask" ;
+    rdfs:comment "One of six kinds of request." .
+o:Task a rdfs:Class ; rdfs:subClassOf o:Activity ; rdfs:label "Task" ;
+    rdfs:comment "A PRISM task row — id/title/channel, the conductor's unit of work." .
+
+o:Agent a rdfs:Class ; rdfs:label "Agent" ;
+    rdfs:comment "One per person, team, product, workstream — a workflow catalog entry." .
+o:Skill a rdfs:Class ; rdfs:label "Skill" ;
+    rdfs:comment "Packaged context an agent activates: purpose and triggers." .
+
+o:Provider a rdfs:Class ; rdfs:label "Provider" ;
+    rdfs:comment "A surface exposing operations, which declares what it supports." .
+o:Script a rdfs:Class ; rdfs:label "Script" ;
+    rdfs:comment "An artifact a skill bundles, executed through a provider." .
+
+o:QueueItem a rdfs:Class ; rdfs:label "Queue item" ;
+    rdfs:comment "What arrived, and where from." .
+o:Signal a rdfs:Class ; rdfs:subClassOf o:QueueItem ; rdfs:label "Signal" ;
+    rdfs:comment "A queue item that may become a Task." .
+
+o:Artifact a rdfs:Class ; rdfs:label "Artifact" ;
+    rdfs:comment "Folder (where work is kept) | Document (what it produced)." .
+o:Folder a rdfs:Class ; rdfs:subClassOf o:Artifact ; rdfs:label "Folder" ;
+    rdfs:comment "Where work is kept — brain.db's docs, grouped by parent path." .
+o:Document a rdfs:Class ; rdfs:subClassOf o:Artifact ; rdfs:label "Document" ;
+    rdfs:comment "What work produced — a brain.db docs row's source_file." .
+
+o:Channel a rdfs:Class ; rdfs:label "Channel" ;
+    rdfs:comment "Where a task or signal arrived through (ui, mcp, api, ...)." .
+
+o:Code a rdfs:Class ; rdfs:label "Code" ;
+    rdfs:comment "A code-graph entity — module, class, function, ..." .
+o:Function a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Function" .
+o:Class a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Class" .
+o:Method a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Method" .
+o:Module a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Module" ;
+    rdfs:comment "A module or file." .
+o:Interface a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Interface" .
+o:Variable a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Variable" .
+
+# ---------------------------------------------------------------------
+# Properties — "The four surfaces, and how they join" + PRISM's own edges
+# ---------------------------------------------------------------------
+
+o:inFolder a rdf:Property ; rdfs:domain o:Document ; rdfs:range o:Folder ;
+    rdfs:label "inFolder" ; rdfs:comment "Where a document is kept." .
+o:insideFolder a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Folder ;
+    rdfs:label "insideFolder" ; rdfs:comment "The folder above it." .
+o:keptBy a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Party ;
+    rdfs:label "keptBy" .
+o:raises a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:Ask ;
+    rdfs:label "raises" .
+o:askedBy a rdf:Property ; rdfs:domain o:Ask ; rdfs:range o:Party ;
+    rdfs:label "askedBy" .
+
+o:actsFor a rdf:Property ; rdfs:domain o:Agent ; rdfs:range o:Activity ;
+    rdfs:label "actsFor" .
+o:activates a rdf:Property ; rdfs:domain o:Agent ; rdfs:range o:Skill ;
+    rdfs:label "activates" .
+o:invokes a rdf:Property ; rdfs:domain o:Agent ; rdfs:range o:Provider ;
+    rdfs:label "invokes" .
+o:bundles a rdf:Property ; rdfs:domain o:Skill ; rdfs:range o:Script ;
+    rdfs:label "bundles" .
+o:permits a rdf:Property ; rdfs:domain o:Skill ; rdfs:range o:Provider ;
+    rdfs:label "permits" .
+o:executedVia a rdf:Property ; rdfs:domain o:Script ; rdfs:range o:Provider ;
+    rdfs:label "executedVia" .
+o:arrivedVia a rdf:Property ; rdfs:range o:Channel ;
+    rdfs:label "arrivedVia" ;
+    rdfs:comment "Task or Signal -> Channel it arrived through." .
+o:becameTask a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:Task ;
+    rdfs:label "becameTask" .
+o:hasWorkflow a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:Agent ;
+    rdfs:label "hasWorkflow" .
+
+o:relatesTo a rdf:Property ; rdfs:domain o:Code ; rdfs:range o:Code ;
+    rdfs:label "relatesTo" ;
+    rdfs:comment "Supertype of the code-graph edge kinds." .
+o:calls a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "calls" .
+o:imports a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "imports" .
+o:imports_from a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:label "imports_from" .
+o:inherits a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "inherits" .
+o:contains a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "contains" .
+o:uses a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "uses" .
+o:method a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "method" .
+o:rationale_for a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:label "rationale_for" .
+
+# ---------------------------------------------------------------------
+# The rules are SHACL shapes (task 8eeb3e65, epic 3efbcd89) — Step/Rule
+# classes + the properties shapes.ttl's rules validate against or persist
+# a report through. o:Step/o:decidedBy/o:producedBy are the
+# agent-delegates-one-tier-down rule's own data (emitted from
+# WORKFLOW_STEPS + STEP_ROLES, never fabricated); o:Rule/o:lookedAt/
+# o:violations/o:focus/o:message/o:validatedAt are the report shape
+# services/ontology_rules.py persists into urn:prism:<project>/report.
+# ---------------------------------------------------------------------
+
+o:Step a rdfs:Class ; rdfs:label "Step" ;
+    rdfs:comment "One WORKFLOW_STEPS entry — an agent step or a gate." .
+o:Rule a rdfs:Class ; rdfs:label "Rule" ;
+    rdfs:comment "One SHACL shape's validated report row." .
+
+o:arrivedAt a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:dateTime ;
+    rdfs:label "arrivedAt" .
+o:state a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:string ;
+    rdfs:label "state" .
+o:decidedBy a rdf:Property ; rdfs:domain o:Step ; rdfs:range xsd:string ;
+    rdfs:label "decidedBy" ; rdfs:comment "The role that decides this gate." .
+o:producedBy a rdf:Property ; rdfs:domain o:Step ; rdfs:range xsd:string ;
+    rdfs:label "producedBy" ;
+    rdfs:comment "The role whose work this gate is deciding on." .
+
+o:description a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
+    rdfs:label "description" .
+o:lookedAt a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:integer ;
+    rdfs:label "lookedAt" .
+o:violations a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:integer ;
+    rdfs:label "violations" .
+o:focus a rdf:Property ; rdfs:domain o:Rule ; rdfs:label "focus" ;
+    rdfs:comment "One offending instance node this rule's report names." .
+o:message a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:string ;
+    rdfs:label "message" .
+o:validatedAt a rdf:Property ; rdfs:domain o:Rule ; rdfs:range xsd:dateTime ;
+    rdfs:label "validatedAt" .

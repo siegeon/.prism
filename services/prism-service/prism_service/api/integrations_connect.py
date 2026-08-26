@@ -27,6 +27,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
 from prism_service.api.auth import coerce_principal, current_principal
+from prism_service.models.task import CHANNELS
 from prism_service.models.workspace import Principal
 from prism_service.services import jira_oauth
 from prism_service.services.integration_store import get_integration_store
@@ -37,6 +38,17 @@ from prism_service.services.workspace_service import get_workspace_service
 router = APIRouter(dependencies=[Depends(current_principal)])
 
 PROVIDERS = ("github", "jira")
+
+# Channels PRISM itself originates work from — never a connector to SEE work
+# arriving from somewhere else (task 64321cfe). Filtering CHANNELS against
+# this small exclusion set derives the connector list from the ONE shared
+# channel vocabulary (models.task.CHANNELS), so a new remote channel added
+# there surfaces a card automatically, with no second list to keep in sync.
+_LOCAL_CHANNELS = {"ui", "mcp", "daemon"}
+
+
+def _remote_channels() -> tuple[str, ...]:
+    return tuple(c for c in CHANNELS if c not in _LOCAL_CHANNELS)
 
 # Where the callback lands the browser when it is done. A FIXED internal path:
 # never a caller-supplied redirect target.
@@ -296,6 +308,16 @@ def _provider_state(provider: str, scope: str) -> dict:
         state, detail, account = _claude_state()
         return {"provider": "claude", "name": "Claude", "state": state,
                 "detail": detail, "account": account, "tracking": []}
+
+    if provider not in ("github", "jira"):
+        # A channel in the shared vocabulary with no adapter registered yet
+        # (e.g. slack, outlook) — tasks tagged with it still arrive over MCP
+        # from a collector; there is simply no connect flow here for it.
+        return {"provider": provider, "name": provider.capitalize(),
+                "state": "not_configured",
+                "detail": ("No adapter for this channel yet — tasks tagged "
+                           f"{provider} arrive over MCP from a collector."),
+                "account": "", "tracking": []}
 
     name = "GitHub" if provider == "github" else "Jira"
 
@@ -874,11 +896,15 @@ def connector_status(principal: Principal = Depends(current_principal)) -> dict:
     scope = personal_scope(principal)
     prefs = get_sync_preferences()
     rows = []
-    for p in ("claude", "github", "jira"):
+    for p in ("claude",) + _remote_channels():
         row = _provider_state(p, scope)
         # Computed INDEPENDENTLY of row["state"]: a usable credential is not
         # consent to sync (owner 2026-07-28, task 01118728).
         row["sync_enabled"] = prefs.enabled(scope, p)
+        # So the Work board chip, this card and the ontology Channel
+        # instance all share one vocabulary (task 64321cfe). Claude is not
+        # a task channel — it stays "".
+        row["channel"] = p if p in CHANNELS else ""
         rows.append(row)
     return {"connectors": rows}
 

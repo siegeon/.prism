@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Bot, Brain, Eye, FolderTree, Inbox, Info,
   KeyRound, Layers, LayoutDashboard, ListChecks, MessageSquare, Plug,
-  Radio, ScrollText, Search, Settings, Sparkles, Workflow,
+  Radio, ScrollText, Search, Settings, Shapes, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -29,16 +29,14 @@ type Item = {
   // live pill and make the live icon in the activity view green") — a
   // one-off, not a reusable mechanism, same precedent as isNew above.
   isLiveIndicator?: boolean;
+  // A one-line subtitle rendered under the label (task eca23a10, owner:
+  // "the explore and the understand and the ontology under knowledge is
+  // not super clear"). Only Knowledge's three items set this; every other
+  // section is untouched.
+  hint?: string;
 };
 
 type Section = { label?: string; items: Item[] };
-
-// Inbox is under development (task d1854966, owner 2026-08-17): hide the
-// nav entry and the /inbox route behind this single flag while it bakes.
-// This is a HIDE, not a delete — the item literal, the route, and the
-// InboxPage lazy import all stay in source; flip this to true to restore
-// both surfaces. Not the rollback PR #322 owns separately.
-export const INBOX_ENABLED = false;
 
 // Always-visible top item. From inside Settings mode, clicking Dashboard
 // is also the way back out, so it never disappears.
@@ -60,26 +58,29 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Knowledge",
     items: [
-      // Knowledge collapsed to TWO surfaces (task 89a1ddef): Brain is the
-      // Sigma graphvis (code connections + search + context bundle; /graph +
-      // /explore redirect here). Understand is the unified wiki — memory + OKF
-      // + understanding as one OKF-style concept graph + read panel + links.
-      // The old /memory and /okf entries fold into Understand (still
-      // deep-linkable: /memory and /okf redirect, /memory/:id preselects).
-      { to: "/brain", label: "Explore", icon: Brain, staleKey: "brain" },
-      { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand" },
+      // Knowledge is THREE surfaces (task eca23a10, superseding the prior
+      // two-surface collapse at 89a1ddef): Brain is the Sigma graphvis (code
+      // connections + search + context bundle; /graph + /explore redirect
+      // here). Understand is the unified concept wiki — memory + OKF as one
+      // OKF-style concept graph + read panel + links. Ontology is its own
+      // surface now (moved out of Understand's toggle): classes/instances/
+      // properties/axioms/rules/SPARQL. The old /memory and /okf entries
+      // still fold into Understand (deep-linkable: /memory and /okf
+      // redirect, /memory/:id preselects).
+      { to: "/brain", label: "Explore", icon: Brain, staleKey: "brain", hint: "the code graph" },
+      { to: "/understand", label: "Understand", icon: Eye, staleKey: "understand", hint: "concepts and memory" },
+      { to: "/ontology", label: "Ontology", icon: Shapes, hint: "classes, rules, queries" },
     ],
   },
   {
     label: "Activity",
     items: [
-      // Inbox sits above Work deliberately (task 0784729f): Work is the
-      // full list you go and query (with its own My Work / Team toggle,
-      // TasksPage.tsx:54); Inbox is only what needs you, and it empties.
-      // Hidden behind INBOX_ENABLED while under development (task
-      // d1854966) — item literal stays intact, just not spread in by
-      // default.
-      ...(INBOX_ENABLED ? [{ to: "/inbox", label: "Inbox", icon: Inbox, isNew: true }] : []),
+      // Queue sits first, above Work, deliberately: signals arrive here
+      // over their channel and become a task ONLY on the owner's word —
+      // typed + clicked, never automatic (owner's model, mx-0889e4; task
+      // 01d05bff). Supersedes the flag-gated /inbox item from task
+      // d1854966, whose feature flag is now retired outright.
+      { to: "/queue", label: "Queue", icon: Inbox },
       { to: "/tasks", label: "Work", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       // The walking-skeleton screen for "PRISM shows its work": live
@@ -102,6 +103,10 @@ const MAIN_SECTIONS: Section[] = [
       { to: "/sessions", label: "Sessions", icon: MessageSquare },
       { to: "/consolidation", label: "Consolidation", icon: Layers },
       { to: "/learning", label: "Learning", icon: Sparkles },
+      // The file tree the ontology grammar resolves (task 5bfdf527): what
+      // the loop's own outputs are FILED as, so it sits last — after the
+      // pipeline that produces them.
+      { to: "/files", label: "Files", icon: FolderTree },
     ],
   },
 ];
@@ -245,7 +250,7 @@ export default function Sidebar() {
                 {section.label}
               </div>
             )}
-            {section.items.map(({ to, label, icon: Icon, staleKey, isNew, isLiveIndicator }) => {
+            {section.items.map(({ to, label, icon: Icon, staleKey, isNew, isLiveIndicator, hint }) => {
               const isStale = staleKey ? stale[staleKey] : false;
               // While the drainer has work in flight, the surfaces it
               // populates (Brain, Graph, Understand — every item with a
@@ -287,7 +292,14 @@ export default function Sidebar() {
                       isLiveNow && "text-[color:var(--accent-sage-fg)] animate-pulse",
                     )}
                   />
-                  <span className="flex-1">{label}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block">{label}</span>
+                    {hint && (
+                      <span className="block normal-case tracking-normal text-2xs text-[color:var(--nav-text)] opacity-70">
+                        {hint}
+                      </span>
+                    )}
+                  </span>
                   {isNew && <Lozenge tone="new">New</Lozenge>}
                   {isScanning ? (
                     <span

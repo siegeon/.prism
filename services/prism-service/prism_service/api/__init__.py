@@ -21,6 +21,7 @@ from prism_service.api.consolidation import router as consolidation_router
 from prism_service.api.conductor import router as conductor_router
 from prism_service.api.conductor_flow import router as conductor_flow_router
 from prism_service.api.dashboard import router as dashboard_router
+from prism_service.api.documents import router as documents_router
 from prism_service.api.drive_heartbeat import router as drive_heartbeat_router
 from prism_service.api.github_auth import router as github_auth_router
 from prism_service.api.graph import router as graph_router
@@ -37,6 +38,7 @@ from prism_service.api.roles import router as roles_router
 from prism_service.api.sandbox_jobs import router as sandbox_jobs_router
 from prism_service.api.service_info import router as service_info_router
 from prism_service.api.sessions import router as sessions_router
+from prism_service.api.signals import router as signals_router
 from prism_service.api.tasks import router as tasks_router
 from prism_service.api.staleness import router as staleness_router
 from prism_service.api.understand import router as understand_router
@@ -60,6 +62,7 @@ api_router.include_router(consolidation_router, prefix="/consolidation", tags=["
 api_router.include_router(conductor_router, prefix="/conductor", tags=["conductor"])
 api_router.include_router(conductor_flow_router, prefix="/conductor/flow", tags=["conductor-flow"])
 api_router.include_router(dashboard_router, prefix="/dashboard", tags=["dashboard"])
+api_router.include_router(documents_router, prefix="/documents", tags=["documents"])
 api_router.include_router(drive_heartbeat_router, prefix="/drive-heartbeat", tags=["drive-heartbeat"])
 api_router.include_router(github_auth_router, prefix="/github-auth", tags=["github-auth"])
 api_router.include_router(graph_router, prefix="/graph", tags=["graph"])
@@ -74,6 +77,7 @@ api_router.include_router(roles_router, prefix="/roles", tags=["roles"])
 api_router.include_router(sandbox_jobs_router, prefix="/conductor/jobs", tags=["sandbox-jobs"])
 api_router.include_router(service_info_router, prefix="/service-info", tags=["service-info"])
 api_router.include_router(sessions_router, prefix="/sessions", tags=["sessions"])
+api_router.include_router(signals_router, prefix="/signals", tags=["signals"])
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(staleness_router, prefix="/staleness", tags=["staleness"])
 api_router.include_router(understand_router, prefix="/understand", tags=["understand"])
