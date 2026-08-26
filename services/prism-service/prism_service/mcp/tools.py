@@ -4597,11 +4597,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 channel_ref=_channel_ref,
                 workflow=_workflow,
             )
+            # STE style block (task 6e611531): task_svc.last_style reflects
+            # THIS create call — task_svc.create ran just above.
+            _out = _serialise(task)
+            _out["style"] = task_svc.last_style
             if _spec_summary is not None:
-                _out = _serialise(task)
                 _out["oracle_spec"] = _spec_summary
-                return [TextContent(type="text", text=_json(_out))]
-            return [TextContent(type="text", text=_json(task))]
+            return [TextContent(type="text", text=_json(_out))]
 
         if name == "task_list":
             _status = arguments.get("status")
@@ -4875,11 +4877,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     except Exception:
                         pass  # best-effort — never break task updates
 
+            # STE style block (task 6e611531): task_svc.last_style reflects
+            # THIS update call — task_svc.update ran just above.
+            _out = _serialise(task)
+            _out["style"] = task_svc.last_style
             if _spec_summary is not None:
-                _out = _serialise(task)
                 _out["oracle_spec"] = _spec_summary
-                return [TextContent(type="text", text=_json(_out))]
-            return [TextContent(type="text", text=_json(task))]
+            return [TextContent(type="text", text=_json(_out))]
 
         if name == "task_link_session":
             # FORCED WRITER. session_id resolution: caller-passed wins;
