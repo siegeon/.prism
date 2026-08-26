@@ -6667,3 +6667,17 @@ PRISM_VERSION_NOTES += (
     "test_memory_text_is_ste (5), test_ontology_text_is_ste (3), "
     "test_ontology_sees_task_and_memory_bodies (4), text-is-plain fixtures."
 )
+PRISM_VERSION_NOTES += (
+    "7.13.71: the Activity nav item for /tasks was labelled \"Work\" -- "
+    "owner: 'work should be task'. Renamed the sidebar nav label, the "
+    "derived section/page title (sectionTitleFor reads the same array, "
+    "so both followed from one edit), and TasksPage's \"My Work\"/Team "
+    "attention toggle to \"My Tasks\"/Team, plus the matching aria-label "
+    "and doc comments in Sidebar.tsx/TasksPage.tsx/api.ts. Updated the "
+    "source-reading tests that pinned the old literal strings "
+    "(test_inbox_surface.py, test_unified_work_ui.py, "
+    "test_work_rows_link_out.py) and the stale prose in "
+    "test_animate_conductor_tasks_ui.py and the green_gate_evidence_ui "
+    "acceptance walkthrough -- 111 tests green, `npm run build` clean, "
+    "and the built bundle confirmed to contain the new label text."
+)

@@ -5,7 +5,7 @@ markdown_ui and the other *_ui.py tests — the UI-FIRST acceptance criteria are
 pinned by asserting over the ACTUAL TSX SOURCE. `npm run build` (tsc -b) is the
 companion typecheck in the task's verify list.
 
-FAILS today because TasksPage is still the plain native-only board: no My Work/
+FAILS today because TasksPage is still the plain native-only board: no My Tasks/
 Team model, no source/assignee filters, no provider badges/backlinks, no remote-
 vs-local status, no Start/Restricted, no keyboard nav; lib/api.ts has no
 integration helpers; SettingsPage has no integrations sync card.
@@ -41,13 +41,13 @@ def test_api_exposes_integration_helpers():
     assert "/integrations/containers/" in src and "/pull" in src
 
 
-# ── AC-1: My Work vs Team attention model ──────────────────────────────
+# ── AC-1: My Tasks vs Team attention model ──────────────────────────────
 
-def test_tasks_page_has_my_work_team_toggle():
+def test_tasks_page_has_my_tasks_team_toggle():
     src = _read(_TASKS)
     assert '"mine" | "team"' in src or "'mine' | 'team'" in src, (
-        "TasksPage must carry a My Work/Team view union")
-    assert "My Work" in src and "Team" in src
+        "TasksPage must carry a My Tasks/Team view union")
+    assert "My Tasks" in src and "Team" in src
     assert "data-work-view" in src, "the toggle must expose data-work-view for the demo"
 
 
@@ -117,5 +117,8 @@ def test_settings_has_integrations_sync_card():
     assert "trackConnectorRepo" in src, "the card chooses what to track"
 
 
-def test_sidebar_labels_the_work_surface():
-    assert "Work" in _read(_SIDEBAR)
+def test_sidebar_labels_the_tasks_surface():
+    """RE-ANCHORED for the Work -> Tasks nav rename: the /tasks nav item must
+    be labelled Tasks, not merely contain the substring "Work" (which would
+    still pass today via an unrelated historical comment)."""
+    assert 'to: "/tasks", label: "Tasks"' in _read(_SIDEBAR)

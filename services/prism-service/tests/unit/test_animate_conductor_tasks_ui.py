@@ -104,7 +104,7 @@ def test_board_uses_lozenge_primitives_for_step_and_gate():
 # work table whose every row carries its own status and gate column, so the
 # headers no longer exist and this assertion had been red on main ever since.
 # The current contract is pinned by tests/integration/test_unified_work_ui.py
-# (My Work/Team toggle, source + assignee filters, provider badge and
+# (My Tasks/Team toggle, source + assignee filters, provider badge and
 # backlink on external rows) — 8 tests, green. Retired here rather than left
 # standing, because a contradiction nobody owns is just a red main.
 

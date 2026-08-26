@@ -77,7 +77,7 @@ export async function approveDesignPacket(
 
 // ── Team-work integration surface (task ae31c2c0) ──────────────────────
 // Thin typed helpers over the provider-neutral integration core
-// (/api/workspaces/{ws}/integrations/*). The Work view merges native tasks
+// (/api/workspaces/{ws}/integrations/*). The Tasks view merges native tasks
 // with the external entities these return; authorization/sync truth is always
 // the server's, never inferred client-side.
 
