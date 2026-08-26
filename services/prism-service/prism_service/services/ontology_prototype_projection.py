@@ -116,7 +116,12 @@ def _task_rows(project: str) -> list[dict]:
     """Task rows (id/title/channel) for the task-names-its-channel axiom
     (c1d0ee70) — real rows, never fabricated."""
     ctx = get_project(project)
-    return [{"id": t.id, "title": t.title, "channel": t.channel}
+    # description rides along so the graph holds the task BODY, not only
+    # its title: the text-is-plain rule (task 5ac5d04c, epic b2acfa16)
+    # reads rdfs:comment, and a rule that sees titles only is blind to
+    # the text people actually write.
+    return [{"id": t.id, "title": t.title, "channel": t.channel,
+             "description": t.description or ""}
             for t in ctx.task_svc.list()]
 
 

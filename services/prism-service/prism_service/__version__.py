@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.70"
+PRISM_VERSION = "7.13.71"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6640,4 +6640,30 @@ PRISM_VERSION_NOTES += (
     "test_gate_still_refuses_a_genuine_conflict_resolution_edit) plus the "
     "full existing control_plane/dirty-judge/adjudicator suites (42 tests) "
     "still green."
+    "\n\n7.13.71: content written into PRISM reads as Simplified Technical "
+    "English (epic b2acfa16, owner: use danyuchn/asd-ste100-skill and give the "
+    "application a regex fix when creating ontology, understand and task "
+    "members). The skill is vendored at .claude/skills/asd-ste100 and named in "
+    "CLAUDE.md and in the task_create / memory_store tool descriptions. The "
+    "application enforces the regex-checkable subset itself: "
+    "services/ste.py normalises text (contractions, semicolons to sentence "
+    "breaks, filler phrases, nominalisations, phrasal verbs, marketing "
+    "adjectives) outside protected spans (code, URLs, paths, ids, quotes) and "
+    "reports what a regex must not touch (sentence length 20 strict / 25 "
+    "flavored, passive voice, present perfect, hedge stacking, multi-"
+    "instruction, long paragraphs). Hedges are never rewritten. "
+    "TaskService.create/update normalise title, description, oracle, "
+    "likely_misfire, stop_if, completion_proof and premise_notes (plan_doc "
+    "is checked, never rewritten) and record an ste_normalise history row; "
+    "MemoryService.store normalises the body. API create/update, MCP "
+    "task_create/task_update/memory_store and the memory supersede route "
+    "return a `style` block; signal promote inherits it. The ontology gains "
+    "the text-is-plain SHACL rule over Task, Decision, Term and Agent, 18 "
+    "TTL literals were rewritten to STE, o:Term joined the TBox, and task "
+    "descriptions plus memory bodies now project as rdfs:comment so a text "
+    "rule sees what people write, not only titles. rule_catalog lists a "
+    "shared rule once with target_classes, and looked_at unions its classes. "
+    "Tests: test_ste_normaliser (40), test_content_is_ste_at_every_write (7), "
+    "test_memory_text_is_ste (5), test_ontology_text_is_ste (3), "
+    "test_ontology_sees_task_and_memory_bodies (4), text-is-plain fixtures."
 )

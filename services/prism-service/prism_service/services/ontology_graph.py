@@ -469,6 +469,9 @@ class OntologyGraph:
             u = U("task", t["id"])
             g.add((u, RDF.type, CLS("Task")))
             g.add((u, RDFS.label, rdflib.Literal(t["title"])))
+            body = str(t.get("description") or "").strip()
+            if body:
+                g.add((u, RDFS.comment, rdflib.Literal(body)))
             channel = str(t.get("channel") or "").strip()
             if not channel:
                 continue
@@ -679,6 +682,9 @@ class OntologyGraph:
                 str(m.get("type") or "").strip().lower(), "Concept")
             g.add((u, RDF.type, CLS(cls_local)))
             g.add((u, RDFS.label, rdflib.Literal(m.get("name") or m["id"])))
+            body = str(m.get("description") or "").strip()
+            if body:
+                g.add((u, RDFS.comment, rdflib.Literal(body)))
             domain = str(m.get("domain") or "").strip()
             if domain:
                 du = U("domain", domain)

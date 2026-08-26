@@ -42,6 +42,10 @@ def memory_rows(project: str) -> list[dict]:
             rows.append({
                 "id": entry.id,
                 "name": entry.name or entry.id,
+                # The body travels too (epic b2acfa16): Understand is under
+                # the ontology, so its rules must see what a memory SAYS,
+                # not only what it is called.
+                "description": entry.description or "",
                 "type": entry.type or "",
                 "domain": domain,
                 "classification": entry.classification or "",

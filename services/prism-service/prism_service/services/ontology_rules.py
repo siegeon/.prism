@@ -131,16 +131,25 @@ def _rule_catalog_impl() -> list[dict]:
             OPTIONAL {{ ?rule sh:message ?msg }}
         }}
     """
-    out = []
+    # One row per RULE. A constraint shared by several node shapes (the
+    # text-is-plain rule targets Task, Decision, Term and Agent, task
+    # 5ac5d04c) collects every target class on that one row instead of
+    # repeating the rule once per class on the Rules tab.
+    by_name: dict[str, dict] = {}
     for row in g.query(q):
-        out.append({
-            "name": _local_name(str(row.rule)), "rule_iri": str(row.rule),
-            "target_class": str(row.target),
-            "title": str(row.name) if row.name else "",
-            "description": str(row.desc) if row.desc else "",
-            "message": str(row.msg) if row.msg else "",
-        })
-    out.sort(key=lambda r: r["name"])
+        name = _local_name(str(row.rule))
+        entry = by_name.get(name)
+        if entry is None:
+            entry = by_name[name] = {
+                "name": name, "rule_iri": str(row.rule),
+                "target_class": str(row.target), "target_classes": [],
+                "title": str(row.name) if row.name else "",
+                "description": str(row.desc) if row.desc else "",
+                "message": str(row.msg) if row.msg else "",
+            }
+        if str(row.target) not in entry["target_classes"]:
+            entry["target_classes"].append(str(row.target))
+    out = sorted(by_name.values(), key=lambda r: r["name"])
     return out
 
 
@@ -240,8 +249,11 @@ def looked_at_counts(data_graph: rdflib.Graph, catalog: list[dict]) -> dict[str,
     at" (ontology-SKILL.md), so this is computed separately."""
     counts: dict[str, int] = {}
     for r in catalog:
-        cls = rdflib.URIRef(r["target_class"])
-        counts[r["name"]] = sum(1 for _ in data_graph.subjects(_RDF.type, cls))
+        classes = r.get("target_classes") or [r["target_class"]]
+        seen: set = set()
+        for cls in classes:
+            seen.update(data_graph.subjects(_RDF.type, rdflib.URIRef(cls)))
+        counts[r["name"]] = len(seen)
     return counts
 
 
