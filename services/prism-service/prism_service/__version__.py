@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.68"
+PRISM_VERSION = "7.13.69"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6596,4 +6596,13 @@ PRISM_VERSION_NOTES += (
     "document. Also filed: the code graph indexes built bundles (Function "
     "instances named '$', '$1' from web_dist), which is why Explore has no "
     "real symbol to classify yet (task 1a361686)."
+    "\n\n7.13.69: a task's ORACLE and PLAN text link to the ontology too (task "
+    "2ec1e395, closes epic 47bba8fe). GET /api/tasks/{id}/links returns spans "
+    "per field (description, oracle, likely_misfire, plan_doc, premise_notes, "
+    "completion_proof) from ONE index build; the task page fetches once and "
+    "renders the oracle card through the shared inline renderer with spans "
+    "as links, splices plan_doc/completion_proof, and gains a Plan notes card "
+    "for premise_notes (a backend field that had no render surface). Known "
+    "gap: the Design tab's DesignPacket renders its own plan_doc copy and is "
+    "not yet spliced."
 )
