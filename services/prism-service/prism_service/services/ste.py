@@ -144,6 +144,10 @@ _PARTICIPLE_IRREGULAR = {
 
 _PASSIVE_BE_VERBS = ("is", "are", "was", "were", "been", "being", "be")
 
+# Sentence punctuation that can sit glued to the end of a URL or a path
+# token. It is never part of the protected span.
+_TRAILING_PUNCT = ".,;:!?)]}\"'"
+
 _PASSIVE_ALLOWLIST = {
     "is done", "is required", "are known", "is called", "is named",
     "is set", "is used", "are used",
@@ -167,7 +171,10 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     for m in re.finditer(r"`[^`\n]*`", text):
         spans.append((m.start(), m.end()))
     for m in re.finditer(r"https?://\S+", text):
-        spans.append((m.start(), m.end()))
+        # Punctuation glued to the end of a URL belongs to the sentence,
+        # not to the URL: "see https://x/y; then" keeps its semicolon
+        # rewritable (found live on 7.13.72, epic b2acfa16).
+        spans.append((m.start(), m.start() + len(m.group(0).rstrip(_TRAILING_PUNCT))))
     for m in re.finditer(r"\[[^\]\n]*\]\(([^)\n]*)\)", text):
         spans.append(m.span(1))
     for m in re.finditer(r'"[^"\n]{0,200}"', text):
@@ -190,9 +197,11 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
     for m in re.finditer(r"\b[0-9a-fA-F]{8}\b", text):
         spans.append((m.start(), m.end()))
     for m in re.finditer(r"\S+", text):
-        tok = m.group(0)
-        if "/" in tok or re.search(r"\.[A-Za-z][A-Za-z0-9]{0,5}$", tok):
-            spans.append((m.start(), m.end()))
+        # Same rule for a path: "Features/*/Endpoints.cs;" protects the
+        # path and leaves the semicolon to the sentence rules.
+        tok = m.group(0).rstrip(_TRAILING_PUNCT)
+        if tok and ("/" in tok or re.search(r"\.[A-Za-z][A-Za-z0-9]{0,5}$", tok)):
+            spans.append((m.start(), m.start() + len(tok)))
 
     return _merge_spans(spans)
 

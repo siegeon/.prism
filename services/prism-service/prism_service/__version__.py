@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.72"
+PRISM_VERSION = "7.13.73"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6680,4 +6680,10 @@ PRISM_VERSION_NOTES += (
     "test_animate_conductor_tasks_ui.py and the green_gate_evidence_ui "
     "acceptance walkthrough -- 111 tests green, `npm run build` clean, "
     "and the built bundle confirmed to contain the new label text."
+    "\n\n7.13.73: the STE normaliser no longer protects punctuation glued to "
+    "a path or URL. Found on the 7.13.72 live oracle walk: "
+    "'Features/*/Endpoints.cs; each' kept its semicolon because the path mask "
+    "swallowed the ';'. A trailing . , ; : ! ? ) ] quote now belongs to the "
+    "sentence, so the semicolon rule splits it and a contraction inside the "
+    "URL or path still survives (two regression tests in test_ste_normaliser)."
 )

@@ -443,3 +443,34 @@ def test_update_never_rewrites_plan_doc(tmp_path):
     plan_doc = "```\ndon't;\n```"
     updated = svc.update(task.id, plan_doc=plan_doc)
     assert updated.plan_doc == plan_doc
+
+
+# ----------------------------------------------------------------------
+# Trailing punctuation after a path or URL belongs to the sentence
+# (found live on 7.13.72: "Endpoints.cs; each" kept its semicolon
+# because the path mask swallowed the ";").
+# ----------------------------------------------------------------------
+
+
+def test_semicolon_after_a_path_becomes_a_sentence_break():
+    from prism_service.services import ste
+
+    text = "Routes defined in Features/*/Endpoints.cs; each delegates to a Handler.cs. Don't use controllers."
+    fixed, rules = ste.normalize(text, "flavored")
+    assert "Features/*/Endpoints.cs. Each delegates to a Handler.cs." in fixed, fixed
+    assert "Do not use controllers." in fixed
+    assert "semicolon" in rules and "contraction" in rules
+    assert not [f for f in ste.check(fixed, "flavored") if f.rule == "semicolon"]
+
+
+def test_punctuation_after_a_url_is_not_protected():
+    from prism_service.services import ste
+
+    text = "See https://example.org/docs/a.html; then run it."
+    fixed, rules = ste.normalize(text, "flavored")
+    assert "https://example.org/docs/a.html. Then run it." in fixed, fixed
+    assert "semicolon" in rules
+    # The URL itself is still byte-identical and a contraction inside it survives.
+    text2 = "Open https://example.org/don't/x, it's the entry point."
+    fixed2, _ = ste.normalize(text2, "flavored")
+    assert "https://example.org/don't/x" in fixed2 and "it is the entry point" in fixed2
