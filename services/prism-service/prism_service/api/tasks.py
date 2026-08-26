@@ -923,14 +923,18 @@ _LINK_FIELDS = ("description", "oracle", "likely_misfire", "plan_doc",
 
 @router.get("/{task_id}/links")
 def get_task_links(task_id: str, project: str = Query("default")) -> dict:
-    """Cross-clicking (task 6968cc39, extended by task 2ec1e395): every
-    ontology-known entity this task's TEXT FIELDS mention, as
-    entity_linker.link()'s non-overlapping spans. `fields` carries spans
-    per field name (_LINK_FIELDS) so TaskDetailPage's oracle/plan/premise/
-    proof cards share ONE response instead of each hand-rolling their own
-    linker call — entity_linker's own index cache means these N link()
-    calls still cost only the FIRST request's SPARQL build, never one per
-    field. `spans` stays the bare description-only shape for old callers."""
+    """Cross-clicking (task 6968cc39, extended by task 2ec1e395, then task
+    8a6f175b): every ontology-known entity this task's TEXT FIELDS
+    mention, as entity_linker.link()'s non-overlapping spans. `fields`
+    carries spans per field name (_LINK_FIELDS) so TaskDetailPage's
+    oracle/plan/premise/proof cards share ONE response instead of each
+    hand-rolling their own linker call — entity_linker's own index cache
+    means these N link() calls still cost only the FIRST request's SPARQL
+    build, never one per field. `spans` stays the bare description-only
+    shape for old callers. `vocabulary`, per field, names the lexicon
+    synonyms and canonical labels that field's spans reached
+    (entity_linker.vocabulary_of) — old callers reading only `spans`/
+    `fields` see no shape change."""
     from prism_service.services import entity_linker
 
     svc = _svc(project)
@@ -939,7 +943,9 @@ def get_task_links(task_id: str, project: str = Query("default")) -> dict:
         raise HTTPException(404, "task not found")
     fields = {name: entity_linker.link(project, getattr(t, name, "") or "")
               for name in _LINK_FIELDS}
-    return {"spans": fields["description"], "fields": fields}
+    vocabulary = {name: entity_linker.vocabulary_of(spans)
+                  for name, spans in fields.items()}
+    return {"spans": fields["description"], "fields": fields, "vocabulary": vocabulary}
 
 
 @router.get("/{task_id}/trace")
