@@ -839,8 +839,15 @@ def _align_language_workflow(project: str, svc=None) -> dict:
     the same way _triage_workflow above builds triage's. Every step's
     persona resolves off the step's own `agent` (falling back to "sm"),
     and no step carries an `authority` string, because this workflow has
-    no gate — the whole pass is machine-run end to end."""
+    no gate — the whole pass is machine-run end to end.
+
+    Also carries "coverage" (task c7edf4e2, epic cc9a44c8): the ingestion
+    paths services.language_alignment has actually seen register a real
+    STE write, read straight off its coverage() registry -- a stale or
+    never-exercised path is what the SPA card (WorkflowsPage.tsx) renders
+    in a warning tone."""
     from prism_service.models.workflow import WORKFLOWS
+    from prism_service.services import language_alignment
 
     steps = []
     for step in WORKFLOWS["align_language"]:
@@ -862,6 +869,10 @@ def _align_language_workflow(project: str, svc=None) -> dict:
             "linked_workflow_id": None,
         })
     occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
+    try:
+        coverage = language_alignment.coverage(project)
+    except Exception:
+        coverage = []
     return {
         "id": "align_language",
         "name": "Align language",
@@ -872,6 +883,7 @@ def _align_language_workflow(project: str, svc=None) -> dict:
         "steps": steps,
         "bots": [],
         "occupancy": occupancy,
+        "coverage": coverage,
     }
 
 

@@ -72,6 +72,20 @@ export type WorkflowDef = {
   workflows?: WorkflowCatalogEntry[];
 };
 
+/** One ingestion path's hit count in services.language_alignment's
+ * coverage registry (task c7edf4e2, epic cc9a44c8) — a real STE write
+ * this project has actually seen from that path, or never has. Only the
+ * align_language catalog entry carries this. */
+export type WorkflowCoverageRow = {
+  path: string;
+  count: number;
+  last_seen: string;
+  /** False for a path the registry could not name (an "unknown:<module>"
+   * path) — a real ingestion point the label map has not been taught
+   * yet, rendered in a warning tone rather than dropped. */
+  known: boolean;
+};
+
 export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
   id: string;
   name: string;
@@ -85,6 +99,10 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
    * af396b2c) — the queue behind this agent. Absent only for an older
    * service. */
   task_count?: number;
+  /** Ingestion-path coverage (task c7edf4e2) — present only on the
+   * align_language catalog entry. Absent for every other entry and for
+   * an older service. */
+  coverage?: WorkflowCoverageRow[];
 };
 
 export type WorkflowStepResult = {
