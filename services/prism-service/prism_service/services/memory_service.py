@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import secrets
 import sqlite3
 from prism_service.services import sqlite_db
+from prism_service.services import ste
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,6 +61,11 @@ class MemoryService:
         self._dir = Path(mulch_dir) / "expertise"
         self._dir.mkdir(parents=True, exist_ok=True)
         self._task_svc = task_svc
+        # STE style report (task 5de57583): the style block from the most
+        # recent store() call. A plain attribute, not a model field — a
+        # sibling caller (MCP tool, API route) reads it right after the
+        # call that set it. Empty until the first store() runs.
+        self.last_style: dict = {}
 
         # Recall log DB — operational data, separate from expertise JSONL.
         # One sqlite connection PER THREAD via the lazy `_recall_db`
@@ -229,6 +236,23 @@ class MemoryService:
         history while preventing rot.
         """
         from difflib import SequenceMatcher
+
+        # STE normalisation (task 5de57583): rewrite the safe fields BEFORE
+        # dedup and persist, so the stored row and the similarity check both
+        # see the same text. ``name`` is a kebab-case id, so it is left
+        # untouched. Never blocks the store — a normaliser bug is logged
+        # and the caller's own text is used unchanged.
+        try:
+            fixed_description, rules = ste.normalize(description, mode="flavored")
+            findings = ste.check(fixed_description, mode="flavored")
+            description = fixed_description
+            self.last_style = ste.style_block(
+                {"description": (rules, findings)})
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "STE normaliser failed for memory store (domain=%s, "
+                "name=%s); the write proceeds with the caller's own "
+                "text unchanged.", domain, name, exc_info=True)
 
         now = datetime.now(timezone.utc).isoformat()
         entries = self._read_entries(domain)

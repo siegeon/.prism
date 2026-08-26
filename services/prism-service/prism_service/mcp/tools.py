@@ -4255,7 +4255,13 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 ))
             except Exception:
                 pass  # best-effort — never break the memory write
-            return [TextContent(type="text", text=_json(result))]
+            # STE style report (task 5de57583): surface the normaliser's
+            # style block next to the stored entry, mirroring how
+            # task_create/task_update report their own style block.
+            response = _serialise(result)
+            if isinstance(response, dict):
+                response["style"] = memory_svc.last_style
+            return [TextContent(type="text", text=_json(response))]
 
         if name == "memory_invalidate":
             import sqlite3 as _sq3
