@@ -66,10 +66,11 @@ def rule_catalog() -> list[dict]:
     q = f"""
         PREFIX sh: <{_SH}>
         PREFIX rdfs: <{_RDFS}>
-        SELECT ?rule ?target ?desc ?msg WHERE {{
+        SELECT ?rule ?target ?name ?desc ?msg WHERE {{
             ?node a sh:NodeShape ; sh:targetClass ?target .
             {{ ?node sh:property ?rule }} UNION {{ ?node sh:sparql ?rule }}
-            OPTIONAL {{ ?rule rdfs:comment ?desc }}
+            OPTIONAL {{ ?rule sh:name ?name }}
+            OPTIONAL {{ ?rule sh:description ?desc }}
             OPTIONAL {{ ?rule sh:message ?msg }}
         }}
     """
@@ -78,6 +79,7 @@ def rule_catalog() -> list[dict]:
         out.append({
             "name": _local_name(str(row.rule)), "rule_iri": str(row.rule),
             "target_class": str(row.target),
+            "title": str(row.name) if row.name else "",
             "description": str(row.desc) if row.desc else "",
             "message": str(row.msg) if row.msg else "",
         })
@@ -167,7 +169,7 @@ def validate(project: str) -> list[dict]:
     rows = []
     for r in catalog:
         rows.append({
-            "name": r["name"], "description": r["description"],
+            "name": r["name"], "title": r["title"], "description": r["description"],
             "message": r["message"], "looked_at": looked_at.get(r["name"], 0),
             "focus": violations.get(r["name"], []), "validated_at": now,
         })
@@ -182,6 +184,7 @@ def _persist(graph: OntologyGraph, project: str, rows: list[dict]) -> None:
         ru = rdflib.URIRef(f"{NS}rule/{quote(r['name'], safe='')}")
         g.add((ru, _RDF.type, o.Rule))
         g.add((ru, _RDFS.label, rdflib.Literal(r["name"])))
+        g.add((ru, o.title, rdflib.Literal(r.get("title", ""))))
         g.add((ru, o.description, rdflib.Literal(r["description"])))
         g.add((ru, o.lookedAt, rdflib.Literal(r["looked_at"])))
         g.add((ru, o.violations, rdflib.Literal(len(r["focus"]))))
@@ -201,6 +204,8 @@ def _read_report(project: str) -> list[dict]:
         row = by_rule.setdefault(s, {"focus": []})
         if p == str(_RDFS.label):
             row["name"] = o
+        elif p == f"{NS}title":
+            row["title"] = o
         elif p == f"{NS}description":
             row["description"] = o
         elif p == f"{NS}lookedAt":
@@ -215,6 +220,7 @@ def _read_report(project: str) -> list[dict]:
     for row in by_rule.values():
         if "name" not in row:
             continue
+        row.setdefault("title", "")
         row.setdefault("description", "")
         row.setdefault("looked_at", 0)
         row.setdefault("message", "")
@@ -234,19 +240,45 @@ def evaluate(project: str) -> list[dict]:
     return _to_evaluate_shape(rows)
 
 
-def full_report(project: str) -> dict:
-    """GET /api/okf/ontology/rules — the whole persisted report, per rule:
-    focus nodes capped at 20."""
+def last_validated_at(project: str) -> str:
+    """The persisted report's own validated_at (task 7dbb242f) — reused by
+    structure()/records() as their 'last rebuilt' timestamp, since
+    rebuild() always ends with validate() writing this report. Runs
+    validate() once if no report exists yet, same fallback evaluate() and
+    full_report() use."""
     rows = _read_report(project)
     if not rows:
         validate(project)
         rows = _read_report(project)
+    return rows[0]["validated_at"] if rows else ""
+
+
+def full_report(project: str) -> dict:
+    """GET /api/okf/ontology/rules — the whole persisted report, per rule:
+    title (sh:name), description, focus as [{iri, label}] capped at 20
+    (labels via rdfs:label off the live graph), and need_decision/total —
+    task 7dbb242f."""
+    rows = _read_report(project)
+    if not rows:
+        validate(project)
+        rows = _read_report(project)
+
+    graph = OntologyGraph(project)
     rules = []
+    need_decision = 0
+    validated_at = ""
     for r in rows:
+        focus_iris = r["focus"][:20]
+        n_violations = len(r["focus"])
+        if n_violations:
+            need_decision += 1
+        validated_at = r.get("validated_at", "") or validated_at
         rules.append({
-            "name": r["name"], "description": r["description"],
-            "message": r["message"], "looked_at": r["looked_at"],
-            "violations": len(r["focus"]), "focus": r["focus"][:20],
+            "name": r["name"], "title": r.get("title", ""),
+            "description": r["description"], "message": r["message"],
+            "looked_at": r["looked_at"], "violations": n_violations,
+            "focus": [{"iri": iri, "label": graph.label_of(iri)} for iri in focus_iris],
             "validated_at": r["validated_at"],
         })
-    return {"rules": rules}
+    return {"rules": rules, "need_decision": need_decision,
+            "total": len(rules), "validated_at": validated_at}

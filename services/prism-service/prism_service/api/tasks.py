@@ -1867,6 +1867,11 @@ class TaskUpdate(BaseModel):
     # Which PRISM workflow drives this task (task af396b2c). Validated
     # against models.task.WORKFLOW_ALIASES below before the write.
     workflow: Optional[str] = None
+    # dependencies were settable at create and then silently DROPPED on
+    # every edit (task d67bca9f) -- this route had no field for it at all,
+    # so a PATCH {"dependencies":[...]} echoed back the OLD (usually
+    # empty) list with a 200. TaskService.update already accepts it.
+    dependencies: Optional[list[str]] = None
 
 
 @router.patch("/{task_id}")
@@ -1889,6 +1894,16 @@ def update_task(
             kwargs["workflow"] = validate_workflow(kwargs["workflow"]) or DEFAULT_WORKFLOW
         except ValueError as exc:
             raise HTTPException(400, str(exc))
+    # dependencies validated BEFORE the write (task d67bca9f): every id
+    # must exist in this project, and a task cannot depend on itself --
+    # same posture as the workflow check just above.
+    if "dependencies" in kwargs:
+        deps = kwargs["dependencies"] or []
+        if task_id in deps:
+            raise HTTPException(422, f"task cannot depend on itself: {task_id}")
+        missing = [d for d in deps if svc.get(d) is None]
+        if missing:
+            raise HTTPException(422, f"unknown dependency ids: {', '.join(missing)}")
     # Conductor session gate (ef81fc15): flipping a task to in_progress
     # hands it to the conductor (intake lane on /conductor). Refuse the
     # TRANSITION when no session is linked — this exact sessionless PATCH

@@ -35,6 +35,8 @@ o:task-names-its-channel.target a sh:NodeShape ;
 
 o:task-names-its-channel a sh:PropertyShape ;
     rdfs:comment "Every task row names the channel it arrived through — a blank channel is a rule with no way to fail." ;
+    sh:name "Every task names its channel" ;
+    sh:description "A task with no channel is a rule that cannot fail." ;
     sh:path o:arrivedVia ;
     sh:minCount 1 ;
     sh:message "task has no arrivedVia channel" .
@@ -51,6 +53,8 @@ o:ask-comes-from-the-queue.target a sh:NodeShape ;
 
 o:ask-comes-from-the-queue a sh:SPARQLConstraint ;
     rdfs:comment "A task's channel must match the signal it became — guards the join, so the two halves cannot drift apart." ;
+    sh:name "Every ask came from the queue" ;
+    sh:description "A task's channel must match the signal it became." ;
     sh:message "task's channel drifted from the signal it came from" ;
     sh:select """
         PREFIX o: <urn:prism:onto:>
@@ -74,6 +78,8 @@ o:flagged-signal-is-placed.target a sh:NodeShape ;
 
 o:flagged-signal-is-placed a sh:SPARQLConstraint ;
     rdfs:comment "What a connector could not place, waiting on a person — pending placement past a week is a rule that fires." ;
+    sh:name "Every signal got placed" ;
+    sh:description "An open signal waiting on a person past a week is a rule that fires." ;
     sh:message "open signal is pending placement" ;
     sh:select """
         PREFIX o: <urn:prism:onto:>
@@ -98,6 +104,8 @@ o:no-artifacts-in-the-root.target a sh:NodeShape ;
 
 o:no-artifacts-in-the-root a sh:PropertyShape ;
     rdfs:comment "Every document lives inside a folder — one sitting loose in the root breaks the file-tree grammar." ;
+    sh:name "Nothing loose in the root" ;
+    sh:description "Every document lives inside a folder." ;
     sh:path o:inFolder ;
     sh:minCount 1 ;
     sh:message "document has no inFolder — loose in the root" .
@@ -114,6 +122,8 @@ o:dated-folder-uses-one-format.target a sh:NodeShape ;
 
 o:dated-folder-uses-one-format a sh:SPARQLConstraint ;
     rdfs:comment "One folder dated 2026-Q1 among 34 written YYYY-MM-DD — the tree commits to one date format." ;
+    sh:name "Dated folders use one format" ;
+    sh:description "A dated folder name commits to YYYY-MM-DD, not a quarter or a year." ;
     sh:message "dated folder does not use YYYY-MM-DD" ;
     sh:select """
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -136,6 +146,8 @@ o:skill-description-says-when.target a sh:NodeShape ;
 
 o:skill-description-says-when a sh:SPARQLConstraint ;
     rdfs:comment "A skill nothing ever triggers is a skill we do not have — discovery is on the description." ;
+    sh:name "Every agent says when to use it" ;
+    sh:description "An agent's description names the condition that triggers it." ;
     sh:message "description gives no when/trigger condition" ;
     sh:select """
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -155,6 +167,8 @@ o:skill-description-has-no-markup.target a sh:NodeShape ;
 
 o:skill-description-has-no-markup a sh:SPARQLConstraint ;
     rdfs:comment "'<monday>' in a description is markup in a prompt." ;
+    sh:name "Descriptions carry no markup" ;
+    sh:description "An angle bracket in a description reads as markup in a prompt." ;
     sh:message "description contains angle-bracket markup" ;
     sh:select """
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -178,6 +192,8 @@ o:agent-delegates-one-tier-down.target a sh:NodeShape ;
 
 o:agent-delegates-one-tier-down a sh:SPARQLConstraint ;
     rdfs:comment "Conway, enforced, per axis — the producing role cannot also be the role that decides the gate on its own work." ;
+    sh:name "A gate is decided one tier up" ;
+    sh:description "The role that produced the work cannot also decide the gate on it." ;
     sh:message "gate is decided by the same role that produced the work" ;
     sh:select """
         PREFIX o: <urn:prism:onto:>
@@ -198,6 +214,8 @@ o:twin-classes.target a sh:NodeShape ;
 
 o:twin-classes a sh:SPARQLConstraint ;
     rdfs:comment "Every structural bug in this model has been one concept with two representations." ;
+    sh:name "No two classes are twins" ;
+    sh:description "Two classes sharing an identical instance set are one concept, twice." ;
     sh:message "shares an identical non-empty instance set with another class" ;
     sh:select """
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>

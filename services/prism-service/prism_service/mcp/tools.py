@@ -1215,6 +1215,12 @@ TOOLS: list[Tool] = [
             "properties": {
                 "id": {"type": "string", "description": "Task ID to update"},
                 "title": {"type": "string", "description": "Rename the task. Blank/whitespace is ignored (never blanks an existing title)."},
+                "description": {"type": "string", "description": "Replace the task description."},
+                "dependencies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Replace the dependency list -- ids of tasks that must be done before this one is unblocked. Every id must exist in this project; a task cannot depend on itself.",
+                },
                 "status": {
                     "type": "string",
                     "description": "New status: pending, in_progress, done, blocked",
@@ -4630,8 +4636,33 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json(signal.__dict__))]
 
         if name == "task_update":
+            # Accepted keys defined ONCE (task d67bca9f) so the unknown-
+            # fields check below and the kwargs build below can never drift
+            # apart. `id`/`session_id` are request plumbing, not update
+            # fields -- accepted but never fed to TaskService.update.
+            _TASK_UPDATE_FIELDS = (
+                "title", "description", "status", "priority", "tags",
+                "assigned_agent", "blocked_reason", "parent_id", "oracle",
+                "proof_type", "completion_proof", "likely_misfire",
+                "full_outcome_complete", "allowed_files", "verify",
+                "stop_if", "plan_doc", "plan_diagram", "workflow",
+                "dependencies",
+            )
+            _unknown_keys = [
+                k for k in arguments
+                if k not in _TASK_UPDATE_FIELDS and k not in ("id", "session_id")
+            ]
+            if _unknown_keys:
+                # The MCP server layer (handle_tool/handle_mcp) dispatches
+                # arguments straight to _dispatch_tool with no jsonschema
+                # validation against inputSchema -- an unknown key was
+                # previously silently dropped and the call still returned
+                # ok. Reject it loudly instead (task d67bca9f).
+                return [TextContent(type="text", text=_json({
+                    "error": "unknown_fields", "fields": _unknown_keys,
+                }))]
             update_kwargs: dict[str, Any] = {}
-            for key in ("title", "status", "priority", "tags", "assigned_agent", "blocked_reason", "parent_id", "oracle", "proof_type", "completion_proof", "likely_misfire", "full_outcome_complete", "allowed_files", "verify", "stop_if", "plan_doc", "plan_diagram", "workflow"):
+            for key in _TASK_UPDATE_FIELDS:
                 if key in arguments:
                     update_kwargs[key] = arguments[key]
             # Workflow validated BEFORE the write (task af396b2c) -- same
@@ -4643,6 +4674,23 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 except ValueError as exc:
                     return [TextContent(type="text", text=_json({
                         "error": "workflow_validation_failed", "detail": str(exc),
+                    }))]
+            # dependencies validated BEFORE the write (task d67bca9f): every
+            # id must exist in this project, and a task cannot depend on
+            # itself -- same posture as the REST route's PATCH handler.
+            if "dependencies" in update_kwargs:
+                _deps = update_kwargs["dependencies"] or []
+                _tid = arguments["id"]
+                if _tid in _deps:
+                    return [TextContent(type="text", text=_json({
+                        "error": "dependencies_validation_failed",
+                        "detail": f"task cannot depend on itself: {_tid}",
+                    }))]
+                _missing = [d for d in _deps if task_svc.get(d) is None]
+                if _missing:
+                    return [TextContent(type="text", text=_json({
+                        "error": "dependencies_validation_failed",
+                        "detail": f"unknown dependency ids: {', '.join(_missing)}",
                     }))]
             # Authoring-time oracle validation (task b78a193c): only when
             # this update actually TOUCHES oracle/proof_type/verify (R7) —
