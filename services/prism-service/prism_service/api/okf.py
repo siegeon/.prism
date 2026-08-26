@@ -6,13 +6,15 @@ so the bundle isn't rebuilt on every request — OkfHost itself invalidates on a
 cheap content signature, so the cache stays correct across writes elsewhere.
 """
 
+import time
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from prism_service.project_context import get_project
 from prism_service.services import ontology_prototype_projection
 from prism_service.services.okf_host import OkfHost
-from prism_service.services.ontology_store import OntologyStore
+from prism_service.services.ontology_graph import OntologyGraph
 
 router = APIRouter()
 
@@ -71,23 +73,26 @@ def raw(path: str, project: str = Query("default")) -> PlainTextResponse:
 
 
 # ---------------------------------------------------------------------------
-# Ontology (task 15c06516) — persisted classes/instances/properties/axioms,
-# served straight off OntologyStore. Never computed on this read path; the
-# projection (services/ontology_prototype_projection.rebuild) is the only
-# writer. Auto-runs ONCE on an empty store so /understand shows real data
-# without a manual rebuild click (no per-project refresh job is reachable
-# from this file's allowed scope for this walking skeleton).
+# Ontology (task 15c06516, RDF graph task 495d3a69) — the ontology is a
+# pyoxigraph RDF store (services/ontology_graph.OntologyGraph), queried via
+# SPARQL. Never computed on this read path; the projection (services/
+# ontology_prototype_projection.rebuild) is the only writer, and it also
+# keeps ontology_store.py's sqlite table warm as a thin cache (read
+# directly by tests/unit/test_prototype_axioms.py, outside this task's
+# allowed_files) — but THIS module answers from the graph, not sqlite.
+# Auto-runs ONCE on an empty graph so /understand shows real data without
+# a manual rebuild click.
 # ---------------------------------------------------------------------------
 
 @router.get("/ontology")
 def ontology(project: str = Query("default")) -> dict:
-    store = OntologyStore(project)
-    if store.is_empty():
+    graph = OntologyGraph(project)
+    if graph.is_empty():
         ontology_prototype_projection.rebuild(project)
     return {
-        "classes": store.list_classes(),
-        "properties": store.list_properties(),
-        "axioms": store.list_axioms(),
+        "classes": graph.classes(),
+        "properties": graph.properties(),
+        "axioms": graph.axioms(),
     }
 
 
@@ -96,10 +101,25 @@ def ontology_instances(
     project: str = Query("default"), class_id: str = Query(...),
     limit: int = Query(200),
 ) -> dict:
-    store = OntologyStore(project)
-    return {"instances": store.list_instances(class_id, limit=limit)}
+    return {"instances": OntologyGraph(project).instances(class_id, limit=limit)}
 
 
 @router.post("/ontology/rebuild")
 def ontology_rebuild(project: str = Query("default")) -> dict:
-    return ontology_prototype_projection.rebuild(project)
+    return ontology_prototype_projection.rebuild(project)["graph"]
+
+
+@router.post("/ontology/sparql")
+def ontology_sparql(payload: dict, project: str = Query("default")) -> dict:
+    """SELECT/ASK only, bounded LIMIT, real rows from the live graph."""
+    query = payload.get("query") or ""
+    limit = int(payload.get("limit") or 500)
+    start = time.perf_counter()
+    try:
+        result = OntologyGraph(project).query(query, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # SPARQL parse errors surface as SyntaxError
+        raise HTTPException(400, str(exc))
+    result["elapsed_ms"] = round((time.perf_counter() - start) * 1000, 1)
+    return result

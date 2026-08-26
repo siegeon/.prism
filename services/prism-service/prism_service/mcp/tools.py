@@ -4617,7 +4617,16 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             )
             if arguments.get("arrived_at"):
                 signal.arrived_at = arguments["arrived_at"]
-            SignalStore(project_id).create(signal)
+            _sig_store = SignalStore(project_id)
+            _sig_store.create(signal)
+            # Resolve against the ontology on arrival (task 785bb4ce) --
+            # same best-effort call the REST create makes; a collector's
+            # post over MCP must not land with empty matches.
+            try:
+                from prism_service.api.signals import _resolve_best_effort
+                _resolve_best_effort(_sig_store, project_id, signal)
+            except Exception:
+                pass
             return [TextContent(type="text", text=_json(signal.__dict__))]
 
         if name == "task_update":

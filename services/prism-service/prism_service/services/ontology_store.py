@@ -1,15 +1,19 @@
-"""OntologyStore — persisted ontology tables (task 15c06516).
+"""OntologyStore — a thin, best-effort sqlite CACHE of the ontology
+(originally task 15c06516; downgraded from "the read path" by task
+495d3a69, "the ontology is an RDF graph you can query with SPARQL").
 
-Real sqlite rows in the project's OWN data directory, beside brain.db /
-graph.db / tasks.db (config.project_data_dir — the same resolver okf_host.py
-and the task/memory/graph services all use), as ontology.db. Populated by
-services/ontology_prototype_projection.rebuild(); NEVER computed on the read
-path — api/okf.py's ontology routes are a thin SELECT over these tables.
+api/okf.py's ontology routes no longer read this table — they answer from
+services/ontology_graph.OntologyGraph (a pyoxigraph RDF store, queried via
+SPARQL), which is now the ONE representation of the ontology. This table
+is kept alive, still populated by ontology_prototype_projection.rebuild()
+from the SAME gathered rows the graph is built from, only because
+tests/unit/test_prototype_axioms.py reads it directly and sits outside
+task 495d3a69's allowed_files — it is not read by any production code path.
 
-Tables (mx-2d14b0 mapping): ontology_classes (graph entity kinds / catalog
-groupings), ontology_instances (real rows), ontology_properties (graph edge
-kinds / scalars), ontology_axioms (arc_governance principle names, 'quiet'
-until sibling task c1d0ee70 wires violation detection).
+Tables (mx-2d14b0 mapping, unchanged): ontology_classes (graph entity kinds
+/ catalog groupings), ontology_instances (real rows), ontology_properties
+(graph edge kinds / scalars), ontology_axioms (arc_governance principle
+names + evaluated PROTOTYPE_AXIOMS, task c1d0ee70).
 """
 
 from __future__ import annotations

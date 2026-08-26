@@ -46,6 +46,10 @@ dependencies = [
   # maintained successor with the same get_language/get_parser surface.
   "tree-sitter-language-pack>=1.12",
   "pyyaml>=6",
+  "rdflib>=7.6.0",
+  "pyshacl>=0.40.1",
+  "owlrl>=7.6.2",
+  "pyoxigraph>=0.5.9",
 ]
 
 [project.optional-dependencies]
@@ -101,6 +105,13 @@ version = { attr = "prism_service.__version__.PRISM_VERSION" }
   "services/*.yaml",
   "assets/*",
   "py.typed",
+  # task 495d3a69 — the ontology TBox, needed at runtime by
+  # services/ontology_graph.OntologyGraph.load_model(). MANIFEST.in also
+  # needs a matching recursive-include for sdist builds, but that file is
+  # outside this task's allowed_files; editable/uv-run dev installs (and
+  # this task's own tests) read the file straight off the source tree, so
+  # this package-data entry is what a built WHEEL needs.
+  "ontology/*.ttl",
 ]
 
 [tool.ruff]
