@@ -25,6 +25,7 @@ classes()/instances()/properties()/axioms() below answer from the graph.
 from __future__ import annotations
 
 import re
+import threading
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import quote, unquote
@@ -136,6 +137,63 @@ _STORES: dict[str, ox.Store] = {}
 _STORES_MAX = 8
 
 
+# ONE process-wide lock around every store call. FastAPI's TestClient (and
+# the live daemon's thread pool) runs routes on worker threads, so a
+# rebuild's remove_graph/bulk_load on one thread can race a query on
+# another against the SAME RocksDB handle — the native side of pyoxigraph
+# then dies with a plain SIGSEGV that faulthandler never sees (the full
+# suite crashed with rc=139 three times on 2026-08-25, always in the
+# ontology/rules block). Serialising the calls, and MATERIALISING lazy
+# results inside the lock so no iterator outlives it, removes the race.
+_STORE_LOCK = threading.RLock()
+
+
+class _Solutions(list):
+    """A SELECT result materialised under the lock; keeps `.variables` so
+    OntologyGraph.query() reads columns the same way as before."""
+
+    def __init__(self, rows, variables):
+        super().__init__(rows)
+        self.variables = list(variables or [])
+
+
+class _LockedStore:
+    """Proxy that serialises every pyoxigraph.Store call under _STORE_LOCK
+    and materialises iterators before releasing it."""
+
+    def __init__(self, store: ox.Store) -> None:
+        self._s = store
+
+    def query(self, *a, **k):
+        with _STORE_LOCK:
+            r = self._s.query(*a, **k)
+            # ASK yields pyoxigraph.QueryBoolean (truthy/falsy, not iterable);
+            # hand back a plain bool. SELECT/CONSTRUCT are iterables.
+            if isinstance(r, bool) or not hasattr(r, "__iter__"):
+                return bool(r)
+            variables = getattr(r, "variables", None)
+            return _Solutions(list(r), variables)
+
+    def quads_for_pattern(self, *a, **k):
+        with _STORE_LOCK:
+            return list(self._s.quads_for_pattern(*a, **k))
+
+    def __getattr__(self, name):
+        attr = getattr(self._s, name)
+        if not callable(attr):
+            return attr
+
+        def _call(*a, **k):
+            with _STORE_LOCK:
+                out = attr(*a, **k)
+                # Any other lazy iterator (e.g. __iter__ results) is
+                # materialised too, so nothing walks the store unlocked.
+                if hasattr(out, "__next__"):
+                    return list(out)
+                return out
+        return _call
+
+
 def _cache_store(key: str, store: ox.Store) -> None:
     import gc
 
@@ -190,7 +248,7 @@ class OntologyGraph:
             # last to be evicted by _cache_store.
             _STORES.pop(key, None)
             _STORES[key] = store
-        self._store = store
+        self._store = _LockedStore(store)
 
     def load_model(self) -> int:
         """Parse model.ttl AND every ontology/model-*.ttl extension (task
