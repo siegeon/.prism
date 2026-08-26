@@ -205,6 +205,9 @@ ADJUDICATOR_SEAT = "conductor-adjudicator"
 # one task is not reviewing its own work.
 MACHINE_SEATS = frozenset(
     {ADJUDICATOR_SEAT, "conductor-autoclear", "gate-card-rerun"})
+# Task 8582921d: how many CONSECUTIVE machine rewinds (green_gate -> back
+# to implement/verify) may happen before the seat parks loudly for a human.
+MAX_AUTO_REWINDS = 3
 
 
 # DELIVERY AUTO-MERGE (task cb1dc6f4, owner 2026-07-29: "i approved the green
@@ -2383,6 +2386,7 @@ class ConductorService:
             return None
         refusal, receipt = self._oracle_receipt_refusal(
             task, override=False, reason="")
+        _tried, _reminted = False, False
         if refusal and mint:
             try:
                 from prism_service.services import oracle_spec as osp
@@ -2400,12 +2404,27 @@ class ConductorService:
                         self._project_name or "default", task_id))
             except Exception:
                 return None
+            _tried = tried
             if tried:
+                self._evaluate_green_gate_rewind(task, tree, True, refusal,
+                                                 False)
                 return None
             self.mint_green_evidence(task_id, session_id=ADJUDICATOR_SEAT)
+            _reminted = True
             refusal, receipt = self._oracle_receipt_refusal(
                 task, override=False, reason="")
         if refusal or receipt is None:
+            if refusal:  # task 8582921d: backward edge instead of abstaining
+                try:
+                    from prism_service.services import oracle_spec as _o
+                    from prism_service.services import task_workspace as _tw
+                    _ws = _tw.workspace_for(task_id)
+                    _tree = _o.current_tree_sha(
+                        (_ws or {}).get("path") if _ws else None)
+                except Exception:
+                    _tree = ""
+                self._evaluate_green_gate_rewind(
+                    task, _tree, bool(_tried), refusal, bool(_reminted))
             return None
         # FALSE-GREEN TOOTH (task e0149f1f): the receipt tooth above matches
         # the receipt's tree against the WORKTREE's tree — so when the
@@ -2434,6 +2453,95 @@ class ConductorService:
                                session_id=ADJUDICATOR_SEAT,
                                actor=ADJUDICATOR_SEAT, model="machine")
         return res if res and res.get("ok") else None
+
+    # -- green_gate backward edge (task 8582921d) ------------------------
+    def _record_seat_row(self, task_id, action, details):
+        """Audit row stamped with the machine seat; older TaskService
+        signatures have no `model` kwarg, so fall back without it."""
+        try:
+            self._task_svc.record_history(task_id, action, details=details,
+                                          actor=ADJUDICATOR_SEAT,
+                                          model="machine")
+        except TypeError:
+            self._task_svc.record_history(task_id, action, details=details,
+                                          actor=ADJUDICATOR_SEAT)
+
+    def _human_reject_stands(self, task_id) -> bool:
+        """AC-5: the newest green_gate decision is a HUMAN reject with no
+        forward row after it -> the machine never crosses it."""
+        for r in reversed(list(self._task_svc.history(task_id) or [])):
+            act = getattr(r, "action", "")
+            if act == "advance_task":
+                return False
+            if act != "gate_decide":
+                continue
+            if "reject" not in str(getattr(r, "details", "")).lower():
+                continue
+            actor = str(getattr(r, "actor", "") or "")
+            machine = (actor in MACHINE_SEATS
+                       or getattr(r, "model", "") == "machine")
+            return not machine
+        return False
+
+    def _consecutive_auto_rewinds(self, task_id) -> int:
+        """Auto rewinds since the last forward/human row. Parking rows and
+        machine refusals do not reset the count (or the budget would never
+        bind)."""
+        n = 0
+        for r in reversed(list(self._task_svc.history(task_id) or [])):
+            act = getattr(r, "action", "")
+            if act == "auto_rewind":
+                n += 1
+            elif act == "auto_rewind_exhausted" or (
+                    act == "gate_decide"
+                    and "machine=refused" in str(getattr(r, "details", ""))):
+                continue
+            else:
+                break
+        return n
+
+    def _auto_rewind(self, task_id, target_step, reason, evidence_ref):
+        """AC-6: move the task back with the seat and evidence on the row;
+        the refusal text becomes the next step's work order."""
+        self._task_svc.update(task_id, workflow_step=target_step,
+                              gate_state="none", gate_reason=reason,
+                              blocked_reason="")
+        self._record_seat_row(
+            task_id, "auto_rewind",
+            f"green_gate -> {target_step}; {evidence_ref}; reason={reason}")
+        return {"ok": True, "rewound_to": target_step}
+
+    def _evaluate_green_gate_rewind(self, task, tree_sha, tried, refusal,
+                                    remint_attempted):
+        """Decide the backward edge for a refused green_gate.
+        AC-2 red AT this tree -> implement_tasks; AC-3 stale -> verify_green_state;
+        AC-4 bounded by MAX_AUTO_REWINDS; AC-5 never crosses a human reject."""
+        task_id = getattr(task, "id", "")
+        if self._task_svc is None or not refusal:
+            return None
+        if self._human_reject_stands(task_id):
+            return None
+        text = refusal.upper()
+        if "FAILED" in text and (tried or remint_attempted):
+            target = "implement_tasks"
+        elif "STALE" in text or "FAILED" in text:
+            target = "verify_green_state"
+        else:
+            return None  # manual / no-receipt cases stay with a human
+        n = self._consecutive_auto_rewinds(task_id)
+        if n >= MAX_AUTO_REWINDS:
+            msg = (f"auto-rewind budget exhausted: {n} consecutive machine "
+                   f"rewinds (max {MAX_AUTO_REWINDS}) — parked for a human; "
+                   f"latest: {refusal}")
+            self._task_svc.update(task_id, gate_state="pending",
+                                  gate_reason=msg, blocked_reason=msg)
+            rows = list(self._task_svc.history(task_id) or [])
+            if not (rows and getattr(rows[-1], "action", "")
+                    == "auto_rewind_exhausted"):
+                self._record_seat_row(task_id, "auto_rewind_exhausted", msg)
+            return None
+        return self._auto_rewind(task_id, target, refusal,
+                                 f"tree={(tree_sha or '')[:12]}")
 
     @staticmethod
     def pinned_test_paths(task) -> list:
