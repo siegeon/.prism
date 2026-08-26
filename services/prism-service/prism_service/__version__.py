@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.87"
+PRISM_VERSION = "7.13.88"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6988,4 +6988,19 @@ PRISM_VERSION_NOTES += (
     "burn-graph caption agree with the task page. New regression test "
     "pins all four surfaces. 5 new + 54 neighboring gate/conductor UI "
     "tests green; real `npm run build` clean."
+    "\n\n7.13.88: the Workflows canvas active-node fill bar now paces off "
+    "p95 of a step's real recent durations, not a plain mean. Owner, "
+    "watching it live: \"it should be the p95 duration of the last x runs "
+    "(like the count of the pills or something)\". A plain mean (the "
+    "server's average_duration_seconds, from an external workflow engine) "
+    "gets dragged by one outlier, so the bar either rocketed to 98% early "
+    "or crawled long past when a step usually finishes. p95StepDuration"
+    "Seconds computes p95 from the SAME run-history dataset already "
+    "driving the pill rail (visibleRunHistory, capped at RUN_RAIL_PILLS) "
+    "-- each WorkflowRun's real per-step timeline, no new fetch, no "
+    "server change. Falls back to the server mean below a 3-sample floor, "
+    "then to the existing indeterminate wiggle. 129 tests green (4 new + "
+    "125 neighboring conductor/workflow UI, one pre-existing assertion "
+    "updated in place for the superseded literal string); real "
+    "`npm run build` clean."
 )
