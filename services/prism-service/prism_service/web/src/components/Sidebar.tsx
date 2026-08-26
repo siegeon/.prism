@@ -38,13 +38,6 @@ type Item = {
 
 type Section = { label?: string; items: Item[] };
 
-// Inbox is under development (task d1854966, owner 2026-08-17): hide the
-// nav entry and the /inbox route behind this single flag while it bakes.
-// This is a HIDE, not a delete — the item literal, the route, and the
-// InboxPage lazy import all stay in source; flip this to true to restore
-// both surfaces. Not the rollback PR #322 owns separately.
-export const INBOX_ENABLED = false;
-
 // Always-visible top item. From inside Settings mode, clicking Dashboard
 // is also the way back out, so it never disappears.
 const TOP_SECTION: Section = {
@@ -82,13 +75,12 @@ const MAIN_SECTIONS: Section[] = [
   {
     label: "Activity",
     items: [
-      // Inbox sits above Work deliberately (task 0784729f): Work is the
-      // full list you go and query (with its own My Work / Team toggle,
-      // TasksPage.tsx:54); Inbox is only what needs you, and it empties.
-      // Hidden behind INBOX_ENABLED while under development (task
-      // d1854966) — item literal stays intact, just not spread in by
-      // default.
-      ...(INBOX_ENABLED ? [{ to: "/inbox", label: "Inbox", icon: Inbox, isNew: true }] : []),
+      // Queue sits first, above Work, deliberately: signals arrive here
+      // over their channel and become a task ONLY on the owner's word —
+      // typed + clicked, never automatic (owner's model, mx-0889e4; task
+      // 01d05bff). Supersedes the flag-gated /inbox item from task
+      // d1854966, whose feature flag is now retired outright.
+      { to: "/queue", label: "Queue", icon: Inbox },
       { to: "/tasks", label: "Work", icon: ListChecks },
       { to: "/conductor", label: "Conductor", icon: Workflow },
       // The walking-skeleton screen for "PRISM shows its work": live

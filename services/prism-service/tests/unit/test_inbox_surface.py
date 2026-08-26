@@ -19,6 +19,18 @@ the ACTUAL TSX source (the convention documented in
 tests/unit/test_conductor_page_animated_cleanup_ui.py). Where that is done
 here it parses structure, never a fixed character window around a match, so
 an explanatory comment cannot satisfy an assertion.
+
+RE-ANCHORED (task 01d05bff, 2026-08-25): the Inbox nav entry/route are
+retired outright in favour of Queue (owner's model, mx-0889e4 — signals
+arrive in the Queue; a signal becomes a task only on the owner's word,
+never a bare conductor-state projection). The three invariants that survive
+a person can reach the surface from the nav, it sits above Work, and the
+route lands on a real page — are re-pointed at Queue below with a `queue_`
+prefix. The My-Work-naming and per-viewer-identity checks were specific to
+the old Inbox mock and are retired outright (Queue is a shared open-signal
+list, not a personal inbox). The backend /api/inbox tests below are
+UNTOUCHED — api/inbox.py itself is out of this task's scope and keeps
+serving that endpoint; only its UI reachability is gone.
 """
 
 from __future__ import annotations
@@ -39,80 +51,40 @@ def _sidebar() -> str:
     return (_WEB / "components" / "Sidebar.tsx").read_text(encoding="utf-8")
 
 
-def test_a_person_can_reach_the_inbox_from_the_nav():
-    """SUPERSEDED IN PART (task d1854966, 2026-08-17): while the feature is
-    under development the nav item is hidden behind INBOX_ENABLED and no
-    longer actually reachable — that live-reachability contract now lives in
-    test_inbox_hidden_ui.py. What survives here is the reversibility
-    invariant this test originally protected: the item's literal definition
-    (to/label) must remain in source so re-enabling stays a one-line flip,
-    not a rebuild. e139295d shipped a section whose SectionId, KNOWN_SECTIONS
-    and SECTION_META were all correct and green while the surface stayed
-    unreachable, because the nav lives elsewhere — same trap, different
-    direction: source presence here is deliberately NOT reachability."""
+def test_a_person_can_reach_the_queue_from_the_nav():
+    """RE-ANCHORED (task 01d05bff): Inbox is retired outright, not hidden
+    behind a flag — Queue is the real surface a person clicks now. What
+    survives is the original invariant: a real, labelled nav item points at
+    the route (e139295d's lesson stands — source presence isn't reachability
+    on its own, but this item is never gated off, unlike the old flag)."""
     src = _sidebar()
-    item = re.search(r'\{[^{}]*to:\s*"/inbox"[^{}]*\}', src)
-    assert item, 'no sidebar item points at "/inbox"'
-    assert re.search(r'label:\s*"Inbox"', item.group(0)), (
-        f"the /inbox nav item is not labelled Inbox: {item.group(0)}")
+    item = re.search(r'\{[^{}]*to:\s*"/queue"[^{}]*\}', src)
+    assert item, 'no sidebar item points at "/queue"'
+    assert re.search(r'label:\s*"Queue"', item.group(0)), (
+        f"the /queue nav item is not labelled Queue: {item.group(0)}")
 
 
-def test_the_inbox_sits_above_work_in_activity():
-    """SUPERSEDED IN PART (task d1854966, 2026-08-17): while hidden the item
-    no longer RENDERS above Work (it does not render at all) — the rendered
-    order contract now lives in test_inbox_hidden_ui.py
-    (test_sibling_activity_items_stay_in_order). What survives here: the
-    item's literal SOURCE position stays above Work's, preserving the
-    original ordering decision for whenever the flag flips back on."""
+def test_the_queue_sits_above_work_in_activity():
+    """RE-ANCHORED (task 01d05bff): the ordering decision that Inbox
+    originally protected — the thing that needs you sits above the full
+    list you go query — now applies to Queue."""
     src = _sidebar()
-    inbox_at = src.find('to: "/inbox"')
+    queue_at = src.find('to: "/queue"')
     work_at = src.find('to: "/tasks", label: "Work"')
-    assert inbox_at != -1 and work_at != -1, "both nav entries must exist"
-    assert inbox_at < work_at, "Inbox's source position must precede Work's"
+    assert queue_at != -1 and work_at != -1, "both nav entries must exist"
+    assert queue_at < work_at, "Queue's source position must precede Work's"
 
 
-def test_the_nav_entry_is_not_relabelled_my_work():
-    """The approved mock is explicit: it is NOT called My Work, because Work
-    already has a My Work / Team toggle one row below (TasksPage.tsx:54).
-    Scoped deliberately to the /inbox nav item so it can never fire on the
-    unrelated toggle it is protecting."""
-    src = _sidebar()
-    item = re.search(r'\{[^{}]*to:\s*"/inbox"[^{}]*\}', src)
-    assert item and "My Work" not in item.group(0)
-
-
-def test_the_route_lands_on_a_real_page():
-    """SUPERSEDED IN PART (task d1854966, 2026-08-17): a bookmarked /inbox no
-    longer lands on InboxPage while INBOX_ENABLED is off — it redirects to
-    Dashboard instead (test_inbox_hidden_ui.py). What survives here: the
-    Route's element must still REFERENCE InboxPage somewhere in its (now
-    guarded) definition, so the registration itself is not deleted. Also
-    fixes the original regex, which named itself in this task's context as
-    passing "only by token-order accident": `[^>]*` stopped at the first
-    literal `>` inside `<InboxPage />`, so it never actually captured past
-    the element open tag — replaced with an element-attribute capture that
-    reads the real `element={...}` expression."""
+def test_the_queue_route_lands_on_a_real_page():
+    """RE-ANCHORED (task 01d05bff): /inbox now redirects to /queue
+    (test_queue_makes_a_task_on_your_word.py owns that redirect contract) —
+    this pins that /queue itself mounts a real page, the same invariant
+    this test originally protected for /inbox."""
     src = (_WEB / "App.tsx").read_text(encoding="utf-8")
-    route = re.search(r'<Route\s+path="/inbox"[^>]*element=\{([^}]*)\}[^>]*/>', src)
-    assert route, "no <Route path=\"/inbox\"> is registered"
-    assert "InboxPage" in route.group(1), (
-        f"/inbox's route registration no longer references InboxPage: {route.group(1)}")
-
-
-def test_the_page_reads_live_state_not_a_fixture():
-    src = (_WEB / "pages" / "InboxPage.tsx").read_text(encoding="utf-8")
-    assert "/api/inbox" in src, "InboxPage does not call the inbox API"
-
-
-def test_the_page_shows_whose_inbox_it_is():
-    """AC-6: two different people at the same URL must be able to tell
-    their views apart, so the page renders the signed-in identity the
-    /api/inbox response already carries — not just the two task lists."""
-    src = (_WEB / "pages" / "InboxPage.tsx").read_text(encoding="utf-8")
-    assert "viewer" in src, (
-        "InboxPage never reads the viewer identity off the inbox response")
-    assert "display_name" in src, (
-        "InboxPage never renders the signed-in display name")
+    route = re.search(r'<Route\s+path="/queue"[^>]*element=\{([^}]*)\}[^>]*/>', src)
+    assert route, "no <Route path=\"/queue\"> is registered"
+    assert "QueuePage" in route.group(1), (
+        f"/queue's route registration does not reference QueuePage: {route.group(1)}")
 
 
 def _client(tmp_path, monkeypatch):
