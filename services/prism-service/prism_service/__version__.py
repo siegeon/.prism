@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.74"
+PRISM_VERSION = "7.13.75"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6709,4 +6709,21 @@ PRISM_VERSION_NOTES += (
     "instance, test_sdlc_progress_reuse_never_touches_validation_or_a_"
     "finished_replay) and added a new one pinning the auto-attach effect. "
     "`npm run build` clean, 121 workflows-page tests green."
+    "\n\n7.13.75: 7.13.74 fixed the WRONG fill. Owner, live, pointing at a "
+    "node card's actual body: 'the bar on the top is not what we did it "
+    "was a bar in the body of the panel filling over time.' drawNode "
+    "(workflowGraph.ts) had only ever painted a 3px header rail for "
+    "active-node progress, by original design (\"Progress gets its own "
+    "rail and never paints beneath content\") -- there was no separate "
+    "body-fill anywhere, for Build and test or anything else, confirmed by "
+    "reading the actual render code rather than assuming it existed. Added "
+    "a low-opacity (0.16) left-to-right fill across the card's own body "
+    "(below the 20px header strip), painted before the glyph/label/sub/"
+    "summary text so it never sits over the content, plus a brighter 2px "
+    "leading edge marking exactly how far the fill has reached. Retired "
+    "the old negative regression test that guarded against exactly this "
+    "(`\"fillWidth, h - 21\" not in graph`) with a comment naming the "
+    "owner override that superseded it, and replaced it with a positive "
+    "pin on the new body-fill lines. 121 workflows-page tests green, "
+    "`npm run build` clean."
 )

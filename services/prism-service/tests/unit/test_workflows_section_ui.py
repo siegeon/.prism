@@ -819,7 +819,16 @@ def test_workflow_graph_is_an_operational_state_machine_with_drill_in():
     assert "activeProgress" in graph
     assert "ctx.fillRect(x + 1, y + 1, w - 2, 3)" in graph
     assert "ctx.fillRect(x + 1, y + 1, fillWidth, 3)" in graph
-    assert "fillWidth, h - 21" not in graph
+    # SUPERSEDED 2026-08-26 (owner, live, pointing at a card's own body:
+    # "a bar in the body of the panel filling over time"): the header rail
+    # used to be the ONLY progress paint, deliberately, so nothing ever had
+    # to render beneath the card's text. The owner asked for the card body
+    # itself to fill left-to-right too -- a low-opacity fill plus a
+    # brighter leading edge, painted before the text so it still never sits
+    # ABOVE the content, just no longer absent from the body either.
+    assert "bodyY = y + 20, bodyH = h - 20" in graph
+    assert "ctx.fillRect(x + 1, bodyY, fillWidth, bodyH - 1)" in graph
+    assert "rgba(${rgb}, 0.16)" in graph
     assert "drawTransitionLabel(ctx, wire.label" in graph
     assert "sub: gate ?" in graph and "sub: s.validation" not in graph
     assert "elapsedSeconds <= active.averageSeconds" in graph
