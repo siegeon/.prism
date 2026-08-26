@@ -293,8 +293,16 @@ def test_gate_still_refuses_a_genuine_conflict_resolution_edit(tmp_path):
     _write(wt, _RUBRIC_REL, _LOOSENED_RUBRIC)
     _git(wt, "commit", "-qam", "candidate: loosens the rubric directly")
     # ...then merges dev in, hitting a conflict, and resolves with ITS OWN
-    # (still-loosened) content -- matching neither parent.
+    # (still-loosened) content -- matching neither parent. Not routed
+    # through _git() (which raises on the conflict's nonzero exit) -- but
+    # still needs the SAME author/committer identity _git() sets, because a
+    # CI runner carries no global git config: without it, a git version
+    # whose smarter merge heuristics resolve this pair cleanly (no
+    # conflict) fails outright on auto-commit ("who are you"), leaving a
+    # half-merged tree the next explicit commit then has nothing to add to.
     subprocess.run(["git", "merge", "--no-edit", dev_tip], cwd=str(wt),
+                   env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"},
                    capture_output=True, text=True)
     _write(wt, _RUBRIC_REL, _LOOSENED_RUBRIC)
     _git(wt, "add", _RUBRIC_REL)

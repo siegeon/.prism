@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.76"
+PRISM_VERSION = "7.13.77"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6749,4 +6749,34 @@ PRISM_VERSION_NOTES += (
     "assertions to match current code with a comment naming what "
     "superseded them, per this file's own established pattern. No TSX/app "
     "behavior changed -- test-only fix. 18/18 green across both files."
+    "\n\n7.13.77: CORRECTING 7.13.76's own claim that the OTHER 2 CI "
+    "failures on PR #2344 (test_control_plane_pinned.py::"
+    "test_gate_still_refuses_a_genuine_conflict_resolution_edit, "
+    "test_premise_notes_seeded_across_fixtures.py::"
+    "test_no_fixture_stalls_at_review_previous_notes_for_premise_reasons) "
+    "were transient/flaky needing no fix -- they failed AGAIN, identically, "
+    "on the very next CI run. The second is a downstream symptom of the "
+    "first: it shells out to run the whole integration suite as a fixture "
+    "check, so one root cause explains both. Root cause, confirmed by "
+    "diffing the CI runner's git (2.55.0, ubuntu-24.04) against local "
+    "(2.34.1): line 297 of test_control_plane_pinned.py ran `git merge "
+    "--no-edit` via a bare subprocess.run with NO author/committer "
+    "identity env, unlike every other git call in the file (which goes "
+    "through the local _git() helper that sets GIT_AUTHOR_NAME/EMAIL and "
+    "GIT_COMMITTER_NAME/EMAIL). A dev workstation's ambient ~/.gitconfig "
+    "papers over the gap; a CI runner has no global git identity at all, "
+    "so a git version whose smarter merge heuristics resolve the test's "
+    "two conflicting rubric edits without a real conflict fails outright "
+    "trying to auto-commit the clean merge (\"Please tell me who you "
+    "are\"), leaving the tree in a state the next explicit commit has "
+    "nothing new to add to. Added the SAME identity env dict _git() uses "
+    "to that one subprocess.run call. Could not reproduce the CI-specific "
+    "failure locally (git 2.34.1, and this worktree's own git-identity "
+    "env-var isolation guard blocks simulating a clean-identity "
+    "environment), so verified by direct code reading (this was the ONLY "
+    "bare git subprocess call in the file) rather than an empirical "
+    "repro -- the real CI run on PR #2344 is the actual verification. "
+    "15/15 + 1/1 green locally (unchanged from before; this fix can't "
+    "regress the local-identity path, only add coverage for the absent-"
+    "identity one)."
 )
