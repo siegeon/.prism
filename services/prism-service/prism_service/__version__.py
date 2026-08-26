@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.92"
+PRISM_VERSION = "7.13.93"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7054,4 +7054,18 @@ PRISM_VERSION_NOTES += (
     "hits as unknown before 7.13.91 labelled those seats. The count carries "
     "over and the later last_seen wins, so the Ingestion paths block does "
     "not keep a red row for a path that is known now."
+    "\n\n7.13.93: machine-written task text respects the ontology (task "
+    "938b0a2d, owner on 8582921d: 'something in the system generated this "
+    "content but did not respect the ontology'). blocked_reason and "
+    "gate_reason now align at write like every human field (the gate-reason "
+    "tokens that readiness, the decision packet and the low-value check "
+    "parse were proven to survive alignment), the reachability tooth's "
+    "message is Simplified Technical English with one unreachable symbol "
+    "per line, GET /api/tasks/{id}/links covers both fields, and the task "
+    "page renders the BLOCKED BECAUSE box and every gate reason through "
+    "LinkedText so a code symbol links to Explore and a term links to the "
+    "ontology. The no-drift sweep now guards those two columns. Follow-up "
+    "162c5beb: conductor_flow's autoclear compares the raw reason against "
+    "the stored aligned one and will rewrite gate_reason each sweep when "
+    "the raw text holds a semicolon."
 )
