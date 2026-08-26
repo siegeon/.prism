@@ -97,7 +97,15 @@ def test_link_finds_every_entity_with_the_right_cls_and_href(project):
     assert ticket_span["cls"] == "JiraIssue"
     assert ticket_span["href"] == ""  # no Jira connection wired in this test
 
-    assert len(spans) == 7, spans
+    # task 8a6f175b: "Ticket" is now a lexicon synonym for the Task term
+    # (model-lexicon.ttl o:altLabel "ticket"), so it links too -- an 8th
+    # span this fixture's text did not carry before that change.
+    synonym_span = by_text["Ticket"]
+    assert synonym_span["cls"] == "Term"
+    assert synonym_span["label"] == "Task"
+    assert "term=Task" in synonym_span["href"]
+
+    assert len(spans) == 8, spans
 
     for start, end in ((s["start"], s["end"]) for s in spans):
         assert text[start:end] in by_text
