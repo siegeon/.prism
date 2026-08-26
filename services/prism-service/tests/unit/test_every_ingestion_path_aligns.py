@@ -462,6 +462,9 @@ def test_an_unmapped_caller_registers_as_unknown_not_silently(project, spy):
 _SENSITIVE_COLUMNS = (
     "title", "description", "oracle", "likely_misfire", "completion_proof",
     "premise_notes", "plan_doc", "subject", "body", "summary",
+    # blocked_reason/gate_reason join the set at task 938b0a2d: machine-
+    # written task text must align the same way human-written text does.
+    "blocked_reason", "gate_reason",
 )
 _SENSITIVE_TABLES = ("tasks", "memories", "signals")
 _ALLOWED_WRITE_FILES = {"task_service.py", "memory_service.py", "signal_store.py"}
