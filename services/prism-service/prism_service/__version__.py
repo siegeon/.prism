@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.62"
+PRISM_VERSION = "7.13.63"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6464,4 +6464,24 @@ PRISM_VERSION_NOTES += (
     "the /ontology page's Query box is live. MCP signal_post now resolves a "
     "signal against the ontology on arrival like the REST create does. "
     "SHACL shapes for the rules (pyshacl) are the next ship."
+    "\n\n7.13.63: THE RULES ARE SHACL SHAPES THAT CAN FAIL (task 8eeb3e65, "
+    "closes epic 3efbcd89). prism_service/ontology/shapes.ttl holds nine "
+    "rules keyed the prototype's way (the property/SPARQL-constraint shape "
+    "carries the rule IRI, the node shape is <rule>.target, so every "
+    "violation maps back to its rule): task-names-its-channel, "
+    "ask-comes-from-the-queue, flagged-signal-is-placed, "
+    "no-artifacts-in-the-root, dated-folder-uses-one-format, "
+    "skill-description-says-when, skill-description-has-no-markup, "
+    "agent-delegates-one-tier-down, twin-classes. services/ontology_rules "
+    "runs owlrl RDFS closure then pyshacl (advanced mode) on every graph "
+    "rebuild, persists the report as triples (urn:prism:<project>/report: "
+    "lookedAt, violations, focus, message, validatedAt) and serves it as "
+    "the ontology's axioms (looked_at counts included) plus GET "
+    "/api/okf/ontology/rules; the hand-coded python axioms are superseded. "
+    "The graph now also carries o:Step/decidedBy/producedBy (real "
+    "WORKFLOW_STEPS + STEP_ROLES), agent descriptions and o:arrivedAt on "
+    "signals so those rules have data. Bug found by a rule that could not "
+    "fire: root-level documents were emitted inFolder a fictitious '.' "
+    "folder. Also: related-task matches in the signal resolver ignore "
+    "stopwords and weight rare tokens (task 461b7985)."
 )
