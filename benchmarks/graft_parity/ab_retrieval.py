@@ -30,17 +30,23 @@ Usage:
     # 3. A/B a candidate
     python ab_retrieval.py run --repo <path> --cases cases.json \
         --candidate mymodule:my_graph_search
+
+A run that makes no progress for --stall-timeout seconds (default on) is
+declared STALLED: a banner names corpus, stage, tool and position, every
+thread is dumped, and the process exits 3 (task 39244a32).
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import importlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from math import comb
 from pathlib import Path
@@ -57,6 +63,58 @@ MAX_FILE_BYTES = 300_000
 # Commit subjects that describe bookkeeping, not a change to locate.
 NOISE_PREFIXES = ("merge", "bump", "release", "updated ui/dist",
                   "update changelog", "v0.", "v1.")
+
+STALL_EXIT = 3  # not 0 (ok) and not 1 (a bare error): a caller can tell a stall
+STALL_TIMEOUT_DEFAULT = 300.0
+
+
+class StallWatchdog:
+    """Ends the run when one tool call makes no progress for `timeout` seconds.
+
+    A call that wedges inside the product never returns, so a harness with no
+    watchdog blocks until someone kills it and reports nothing. The harness
+    notes its position BEFORE each call; this daemon thread reads that note
+    and, when it is older than `timeout`, writes a STALLED banner to stderr,
+    dumps every thread (the wedged frame is in there), and exits STALL_EXIT.
+    timeout <= 0 disables it.
+    """
+
+    def __init__(self, corpus: str, timeout: float) -> None:
+        self.corpus = corpus
+        self.timeout = float(timeout)
+        self._lock = threading.Lock()
+        self._where = ("start", "-", 0, 0, "case")
+        self._since = time.monotonic()
+        self._thread = threading.Thread(target=self._watch, daemon=True,
+                                        name="stall-watchdog")
+
+    def start(self) -> "StallWatchdog":
+        if self.timeout > 0:
+            self._thread.start()
+        return self
+
+    def note(self, stage: str, tool: str, i: int, n: int,
+             unit: str = "case") -> None:
+        with self._lock:
+            self._where = (stage, tool, i, n, unit)
+            self._since = time.monotonic()
+
+    def _watch(self) -> None:
+        tick = min(0.5, self.timeout / 4)
+        while True:
+            time.sleep(tick)
+            with self._lock:
+                waited = time.monotonic() - self._since
+                stage, tool, i, n, unit = self._where
+            if waited < self.timeout:
+                continue
+            sys.stdout.flush()
+            sys.stderr.write(
+                f"STALLED corpus={self.corpus} stage={stage} tool={tool} "
+                f"{unit}={i}/{n} waited={int(waited)}s\n")
+            sys.stderr.flush()
+            faulthandler.dump_traceback(all_threads=True)
+            os._exit(STALL_EXIT)
 
 
 def build_cases(repo: Path, suffix: str, limit: int,
@@ -102,7 +160,8 @@ def build_cases(repo: Path, suffix: str, limit: int,
 
 
 class Harness:
-    def __init__(self, project_id: str, projects_dir: Path) -> None:
+    def __init__(self, project_id: str, projects_dir: Path,
+                 watchdog: StallWatchdog | None = None) -> None:
         if str(SERVICE_ROOT) not in sys.path:
             sys.path.insert(0, str(SERVICE_ROOT))
         from prism_service import config as cfg
@@ -112,6 +171,12 @@ class Harness:
         cfg.PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
         pc._contexts.clear()
         self.project_id = project_id
+        self.watchdog = watchdog
+
+    def note(self, stage: str, tool: str, i: int, n: int,
+             unit: str = "case") -> None:
+        if self.watchdog is not None:
+            self.watchdog.note(stage, tool, i, n, unit)
 
     def call(self, tool: str, args: dict | None = None):
         from prism_service.mcp.tools import handle_tool
@@ -126,12 +191,14 @@ class Harness:
             return r[0].text
 
     def index(self, repo: Path, suffix: str, domain: str) -> dict:
+        self.note("index", "project_create", 0, 0, "file")
         self.call("project_create", {"project_id": self.project_id})
         n = 0
-        for p in sorted(repo.rglob("*" + suffix)):
+        paths = [p for p in sorted(repo.rglob("*" + suffix))
+                 if not SKIP_PARTS & set(p.relative_to(repo).parts)]
+        for i, p in enumerate(paths, 1):
             rel = p.relative_to(repo)
-            if SKIP_PARTS & set(rel.parts):
-                continue
+            self.note("index", "brain_index_doc", i, len(paths), "file")
             try:
                 if p.stat().st_size > MAX_FILE_BYTES:
                     continue
@@ -142,12 +209,15 @@ class Harness:
                                           "content": content,
                                           "domain": domain})
             n += 1
+        self.note("index", "graph_rebuild", n, n, "file")
         graph = self.call("graph_rebuild", {}) or {}
         return {"indexed": n, "graph": graph}
 
-    def arm(self, cases: list[dict], limit: int) -> list[dict]:
+    def arm(self, cases: list[dict], limit: int,
+            stage: str = "arm:baseline") -> list[dict]:
         per = []
-        for c in cases:
+        for i, c in enumerate(cases, 1):
+            self.note(stage, "brain_search", i, len(cases))
             res = self.call("brain_search",
                             {"query": c["query"], "limit": limit})
             ranked = []
@@ -222,7 +292,7 @@ def load_candidate(spec: str):
     return getattr(importlib.import_module(mod_name), fn_name)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -250,8 +320,17 @@ def main() -> int:
     r.add_argument("--domain", default="go")
     r.add_argument("--limit", type=int, default=max(K_VALUES))
     r.add_argument("--output", type=Path, default=None)
+    r.add_argument("--stall-timeout", type=float,
+                   default=STALL_TIMEOUT_DEFAULT, metavar="SECONDS",
+                   help="seconds one tool call may run with no progress before "
+                        "the run is declared STALLED, every thread is dumped, "
+                        f"and the process exits {STALL_EXIT} "
+                        f"(default {STALL_TIMEOUT_DEFAULT:g}; 0 to disable)")
+    return ap
 
-    args = ap.parse_args()
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     if args.cmd == "cases":
         cases = build_cases(args.repo, args.suffix, args.limit,
@@ -265,7 +344,9 @@ def main() -> int:
 
     cases = json.loads(args.cases.read_text(encoding="utf-8"))
     project = f"bench-ab-{int(time.time())}"
-    h = Harness(project, RESULTS_DIR / "_work" / project / "projects")
+    watchdog = StallWatchdog(str(args.repo), args.stall_timeout).start()
+    h = Harness(project, RESULTS_DIR / "_work" / project / "projects",
+                watchdog=watchdog)
 
     t0 = time.perf_counter()
     idx = h.index(args.repo, args.suffix, args.domain)
@@ -293,7 +374,7 @@ def main() -> int:
         prior = {k: os.environ.get(k) for k in env_overrides}
         os.environ.update(env_overrides)
         try:
-            per_cand = h.arm(cases, args.limit)
+            per_cand = h.arm(cases, args.limit, stage="arm:candidate")
         finally:
             if original is not None:
                 from prism_service.engines.brain_engine import Brain
