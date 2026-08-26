@@ -120,6 +120,33 @@ function replaySpanMs(event: ReplayEvent, next?: ReplayEvent, speed: number = RE
   return Math.min(REPLAY_MAX_STEP_MS, replayStepMs(event, speed) + replayGapMs(event, next, speed));
 }
 
+/** p95 of a step's REAL durations across the last N completed runs -- the
+ * exact same dataset the pill rail counts (visibleRunHistory, capped at
+ * RUN_RAIL_PILLS), never a separately-fetched sample set. A plain mean
+ * (the previous pacing source, server's average_duration_seconds) gets
+ * dragged around by one fast or slow outlier and reads as a bar that
+ * either rockets to 98% early or crawls long past when the step usually
+ * finishes -- p95 is the "this is how long it takes most of the time"
+ * number a person actually wants from a progress bar. Null (not 0) below
+ * the 3-sample floor, so the caller's existing fallback chain (server
+ * average, then the indeterminate wiggle) still applies rather than
+ * pacing off one or two noisy runs. Owner 2026-08-26, watching this bar
+ * live on the Workflows canvas: "it should be the p95 duration of the
+ * last x runs (like the count of the pills or something)". */
+function p95StepDurationSeconds(runs: WorkflowRun[], stepId: string): number | null {
+  const samples: number[] = [];
+  for (const run of runs) {
+    const entry = run.timeline?.find((t) => t.step === stepId && t.endedAt);
+    if (!entry?.startedAt || !entry.endedAt) continue;
+    const secs = (Date.parse(entry.endedAt) - Date.parse(entry.startedAt)) / 1000;
+    if (Number.isFinite(secs) && secs > 0) samples.push(secs);
+  }
+  if (samples.length < 3) return null;
+  samples.sort((a, b) => a - b);
+  const idx = Math.min(samples.length - 1, Math.ceil(0.95 * samples.length) - 1);
+  return samples[idx];
+}
+
 function pillIndexTitle(index: number, offset: number, runs: WorkflowRun[]): string | undefined {
   const run = runs[index - offset];
   if (!run) return undefined;
@@ -1144,15 +1171,20 @@ export default function WorkflowsPage() {
       if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
         const step = selectedWorkflow.steps.find((candidate) => candidate.id === runtime.currentStep);
         const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(runtime.startedAt)) / 1000);
-        const average = step?.average_duration_seconds;
+        // p95 of this step's real recent durations paces the bar when
+        // there is enough history; the server's plain mean is the
+        // fallback for a step still short on same-step samples, and the
+        // indeterminate wiggle is the last resort with neither.
+        const p95 = p95StepDurationSeconds(visibleRunHistory, runtime.currentStep);
+        const pacing = p95 ?? step?.average_duration_seconds;
         activeProgress = {
           nodeId: runtime.currentStep,
-          progress: average && average > 0
-            ? Math.min(0.98, elapsedSeconds / average)
+          progress: pacing && pacing > 0
+            ? Math.min(0.98, elapsedSeconds / pacing)
             : 0.12 + ((elapsedSeconds % 18) / 18) * 0.68,
-          indeterminate: !(average && average > 0),
+          indeterminate: !(pacing && pacing > 0),
           elapsedSeconds,
-          averageSeconds: average && average > 0 ? average : null,
+          averageSeconds: pacing && pacing > 0 ? pacing : null,
         };
       } else if (testModeRef.current === "replay" && testStep !== null && selectedWorkflow) {
         const nodeId = testStep < 0
@@ -1198,7 +1230,7 @@ export default function WorkflowsPage() {
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
