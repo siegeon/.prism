@@ -1812,6 +1812,28 @@ TOOLS: list[Tool] = [
             "additionalProperties": False,
         },
     ),
+    Tool(
+        name="signal_post",
+        description=(
+            "Drop a signal into the Queue (task a6858911): a collector "
+            "(slack, outlook, github, jira, or an MCP agent) reports "
+            "something that arrived, BEFORE it becomes a task. A signal "
+            "is never a task -- it only becomes one when the owner acts "
+            "on it in the app."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string", "description": "Where this signal came from: ui|mcp|github|jira|slack|outlook|daemon. Defaults to 'mcp' on this tool; a collector relaying another channel over MCP names it here."},
+                "channel_ref": {"type": "string", "description": "Opaque origin reference for the channel — a session id, issue URL, or message permalink. Defaults to the request's session id."},
+                "subject": {"type": "string", "description": "Short summary of the signal."},
+                "body": {"type": "string", "description": "Full body/content of the signal."},
+                "sender": {"type": "string", "description": "Who or what sent it."},
+                "arrived_at": {"type": "string", "description": "ISO timestamp the signal arrived; defaults to now."},
+            },
+            "required": ["subject"],
+        },
+    ),
 ]
 
 
@@ -1861,6 +1883,10 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "janitor_abandon",
     "memory_invalidate",
     "agent_bridge_command",
+    # Queue intake (task a6858911): a collector posting a signal over MCP
+    # is the primary path (slack/outlook/github/jira/other agents), so
+    # this rides the default interactive surface unlike documents_place.
+    "signal_post",
 }
 # documents_place is intentionally NOT added here: test_mcp_tool_profiles.py
 # pins an exact count of the curated interactive surface and is outside this
@@ -4564,6 +4590,35 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 date=arguments.get("date"),
             )
             return [TextContent(type="text", text=_json(result))]
+
+        if name == "signal_post":
+            # Channel provenance (task a6858911): same posture as
+            # task_create -- a signal posted over MCP came from "mcp"
+            # unless the caller relays another channel; channel_ref is
+            # the request's session id when the caller doesn't supply one.
+            from prism_service.models.task import validate_channel
+            from prism_service.models.signal import Signal
+            from prism_service.services.signal_store import SignalStore
+            try:
+                _channel = validate_channel(arguments.get("channel", "")) or "mcp"
+            except ValueError as exc:
+                return [TextContent(type="text", text=_json({
+                    "error": "channel_validation_failed", "detail": str(exc),
+                }))]
+            _channel_ref = (str(arguments.get("channel_ref", "") or "").strip()
+                            or _resolve_link_session_id())
+            signal = Signal(
+                project=project_id,
+                channel=_channel,
+                channel_ref=_channel_ref,
+                subject=arguments.get("subject", ""),
+                body=arguments.get("body", ""),
+                sender=arguments.get("sender", ""),
+            )
+            if arguments.get("arrived_at"):
+                signal.arrived_at = arguments["arrived_at"]
+            SignalStore(project_id).create(signal)
+            return [TextContent(type="text", text=_json(signal.__dict__))]
 
         if name == "task_update":
             update_kwargs: dict[str, Any] = {}
