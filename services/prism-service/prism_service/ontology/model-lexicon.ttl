@@ -27,7 +27,7 @@ o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
 <urn:prism:onto:term/task> a o:Term ;
     rdfs:label "Task" ;
     rdfs:comment "A tracked unit of work with an owner and a status." ;
-    o:altLabel "ticket", "work item", "story", "card", "todo" ;
+    o:altLabel "ticket", "work item" ;
     o:denotes o:Task .
 
 <urn:prism:onto:term/pull-request> a o:Term ;
@@ -51,27 +51,27 @@ o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
 <urn:prism:onto:term/workflow> a o:Term ;
     rdfs:label "Workflow" ;
     rdfs:comment "The named list of steps that drives one task." ;
-    o:altLabel "pipeline", "agent flow", "step list" .
+    o:altLabel "agent flow", "step list" .
 
 <urn:prism:onto:term/gate> a o:Term ;
     rdfs:label "Gate" ;
     rdfs:comment "A checkpoint where a distinct actor decides to proceed." ;
-    o:altLabel "checkpoint", "approval gate", "sign-off" .
+    o:altLabel "approval gate" .
 
 <urn:prism:onto:term/oracle> a o:Term ;
     rdfs:label "Oracle" ;
     rdfs:comment "The proof condition a task must satisfy to count as done." ;
-    o:altLabel "acceptance test", "proof condition" .
+    o:altLabel "proof condition" .
 
 <urn:prism:onto:term/evidence> a o:Term ;
     rdfs:label "Evidence" ;
     rdfs:comment "The proof a task presents to close its gate." ;
-    o:altLabel "proof", "receipt", "evidence packet" .
+    o:altLabel "evidence packet" .
 
 <urn:prism:onto:term/concept> a o:Term ;
     rdfs:label "Concept" ;
     rdfs:comment "A curated memory entry worth remembering." ;
-    o:altLabel "memory", "memory entry", "expertise entry" ;
+    o:altLabel "memory entry", "expertise entry" ;
     o:denotes o:Concept .
 
 <urn:prism:onto:term/decision> a o:Term ;

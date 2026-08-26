@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.85"
+PRISM_VERSION = "7.13.86"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -6961,4 +6961,14 @@ PRISM_VERSION_NOTES += (
     "origin/main, preserving its uncommitted red test and premise notes "
     "via stash -- unrelated to this file, just resolving why the drive "
     "halted in the first place. 9 tests green."
+    "\n\n7.13.86: the lexicon no longer aligns common English words. 7.13.84 "
+    "shipped story, card, todo, proof, receipt, memory, pipeline, checkpoint, "
+    "sign-off and acceptance test as synonyms, and the first Align language run "
+    "rewrote them in 525 prism tasks ('gate card' became 'gate Task', 'proof "
+    "of' became 'Evidence of'). Those ten synonyms are gone. A guard test now "
+    "requires every one-word synonym to sit on an explicit allowlist (ticket, "
+    "PR, MR, ADR, doc, bot, assistant) and pins that common words never "
+    "align. The affected tasks are re-aligned from the before text that the "
+    "ste_normalise history rows kept, through the normal TaskService path, so "
+    "the repair itself is on each task's history (epic cc9a44c8)."
 )
