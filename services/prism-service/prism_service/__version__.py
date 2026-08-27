@@ -13,10 +13,12 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.102"
+PRISM_VERSION = "7.13.105"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.104: safety: task_runner had a cost-based circuit breaker (_spend_ceiling_crossed) but NOTHING checking actual host resource pressure before spawning another claude -p subprocess. Real incident: 30+ PRISM tasks sat in_progress simultaneously on this box tonight, each one task_runner is willing to drive, contending with many other concurrent agent/pytest processes -- one background fix was independently killed by its own internal timeout purely from host contention. Added _system_overloaded() (mirrors _spend_ceiling_crossed's shape exactly): reads the 1-minute load average via os.getloadavg(), divides by os.cpu_count(), and refuses new work above a configurable per-core ceiling (PRISM_TASK_RUNNER_MAX_LOAD_PER_CORE, default 8.0 -- this host idles ~0.16/core, and most concurrent-agent load is network-I/O-blocked time that load average does not count as runnable, so legitimate heavy multi-agent concurrency stays well under this ceiling; 8.0/core is reserved for genuine saturation). Fails SAFE (never raises) when os.getloadavg() is unavailable (Windows, some containers). Unlike the spend ceiling (unset == unbounded), this guard carries a real default and is ACTIVE the moment task_runner itself is enabled -- a genuine safety rail, not a second opt-in. Wired into the same two call sites as _spend_ceiling_crossed: eligible_task()'s pre-claim check and sweep_once(). "
+    "7.13.102: fix: task_runner._run_one_step discarded a COMPLETE, usable step report whenever claude -p exited non-zero, even when the non-zero exit was only a post-hoc --max-budget-usd/--max-turns flag raised AFTER the model's own turn had already ended normally (stop_reason==end_turn). Confirmed live on tasks 85f92e4b, 0e2c82f3 and 82cc05ee, all stuck at review_previous_notes with a perfect '## Premises' report thrown away as 'exit=1, no usable output'. Added ClaudeCliResult.graceful_budget_stop() (inference/claude_cli.py) to name the condition (subtype in error_max_budget_usd/error_max_turns AND stop_reason==end_turn), and task_runner now routes the proof and passes when that condition holds with non-empty final_text; a genuinely empty proof, or any non-graceful failure (crash, auth failure, truncation mid-generation), still fails exactly as before. The $2.00 default budget ceiling itself is unchanged -- this fixes the discard, not the ceiling. "
     "7.13.25: agent-bridge remote-assist no longer needs a human to "
     "copy/paste a session id every reload or daemon restart. Added "
     "GET /api/agent-bridge/sessions (auth'd exactly like session creation) "
@@ -7259,7 +7261,7 @@ PRISM_VERSION_NOTES += (
     "reload path (task b15e84b2) -- a dropped connection is not a "
     "version mismatch, and sharedStream.ts must never call reload "
     "itself, per that task's own regression test."
-    "\n\n7.13.102: Understand writes the law, the ontology holds it, the code "
+    "\n\n7.13.105: Understand writes the law, the ontology holds it, the code "
     "obeys it (epic 61821448, owner: the ontology is the lexicon and the law, "
     "Understand feeds it, the law dictates the code; unify, do not subdivide). "
     "EXPLORE TRUTH (f9e0745e): every indexer reads ONE skip list "
@@ -7288,4 +7290,26 @@ PRISM_VERSION_NOTES += (
     "test_explore_indexes_source_not_bundles (8), "
     "test_ontology_projects_the_code_graph (8), test_memory_promotes_to_law "
     "(11); two re-anchors named in place."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.103: a reported step FAILURE never refreshed a live-open task "
+    "tab (task 1728c54b). api/conductor_flow.py's flow_report `elif "
+    "failed:` branch recorded the failure via a raw "
+    "task_svc.record_history() insert and returned WITHOUT ever calling "
+    "task_svc.update() -- so it never computed a fresh `activity` block "
+    "or published the `task.changed` bus event TaskDetailPage.tsx's "
+    "/sse/tasks subscription relies on. GET /api/tasks/{id} showed the "
+    "correct stalled state immediately; an already-open tab stayed on "
+    "pre-failure state (e.g. 'driving') until a manual reload. Fix: "
+    "TaskService.update()'s activity-compute + bus-publish + "
+    "task_runner-wake block is extracted into a reusable "
+    "_publish_task_changed(task, fields) (no behavior change to update() "
+    "itself); a new publish_activity_changed(task_id) reloads the task, "
+    "computes activity the same way, and publishes with fields={} (no "
+    "column changed). flow_report's failure branch calls it right after "
+    "record_history, swallowed in a try/except exactly like that call. "
+    "Verified every other record_history call site in conductor_flow.py "
+    "and conductor_service.py already pairs with a task_svc.update() for "
+    "the real state change -- record_history there is audit-trail only, "
+    "same shape as before; no other site needed this fix."
 )

@@ -302,3 +302,66 @@ def test_invoke_leaves_structured_output_none_without_a_schema(tmp_path):
         res = claude_cli.invoke("hi", tmp_path, tmp_path, max_turns=1, parse_events=True)
 
     assert res.structured_output is None
+
+
+# ---------------------------------------------------------------------------
+# graceful_budget_stop -- a budget/turn ceiling hit AFTER a complete message
+# must not be conflated with a real failure (task: budget-exhaustion drops
+# valid proof; see task_runner._run_one_step).
+# ---------------------------------------------------------------------------
+
+def _result_event(**overrides):
+    evt = {"type": "result", "is_error": True, "stop_reason": "end_turn",
+           "subtype": "error_max_budget_usd", "total_cost_usd": 2.05}
+    evt.update(overrides)
+    return evt
+
+
+def test_graceful_budget_stop_true_on_complete_message_over_budget():
+    """The exact shape observed live on tasks 85f92e4b/0e2c82f3/82cc05ee:
+    is_error true, but stop_reason end_turn means the model finished its
+    own answer before the post-hoc budget check flagged the run."""
+    parsed = [
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "## Premises\n- ok - VERIFIED\n"}]}},
+        _result_event(),
+    ]
+    assert claude_cli._graceful_budget_stop(parsed) is True
+
+
+def test_graceful_budget_stop_true_for_max_turns_too():
+    parsed = [_result_event(subtype="error_max_turns")]
+    assert claude_cli._graceful_budget_stop(parsed) is True
+
+
+def test_graceful_budget_stop_false_when_truncated_mid_generation():
+    """A non-end_turn stop_reason means the model was cut off mid-answer --
+    that is a real failure, not a graceful stop, even under the same
+    budget subtype."""
+    parsed = [_result_event(stop_reason="max_tokens")]
+    assert claude_cli._graceful_budget_stop(parsed) is False
+
+
+def test_graceful_budget_stop_false_for_non_budget_subtype():
+    """A plain success or an unrelated error subtype must not be treated
+    as a graceful budget stop."""
+    parsed = [_result_event(subtype="success")]
+    assert claude_cli._graceful_budget_stop(parsed) is False
+
+
+def test_graceful_budget_stop_false_with_no_result_event():
+    """A crash never emits a result event at all -- must read as False,
+    never crash on a missing event."""
+    parsed = [{"type": "assistant", "message": {"content": []}}]
+    assert claude_cli._graceful_budget_stop(parsed) is False
+
+
+def test_claude_cli_result_exposes_graceful_budget_stop_method():
+    """ClaudeCliResult.graceful_budget_stop() delegates to the same
+    parsed_events the dataclass already carries -- the shape task_runner
+    calls directly on `result`."""
+    res = claude_cli.ClaudeCliResult(
+        output_path=Path("/tmp/does-not-matter.jsonl"), exit_code=1,
+        parsed_events=[_result_event()],
+    )
+    assert res.graceful_budget_stop() is True
