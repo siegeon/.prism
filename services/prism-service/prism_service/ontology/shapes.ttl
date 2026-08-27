@@ -18,8 +18,10 @@
 # require it) against a scratch rdflib.Graph that already has a targeted
 # rdfs:subClassOf type expansion applied (task 6503d7f8 —
 # services/ontology_rules._expand_subclass_types, which replaced a full
-# owlrl RDFS closure), so o:Signal instances also carry o:QueueItem (its
-# rdfs:subClassOf parent in model.ttl) before any shape is checked.
+# owlrl RDFS closure), so e.g. o:JiraIssue instances also carry o:Work (its
+# rdfs:subClassOf parent in model.ttl) before any shape is checked. (task
+# cacfb628: o:Signal no longer expands to a parent — o:QueueItem, its
+# only child, collapsed into it.)
 
 @prefix o: <urn:prism:onto:> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .

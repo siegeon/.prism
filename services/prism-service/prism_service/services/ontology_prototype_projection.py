@@ -79,11 +79,12 @@ def _provider_instances() -> list[str]:
 
 
 def _signal_rows(project: str) -> list[dict]:
-    """QueueItem <- SIGNALS (task 785bb4ce, owner: the Queue is where
+    """Signal <- SIGNALS (task 785bb4ce, owner: the Queue is where
     signals arrive, not tasks): one row per signal, consumed by BOTH
     projections through gather() (task 495d3a69) -- the sqlite cache below
     and OntologyGraph._emit_signals. Task is its own class (rows["tasks"])
-    so nothing that used to live under QueueItem is lost."""
+    so nothing that used to live under o:QueueItem is lost -- and task
+    cacfb628 collapsed o:QueueItem itself into o:Signal, its one child."""
     from prism_service.services.signal_store import SignalStore
 
     store = SignalStore(project)
@@ -357,11 +358,12 @@ def rebuild(project: str) -> dict:
     _add_class(classes, instances, "Provider", "class", "integrations",
                rows["providers"])
 
-    # QueueItem <- signals (task 785bb4ce); the sqlite cache has no `state`
+    # Signal <- signals (task 785bb4ce; catalog id "QueueItem" collapsed
+    # into "Signal" by task cacfb628); the sqlite cache has no `state`
     # column, so state rides inline in the label here -- the RDF graph
     # carries it as a real property (OntologyGraph._emit_signals).
     sig = rows["signals"]
-    _add_class(classes, instances, "QueueItem", "class", "signals",
+    _add_class(classes, instances, "Signal", "class", "signals",
                [f"{s['label']} · {s['state']}" for s in sig],
                refs=[s["id"] for s in sig])
 

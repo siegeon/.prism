@@ -205,8 +205,9 @@ def test_a_second_rebuild_does_not_double_the_triples(project, monkeypatch):
 
     og = OntologyGraph(project)
     # task b1971944 made validate() post one "ontology" Queue signal per
-    # firing rule, and each signal projects as a QueueItem on the NEXT
-    # rebuild, so with the listener live the triple count moves once
+    # firing rule, and each signal projects as a Signal on the NEXT
+    # rebuild (task cacfb628 collapsed the old o:QueueItem catalog id into
+    # o:Signal), so with the listener live the triple count moves once
     # before it settles. That convergence is pinned in
     # test_firing_rules_become_decisions; THIS test pins that rebuild
     # itself is REPLACE-not-append, so it runs with the listener silent

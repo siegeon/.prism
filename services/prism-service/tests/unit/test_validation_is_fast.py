@@ -57,7 +57,12 @@ def test_expansion_adds_superclass_types_the_shapes_need():
 
     ontology_rules._expand_subclass_types(g)
 
-    assert (sig, _RDF.type, _O.QueueItem) in g, "Signal -> QueueItem"
+    # Re-anchored for task cacfb628: o:QueueItem collapsed into o:Signal,
+    # its one child (a Refused Bequest) -- Signal now carries no
+    # rdfs:subClassOf parent, so expansion adds no extra type for it.
+    assert not [t for t in g.triples((sig, _RDF.type, None)) if t[2] != _O.Signal], (
+        "Signal has no supertype now that o:QueueItem is gone"
+    )
     assert (dec, _RDF.type, _O.Concept) in g, "Decision -> Concept"
     assert (person, _RDF.type, _O.Party) in g, "Person -> Party"
     assert (ask, _RDF.type, _O.Ask) in g, "AskForDecision -> Ask"

@@ -53,10 +53,15 @@ o:Provider a rdfs:Class ; rdfs:label "Provider" ;
 o:Script a rdfs:Class ; rdfs:label "Script" ;
     rdfs:comment "An artifact a skill bundles, executed through a provider." .
 
-o:QueueItem a rdfs:Class ; rdfs:label "Queue item" ;
-    rdfs:comment "What arrived, and where from." .
-o:Signal a rdfs:Class ; rdfs:subClassOf o:QueueItem ; rdfs:label "Signal" ;
-    rdfs:comment "A queue item that may become a Task." .
+# task cacfb628, epic 61821448 (owner, via the Extract Superclass article:
+# "pull up only what is truly common"): o:QueueItem is collapsed into
+# o:Signal — it had exactly one child and every instance was already a
+# Signal, a Refused Bequest ("the parent is the real class, hiding in two
+# costumes"). Signal keeps o:QueueItem's own label sense ("what arrived,
+# and where from") folded into its comment below; every property that
+# named o:QueueItem as its domain now names o:Signal directly.
+o:Signal a rdfs:Class ; rdfs:label "Signal" ;
+    rdfs:comment "What arrived, and where from — may become a Task." .
 
 o:Artifact a rdfs:Class ; rdfs:label "Artifact" ;
     rdfs:comment "Folder (where work sits) | Document (what work produced)." .
@@ -101,7 +106,7 @@ o:insideFolder a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Folder ;
     rdfs:label "insideFolder" ; rdfs:comment "The folder above it." .
 o:keptBy a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Party ;
     rdfs:label "keptBy" .
-o:raises a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:Ask ;
+o:raises a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:Ask ;
     rdfs:label "raises" .
 o:askedBy a rdf:Property ; rdfs:domain o:Ask ; rdfs:range o:Party ;
     rdfs:label "askedBy" .
@@ -239,16 +244,16 @@ o:AskForDeliverable a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for d
 o:AskFyi a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "FYI" ;
     rdfs:comment "Informational only — it asks for nothing." .
 
-o:aboutTicket a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:JiraIssue ;
+o:aboutTicket a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:JiraIssue ;
     rdfs:label "aboutTicket" ; rdfs:comment "The Jira issue a signal's text names." .
-o:aboutCode a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:PullRequest ;
+o:aboutCode a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:PullRequest ;
     rdfs:label "aboutCode" ; rdfs:comment "The PR/issue a signal's text names." .
 o:dueBy a rdf:Property ; rdfs:domain o:Ask ; rdfs:range xsd:date ;
     rdfs:label "dueBy" ; rdfs:comment "A deadline resolved from the signal's text." .
 o:email a rdf:Property ; rdfs:domain o:Person ; rdfs:range xsd:string ;
     rdfs:label "email" ;
     rdfs:comment "An address is evidence, a name is a guess — the join key." .
-o:permalink a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range xsd:string ;
+o:permalink a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:string ;
     rdfs:label "permalink" .
 o:projectKnown a rdf:Property ; rdfs:domain o:JiraIssue ; rdfs:range xsd:boolean ;
     rdfs:label "projectKnown" ;
