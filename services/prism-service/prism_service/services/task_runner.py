@@ -309,12 +309,22 @@ def _run_one_step(project: str, task_id: str) -> dict:
 
     proof = (result.final_text() or "").strip()
     step_id = job["step"]
-    if result.exit_code == 0 and proof:
+    # A graceful budget/turn ceiling (exit!=0 but the model's own turn
+    # ended normally -- see ClaudeCliResult.graceful_budget_stop) still
+    # carries a complete, usable report and must not be discarded just
+    # because the post-hoc budget check marked the run is_error. Any OTHER
+    # non-zero exit (crash, auth failure, truncation mid-generation) keeps
+    # failing exactly as before.
+    if proof and (result.exit_code == 0 or result.graceful_budget_stop()):
         _route_proof(task_svc, task_id, step_id, proof)
         outcome: object = "pass"
-    else:
+    elif not proof:
         outcome = {"ok": False,
                    "reason": f"exit={result.exit_code}, no usable output"}
+    else:
+        outcome = {"ok": False,
+                   "reason": f"exit={result.exit_code}, non-graceful "
+                             "failure (crash/auth/truncated mid-turn)"}
 
     report = flow.flow_report(flow.Ident(
         task_id=task_id, session_id=SEAT_ID, outcome=outcome,
