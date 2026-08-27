@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.97"
+PRISM_VERSION = "7.13.98"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7174,4 +7174,28 @@ PRISM_VERSION_NOTES += (
     "inside the observer; the 7.13.93 suite stalled 30 s in "
     "TaskService.create and died rc=139. The hook now walks frame objects "
     "with sys._getframe and reads plain __dict__ attributes only."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.98: a stuck conductor step decomposes instead of looping or "
+    "escalating (owner: task_runner.py retried implement_tasks for 4+ "
+    "hours on 4 red tests before a human blocked it). New conductor "
+    "guide subsection (mcp/tools.py, 'A stuck step decomposes; it does "
+    "not loop or escalate') tells a drive to split a stalled task into "
+    "child tasks via task_create(parent_id=...), each sized so one "
+    "step's own action can check its oracle -- asking a human is only "
+    "for a real Ontology gap, never a substitute for the split. New "
+    "SHACL rule task-blocked-needs-decomposition (ontology/shapes.ttl) "
+    "makes the specific case adjudicable on the live graph: a o:Task "
+    "with o:status 'blocked' and no child Task pointing at it via "
+    "o:parent fires as a violation on the Ontology Rules tab. o:status "
+    "and o:parent are new model.ttl properties, now really projected "
+    "from task_svc (ontology_graph._emit_tasks, "
+    "ontology_prototype_projection._task_rows) -- not just declared, "
+    "so the rule is live on real data, not decoration. Fixture + "
+    "regression test in test_rules_are_shacl_shapes.py (compliant: "
+    "blocked task with a child; violating: blocked task with none). "
+    "Follow-up noted, not built here: task_runner.py itself does not "
+    "yet detect a stalled loop and act on this doctrine automatically "
+    "-- that is separately-scoped loop-detection work."
 )

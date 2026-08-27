@@ -2651,6 +2651,28 @@ degrades into a vibe. If a task is stalling, don't push harder on it as
 one unit — decompose it, the same call a lazy single-turn agent should
 make when a leaf is too big to actually finish.
 
+## A stuck step decomposes; it does not loop or escalate
+
+A step that cannot advance — same `workflow_step`, same failing oracle,
+across repeated attempts — never keeps retrying the same action, and
+never asks a human for a decision by default. The correct move is to
+decompose: create child tasks with `task_create(parent_id=...)`, each
+one sized so its own oracle can be checked from ONE step's own action
+(the same Depth Tree split named above). A subtask is yours to finish
+end to end, per the doctrine on subtasks elsewhere in this guide — a
+fork inside a stuck task is a decision to make, not a question to ask.
+
+Ask a human ONLY when the real gap is that PRISM's own Ontology has no
+rule covering the situation — never as a substitute for splitting the
+work. When that happens, flag the gap itself: file it so a real,
+adjudicable Ontology rule can be written (Ontology tab, "Rules"), the
+same way `task-blocked-needs-decomposition` now does for the specific
+case that motivated this — a `blocked` task with zero child tasks
+split off it. That rule fires on the live project graph and appears on
+the Rules tab with its own violation count for human adjudication; a
+task tripping it is a task that stalled without doing the one thing
+this section asks for.
+
 ## Two valid delivery paths — know which one you're on
 
 "Work this ticket in PRISM as a user would" means actually DRIVE it

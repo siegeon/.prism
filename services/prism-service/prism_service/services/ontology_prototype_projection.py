@@ -120,8 +120,12 @@ def _task_rows(project: str) -> list[dict]:
     # its title: the text-is-plain rule (task 5ac5d04c, epic b2acfa16)
     # reads rdfs:comment, and a rule that sees titles only is blind to
     # the text people actually write.
+    # status/parent_id ride along too, both real task_svc fields, for the
+    # task-blocked-needs-decomposition rule: it needs a blocked task's own
+    # status and its children's parent edges, never fabricated.
     return [{"id": t.id, "title": t.title, "channel": t.channel,
-             "description": t.description or ""}
+             "description": t.description or "", "status": t.status,
+             "parent_id": t.parent_id or ""}
             for t in ctx.task_svc.list()]
 
 

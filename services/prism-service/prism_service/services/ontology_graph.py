@@ -465,7 +465,7 @@ class OntologyGraph:
         oracle's own SPARQL shape ('?task a o:Task ; o:arrivedVia ?channel').
         A channel not already emitted by _emit_channels_agents_providers
         (e.g. a project's ad-hoc channel string) is created here so no
-        task's arrivedVia edge ever dangles."""
+        task's arrivedVia edge ever dangles. Also projects o:status (the task-blocked-needs-decomposition rule reads it) and o:parent -> the parent o:Task (child points at its own epic), both real task_svc fields, never fabricated."""
         import rdflib
 
         known = {str(c) for c in rows["channels"]}
@@ -476,6 +476,12 @@ class OntologyGraph:
             body = str(t.get("description") or "").strip()
             if body:
                 g.add((u, RDFS.comment, rdflib.Literal(body)))
+            status = str(t.get("status") or "").strip()
+            if status:
+                g.add((u, CLS("status"), rdflib.Literal(status)))
+            parent_id = str(t.get("parent_id") or "").strip()
+            if parent_id:
+                g.add((u, CLS("parent"), U("task", parent_id)))
             channel = str(t.get("channel") or "").strip()
             if not channel:
                 continue

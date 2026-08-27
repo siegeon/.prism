@@ -141,6 +141,14 @@ RULE_FIXTURES: dict[str, tuple[str, str, str]] = {
         _PREFIXES + 'o:t1 a o:Task ; rdfs:label "Open a ticket for review." .',
         "t1",
     ),
+    # a blocked task with a child (decomposed) is compliant; a blocked
+    # task with no children names no split at all.
+    "task-blocked-needs-decomposition": (
+        _PREFIXES + 'o:t1 a o:Task ; o:status "blocked" . '
+        'o:t2 a o:Task ; o:parent o:t1 .',
+        _PREFIXES + 'o:t1 a o:Task ; o:status "blocked" .',
+        "t1",
+    ),
 }
 
 

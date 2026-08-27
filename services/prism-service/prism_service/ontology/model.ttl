@@ -117,6 +117,12 @@ o:becameTask a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:Task ;
     rdfs:label "becameTask" .
 o:hasWorkflow a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:Agent ;
     rdfs:label "hasWorkflow" .
+o:status a rdf:Property ; rdfs:domain o:Task ; rdfs:range xsd:string ;
+    rdfs:label "status" ;
+    rdfs:comment "pending, in_progress, done, or blocked — the conductor's own task.status." .
+o:parent a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:Task ;
+    rdfs:label "parent" ;
+    rdfs:comment "A child task's own parent_id. Read: child o:parent parent." .
 
 o:relatesTo a rdf:Property ; rdfs:domain o:Code ; rdfs:range o:Code ;
     rdfs:label "relatesTo" ;

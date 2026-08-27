@@ -386,3 +386,33 @@ o:text-uses-canonical-terms a sh:SPARQLConstraint ;
             FILTER(REGEX(?c, CONCAT("\\\\b", ?alt, "s?\\\\b"), "i"))
         }
     """ .
+
+
+# ---------------------------------------------------------------------
+# task-blocked-needs-decomposition — a blocked o:Task with no children
+# (no other Task's o:parent points at it). Blocking a task and stopping
+# is a dead end; the conductor doctrine says split it into subtasks
+# sized so each one's own oracle can be measured from a single step's
+# action (mcp/tools.py's conductor guide, "Why tasks decompose into
+# subtasks"). A blocked task that names no children is either awaiting
+# that split, or is a real gap in this ontology that needs a rule of
+# its own — either way it needs a human or a new rule, not a silent
+# stall.
+# ---------------------------------------------------------------------
+
+o:task-blocked-needs-decomposition.target a sh:NodeShape ;
+    sh:targetClass o:Task ;
+    sh:sparql o:task-blocked-needs-decomposition .
+
+o:task-blocked-needs-decomposition a sh:SPARQLConstraint ;
+    rdfs:comment "A blocked task with no subtasks split off it is a dead end, not a decision point -- decompose it, or name the ontology gap that stopped it." ;
+    sh:name "A blocked task splits into subtasks" ;
+    sh:description "A blocked task with no subtasks split off it. Decompose it into child tasks, or file this as a gap needing an ontology rule or a human decision." ;
+    sh:message "task is blocked and has no child tasks split off it" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this a o:Task ; o:status "blocked" .
+            FILTER NOT EXISTS { ?child o:parent $this }
+        }
+    """ .
