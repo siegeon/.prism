@@ -52,6 +52,21 @@ OPTED_IN_INTERVAL_S = 30  # cadence once opted in, unless INTERVAL_ENV overrides
 CI_TIMEOUT_S = 900.0
 CI_POLL_S = 15.0
 
+# Task 811fcce0: GitHub has not always registered the PR's checks by the
+# very FIRST poll right after push+pr_create -- `gh pr checks` then exits
+# non-zero (not GH_CHECKS_PENDING_RC) with stderr reading exactly "no
+# checks reported on the '<base>' branch". That is a false negative, not
+# a real check failure: no check has been scheduled against this branch
+# yet, not "a check ran and failed". A short, SEPARATE grace window
+# (bounded, distinct from CI_TIMEOUT_S's own pending-deadline) covers
+# exactly this one string; any OTHER ci_wait failure (a check that ran
+# and genuinely failed) still fails on its first poll, unchanged -- a
+# blanket retry across every failure would mask a real one behind an
+# unnecessary wait, which is the ticket's own named likely_misfire.
+CI_NOT_YET_REGISTERED_GRACE_S = 60.0
+_NO_CHECKS_REGISTERED_RE = re.compile(
+    r"no checks reported on the '[^']*' branch", re.IGNORECASE)
+
 # Ceiling on ONE git/gh call. On timeout the WHOLE process group dies, not
 # only the direct child: `git push` over HTTPS spawns `git-remote-https`
 # beneath it, and `subprocess.run(timeout=)` left that helper alive with its
@@ -289,6 +304,7 @@ def ship_task(task_id: str, project: str = "default", *,
               task_svc=None, cond=None,
               poll_interval_s: float = CI_POLL_S,
               ci_timeout_s: float = CI_TIMEOUT_S,
+              not_yet_registered_grace_s: float = CI_NOT_YET_REGISTERED_GRACE_S,
               on_landed: Optional[Callable[..., bool]] = None) -> dict:
     """Land this task's workspace branch. DETERMINISTIC — no model calls.
 
@@ -375,12 +391,33 @@ def ship_task(task_id: str, project: str = "default", *,
 
     # ---- wait for CI -------------------------------------------------------
     deadline = time.monotonic() + float(ci_timeout_s)
+    # Set only once the FIRST "no checks reported" response is seen, so the
+    # grace window is bounded from that first sighting, not from ci_wait's
+    # own start (a few real-pending polls first must not eat into it).
+    not_yet_registered_deadline: Optional[float] = None
     while True:
         rc, out, err = _run(run, ["gh", "pr", "checks", str(pr), *repo_flag], path)
         if rc == 0:
             break
+        text = err or out or ""
         if rc != GH_CHECKS_PENDING_RC:
-            res = _fail("ci_wait", err or out or f"gh pr checks exited {rc}", pr)
+            if _NO_CHECKS_REGISTERED_RE.search(text):
+                if not_yet_registered_deadline is None:
+                    not_yet_registered_deadline = (
+                        time.monotonic() + float(not_yet_registered_grace_s))
+                if time.monotonic() < not_yet_registered_deadline:
+                    if poll_interval_s:
+                        time.sleep(float(poll_interval_s))
+                    continue
+                res = _fail(
+                    "ci_wait",
+                    f"no checks were ever reported for PR #{pr} after "
+                    f"{int(not_yet_registered_grace_s)}s grace: {text}", pr)
+                _park(task_svc, task_id, res["stage"], res["error"])
+                return res
+            # Any OTHER ci_wait failure (a real check that ran and failed)
+            # still fails immediately on its first poll -- unchanged.
+            res = _fail("ci_wait", text or f"gh pr checks exited {rc}", pr)
             _park(task_svc, task_id, res["stage"], res["error"])
             return res
         if time.monotonic() >= deadline:

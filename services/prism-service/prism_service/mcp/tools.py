@@ -5245,8 +5245,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 return [TextContent(type="text", text=_json({
                     "ok": False, "error": "unknown task",
                     "task_id": _task_id}))]
+            # Task 811fcce0 follow-on defect (found driving the "quickfix"
+            # workflow through this exact tool): _step_by_id defaults its
+            # `workflow` arg to "implement", so a REPORT for any OTHER
+            # workflow's step id (intake/classify/collect/draft/apply_fix/
+            # ...) never matches implement's own 10 step ids -- _cur was
+            # always None, so every report silently fell into the "not
+            # entered yet, restart" branch below instead of advancing.
+            # Resolve the task's OWN workflow the same way conductor_flow's
+            # _job/_task_workflow already do.
             _cur = conductor_svc._step_by_id(
-                getattr(_t, "workflow_step", "") or "")
+                getattr(_t, "workflow_step", "") or "", _flow._task_workflow(_t))
             if _cur is None:
                 # Not entered yet — a report with no current step: START it.
                 _body = _flow.Ident(task_id=_task_id, session_id=_sid,
