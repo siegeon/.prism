@@ -156,8 +156,14 @@ def _locate_drive_transcripts() -> list[Path]:
             subagents = subagents / "workflows" / run
         if subagents.is_dir():
             hits.extend(sorted(subagents.rglob("*.jsonl")))
+        # When PRISM_BRAIN_FIRST_DRIVE_RUN scopes the measurement to ONE wf_
+        # run, the parent session transcript is NOT part of that drive: it
+        # carries the main session's own retrieval traffic across every drive
+        # it hosted (measured 2026-08-26: ~460 disk calls of a 507 total came
+        # from the parent file alone), so including it drowns the per-run
+        # ratio AC-5 exists to measure.
         parent_file = proj_dir / f"{session}.jsonl"
-        if parent_file.is_file():
+        if parent_file.is_file() and not run:
             hits.append(parent_file)
     if not hits:
         raise AssertionError(
