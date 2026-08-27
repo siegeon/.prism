@@ -257,11 +257,21 @@ def test_queue_item_projects_from_signals_and_task_class_exists(project):
     sig_store.create(_make_signal(project, subject="signal two"))
     sig_store.create(_make_signal(project, subject="signal three"))
 
+    # Re-anchored for task b1971944 ("a firing rule becomes a decision on
+    # the Queue"): rebuild()'s own OntologyGraph.rebuild() -> validate()
+    # pass may now post NEW "ontology"-channel signals for any rule this
+    # project's own tasks/docs happen to violate, AFTER this project's
+    # QueueItem projection already took its snapshot via gather() at the
+    # top of rebuild() -- so the count this pins is the one BEFORE
+    # rebuild runs, never a later sig_store.list() call, which could see
+    # those new signals too.
+    signal_count_before_rebuild = len(sig_store.list())
+
     proj.rebuild(project)
 
     store = OntologyStore(project)
     classes = {c["id"]: c for c in store.list_classes()}
-    assert classes["QueueItem"]["instance_count"] == len(sig_store.list())
+    assert classes["QueueItem"]["instance_count"] == signal_count_before_rebuild
     assert classes["QueueItem"]["source"] == "signals"
 
     assert "Task" in classes

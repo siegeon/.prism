@@ -198,6 +198,25 @@ def test_a_second_rebuild_does_not_double_the_triples(project):
     from prism_service.services.ontology_graph import OntologyGraph
 
     og = OntologyGraph(project)
+    # Re-anchored for task b1971944 ("a firing rule becomes a decision on
+    # the Queue"): a rebuild's own validate() pass can post NEW
+    # "ontology"-channel Queue signals for a rule this project's baseline
+    # data violates, and each of those signals itself projects as a
+    # QueueItem the NEXT time round -- which can trip a SECOND rule (e.g.
+    # "twin-classes" once two distinct o:Signal-like classes exist), so
+    # more than one rebuild can be needed before the signal set itself
+    # stops growing. Warm up until two consecutive rebuilds agree (a still
+    # -firing rule updates its own open signal in place, so this always
+    # terminates), THEN assert the real idempotency this test pins.
+    warm = og.rebuild()
+    for _ in range(5):
+        again = og.rebuild()
+        if again["total_triples"] == warm["total_triples"]:
+            break
+        warm = again
+    else:
+        pytest.fail("the ontology Queue-signal backlog never stabilized")
+
     first = og.rebuild()
     second = og.rebuild()
 

@@ -86,6 +86,21 @@ export type WorkflowCoverageRow = {
   known: boolean;
 };
 
+/** The Knowledge health scoreboard (task b1971944, services/
+ * knowledge_health.py) — present only on the knowledge_health catalog
+ * entry, which carries no steps of its own. */
+export type WorkflowMetrics = {
+  search_feedback_rate: number;
+  recall_to_use_rate: number;
+  median_memory_chars: number;
+  evidence_ratio: number;
+  concepts_grounded_in_code: number;
+  modules_with_knowledge: number;
+  rules_with_provenance: number;
+  open_rule_decisions: number;
+  computed_at: string;
+};
+
 export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
   id: string;
   name: string;
@@ -103,6 +118,10 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
    * align_language catalog entry. Absent for every other entry and for
    * an older service. */
   coverage?: WorkflowCoverageRow[];
+  /** Knowledge health metrics (task b1971944) — present only on the
+   * knowledge_health catalog entry. Absent for every other entry and for
+   * an older service. */
+  metrics?: WorkflowMetrics;
 };
 
 export type WorkflowStepResult = {

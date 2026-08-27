@@ -13,6 +13,7 @@ from fastapi.responses import PlainTextResponse
 
 from prism_service.project_context import get_project
 from prism_service.services import ontology_prototype_projection
+from prism_service.services import rule_decisions
 from prism_service.services.okf_host import OkfHost
 from prism_service.services.ontology_graph import OntologyGraph
 
@@ -141,10 +142,13 @@ def ontology_terms(project: str = Query("default")) -> dict:
 @router.get("/ontology/rules")
 def ontology_rules(project: str = Query("default")) -> dict:
     """The rules are SHACL shapes that can fail (task 8eeb3e65) — the full
-    persisted validation report, per rule: focus nodes capped at 20."""
-    from prism_service.services import ontology_rules as rules_svc
+    persisted validation report, per rule: focus nodes capped at 20.
 
-    return rules_svc.full_report(project)
+    Read-time filtered for the owner's own decisions (task b1971944): an
+    exempted focus IRI is hidden from "focus" and subtracted from
+    "violations" here, never in the SHACL runner itself, and an accepted
+    rule carries its own "decision" key."""
+    return rule_decisions.decorated_report(project)
 
 
 @router.get("/ontology/concept")
