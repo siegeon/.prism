@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.110"
+PRISM_VERSION = "7.13.111"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7398,4 +7398,10 @@ PRISM_VERSION_NOTES += (
     "refreshed ontology signal shows current text on the Queue), and a rule "
     "signal names its target class by local name ('fires on 8 Class'), "
     "never a full IRI."
+    "\n7.13.111: task 2d315628. A dropped ontology signal stands while the "
+    "rule's count is unchanged (rule_decisions used to post a fresh row on "
+    "every validation after a drop - SignalStore.create is a plain INSERT, "
+    "there was never an upsert); when the count moves the rule opens a new "
+    "signal whose body says 'Count moved from 8 to 9 since you dropped "
+    "this.' Resolved and promoted rows keep their behaviour."
 )
