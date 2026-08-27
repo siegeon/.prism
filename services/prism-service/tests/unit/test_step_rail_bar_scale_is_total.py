@@ -198,3 +198,46 @@ def test_gate_row_never_renders_a_proportional_bar():
     guard_window = step_meta_src[max(0, bar_div_idx - 200):bar_div_idx]
     assert "!isGate" in guard_window, \
         "the bar track div (`h-2 rounded-full`) must be conditioned on !isGate so a gate never renders a proportional fill"
+
+
+def test_step_meta_is_a_direct_row_child_for_agent_steps():
+    """Third follow-up (task c5b70c27, owner: "this is the third time we
+    have tried to fix it and you keep saying its working, but we can see
+    its not"). Root cause: for a real agent-work step, StepMeta was rendered
+    NESTED inside an extra `<div className="ml-auto flex items-center gap-2
+    min-w-0">` wrapper. That wrapper has no width of its own — it shrinks to
+    fit its content. A CSS percentage width on a DESCENDANT of an
+    auto-sized flex item resolves to 0 per spec, so StepMeta's own
+    `w-[50%]` silently fell back to its `min-w-[220px]` floor every time —
+    the exact same ~220px as the PREVIOUS (also-failed) fixed-width
+    attempt, despite the class correctly saying 50%. Gate rows never had
+    this wrapper and were never affected, which is why testing missed it
+    twice. The fix: StepMeta renders as a DIRECT child of the row (which
+    has a real, definite width) for the non-current-step case; only the
+    CURRENT step's status badges keep the inner wrapper.
+    """
+    src = _read()
+
+    # Anchor on the row-rendering block inside StepRail's items.map loop
+    # (not GateRow, which never had this bug).
+    row_block_idx = src.index("const stepTurns = byStep[s.id] ?? [];")
+    row_block_end_idx = src.index("{rowOpen && hasTurns && <TurnList", row_block_idx)
+    row_block = src[row_block_idx:row_block_end_idx]
+
+    step_meta_call = '<StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} hasTurns={hasTurns} open={rowOpen} />'
+    assert step_meta_call in row_block, \
+        "could not find the per-row StepMeta call — did its props change?"
+
+    wrapper_open = '<div className="ml-auto flex items-center gap-2 min-w-0">'
+    wrapper_open_idx = row_block.index(wrapper_open)
+    step_meta_idx = row_block.index(step_meta_call)
+
+    # The wrapper must CLOSE (its matching `</div>`, i.e. the ternary's `) : (`
+    # boundary) before StepMeta appears — StepMeta must not be textually
+    # contained inside the wrapper's own JSX subtree.
+    close_marker = ") : ("
+    close_idx = row_block.index(close_marker, wrapper_open_idx)
+    assert close_idx < step_meta_idx, \
+        ("StepMeta must render OUTSIDE (after) the ml-auto/min-w-0 wrapper closes, "
+         "as a direct child of the row — nesting it inside that wrapper reintroduces "
+         "the collapsed-percentage-width bug")
