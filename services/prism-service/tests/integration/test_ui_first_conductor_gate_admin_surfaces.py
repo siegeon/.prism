@@ -163,11 +163,16 @@ def test_post_conductor_gate_reject_stores_reason(tmp_path, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body.get("gate_state") == "failed", body
+    # Superseded by test_gate_reject_rewinds_to_producing_step.py: reject
+    # now rewinds to the gate's producing step instead of dead-ending at
+    # gate_state="failed".
+    assert body.get("gate_state") == "none", body
+    assert body.get("rewound_to") == "write_failing_tests", body
 
     # Reason persisted onto the task row (read back via the service).
     fetched = task_svc.get(t.id)
-    assert fetched.gate_state == "failed"
+    assert fetched.workflow_step == "write_failing_tests"
+    assert fetched.gate_state == "none"
     assert fetched.gate_reason == "trace did not fail for the right reason"
 
 

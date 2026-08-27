@@ -2499,17 +2499,19 @@ class ConductorService:
         return False
 
     def _consecutive_auto_rewinds(self, task_id) -> int:
-        """Auto rewinds since the last forward/human row. Parking rows and
-        machine refusals do not reset the count (or the budget would never
-        bind)."""
+        """Auto rewinds since the last forward/human row. Parking rows,
+        machine refusals, and TaskService's own "updated" audit rows do
+        not reset the count (or the budget would never bind)."""
         n = 0
         for r in reversed(list(self._task_svc.history(task_id) or [])):
             act = getattr(r, "action", "")
+            details = str(getattr(r, "details", ""))
             if act == "auto_rewind":
                 n += 1
-            elif act == "auto_rewind_exhausted" or (
+            elif act == "updated" or act == "auto_rewind_exhausted" or (
                     act == "gate_decide"
-                    and "machine=refused" in str(getattr(r, "details", ""))):
+                    and ("machine=refused" in details
+                         or "action=reject" in details)):
                 continue
             else:
                 break
@@ -3996,11 +3998,30 @@ class ConductorService:
                 gate_state="failed", ok=False,
                 verdict_summary=("reject: " + (reason or ""))[:200],
             )
+            # Reject rewinds to the producing step (see test_gate_reject_
+            # rewinds_to_producing_step.py); budget shared with green_gate's
+            # auto-rewind.
+            rewound_to = None
+            if self._consecutive_auto_rewinds(task_id) < MAX_AUTO_REWINDS:
+                idx = self._step_index(gate_step_id, task_workflow)
+                if idx > 0:
+                    producing = self._workflow_steps(task_workflow)[idx - 1]
+                    if producing["type"] != "gate":
+                        self._task_svc.update(
+                            task_id, workflow_step=producing["id"],
+                            gate_state="none", gate_reason=reason,
+                            blocked_reason="")
+                        self._record_seat_row(
+                            task_id, "auto_rewind",
+                            f"{gate_step_id} -> {producing['id']}; "
+                            f"reason={reason}")
+                        rewound_to = producing["id"]
             return {
                 "ok": True,
                 "task_id": task_id,
                 "gate_step": gate_step_id,
-                "gate_state": "failed",
+                "gate_state": "none" if rewound_to else "failed",
+                "rewound_to": rewound_to,
             }
 
         # action == 'approve' - validation evidence is REQUIRED.
