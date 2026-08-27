@@ -4534,7 +4534,27 @@ class ConductorService:
             verifier_payload = outcome.get("verifier")
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
-            if outcome["verified"] is not True:
+            # PLAIN OWNER GATE, NO RUBRIC BY DESIGN (task 44c7e2d0, live
+            # repro on promote_to_law's review gate — same shape as
+            # triage's decide gate): _verify_gate returns verified=None,
+            # validation=None specifically when the STEP ITSELF declares
+            # no validation kind at all (models/workflow.py's
+            # TRIAGE_STEPS/PROMOTE_TO_LAW_STEPS, "a plain owner gate, the
+            # same shape triage's decide step uses" — there was never a
+            # rubric to consult). Treating that None the same as an
+            # explicit verifier REJECTION failed the gate on the very
+            # first plain Approve click, with the error text itself saying
+            # "recover manually with override=True" — but no UI control
+            # exists to send that, so the gate was permanently stuck for
+            # a human clicking the only Approve button the page has.
+            # verified=None with a REAL declared validation kind (a
+            # genuinely wired-but-missing rubric — validation is non-None
+            # in that case, see _verify_gate) is UNCHANGED below: that is
+            # a real configuration gap, not a by-design no-rubric step,
+            # and still requires override=True.
+            plain_owner_gate = (outcome["verified"] is None
+                                 and outcome.get("validation") is None)
+            if outcome["verified"] is not True and not plain_owner_gate:
                 self._task_svc.update(
                     task_id,
                     gate_state="failed",
@@ -4569,7 +4589,8 @@ class ConductorService:
             detail_bits = [
                 f"gate={gate_step_id}",
                 "action=approve",
-                f"verifier=pass; validation={verifier_validation}",
+                ("no-rubric-gate=pass" if plain_owner_gate
+                 else f"verifier=pass; validation={verifier_validation}"),
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
