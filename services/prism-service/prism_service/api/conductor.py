@@ -348,6 +348,41 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # status IS the live parked reason - self-diagnosable without a stale
     # gate_reason relay, mirroring the red_gate branch below.
     if getattr(task, "workflow_step", "") == "plan_gate":
+        # ROOT PLAN-GATE STOP (task 3c774abd, owner rule 2026-08-27): a ROOT
+        # task on the real conductor SDLC with a passing plan rubric waits
+        # for the owner's own click - the live card must say adapter=human,
+        # never the machine's own "design-packet"/"machine" reading a child
+        # gets. A failing rubric falls through to the rubric/design-packet
+        # readings below unchanged.
+        from prism_service.models.task import normalize_workflow
+        # "implement" (models.task.DEFAULT_WORKFLOW), not the UI catalog id
+        # "conductor" WORKFLOW_ALIASES maps it to — normalize_workflow never
+        # applies that alias, so this is the honest, existing marker.
+        _is_root_conductor = (
+            not str(getattr(task, "parent_id", "") or "").strip()
+            and normalize_workflow(getattr(task, "workflow", "") or "")
+            == "implement")
+        if _is_root_conductor:
+            _validation = s._validation_for_gate("plan_gate", "implement")
+            _rubric = (s._verify_rubric_gate(task, _validation)
+                       if _validation else {"verified": False})
+            if _rubric.get("verified") is True:
+                return {"receipt_ok": True, "receipt_refusal": "",
+                        "manual_review": True,
+                        "receipt": {
+                            "adapter": "human", "passed": True,
+                            "status": "your_review", "ended_at": "",
+                            "reason": (
+                                "Plan rubric passed (machine review). "
+                                "Your approval releases the plan - your "
+                                "review is the sign-off.")}}
+            _reason = str(_rubric.get("reason", "") or
+                          "the plan rubric has not passed yet")
+            return {"receipt_ok": False, "receipt_refusal": _reason,
+                    "manual_review": True,
+                    "receipt": {"adapter": "plan-rubric", "passed": False,
+                                "status": "pending", "ended_at": "",
+                                "reason": _reason}}
         from prism_service.services import design_packet as dp
         _status = dp.approval_status(project, task_id, task)
         if _status.get("approved"):

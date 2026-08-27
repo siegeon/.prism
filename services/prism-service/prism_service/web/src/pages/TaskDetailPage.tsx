@@ -1071,6 +1071,14 @@ export default function TaskDetailPage() {
     gateVerdict === "ready" &&
     !!gateReadiness?.manual_review &&
     gateReadiness?.receipt?.adapter === "human";
+  // ROOT PLAN-GATE STOP (task 3c774abd, owner rule 2026-08-27): a root
+  // plan_gate's adapter="human" receipt is NOT the bare-entitlement case
+  // isAwaitingReview's generic copy describes ("no machine evidence at this
+  // tree") — a real machine tooth (the plan rubric) already ran and passed;
+  // the owner's click is what RELEASES the plan, not a fallback because
+  // nothing could be checked. Named separately so the banner can say so.
+  const isAwaitingRootPlanApproval =
+    isAwaitingReview && task?.workflow_step === "plan_gate";
   // HONEST PLAN_GATE HEADLINE (task 0c49c385, owner 2026-08-07): at
   // plan_gate a populated-but-unapproved design packet reads
   // receipt_ok=false from the design-packet adapter (api/conductor.py:
@@ -1150,7 +1158,9 @@ export default function TaskDetailPage() {
   // the bare-entitlement case. The owner edits or replaces it at will.
   useEffect(() => {
     if (docTab !== "evidence" || gateReason.trim()) return;
-    setGateReason(isAwaitingReview
+    setGateReason(isAwaitingRootPlanApproval
+      ? "Approving on my own review — the plan rubric already passed (machine review); my approval is the sign-off that releases the plan."
+      : isAwaitingReview
       ? "Approving on my own review — no machine evidence exists at this tree; my read of the artifacts is the sign-off."
       : gateReadiness?.receipt_ok
         ? `Approving on live evidence: fresh passing oracle receipt (${gateReadiness.receipt?.adapter || "trusted run"}) + drive record.`
@@ -2091,7 +2101,9 @@ export default function TaskDetailPage() {
                 : isStoryRubricPending
                 ? `PENDING · story rubric: ${gateReadiness?.receipt?.reason || "acceptance criteria not yet complete"}`
                 : gateVerdict === "ready"
-                ? (isAwaitingReview
+                ? (isAwaitingRootPlanApproval
+                    ? "AWAITING YOUR APPROVAL · plan rubric passed (machine review)"
+                    : isAwaitingReview
                     ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
                     : "READY · evidence passing")
                 : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
