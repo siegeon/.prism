@@ -205,13 +205,34 @@ def _rule_title_now(project: str, rule_name: str) -> str:
 # The on_validated listener: one signal per firing rule
 # ---------------------------------------------------------------------
 
+def _iri_local_name(iri: str) -> str:
+    """Text after the LAST '#' or '/' in `iri`, whichever comes later --
+    Tries ontology_rules._local_name() FIRST (strips THIS project's own
+    urn:prism:onto: prefix, which carries no trailing '#' or '/' for the
+    generic split below to find) -- only when that leaves the IRI
+    unchanged (it did not start with urn:prism:onto:) does this fall
+    back to the generic split, so a rule that targets borrowed RDFS
+    vocabulary directly -- the twin-classes rule's own sh:targetClass is
+    rdfs:Class -- never leaks the full IRI into a Queue signal (task
+    aa7fab99)."""
+    from prism_service.services import ontology_rules
+
+    local = ontology_rules._local_name(iri)
+    if local != iri:
+        return local
+    if not iri:
+        return iri
+    idx = max(iri.rfind("#"), iri.rfind("/"))
+    return iri[idx + 1:] if idx != -1 else iri
+
+
 def _target_class_label(project: str, rule_name: str) -> str:
     from prism_service.services import ontology_rules
 
     for r in ontology_rules.rule_catalog(project):
         if r["name"] == rule_name:
             cls = r.get("target_class") or ""
-            return ontology_rules._local_name(cls) if cls else "record"
+            return _iri_local_name(cls) if cls else "record"
     return "record"
 
 
@@ -267,10 +288,10 @@ def _update_signal_body(store: SignalStore, signal_id: str, subject: str,
     columns is policed to live in task_service.py/memory_service.py/
     signal_store.py alone (test_every_ingestion_path_aligns.py), so this
     never reaches into the row with a second, raw SQL write of its own.
-    Known limitation this leaves on record: SignalStore.update() persists
-    the raw subject/body but not aligned_subject/aligned_body, so the
-    Queue keeps showing the ALIGNED text from the signal's original post
-    until signal_store.py itself learns to re-align on update."""
+    SignalStore.update() (task aa7fab99) now re-aligns aligned_subject/
+    aligned_body itself whenever subject or body changes, so this refresh
+    keeps the Queue showing CURRENT aligned text rather than what the
+    signal's first post produced."""
     store.update(signal_id, subject=subject, body=body,
                  matches={"rule": rule_name, "focus": focus})
 

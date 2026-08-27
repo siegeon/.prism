@@ -10,7 +10,10 @@ aligned_subject/aligned_body/style (task ed034701): create() runs the
 same STE pipeline TaskService._apply_ste runs on every task write --
 services.ste.normalize then services.lexicon.align, then services.ste.
 check -- over subject and body, and stores the result in the new
-columns. subject/body are never rewritten.
+columns. subject/body are never rewritten. update() (task aa7fab99)
+re-runs the same alignment whenever subject or body is one of the
+fields being changed, so a refreshed signal (e.g. rule_decisions'
+dedup re-post) keeps its aligned columns current.
 """
 
 from __future__ import annotations
@@ -182,19 +185,29 @@ class SignalStore:
         return [self._row_to_signal(r) for r in rows]
 
     def update(self, signal_id: str, **kwargs: object) -> Optional[Signal]:
+        """Task aa7fab99: when `subject` or `body` is one of the updated
+        fields, re-run the SAME alignment create() runs so aligned_subject/
+        aligned_body/style track the NEW text -- a refreshed ontology
+        signal (rule_decisions' dedup re-post) must keep showing CURRENT
+        aligned text, never what the signal's first post produced."""
         signal = self.get(signal_id)
         if signal is None:
             return None
         for key, value in kwargs.items():
             if hasattr(signal, key):
                 setattr(signal, key, value)
+        if "subject" in kwargs or "body" in kwargs:
+            self._align(signal)
         self._conn.execute(
             "UPDATE signals SET channel=?, channel_ref=?, subject=?, body=?, "
-            "sender=?, state=?, task_id=?, matches=?, drop_reason=? WHERE id=?",
+            "sender=?, state=?, task_id=?, matches=?, drop_reason=?, "
+            "aligned_subject=?, aligned_body=?, style=? WHERE id=?",
             (
                 signal.channel, signal.channel_ref, signal.subject, signal.body,
                 signal.sender, signal.state, signal.task_id,
-                json.dumps(signal.matches), signal.drop_reason, signal_id,
+                json.dumps(signal.matches), signal.drop_reason,
+                signal.aligned_subject, signal.aligned_body,
+                json.dumps(signal.style), signal_id,
             ),
         )
         self._conn.commit()
