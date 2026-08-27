@@ -36,6 +36,16 @@ its body in place rather than posting a second one. A rule whose focus
 count reaches zero (every violator either fixed for real or exempted)
 resolves its own open signal and posts nothing new.
 
+A DROPPED signal is excluded from that dedup lookup on purpose (task
+2d315628): once the owner drops a rule's signal, a re-validation at the
+SAME count must not nag again -- the drop stands, and nothing new posts.
+Only a CHANGED count opens a fresh signal (a new id, the same
+"rule:<name>" channel_ref -- SignalStore.create() is a plain INSERT with
+no upsert on channel_ref, so nothing there needed to change), whose body
+names the move ("Count moved from 8 to 9 since you dropped this.") and
+which then becomes the dedup target for later re-validations. The old
+dropped row is never touched again.
+
 signal.state values this module writes -- "resolved" (accept, codify, or
 exempt reaching zero) and "promoted" (fix) -- are deliberately NOT in
 models.signal.SIGNAL_STATES (out of this task's allowed_files): nothing
@@ -250,16 +260,22 @@ def _focus_labels(project: str, focus: list[str]) -> list[str]:
     return labels
 
 
-def _rule_signal_body(project: str, row: dict, remaining: list[str]) -> str:
-    """Simplified Technical English: short sentences, one idea each."""
+def _rule_signal_body(project: str, row: dict, remaining: list[str],
+                       dropped_count: Optional[int] = None) -> str:
+    """Simplified Technical English: short sentences, one idea each.
+    `dropped_count`, when given, is the focus count the owner's last drop
+    of this rule's signal recorded -- names the move from that count to
+    the current one (task 2d315628), so a re-opened signal says why it
+    came back instead of looking like a silent duplicate."""
     n = len(remaining)
     cls = _target_class_label(project, row["name"])
     noun = f"{cls} record" if n == 1 else f"{cls} records"
     labels = _focus_labels(project, remaining)
-    lines = [
-        row.get("message") or "This rule failed.",
-        f"It found {n} {noun} that fail this rule.",
-    ]
+    lines = [row.get("message") or "This rule failed."]
+    if dropped_count is not None:
+        lines.append(
+            f"Count moved from {dropped_count} to {n} since you dropped this.")
+    lines.append(f"It found {n} {noun} that fail this rule.")
     if labels:
         lines.append(f"Examples: {', '.join(labels)}.")
     derived = row.get("derived_from") or ""
@@ -277,6 +293,20 @@ def _find_open_signal(project: str, channel_ref: str) -> Optional[Signal]:
     for s in store.list(limit=500):
         if s.channel_ref == channel_ref and s.state not in _CLOSED_STATES:
             return s
+    return None
+
+
+def _dropped_count(store: SignalStore, channel_ref: str) -> Optional[int]:
+    """The focus count recorded on the most recently DROPPED signal for
+    `channel_ref`, or None when there is no dropped row to compare
+    against (task 2d315628). store.list() already orders newest-arrived
+    first, so the first dropped match is the owner's most recent drop --
+    that row's `matches.focus` is never touched by drop_signal() itself
+    (it only writes state/drop_reason), so it still holds the count as it
+    stood at the moment of the drop."""
+    for s in store.list(limit=500):
+        if s.channel_ref == channel_ref and s.state == "dropped":
+            return len((s.matches or {}).get("focus") or [])
     return None
 
 
@@ -320,16 +350,27 @@ def on_rules_validated(project: str, report_rows: list[dict]) -> None:
         title = row.get("title") or name
         cls = _target_class_label(project, name)
         subject = f"Rule {title} fires on {len(remaining)} {cls}"
-        body = _rule_signal_body(project, row, remaining)
 
         if existing is not None:
+            body = _rule_signal_body(project, row, remaining)
             _update_signal_body(store, existing.id, subject, body, remaining, name)
-        else:
-            store.create(Signal(
-                project=project, channel="ontology", channel_ref=channel_ref,
-                subject=subject, body=body,
-                matches={"rule": name, "focus": remaining},
-            ))
+            continue
+
+        # No open signal. If the owner dropped this rule's signal, the
+        # drop stands as long as the count has not moved -- post nothing
+        # (task 2d315628: no nag on an unchanged rebuild). A resolved or
+        # promoted row falls straight through to a fresh post, unchanged
+        # from before this task.
+        dropped_count = _dropped_count(store, channel_ref)
+        if dropped_count is not None and dropped_count == len(remaining):
+            continue
+
+        body = _rule_signal_body(project, row, remaining, dropped_count)
+        store.create(Signal(
+            project=project, channel="ontology", channel_ref=channel_ref,
+            subject=subject, body=body,
+            matches={"rule": name, "focus": remaining},
+        ))
 
 
 # ---------------------------------------------------------------------
