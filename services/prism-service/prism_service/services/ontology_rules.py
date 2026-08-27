@@ -153,13 +153,14 @@ def _rule_catalog_impl(project: str | None = None) -> list[dict]:
         PREFIX sh: <{_SH}>
         PREFIX rdfs: <{_RDFS}>
         PREFIX o: <{NS}>
-        SELECT ?rule ?target ?name ?desc ?msg ?derived WHERE {{
+        SELECT ?rule ?target ?name ?desc ?msg ?derived ?verified WHERE {{
             ?node a sh:NodeShape ; sh:targetClass ?target .
             {{ ?node sh:property ?rule }} UNION {{ ?node sh:sparql ?rule }}
             OPTIONAL {{ ?rule sh:name ?name }}
             OPTIONAL {{ ?rule sh:description ?desc }}
             OPTIONAL {{ ?rule sh:message ?msg }}
             OPTIONAL {{ ?rule o:derivedFrom ?derived }}
+            OPTIONAL {{ ?rule o:verifiedBy ?verified }}
         }}
     """
     # One row per RULE. A constraint shared by several node shapes (the
@@ -178,6 +179,7 @@ def _rule_catalog_impl(project: str | None = None) -> list[dict]:
                 "description": str(row.desc) if row.desc else "",
                 "message": str(row.msg) if row.msg else "",
                 "derived_from": _derived_from_local(str(row.derived)) if row.derived else "",
+                "verified_by": str(row.verified) if row.verified else "",
             }
         if str(row.target) not in entry["target_classes"]:
             entry["target_classes"].append(str(row.target))

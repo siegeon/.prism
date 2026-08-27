@@ -521,6 +521,81 @@ def test_installed_rule_fires_on_its_violating_fixture_and_stays_quiet_on_compli
         drafted["name"], list(quiet),
         "the installed rule fired on its own compliant fixture")
 
+    # o:verifiedBy: the fixture proof above becomes a durable, committed
+    # regression test the moment it passes, linked from the rule's own
+    # URI (owner 2026-08-27: "the ontology should work with the code and
+    # the rules to ensure that rules are covered by unit/int tests...
+    # tied back to the code").
+    from prism_service.config import project_data_dir
+    from prism_service.services import task_workspace
+
+    slug = drafted["name"].replace("-", "_")
+    test_rel = f"services/prism-service/tests/unit/law/test_promoted_{slug}.py"
+    fn_name = f"test_{slug}_fires_on_violating_and_stays_quiet_on_compliant"
+    test_ref = f"{test_rel}::{fn_name}"
+
+    repo_root = task_workspace._prism_repo_root()
+    test_path = repo_root / test_rel
+    assert test_path.exists(), test_path
+    content = test_path.read_text(encoding="utf-8")
+    assert "RULE_TTL" in content, content
+    assert "VIOLATING_FIXTURE" in content, content
+    assert "COMPLIANT_FIXTURE" in content, content
+    assert f"def {fn_name}" in content, content
+
+    shapes_path = project_data_dir(project) / "ontology" / "promoted-shapes.ttl"
+    shapes_text = shapes_path.read_text(encoding="utf-8")
+    assert f'o:{drafted["name"]} o:verifiedBy "{test_ref}" .' in shapes_text, shapes_text
+
+    catalog = ontology_rules.rule_catalog(project)
+    row = next(r for r in catalog if r["name"] == drafted["name"])
+    assert row.get("verified_by") == test_ref, row
+
+
+def test_generated_verification_test_for_the_promoted_rule_actually_runs_green(
+    real_project, no_real_worktree,
+):
+    """The fixture proof _install_rule() turns into a test file is not
+    just well-formed-looking text -- run IT, standalone, via a fresh
+    pytest invocation, and require it to pass for real."""
+    import subprocess
+    import sys
+
+    project = real_project
+    from prism_service.api import conductor_flow as flow
+    from prism_service.project_context import get_project
+    from prism_service.services import law_promotion, task_workspace
+
+    memory = _principle_memory(project)
+    task_svc = get_project(project).task_svc
+    assert task_svc is not None  # keeps the import honest / used
+
+    started = law_promotion.start_promotion(project, memory.id)
+    drafted = started["draft"]
+    run_task_id = started["run_task_id"]
+
+    flow.flow_report(flow.Ident(
+        task_id=run_task_id, session_id="owner-review",
+        outcome="approved", expected_step="review", override=True),
+        project=project)
+    result = law_promotion.install_pending(project, task_id=run_task_id)
+    assert result["ok"], result
+
+    slug = drafted["name"].replace("-", "_")
+    repo_root = task_workspace._prism_repo_root()
+    test_path = (repo_root / "services" / "prism-service" / "tests" /
+                 "unit" / "law" / f"test_promoted_{slug}.py")
+    assert test_path.exists(), test_path
+
+    service_root = repo_root / "services" / "prism-service"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test_path), "-q",
+         "-o", "faulthandler_timeout=120"],
+        cwd=str(service_root), capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout, proc.stdout
+
 
 def test_install_refuses_a_rule_skeleton_with_no_demonstrable_fixture(project):
     from prism_service.project_context import get_project

@@ -158,8 +158,9 @@ def decorated_report(project: str) -> dict:
 
     decisions = _load_decisions(project)
     graph = OntologyGraph(project)
-    derived_by_name = {r["name"]: r.get("derived_from", "")
-                        for r in ontology_rules.rule_catalog(project)}
+    catalog = ontology_rules.rule_catalog(project)
+    derived_by_name = {r["name"]: r.get("derived_from", "") for r in catalog}
+    verified_by_name = {r["name"]: r.get("verified_by", "") for r in catalog}
 
     rules = []
     need_decision = 0
@@ -179,6 +180,7 @@ def decorated_report(project: str) -> dict:
                       for iri in remaining[:20]],
             "validated_at": r["validated_at"],
             "derived_from": derived_by_name.get(r["name"], ""),
+            "verified_by": verified_by_name.get(r["name"], ""),
         }
         accepted = (decisions.get(r["name"]) or {}).get("accepted")
         if accepted:
