@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.123"
+PRISM_VERSION = "7.13.124"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.124: feat: added \"quickfix\" as a real, first-class registered PRISM "
+    "workflow (task 811fcce0, epic 3baadd19), following the align_language/"
+    "triage precedent -- never an external script. The owner asked for small, "
+    "already-diagnosed fixes (oracle, likely_misfire, and a pinned test all "
+    "written up front) to skip the full conductor SDLC's story/plan/red/green "
+    "gate ceremony. models/workflow.py QUICKFIX_STEPS (intake -> apply_fix -> "
+    "verify_fix -> done) has no gate at all. Per the ontology's Bot/Behavior "
+    "split: this workflow is the deterministic control-flow layer; only "
+    "apply_fix (role dev) is agentic -- verify_fix is deterministic (agent="
+    "None, same as intake/done), a real pinned-suite pytest run, never an LLM "
+    "judgment call. Registered in api/workflows.py's catalog next to "
+    "align_language, and .prism/behaviors/quickfix/bot.json added matching "
+    "conductor/bot.json's own {id, name, fsms:[{fsmId, behaviorIds}]} shape. "
+    "New tests/unit/test_quickfix_workflow.py (5 tests) pins the 4-step shape/"
+    "order/types/agents, WORKFLOWS registration, steps_for resolution, and "
+    "that no step ever carries a validation rubric (regression guard against "
+    "wiring conductor_service.py, a control_plane.POLICY_FILES entry, into "
+    "this workflow). Updated test_api_workflows.py's catalog-id pin to "
+    "include \"quickfix\". "
     "7.13.118: task 292e8ea2 retire-dead-code sweep, first slice -- removed "
     "the version-pinned docker-compose duplicate (v5.1 preview) and the "
     "three orphan PLAT-0042 task docs (their story, query decomposition, "

@@ -200,6 +200,39 @@ DEFAULT_PROMOTE_TO_LAW_BEHAVIOR: dict = {
     "target": "project",
 }
 
+# Quickfix workflow (task 811fcce0): step content for the catalog entry,
+# same role PROMOTE_TO_LAW_STEP_CONTENT plays above -- kept separate since
+# this workflow's step ids (intake/apply_fix/verify_fix/done) aren't in
+# models.roles.STEP_ROLES. verify_fix's own text names the check as a real
+# subprocess run, not an LLM judgment call -- see the doc comment on
+# models.workflow.QUICKFIX_STEPS for the Bot/Behavior reasoning.
+QUICKFIX_STEP_CONTENT = {
+    "intake": (
+        "A task the owner already fully diagnosed -- oracle, "
+        "likely_misfire, and a pinned test all written up front",
+        "Register the task and enter the quickfix flow",
+        "A quickfix task ready for its fix",
+    ),
+    "apply_fix": (
+        "The task's own oracle and pinned test",
+        "Make the exact change the oracle describes and run the pinned "
+        "test",
+        "The fix, committed, with its pinned test passing",
+    ),
+    "verify_fix": (
+        "The applied fix",
+        "Re-run the full pinned suite from workspace root as an "
+        "independent, deterministic check -- a real pytest run, never a "
+        "judgment call -- then commit and push",
+        "A green suite, pushed to dev and main",
+    ),
+    "done": (
+        "A verified quickfix",
+        "Close out this quickfix",
+        "A shipped, deterministic fix",
+    ),
+}
+
 GATE_AUTHORITY = {
     "story_gate": (
         "Decided by an independent Steward — machine-adjudicable when the "
@@ -1071,6 +1104,53 @@ def _promote_to_law_workflow(project: str, svc=None) -> dict:
     }
 
 
+def _quickfix_workflow(project: str, svc=None) -> dict:
+    """The quickfix workflow's own catalog entry (task 811fcce0, epic
+    3baadd19): a sixth first-class root workflow, built from
+    models.workflow.WORKFLOWS["quickfix"] the same way
+    _align_language_workflow builds align_language's -- persona resolves
+    off each step's own `agent` (falling back to "sm"), and no step
+    carries an `authority` string, because this workflow has no gate at
+    all. See models.workflow.QUICKFIX_STEPS's own doc comment for why
+    verify_fix's `agent` is None (a deterministic subprocess check, not
+    an LLM judgment call) even though its `type` stays "agent"."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    steps = []
+    for step in WORKFLOWS["quickfix"]:
+        persona = step["agent"] or "sm"
+        content = QUICKFIX_STEP_CONTENT[step["id"]]
+        steps.append({
+            "id": step["id"],
+            "agent": step["agent"],
+            "type": step["type"],
+            "validation": step["validation"],
+            "persona": persona,
+            "persona_label": _persona_label(persona),
+            "purpose": step["id"].replace("_", " ").capitalize(),
+            "input": content[0],
+            "action": content[1],
+            "output": content[2],
+            "authority": "",
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
+    return {
+        "id": "quickfix",
+        "name": "Quickfix",
+        "description": (
+            "A small, already-diagnosed fix with its own oracle and "
+            "pinned test -- one agentic step, one deterministic check, "
+            "no gate. Runs when a task is fully scoped and small enough "
+            "to skip the full conductor SDLC."
+        ),
+        "steps": steps,
+        "bots": [],
+        "occupancy": occupancy,
+    }
+
+
 def _knowledge_health_workflow(project: str) -> dict:
     """The Knowledge health scoreboard's own catalog entry (task
     b1971944, epic 61821448): a seventh root workflow, same posture as
@@ -1194,14 +1274,18 @@ def get_workflows(project: str = Query("default")) -> dict:
     # as triage above -- no parent_id, since it is not one of conductor's
     # own nested capabilities.
     align_language = _align_language_workflow(project, svc=_svc)
-    # promote_to_law (task c5650403): a sixth root workflow, same posture
+    # quickfix (task 811fcce0): a sixth root workflow, same posture as
+    # triage/align_language above -- no parent_id, since it is not one of
+    # conductor's own nested capabilities.
+    quickfix = _quickfix_workflow(project, svc=_svc)
+    # promote_to_law (task c5650403): a seventh root workflow, same posture
     # as triage/align_language above -- no parent_id.
     promote_to_law = _promote_to_law_workflow(project, svc=_svc)
-    # knowledge_health (task b1971944): a seventh root workflow, same
+    # knowledge_health (task b1971944): an eighth root workflow, same
     # posture -- no parent_id.
     knowledge_health = _knowledge_health_workflow(project)
-    catalog = [conductor, validation, triage, align_language, promote_to_law,
-              knowledge_health, *conductor_behaviors]
+    catalog = [conductor, validation, triage, align_language, quickfix,
+              promote_to_law, knowledge_health, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
