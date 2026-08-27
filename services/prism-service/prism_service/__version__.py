@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.112"
+PRISM_VERSION = "7.13.113"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7404,7 +7404,7 @@ PRISM_VERSION_NOTES += (
     "there was never an upsert); when the count moves the rule opens a new "
     "signal whose body says 'Count moved from 8 to 9 since you dropped "
     "this.' Resolved and promoted rows keep their behaviour."
-    "\n7.13.112: the owner's answers to the four ontology rule questions "
+    "\n7.13.113 (built as 7.13.112 beside prism.qa's 7.13.112 ship_worker fix, relabelled): the owner's answers to the four ontology rule questions "
     "(mx-536732). task 3c774abd: plan_gate on a ROOT implement task waits "
     "for the user ('Plan rubric passed (machine review). Your approval "
     "releases the plan.', readiness adapter=human, task page 'AWAITING "
