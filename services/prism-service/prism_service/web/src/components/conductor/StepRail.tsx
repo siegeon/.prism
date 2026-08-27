@@ -90,7 +90,7 @@ function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open }: {
   const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
   const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
   return (
-    <div className="ml-auto flex items-center gap-2 flex-1 min-w-0 max-w-[420px] pl-6">
+    <div className="ml-auto flex items-center gap-2 w-[220px] flex-none pl-6">
       <div className="flex-1 min-w-0 flex flex-col gap-1">
         {/* Owner 2026-07-19: render the bar ONLY when this step actually spent
             something. A gate with no real tokens gets NO grey track (was a

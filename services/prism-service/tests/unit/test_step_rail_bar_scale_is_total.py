@@ -84,3 +84,46 @@ def test_bars_scale_to_sum_not_max():
     # arg at either call site).
     assert src.count("sumTokens={sumTokens} sumDur={sumDur}") >= 2, \
         "both StepMeta/GateRow call sites must pass the sum-based sumTokens/sumDur props"
+
+
+def test_step_meta_track_width_is_fixed_not_data_dependent():
+    """Follow-up bug (still visible after the sum-based pct fix, task
+    c5b70c27): StepMeta's OUTER wrapper div sized the bar's track with
+    `flex-1` + `max-w-[420px]` — a flex-grown width capped, not fixed. That
+    made the track's actual rendered width depend on how much horizontal
+    space was left over after each row's own label text, so rows with
+    longer labels rendered a visibly NARROWER bar even though the fill pct
+    math was already correct. The fix is a FIXED pixel width (`w-[Npx]` with
+    `flex-none`) so every row's track renders at the same width regardless
+    of sibling label length.
+    """
+    src = _read()
+
+    step_meta_idx = src.index("function StepMeta")
+    next_fn_idx = src.index("\nfunction ", step_meta_idx + 1)
+    step_meta_src = src[step_meta_idx:next_fn_idx]
+
+    import re
+
+    # Extract the OUTER wrapper's className specifically — the first
+    # `<div className="...">` in StepMeta's returned JSX (the row-level
+    # track container), not the inner bar/caption column.
+    outer_match = re.search(r'<div className="([^"]*)">', step_meta_src)
+    assert outer_match, "could not locate StepMeta's outer wrapper div"
+    outer_class = outer_match.group(1)
+    outer_tokens = outer_class.split()
+
+    # The wrapper must declare a fixed pixel width combined with flex-none —
+    # not a flex-grown/capped sizing mechanism.
+    assert any(re.fullmatch(r"w-\[\d+px\]", t) for t in outer_tokens), \
+        f"StepMeta's outer wrapper must use a fixed pixel width class (w-[Npx]); got: {outer_class!r}"
+    assert "flex-none" in outer_tokens, \
+        f"StepMeta's outer wrapper must be flex-none so its width is not flex-grown; got: {outer_class!r}"
+
+    # The old data-dependent sizing mechanism must be gone from the wrapper
+    # entirely — a row-length-dependent width is exactly the bug this test
+    # guards against.
+    assert "flex-1" not in outer_tokens, \
+        f"the outer wrapper must not use flex-1 (flex-grown) sizing — width must be fixed, not data-dependent; got: {outer_class!r}"
+    assert not any(t.startswith("max-w-") for t in outer_tokens), \
+        f"the old max-w-[...] CAP (not a fixed width) must not remain on StepMeta's outer wrapper; got: {outer_class!r}"
