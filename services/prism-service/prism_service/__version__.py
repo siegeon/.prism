@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.113"
+PRISM_VERSION = "7.13.114"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7455,4 +7455,20 @@ PRISM_VERSION_NOTES += (
     "right after `git init --bare` in _unshipped_workspace(). (3) The "
     "third failure, an unrelated stall-guard timing issue, is already "
     "tracked separately as task 2422eaa2 and is untouched here."
+)
+PRISM_VERSION_NOTES += (
+    " 7.13.114: fix StepRail's per-step duration/token bars so every bar's "
+    "length is directly comparable to every other bar (task c5b70c27, owner: "
+    "'the bar lengths are different lengths and hard to look at'). Root "
+    "cause: StepRail.tsx scaled each step's bar against the SINGLE HEAVIEST "
+    "stage in the run (maxTokens/maxDur), so a step's bar length depended on "
+    "how big the biggest OTHER stage happened to be, not on anything about "
+    "the step itself -- bars were not comparable to each other. Fixed by "
+    "scaling both branches (duration AND tokens) against sumTokens/sumDur, "
+    "the TOTAL across every stage in the run, so a bar's width is now that "
+    "stage's proportional SHARE of the whole run (100% = this step took ALL "
+    "the elapsed time/tokens so far). Pinned by "
+    "tests/unit/test_step_rail_bar_scale_is_total.py, which source-reads "
+    "StepRail.tsx and asserts no maxTokens/maxDur denominator remains and "
+    "that both the token and duration branches divide by the sum."
 )

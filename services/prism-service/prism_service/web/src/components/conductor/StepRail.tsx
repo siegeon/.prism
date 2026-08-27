@@ -74,17 +74,19 @@ function stageDurations(turns: StepTurn[]): Record<string, number> {
   }
   return out;
 }
-// Per-stage metric rendered as a RELATIVE bar (filled vs the heaviest stage)
-// with the numbers tucked underneath — fills the row's empty middle and lets
-// you eyeball where the tokens/time went across the run. The bar tracks tokens
-// when any stage spent tokens, else duration; the caption shows both. Replaces
-// the redundant passed-pill — the spine ✓ already says "done".
-function StepMeta({ durMs, tokens, maxTokens, maxDur, hasTurns, open }: {
-  durMs?: number; tokens: number; maxTokens: number; maxDur: number; hasTurns: boolean; open: boolean;
+// Per-stage metric rendered as a RELATIVE bar (filled vs the TOTAL across the
+// run) with the numbers tucked underneath — fills the row's empty middle and
+// lets you eyeball where the tokens/time went across the run. A bar at 100%
+// means "this step took ALL of the elapsed time/tokens so far", so every
+// bar's width is directly comparable to every other bar's. The bar tracks
+// tokens when any stage spent tokens, else duration; the caption shows both.
+// Replaces the redundant passed-pill — the spine ✓ already says "done".
+function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open }: {
+  durMs?: number; tokens: number; sumTokens: number; sumDur: number; hasTurns: boolean; open: boolean;
 }) {
-  const useTokens = maxTokens > 0;
+  const useTokens = sumTokens > 0;
   const val = useTokens ? tokens : (durMs ?? 0);
-  const max = useTokens ? maxTokens : maxDur;
+  const max = useTokens ? sumTokens : sumDur;
   const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
   const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
   return (
@@ -203,13 +205,14 @@ export default function StepRail({
   const steps = useWorkflowSteps();
   const byStep = turnsByStep(turns ?? []);
   const durByStep = stageDurations(turns ?? []);
-  // Bar scale: the heaviest stage across the run (so bars are relative to it).
-  let maxTokens = 0, maxDur = 0;
+  // Bar scale: the TOTAL across every stage in the run (so each bar's width
+  // is that stage's share of the whole run, and bars are directly
+  // comparable to each other — not each independently normalized against
+  // the single heaviest stage, which made bar lengths look arbitrary).
+  let sumTokens = 0, sumDur = 0;
   for (const s of steps) {
-    const tk = stepTokens?.[s.id] ?? 0;
-    if (tk > maxTokens) maxTokens = tk;
-    const d = durByStep[s.id] ?? 0;
-    if (d > maxDur) maxDur = d;
+    sumTokens += stepTokens?.[s.id] ?? 0;
+    sumDur += durByStep[s.id] ?? 0;
   }
   const curIdx = steps.findIndex((s) => s.id === step);
   // Pulse ONLY when genuinely being driven now (a real recent conductor
@@ -315,7 +318,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} proofType={proofType} completion={completion} gateReadiness={cur ? gateReadiness : undefined} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} proofType={proofType} completion={completion} gateReadiness={cur ? gateReadiness : undefined} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -358,7 +361,7 @@ export default function StepRail({
                               {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
                             </span>
                           )}
-                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
+                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} hasTurns={hasTurns} open={rowOpen} />}
                           {cur && hasTurns && (
                             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
                           )}
@@ -505,8 +508,8 @@ function GateCompletionBlock({ c }: { c: GateCompletion }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDur, proofType, completion, gateReadiness }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; tokens: number; maxTokens: number; maxDur: number; proofType?: string; completion?: GateCompletion;
+function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, sumTokens, sumDur, proofType, completion, gateReadiness }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; tokens: number; sumTokens: number; sumDur: number; proofType?: string; completion?: GateCompletion;
   gateReadiness?: GateSeveritySnapshot["readiness"];
 }) {
   const [receipt, setReceipt] = useState(false);
@@ -548,7 +551,7 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDu
             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
-          <StepMeta durMs={durMs} tokens={tokens} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+          <StepMeta durMs={durMs} tokens={tokens} sumTokens={sumTokens} sumDur={sumDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
         )}
       </button>
       {open && g && (
