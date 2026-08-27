@@ -115,8 +115,13 @@ def test_step_meta_track_width_is_fixed_not_data_dependent():
 
     # The wrapper must declare a fixed pixel width combined with flex-none —
     # not a flex-grown/capped sizing mechanism.
-    assert any(re.fullmatch(r"w-\[\d+px\]", t) for t in outer_tokens), \
-        f"StepMeta's outer wrapper must use a fixed pixel width class (w-[Npx]); got: {outer_class!r}"
+    # Owner 2026-08-27 ("this bar is not taking up the length of the area
+    # STILL ... it should be like 40%-60%"): the width is a fixed SHARE of
+    # the row (w-[N%], 40..60) or a fixed pixel width -- either is
+    # label-independent, which is what this test guards; a 220px stub at the
+    # right edge of a 900px row was the bug the owner saw.
+    assert any(re.fullmatch(r"w-\[(\d+px|[4-6]\d%)\]", t) for t in outer_tokens), \
+        f"StepMeta's outer wrapper must use a fixed width (w-[Npx]) or a fixed row share (w-[40-60%]); got: {outer_class!r}"
     assert "flex-none" in outer_tokens, \
         f"StepMeta's outer wrapper must be flex-none so its width is not flex-grown; got: {outer_class!r}"
 

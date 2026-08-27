@@ -89,8 +89,12 @@ function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open, isGate }: 
   const max = useTokens ? sumTokens : sumDur;
   const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
   const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
+  // Owner 2026-08-27: "this bar is not taking up the length of the area
+  // STILL ... it should be like 40%-60%" -- the track is HALF the row (same
+  // on every row, so it stays label-independent), never a 220px stub at the
+  // right edge.
   return (
-    <div className="ml-auto flex items-center gap-2 w-[220px] flex-none pl-6">
+    <div className="ml-auto flex items-center gap-2 w-[50%] min-w-[220px] flex-none pl-6">
       <div className="flex-1 min-w-0 flex flex-col gap-1">
         {/* Owner 2026-07-19: render the bar ONLY when this step actually spent
             something. A gate with no real tokens gets NO grey track (was a
