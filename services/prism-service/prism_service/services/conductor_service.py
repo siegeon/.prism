@@ -2326,6 +2326,21 @@ class ConductorService:
         if _reach_reason:
             self._park_green_refusal(task_id, _reach_reason)
             return None
+        # PROMOTED-LAW TOOTH (task 2bfe49db, epic 61821448): a memory
+        # promoted to a SHACL rule (services/law_promotion.py, task
+        # c5650403) used to run only on a full ontology rebuild. This runs
+        # the SAME promoted rule over the task's own diff, cheaply. Reads
+        # ONLY the project's own promoted-shapes.ttl (services/law_check.py
+        # docstring). Pre-flight, abstain-only like the tooth above.
+        try:
+            from prism_service.services import law_check
+            _law_reason = law_check.law_violation_reason(
+                task, self._project_name or "default")
+        except Exception:
+            _law_reason = ""
+        if _law_reason:
+            self._park_green_refusal(task_id, _law_reason)
+            return None
         # SCREEN-CLAIM + SHIPPED-NESS PRE-FLIGHT (task 8a737f2f). Two
         # ABSTAIN-ONLY teeth, computed together so a single refusal names
         # BOTH counts when they co-occur (b22576bb replay, test C3):
