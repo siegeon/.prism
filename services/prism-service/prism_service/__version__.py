@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.102"
+PRISM_VERSION = "7.13.103"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7262,7 +7262,7 @@ PRISM_VERSION_NOTES += (
     "itself, per that task's own regression test."
 )
 PRISM_VERSION_NOTES += (
-    "v7.13.102: a reported step FAILURE never refreshed a live-open task "
+    "v7.13.103: a reported step FAILURE never refreshed a live-open task "
     "tab (task 1728c54b). api/conductor_flow.py's flow_report `elif "
     "failed:` branch recorded the failure via a raw "
     "task_svc.record_history() insert and returned WITHOUT ever calling "
