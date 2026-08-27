@@ -187,7 +187,22 @@ def _find_transcript_by_marker(transcripts: list[Path], marker: str) -> Path:
     )
 
 
+_SAVED_RESULT_RE = re.compile(r"saved to (\S+?\.txt)")
+
+
 def _extract_conventions(result_text: str) -> list[str]:
+    # The real context_bundle reply is ~1.5 MB (active_tasks + context_pack
+    # measured at 748 KB and 756 KB on drive wf_c7bae879), so the harness
+    # replaces the inline tool_result with "exceeds maximum allowed tokens
+    # ... saved to <path>.txt". The conventions the tool RETURNED live in that
+    # file, so follow the pointer -- reading the notice alone would fail AC-2
+    # on every drive regardless of what the drive did (task 3a3f90da).
+    m = _SAVED_RESULT_RE.search(result_text or "")
+    if m and "conventions" not in result_text:
+        try:
+            result_text = Path(m.group(1)).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
     try:
         obj = json.loads(result_text)
     except (json.JSONDecodeError, TypeError):
