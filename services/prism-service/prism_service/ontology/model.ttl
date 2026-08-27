@@ -258,3 +258,36 @@ o:permalink a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:string ;
 o:projectKnown a rdf:Property ; rdfs:domain o:JiraIssue ; rdfs:range xsd:boolean ;
     rdfs:label "projectKnown" ;
     rdfs:comment "Set at emission time from the same known-project set parse() enforces." .
+
+# ---------------------------------------------------------------------
+# Bot — its own term, NOT a subclass of o:Agent (task 8bcd4cb3, epic
+# 12029f92, owner 2026-08-27 mx-0e5a88): the top level is a Bot, a
+# tier-1 deterministic workflow run as a finite state machine; the
+# agentic Behaviors are partOf that FSM, one tier down.
+# ---------------------------------------------------------------------
+
+o:Bot a rdfs:Class ; rdfs:label "Bot" ;
+    rdfs:comment "A tier-1 deterministic workflow: it runs one FSM and delegates the agentic work to Behaviors." .
+o:FSM a rdfs:Class ; rdfs:label "FSM" ;
+    rdfs:comment "A finite state machine: the States and Transitions one Bot runs." .
+o:State a rdfs:Class ; rdfs:label "State" ;
+    rdfs:comment "One named position in an FSM." .
+o:Transition a rdfs:Class ; rdfs:label "Transition" ;
+    rdfs:comment "One edge of an FSM: from one State to another." .
+o:Behavior a rdfs:Class ; rdfs:label "Behavior" ;
+    rdfs:comment "A tier-2 agentic unit of work that is part of an FSM." .
+
+o:runsFsm a rdf:Property ; rdfs:domain o:Bot ; rdfs:range o:FSM ;
+    rdfs:label "runsFsm" ; rdfs:comment "The FSM a Bot runs." .
+o:hasState a rdf:Property ; rdfs:domain o:FSM ; rdfs:range o:State ;
+    rdfs:label "hasState" ; rdfs:comment "A State that belongs to an FSM." .
+o:hasTransition a rdf:Property ; rdfs:domain o:FSM ; rdfs:range o:Transition ;
+    rdfs:label "hasTransition" ; rdfs:comment "A Transition that belongs to an FSM." .
+o:fromState a rdf:Property ; rdfs:domain o:Transition ; rdfs:range o:State ;
+    rdfs:label "fromState" ; rdfs:comment "The State a Transition leaves." .
+o:toState a rdf:Property ; rdfs:domain o:Transition ; rdfs:range o:State ;
+    rdfs:label "toState" ; rdfs:comment "The State a Transition enters." .
+o:partOf a rdf:Property ; rdfs:domain o:Behavior ; rdfs:range o:FSM ;
+    rdfs:label "partOf" ; rdfs:comment "The FSM a Behavior is part of." .
+o:tier a rdf:Property ; rdfs:range xsd:integer ;
+    rdfs:label "tier" ; rdfs:comment "1 for a deterministic Bot, 2 for an agentic Behavior." .

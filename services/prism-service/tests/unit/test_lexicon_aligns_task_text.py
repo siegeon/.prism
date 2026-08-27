@@ -285,7 +285,7 @@ def test_ontology_page_renders_lexicon_synonyms_in_its_own_jsx_branch():
 # ----------------------------------------------------------------------
 
 _SINGLE_WORD_SYNONYMS_ALLOWED = {
-    "ticket", "PR", "MR", "ADR", "doc", "assistant",
+    "ticket", "PR", "MR", "ADR", "doc", "assistant", "behaviour",
     # "bot" left this list on 2026-08-27 (mx-0e5a88): a Bot is a tier-1
     # deterministic workflow, not an Agent; see test_bot_is_never_a_synonym.
 }
