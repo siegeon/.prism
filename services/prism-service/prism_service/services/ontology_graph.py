@@ -810,8 +810,13 @@ class OntologyGraph:
                 g.add((u, CLS("inDomain"), du))
             for target_id in m.get("cites") or []:
                 g.add((u, CLS("cites"), U("memory", target_id)))
-            task_id = str(m.get("evidence_task") or "").strip()
-            if task_id:
+            # task 6e858c89: every task the evidence names, in every shape
+            # (task / task_id / tasks); "evidence_task" stays for old rows.
+            _tasks = list(m.get("evidence_tasks") or [])
+            _one = str(m.get("evidence_task") or "").strip()
+            if _one and _one not in _tasks:
+                _tasks.append(_one)
+            for task_id in _tasks:
                 g.add((u, CLS("evidencedBy"), U("task", task_id)))
             for path in m.get("evidence_files") or []:
                 g.add((u, CLS("evidencedBy"), U("document", path)))
