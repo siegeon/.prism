@@ -48,9 +48,10 @@ BASE_CATALOG = [
     {"id": "Agent", "cls": "Agent", "source": "workflows", "bucket": "agent"},
     {"id": "Provider", "cls": "Provider", "source": "integrations", "bucket": "provider"},
     {"id": "Task", "cls": "Task", "source": "tasks", "bucket": "task"},
-    # QueueItem <- SIGNALS (task 785bb4ce): instances are typed o:Signal, a
-    # subclass of o:QueueItem in model.ttl, so both class queries count them.
-    {"id": "QueueItem", "cls": "Signal", "source": "signals", "bucket": "signal"},
+    # Signal <- SIGNALS (task 785bb4ce, then collapsed from o:QueueItem's
+    # catalog id onto its own name by task cacfb628: o:QueueItem was a
+    # Refused Bequest, one class hiding behind two names).
+    {"id": "Signal", "cls": "Signal", "source": "signals", "bucket": "signal"},
     {"id": "Document", "cls": "Document", "source": "brain", "bucket": "document"},
     {"id": "Folder", "cls": "Folder", "source": "brain", "bucket": "folder"},
 ]
@@ -516,8 +517,9 @@ class OntologyGraph:
                        signal_arrived_at: dict[str, str],
                        signal_enrichment: dict[str, dict] | None = None,
                        signal_body: dict[str, str] | None = None) -> None:
-        """Signal rows -> o:Signal (rdfs:subClassOf o:QueueItem in model.ttl,
-        task 785bb4ce: the Queue holds SIGNALS, not tasks), with
+        """Signal rows -> o:Signal (task 785bb4ce: the Queue holds SIGNALS,
+        not tasks; task cacfb628 collapsed o:QueueItem into o:Signal, its
+        one child, so Signal carries no rdfs:subClassOf parent), with
         o:arrivedVia -> its o:Channel, o:state as a literal, o:arrivedAt
         (task 8eeb3e65's flagged-signal-is-placed rule) when known,
         rdfs:comment for its aligned body (task ed034701, mirrors
