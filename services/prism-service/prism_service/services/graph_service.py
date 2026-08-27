@@ -557,6 +557,72 @@ class GraphService:
                 pass
         return False
 
+    def purge_excluded(self) -> dict:
+        """Remove every staged file, entity, and relationship whose path
+        falls under a skipped directory (task f9e0745e).
+
+        rebuild() imports graphify's graph.json as a full snapshot (see
+        _import_graph_json below), so a stale file left sitting in the
+        graphify-src staging area gets re-emitted on every rebuild even
+        after the walker that STAGES new files starts skipping it -- the
+        entities never actually go away until the staged file does. This
+        method is the belt-and-suspenders companion to
+        BrainService.prune_orphaned_code_docs: call it once after a
+        skip-dir list changes (or after a bloat incident) and again at
+        the end of every full ingest, before rebuild().
+
+        Uses source_service.is_ingest_excluded -- a path SEGMENT match,
+        never a substring -- so "dist" inside a filename like
+        redistribute.py survives.
+
+        Returns {"unstaged", "entities_removed", "relationships_removed"}.
+        """
+        from prism_service.services.source_service import is_ingest_excluded
+
+        unstaged = 0
+        for path in list(self._staging_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(self._staging_dir).as_posix()
+            if is_ingest_excluded(rel):
+                try:
+                    path.unlink()
+                    unstaged += 1
+                except OSError:
+                    pass
+
+        entities_removed = 0
+        relationships_removed = 0
+        conn = sqlite_db.connect(self._graph_db, timeout=5.0)
+        try:
+            try:
+                rows = conn.execute(
+                    "SELECT id, file FROM entities "
+                    "WHERE file IS NOT NULL AND file != ''"
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []  # graph.db has no entities table yet -- nothing to purge
+            bad_ids = [r["id"] for r in rows if is_ingest_excluded(r["file"])]
+            for i in range(0, len(bad_ids), 200):
+                batch = bad_ids[i:i + 200]
+                ph = ",".join("?" * len(batch))
+                cur = conn.execute(
+                    f"DELETE FROM relationships "
+                    f"WHERE source_id IN ({ph}) OR target_id IN ({ph})",
+                    batch + batch,
+                )
+                relationships_removed += max(cur.rowcount, 0)
+                cur = conn.execute(
+                    f"DELETE FROM entities WHERE id IN ({ph})", batch,
+                )
+                entities_removed += max(cur.rowcount, 0)
+            conn.commit()
+        finally:
+            conn.close()
+
+        return {"unstaged": unstaged, "entities_removed": entities_removed,
+                "relationships_removed": relationships_removed}
+
     # ------------------------------------------------------------------
     # graphify invocation
     # ------------------------------------------------------------------

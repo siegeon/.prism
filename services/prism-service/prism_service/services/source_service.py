@@ -462,6 +462,24 @@ def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
                 f"{type(e).__name__}: {e}", file=sys.stderr, flush=True,
             )
 
+    # Graph purge (task f9e0745e): graph.rebuild() imports graphify's
+    # graph.json as a full snapshot of whatever is CURRENTLY STAGED, so a
+    # file staged before a skip-dir gap was fixed keeps re-emitting its
+    # entities forever unless the staged copy (and its already-imported
+    # rows) is removed directly. Independent of seen_rel/truncated -- it
+    # only asks "does this row's own path fall under a skipped dir now",
+    # so it is safe to run on every call, full walk or not.
+    purged = {"unstaged": 0, "entities_removed": 0, "relationships_removed": 0}
+    if graph is not None:
+        try:
+            purged = graph.purge_excluded()
+        except Exception as e:
+            import sys
+            print(
+                f"[ingest_source_to_brain] graph purge failed: "
+                f"{type(e).__name__}: {e}", file=sys.stderr, flush=True,
+            )
+
     rebuilt = False
     rebuild_error = ""
     if graph is not None and ingested > 0:
@@ -480,6 +498,7 @@ def ingest_source_to_brain(project: str, max_files: int = 2000) -> dict:
     return {
         "ingested": ingested, "skipped": skipped,
         "rebuilt": rebuilt, "rebuild_error": rebuild_error,
+        "purged": purged,
     }
 
 

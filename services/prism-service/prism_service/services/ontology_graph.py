@@ -63,7 +63,12 @@ _CODE_KIND_CLASS = {
     "module": "Module", "file": "Module", "interface": "Interface",
     "variable": "Variable", "constant": "Variable",
 }
-CODE_CLASSES = ["Function", "Class", "Method", "Module", "Interface", "Variable", "Code"]
+# "Rationale" (task f9e0745e) is not in _CODE_KIND_CLASS -- a rationale row
+# is typed directly in _emit_code_graph, never via _code_class_for_kind's
+# generic "Code" fallback -- but it still needs to be counted here so
+# rebuild()'s per_class summary reports it.
+CODE_CLASSES = ["Function", "Class", "Method", "Module", "Interface", "Variable",
+                "Code", "Rationale"]
 
 # Memory ExpertiseEntry.type -> o: subclass of o:Concept (model-knowledge.ttl,
 # task f5352fa1). An unmapped/blank type still gets the generic o:Concept.
@@ -664,16 +669,66 @@ class OntologyGraph:
                 g.add((fu, RDFS.label, rdflib.Literal(parent)))
             g.add((u, CLS("inFolder"), fu))
 
+    # graph.db relation -> o: property local name (task f9e0745e). Kept
+    # identical to api/xref.py's own _ONTOLOGY_EDGE_PROPERTIES set (that
+    # module reads a relation string straight through as an o: local name
+    # for the Explore mesh's edge label) so a code-graph edge means the
+    # SAME o: property whichever surface draws it.
+    _RELATION_PROPERTY = {
+        "calls": "calls", "imports": "imports", "imports_from": "imports_from",
+        "inherits": "inherits", "contains": "contains", "uses": "uses",
+        "method": "method", "rationale_for": "rationale_for",
+    }
+
     @staticmethod
     def _emit_code_graph(g, rows, U, CLS, RDF, RDFS) -> None:
+        """Type every real code-graph symbol and rationale row, and draw
+        the real edges between them (task f9e0745e, epic 61821448: "the
+        ontology holds the whole code graph"). code_symbols/code_edges
+        (ontology_prototype_projection.gather()) carry the FULL rows, not
+        a sample -- `.get()` with an empty-list default so a hand-built
+        `rows` fixture that only sets code_kinds (several existing tests)
+        still rebuilds cleanly with no code-graph nodes.
+
+        IRI shape is UNCHANGED from before this task (`code/{kind}/{name}`)
+        -- api/xref.py's neighbors route recomputes the identical IRI to
+        look up a symbol's ontology_class, so a rename here would silently
+        break the Explore page's class pill."""
         import rdflib
 
-        for kind, _count, sample in rows["code_kinds"]:
-            cls_local = _code_class_for_kind(kind)
-            for name in sample:
-                u = U("code", f"{kind}/{name}")
-                g.add((u, RDF.type, CLS(cls_local)))
+        symbols = rows.get("code_symbols") or []
+        by_id: dict = {}
+        for sym in symbols:
+            kind = str(sym.get("kind") or "")
+            name = sym.get("name") or ""
+            cls_local = _code_class_for_kind(kind) if kind != "rationale" \
+                else "Rationale"
+            u = U("code", f"{kind}/{name}")
+            by_id[sym.get("id")] = u
+            g.add((u, RDF.type, CLS(cls_local)))
+            if kind == "rationale":
+                # A rationale row's own name/label IS the comment text
+                # graphify extracted (# WHY:/# HACK:/# NOTE:) -- project
+                # it as rdfs:comment, never as a label meant for display.
+                if name:
+                    g.add((u, RDFS.comment, rdflib.Literal(name)))
+                    g.add((u, RDFS.label, rdflib.Literal(name[:80])))
+            else:
                 g.add((u, RDFS.label, rdflib.Literal(name)))
+            file_path = sym.get("file") or ""
+            if file_path:
+                g.add((u, CLS("inFile"), rdflib.Literal(file_path)))
+
+        for edge in rows.get("code_edges") or []:
+            src = by_id.get(edge.get("source"))
+            tgt = by_id.get(edge.get("target"))
+            if src is None or tgt is None:
+                continue
+            relation = str(edge.get("relation") or "").strip().lower()
+            prop = OntologyGraph._RELATION_PROPERTY.get(relation)
+            if prop is None:
+                continue  # an edge kind the ontology has no property for yet
+            g.add((src, CLS(prop), tgt))
 
     @staticmethod
     def _emit_workflow_steps(g, U, CLS, RDF, RDFS) -> None:

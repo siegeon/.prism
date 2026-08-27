@@ -33,6 +33,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+# task f9e0745e: ONE skip-dir list for every indexer. brain_engine used to
+# keep its own private copy (_EXCLUDED_PATH_SEGMENTS) that fell out of sync
+# with source_service._INGEST_SKIP_DIRS and let web_dist/web_dist_next
+# bundle files pass _should_index() straight into the graph.
+from prism_service.services.source_service import _INGEST_SKIP_DIRS
+
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
@@ -753,11 +759,13 @@ class Brain:
         ".md", ".yaml", ".yml", ".json", ".txt", ".sh",
     }
 
-    _EXCLUDED_PATH_SEGMENTS = {
-        ".claude", ".prism", "__pycache__", "node_modules", ".git",
-        ".venv", "venv", ".env", "dist", "build", ".tox",
-        ".mypy_cache", ".pytest_cache", ".overstory",
-    }
+    # task f9e0745e: this used to be a PRIVATE copy of the skip-dir list,
+    # missing web_dist/web_dist_next/worktrees/.venvs -- so a file the
+    # walker in source_service.py correctly skipped could still pass
+    # _should_index() here and get indexed anyway. One list, one owner:
+    # source_service._INGEST_SKIP_DIRS. Every indexer imports it; nobody
+    # keeps a second copy that can drift out of sync again.
+    _EXCLUDED_PATH_SEGMENTS = _INGEST_SKIP_DIRS
 
     # Role → preferred Brain domain list for system_context() filtering.
     # SM/PO/Architect: architecture decisions and docs live in expertise+md.
@@ -1584,6 +1592,13 @@ class Brain:
 
         Set PRISM_MULTIGRAN=off to fall back to the original single-tier
         semantic-only chunking (useful for A/B comparisons).
+
+        task f9e0745e: every ``entity_kind == "module"`` chunk this method
+        returns is bounded to a 4 KB head slice (see ``_cap_module_chunks``)
+        before it goes back to the caller. A changelog-style module (one
+        huge appended string, e.g. ``__version__.py``) can otherwise grow
+        past 100 KB and out-score every real symbol on every search; the
+        sliding-window tier already covers the rest of the file.
         """
         import os as _os
 
@@ -1608,7 +1623,7 @@ class Brain:
                 chunks.extend(
                     self._sliding_window_chunks(filepath, content, min_chars=2048)
                 )
-            return chunks
+            return self._cap_module_chunks(chunks)
 
         lang_name = _TS_LANG_MAP[suffix]
         parser = _get_treesitter_parser(lang_name)
@@ -1621,7 +1636,7 @@ class Brain:
             chunks = self._chunk_regex_fallback(filepath, content, lines, suffix)
 
         if not multigran:
-            return chunks
+            return self._cap_module_chunks(chunks)
 
         # Coarse tier: whole-file view, distinct from __module__ (which only
         # covers lines NOT covered by any def/class). Only worth emitting when
@@ -1642,6 +1657,32 @@ class Brain:
             self._sliding_window_chunks(filepath, content, min_chars=2048)
         )
 
+        return self._cap_module_chunks(chunks)
+
+    _MODULE_CHUNK_CAP_BYTES = 4096  # task f9e0745e
+
+    @classmethod
+    def _cap_module_chunks(cls, chunks: list[dict]) -> list[dict]:
+        """Bound every whole-module chunk (``entity_kind == "module"``) to
+        a 4 KB head slice, in place.
+
+        A module-level doc holds every top-level line the language
+        chunker did not already carve into its own definition. For most
+        files this is small, but a changelog-style module (one string
+        appended to on every release) can grow past 100 KB and then
+        answer every search query, crowding out real symbols. The
+        sliding-window tier already covers the full file byte for byte,
+        so capping the head loses no content -- it only stops one doc
+        from dominating search.
+        """
+        cap = cls._MODULE_CHUNK_CAP_BYTES
+        for chunk in chunks:
+            if chunk.get("entity_kind") != "module":
+                continue
+            content = chunk.get("content") or ""
+            encoded = content.encode("utf-8")
+            if len(encoded) > cap:
+                chunk["content"] = encoded[:cap].decode("utf-8", errors="ignore")
         return chunks
 
     def _sliding_window_chunks(
