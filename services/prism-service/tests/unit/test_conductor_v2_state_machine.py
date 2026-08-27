@@ -300,10 +300,14 @@ def test_gate_decide_reject_does_not_auto_advance(tmp_path):
     result = cond.gate_decide(t.id, action="reject", reason="needs more eyes")
 
     assert result["ok"] is True
-    assert result["gate_state"] == "failed"
+    # Superseded by test_gate_reject_rewinds_to_producing_step.py: reject
+    # still never advances FORWARD past the gate (this test's real intent),
+    # but now rewinds BACKWARD to the producing step instead of dead-ending.
+    assert result["gate_state"] == "none"
+    assert result["rewound_to"] == steps[gate_index - 1]["id"]
     refreshed = task_svc.get(t.id)
-    assert refreshed.workflow_step == steps[gate_index]["id"]
-    assert refreshed.gate_state == "failed"
+    assert refreshed.workflow_step == steps[gate_index - 1]["id"]
+    assert refreshed.gate_state == "none"
     assert refreshed.gate_reason == "needs more eyes"
 
 
@@ -321,7 +325,14 @@ def test_gate_decide_refuses_when_state_not_pending(tmp_path):
         "transitions, not a real premise claim - UNVERIFIED\n"))
     for _ in range(gate_index + 1):
         cond.advance_task(t.id)
-    cond.gate_decide(t.id, action="reject", reason="nope")
+    # Superseded by test_gate_reject_rewinds_to_producing_step.py: a single
+    # reject now rewinds instead of dead-ending at gate_state="failed" --
+    # exhaust the auto-rewind budget to genuinely reach that parked state.
+    from prism_service.services.conductor_service import MAX_AUTO_REWINDS
+    for _ in range(MAX_AUTO_REWINDS + 1):
+        task_svc.update(t.id, workflow_step=steps[gate_index]["id"],
+                        gate_state="pending")
+        cond.gate_decide(t.id, action="reject", reason="nope")
 
     # After reject the gate is 'failed'. The new contract (v6.0.31) says
     # recovery requires action='approve' AND override=True; a plain
