@@ -185,10 +185,17 @@ function TurnList({ rows }: { rows: StepTurn[] }) {
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion, gateReadiness,
+  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion, gateReadiness, workflow,
 }: {
   step?: string;
   gateState?: string;
+  // The task's own workflow (task.workflow — "implement", "triage",
+  // "align_language", "promote_to_law", "quickfix", ...). Resolves the rail
+  // to THAT workflow's own FSM steps via useWorkflowSteps below, instead of
+  // always rendering the "implement" conductor's 10-step SDLC regardless of
+  // which workflow the task is actually on. Undefined/blank falls back to
+  // the default (conductor) resolution, same as the backend's steps_for.
+  workflow?: string;
   // The SAME live readiness payload TaskDetailPage's banner reads (task
   // 8e5aa63b) — passed through so the current gate's pill quotes the shared
   // gateSeverity() label instead of a bare hardcoded "pending".
@@ -218,7 +225,7 @@ export default function StepRail({
   // Completion proof & risk — rendered in the completion gate's evidence area.
   completion?: GateCompletion;
 }) {
-  const steps = useWorkflowSteps();
+  const steps = useWorkflowSteps(workflow);
   const byStep = turnsByStep(turns ?? []);
   const durByStep = stageDurations(turns ?? []);
   // Bar scale: the TOTAL across every AGENT stage in the run (so each bar's

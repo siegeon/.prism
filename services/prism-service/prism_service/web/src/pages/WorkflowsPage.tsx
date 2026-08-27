@@ -1840,6 +1840,7 @@ export default function WorkflowsPage() {
                 activity={conductorLiveActivity}
                 reduced={reduced}
                 hideTokens
+                workflow={selectedWorkflowId}
               />
             )}
             {replayEventIndex !== null && (

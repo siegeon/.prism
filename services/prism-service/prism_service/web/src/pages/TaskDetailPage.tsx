@@ -2583,6 +2583,7 @@ export default function TaskDetailPage() {
               timeline,
               turns: history,
               stepTokens: task.step_tokens,
+              workflow: task.workflow,
             } : null}
             gate={null /* the gate DECISION lives in the top-level action
               panel on Overview now (owner: notifications must be top-level

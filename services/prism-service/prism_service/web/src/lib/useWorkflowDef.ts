@@ -384,27 +384,60 @@ function railFrom(steps: WorkflowStepDef[]): RailStep[] {
   return [INTAKE, ...steps.map((s) => ({ id: s.id, persona: s.persona, type: s.type, machine_only_gate: s.machine_only_gate }))];
 }
 
-// Tab-lifetime cache: the ordering is identical for every project and never
+// Tab-lifetime cache: the catalog is identical for every project and never
 // changes while the tab is open, so the rail must not refetch it per mount
-// (SdlcProgress renders once per task card on the board).
+// (SdlcProgress renders once per task card on the board). Caches the WHOLE
+// parsed WorkflowDef now, not just one flattened rail — a task's own
+// workflow (task.workflow: "implement", "triage", "align_language",
+// "promote_to_law", "quickfix", ...) picks a DIFFERENT catalog entry's
+// steps out of `def.workflows`, so one fetch must serve every workflow's
+// rail, not just the top-level "implement"/conductor one.
 let pending: Promise<WorkflowDef> | null = null;
-let railCache: RailStep[] | null = null;
+let defCache: WorkflowDef | null = null;
 
-/** The ordered conductor rail: intake followed by the service's FSM.
- * Returns just the intake row until the first fetch resolves — honest about
- * what it knows, rather than seeding a hardcoded list that would quietly
- * become the duplicate this module exists to delete. */
-export function useWorkflowSteps(): RailStep[] {
-  const [steps, setSteps] = useState<RailStep[]>(railCache ?? [INTAKE]);
+/** Mirrors the backend's models.task.WORKFLOW_ALIASES: a worker-facing
+ * task.workflow value that names something OTHER than its own catalog
+ * entry id. "implement" is the only one today (-> the "conductor" catalog
+ * entry) — every other named workflow (triage, align_language,
+ * promote_to_law, quickfix) stores the SAME string as its own catalog id,
+ * exactly like the backend's steps_for()/​_task_count_by_workflow's alias
+ * join, so no entry is needed for them here. */
+const WORKFLOW_ID_ALIASES: Record<string, string> = { implement: "conductor" };
+
+/** Resolves a task's own workflow (task.workflow) to its ordered rail,
+ * mirroring the backend's models.workflow.steps_for(): look up the
+ * matching catalog entry in `def.workflows` (through the alias above when
+ * needed) and use ITS steps; fall back to the top-level (conductor/
+ * "implement") steps for a blank/unknown value or an older service that
+ * hasn't sent `workflows` yet — never blank, never throws. */
+function railForWorkflow(def: WorkflowDef, workflow?: string): RailStep[] {
+  const value = (workflow ?? "").trim().toLowerCase();
+  const catalogId = WORKFLOW_ID_ALIASES[value] ?? value;
+  const entry = def.workflows?.find((w) => w.id === catalogId);
+  return railFrom(entry ? entry.steps : def.steps);
+}
+
+/** The ordered rail for one workflow: intake followed by that workflow's own
+ * FSM steps (defaulting to the "implement" conductor's steps when `workflow`
+ * is omitted). Returns just the intake row until the first fetch resolves —
+ * honest about what it knows, rather than seeding a hardcoded list that
+ * would quietly become the duplicate this module exists to delete. */
+export function useWorkflowSteps(workflow?: string): RailStep[] {
+  const [steps, setSteps] = useState<RailStep[]>(
+    defCache ? railForWorkflow(defCache, workflow) : [INTAKE],
+  );
 
   useEffect(() => {
-    if (railCache) return;
+    if (defCache) {
+      setSteps(railForWorkflow(defCache, workflow));
+      return;
+    }
     let cancel = false;
     if (!pending) pending = fetchWorkflowDef(getProject());
     pending
       .then((def) => {
-        railCache = railFrom(def.steps);
-        if (!cancel) setSteps(railCache);
+        defCache = def;
+        if (!cancel) setSteps(railForWorkflow(def, workflow));
       })
       .catch(() => {
         // Service unreachable — retry on the next mount rather than
@@ -412,7 +445,7 @@ export function useWorkflowSteps(): RailStep[] {
         pending = null;
       });
     return () => { cancel = true; };
-  }, []);
+  }, [workflow]);
 
   return steps;
 }
