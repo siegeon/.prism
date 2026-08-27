@@ -52,6 +52,12 @@ OPTED_IN_INTERVAL_S = 30  # cadence once opted in, unless INTERVAL_ENV overrides
 CI_TIMEOUT_S = 900.0
 CI_POLL_S = 15.0
 
+# Ceiling on ONE git/gh call. On timeout the WHOLE process group dies, not
+# only the direct child: `git push` over HTTPS spawns `git-remote-https`
+# beneath it, and `subprocess.run(timeout=)` left that helper alive with its
+# github.com connection open (two orphans observed live 2026-08-26).
+RUN_TIMEOUT_S = 120
+
 # (argv, cwd) -> (returncode, stdout, stderr). The ONE boundary tests stub;
 # shaped after github_cli_auth.Runner, which already proved the seam.
 Runner = Callable[..., tuple]
@@ -65,10 +71,35 @@ _PR_NUM_RE = re.compile(r"/pull/(\d+)")
 
 
 def _default_runner(argv: list, cwd: Optional[str] = None) -> tuple:
-    proc = subprocess.run([str(a) for a in argv],
-                          cwd=str(cwd) if cwd else None,
-                          capture_output=True, text=True, timeout=120)
-    return proc.returncode, proc.stdout or "", proc.stderr or ""
+    cmd = [str(a) for a in argv]
+    group_kw = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if sys.platform.startswith("win") else {"start_new_session": True})
+    proc = subprocess.Popen(cmd, cwd=str(cwd) if cwd else None,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, **group_kw)
+    try:
+        out, err = proc.communicate(timeout=RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)
+        proc.communicate()
+        raise
+    return proc.returncode, out or "", err or ""
+
+
+def _kill_process_group(proc: "subprocess.Popen") -> None:
+    """Kill the child AND every descendant in its own group/session."""
+    try:
+        if sys.platform.startswith("win"):
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+        else:
+            os.killpg(os.getpgid(proc.pid), 9)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
 
 
 def _log(msg: str) -> None:
