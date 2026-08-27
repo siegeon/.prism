@@ -28,7 +28,12 @@ labels, and the four things the owner can do about it:
 All four are persisted to <project data dir>/ontology/decisions.json::
 
     {"<rule name>": {"accepted": {"at": iso, "reason": str},
-                      "exempt": [iri, ...]}}
+                      "exempt": [iri, ...],
+                      "exempt_reasons": {iri: {"at": iso, "reason": str}}}}
+
+"exempt_reasons" (task e1888b31) keeps the reason the user typed for each
+exempted IRI. An entry written before that task has no "exempt_reasons"
+key; decorated_report() reports reason "" and at "" for it.
 
 A signal is deduplicated on channel_ref: while an open signal (state not
 in _CLOSED_STATES) already carries "rule:<name>", a re-validation updates
@@ -127,12 +132,21 @@ def _record_accept(project: str, rule_name: str, reason: str) -> None:
     _save_decisions(project, data)
 
 
-def _record_exempt(project: str, rule_name: str, iris: list[str]) -> None:
+def _record_exempt(project: str, rule_name: str, iris: list[str],
+                   reason: str = "") -> None:
+    """Add `iris` to the rule's exempt list and store `reason` for each
+    of them under exempt_reasons. Only the IRIs named in this call get a
+    new reason and timestamp; earlier entries keep theirs."""
     data = _load_decisions(project)
     entry = data.setdefault(rule_name, {})
     existing = set(entry.get("exempt") or [])
     existing.update(i for i in iris if i)
     entry["exempt"] = sorted(existing)
+    reasons = entry.setdefault("exempt_reasons", {})
+    at = datetime.now(timezone.utc).isoformat()
+    for iri in iris:
+        if iri:
+            reasons[iri] = {"at": at, "reason": reason or ""}
     _save_decisions(project, data)
 
 
@@ -166,8 +180,16 @@ def decorated_report(project: str) -> dict:
     need_decision = 0
     validated_at = ""
     for r in rows:
-        exempt = set((decisions.get(r["name"]) or {}).get("exempt") or [])
+        decision = decisions.get(r["name"]) or {}
+        exempt = set(decision.get("exempt") or [])
+        exempt_reasons = decision.get("exempt_reasons") or {}
         remaining = [f for f in r["focus"] if f not in exempt]
+        exempted = [
+            {"iri": iri, "label": graph.label_of(iri),
+             "reason": (exempt_reasons.get(iri) or {}).get("reason", "") or "",
+             "at": (exempt_reasons.get(iri) or {}).get("at", "") or ""}
+            for iri in r["focus"] if iri in exempt
+        ]
         n_violations = len(remaining)
         if n_violations:
             need_decision += 1
@@ -178,6 +200,7 @@ def decorated_report(project: str) -> dict:
             "looked_at": r["looked_at"], "violations": n_violations,
             "focus": [{"iri": iri, "label": graph.label_of(iri)}
                       for iri in remaining[:20]],
+            "exempted": exempted,
             "validated_at": r["validated_at"],
             "derived_from": derived_by_name.get(r["name"], ""),
             "verified_by": verified_by_name.get(r["name"], ""),
@@ -404,7 +427,7 @@ def decide(project: str, signal: Signal, action: str, reason: str,
 
     if action == "exempt":
         iris = [i for i in (focus or []) if i]
-        _record_exempt(project, rule_name, iris)
+        _record_exempt(project, rule_name, iris, reason)
         remaining = _remaining_focus_now(project, rule_name)
         if not remaining:
             store.update(signal.id, state="resolved")
