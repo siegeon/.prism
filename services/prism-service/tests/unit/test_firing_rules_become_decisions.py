@@ -109,6 +109,112 @@ def test_two_firing_rules_post_two_signals_no_duplicate_on_revalidate():
 
 
 # ---------------------------------------------------------------------------
+# A refreshed signal keeps the ontology's own CURRENT language (task
+# aa7fab99, epic 61821448)
+# ---------------------------------------------------------------------------
+
+def test_refreshed_signal_carries_current_aligned_text_not_the_first_posts():
+    """A refresh (rule_decisions' dedup re-post, on a changed count) must
+    re-align aligned_subject/aligned_body to the NEW text, not leave the
+    first post's aligned text standing. Literal expected strings, using
+    the same raw phrase and already-pinned ste pipeline behaviour
+    ("ticket"->"Task", "PR"->"PullRequest", semicolon-split, contraction
+    fix) test_signals_align_on_arrival.py pins elsewhere -- never
+    normalize(input) compared with itself."""
+    from prism_service.services import rule_decisions
+    from prism_service.services.signal_store import SignalStore
+
+    pid = _project_id("rule-refresh-align")
+    title = "A task always names its channel"
+    name = "task-names-its-channel"
+
+    row1 = {
+        "name": name, "title": title, "description": "",
+        "message": "Please open a ticket for the PR; it's urgent",
+        "looked_at": 1, "focus": ["urn:prism:onto:record/t1"],
+        "validated_at": "2026-01-01T00:00:00+00:00",
+    }
+    rule_decisions.on_rules_validated(pid, [row1])
+
+    store = SignalStore(pid)
+    signal = next(s for s in store.list(limit=500)
+                  if s.channel_ref == f"rule:{name}")
+    assert signal.aligned_subject == (
+        "Rule A task always names its channel fires on 1 Task")
+    assert signal.aligned_body == (
+        "Please open a Task for the PullRequest. It is urgent\n"
+        "It found 1 Task record that fail this rule.\n"
+        "Examples: t1.\n"
+        "Accept: mark this decided. Exempt: leave out named records. "
+        "Fix: open a task to fix this. Codify: write this as a rule "
+        "the team follows.")
+
+    row2 = {
+        "name": name, "title": title, "description": "",
+        "message": "Please open a ticket for the PR; it's urgent, again",
+        "looked_at": 2,
+        "focus": ["urn:prism:onto:record/t1", "urn:prism:onto:record/t2"],
+        "validated_at": "2026-01-01T00:05:00+00:00",
+    }
+    rule_decisions.on_rules_validated(pid, [row2])
+
+    refreshed = store.get(signal.id)
+    assert refreshed.id == signal.id, (
+        "must refresh the SAME signal, never post a second one")
+    assert refreshed.aligned_subject == (
+        "Rule A task always names its channel fires on 2 Task")
+    assert refreshed.aligned_body == (
+        "Please open a Task for the PullRequest. It is urgent, again\n"
+        "It found 2 Task records that fail this rule.\n"
+        "Examples: t1, t2.\n"
+        "Accept: mark this decided. Exempt: leave out named records. "
+        "Fix: open a task to fix this. Codify: write this as a rule "
+        "the team follows.")
+    assert refreshed.aligned_body != signal.aligned_body
+    assert refreshed.aligned_subject != signal.aligned_subject
+
+
+def test_twin_classes_signal_names_the_class_by_local_name_not_full_iri():
+    """rule_decisions must never leak a full IRI into the Queue. The
+    twin-classes rule's own sh:targetClass IS rdfs:Class (ontology/
+    shapes.ttl: `o:twin-classes.target ... sh:targetClass rdfs:Class`),
+    which does not start with this project's urn:prism:onto: prefix, so
+    it used to pass through ontology_rules._local_name unchanged as the
+    full 'http://www.w3.org/2000/01/rdf-schema#Class' IRI (task
+    aa7fab99)."""
+    from prism_service.services import rule_decisions
+    from prism_service.services.signal_store import SignalStore
+
+    pid = _project_id("twin-classes-label")
+    focus = [f"urn:prism:onto:record/Class{i}" for i in range(8)]
+    row = {
+        "name": "twin-classes", "title": "Two classes share every instance",
+        "description": "", "message": "These classes look identical.",
+        "looked_at": 8, "focus": focus,
+        "validated_at": "2026-01-01T00:00:00+00:00",
+    }
+    rule_decisions.on_rules_validated(pid, [row])
+
+    store = SignalStore(pid)
+    signal = next(s for s in store.list(limit=500)
+                  if s.channel_ref == "rule:twin-classes")
+    assert signal.subject == (
+        "Rule Two classes share every instance fires on 8 Class")
+    assert signal.aligned_subject == signal.subject
+    assert "http://www.w3.org/2000/01/rdf-schema#Class" not in signal.subject
+    assert "http://www.w3.org/2000/01/rdf-schema#Class" not in signal.body
+    assert "rdf-schema#Class" not in signal.subject
+    assert "rdf-schema#Class" not in signal.body
+    assert signal.body == (
+        "These classes look identical.\n"
+        "It found 8 Class records that fail this rule.\n"
+        "Examples: Class0, Class1, Class2, Class3, Class4.\n"
+        "Accept: mark this decided. Exempt: leave out named records. "
+        "Fix: open a task to fix this. Codify: write this as a rule "
+        "the team follows.")
+
+
+# ---------------------------------------------------------------------------
 # accept
 # ---------------------------------------------------------------------------
 
