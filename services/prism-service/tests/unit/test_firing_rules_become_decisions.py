@@ -215,6 +215,75 @@ def test_twin_classes_signal_names_the_class_by_local_name_not_full_iri():
 
 
 # ---------------------------------------------------------------------------
+# A dropped rule signal stands at the same count, and comes back naming
+# the move when the count changes (task 2d315628, epic 61821448)
+# ---------------------------------------------------------------------------
+
+def _row(focus: list[str], looked_at: int) -> dict:
+    return {
+        "name": "twin-classes", "title": "Two classes share every instance",
+        "description": "", "message": "These classes look identical.",
+        "looked_at": looked_at, "focus": focus,
+        "validated_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+def test_a_dropped_signal_stands_when_the_rules_count_is_unchanged():
+    from prism_service.services import rule_decisions
+    from prism_service.services.signal_store import SignalStore
+
+    pid = _project_id("rule-drop-same-count")
+    focus = [f"urn:prism:onto:record/Class{i}" for i in range(8)]
+    rule_decisions.on_rules_validated(pid, [_row(focus, 8)])
+
+    store = SignalStore(pid)
+    signal = next(s for s in store.list(limit=500)
+                  if s.channel_ref == "rule:twin-classes")
+    store.update(signal.id, state="dropped", drop_reason="known, ignore")
+
+    # Re-validating at the SAME count (8) must not post anything new --
+    # the drop stands, so nothing nags the owner on the next rebuild.
+    rule_decisions.on_rules_validated(pid, [_row(focus, 8)])
+
+    rows = [s for s in store.list(limit=500) if s.channel_ref == "rule:twin-classes"]
+    assert len(rows) == 1, rows
+    assert rows[0].id == signal.id
+    assert rows[0].state == "dropped"
+    open_rows = [s for s in rows if s.state not in rule_decisions._CLOSED_STATES]
+    assert open_rows == []
+
+
+def test_a_dropped_signal_reopens_naming_the_old_and_new_counts():
+    from prism_service.services import rule_decisions
+    from prism_service.services.signal_store import SignalStore
+
+    pid = _project_id("rule-drop-count-moves")
+    focus8 = [f"urn:prism:onto:record/Class{i}" for i in range(8)]
+    rule_decisions.on_rules_validated(pid, [_row(focus8, 8)])
+
+    store = SignalStore(pid)
+    dropped = next(s for s in store.list(limit=500)
+                    if s.channel_ref == "rule:twin-classes")
+    store.update(dropped.id, state="dropped", drop_reason="known, ignore")
+
+    # The rule's count moves from 8 to 9 -- a fresh open signal must post,
+    # naming the move, and the old dropped row must stay untouched.
+    focus9 = focus8 + ["urn:prism:onto:record/Class8"]
+    rule_decisions.on_rules_validated(pid, [_row(focus9, 9)])
+
+    rows = [s for s in store.list(limit=500) if s.channel_ref == "rule:twin-classes"]
+    assert len(rows) == 2, rows
+
+    still_dropped = next(s for s in rows if s.id == dropped.id)
+    assert still_dropped.state == "dropped"
+    assert still_dropped.body == dropped.body
+
+    reopened = next(s for s in rows if s.id != dropped.id)
+    assert reopened.state not in rule_decisions._CLOSED_STATES
+    assert "Count moved from 8 to 9 since you dropped this." in reopened.body
+
+
+# ---------------------------------------------------------------------------
 # accept
 # ---------------------------------------------------------------------------
 
