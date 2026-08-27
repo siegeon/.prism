@@ -322,7 +322,7 @@ def _edges_for_focus(data_graph: rdflib.Graph, focus_iri: str,
 # Public entry points.
 # ---------------------------------------------------------------------------
 
-def law_violation_reason_for_diff(workspace, baseline: str,
+def _law_violation_reason_for_diff_impl(workspace, baseline: str,
                                   project: str = "default") -> str:
     """The testable core: a real git worktree, no task lookup. Returns one
     STE line per violation (name, both module paths, the memory this rule
@@ -378,6 +378,19 @@ def law_violation_reason_for_diff(workspace, baseline: str,
                 if len(lines) >= _MAX_LINES:
                     return "\n".join(lines)
     return "\n".join(lines)
+
+
+def law_violation_reason_for_diff(workspace, baseline: str,
+                                  project: str = "default") -> str:
+    """Run the diff check on a thread with a big stack. pyshacl and rdflib
+    parse SPARQL with pyparsing, which recurses deeply; on an ordinary
+    API or adjudicator thread that overflowed the C stack and killed the
+    whole process (rc=139, top frame pyparsing/core.py, wave 34 and 36 on
+    2026-08-27 - the same crash class ontology_rules._run_with_big_stack
+    exists for). Every in-process SPARQL parse in PRISM goes through it."""
+    from prism_service.services.ontology_rules import _run_with_big_stack
+    return _run_with_big_stack(
+        _law_violation_reason_for_diff_impl, workspace, baseline, project)
 
 
 def law_violation_reason(task, project: str = "default") -> str:
