@@ -1009,6 +1009,102 @@ class TaskService:
         key when this is never called (bare TaskService in tests/scripts)."""
         self._conductor_svc = conductor_svc
 
+    def _publish_task_changed(self, task: Task, fields: dict) -> None:
+        """Compute a fresh `activity` block and push a `task.changed` bus
+        event, then wake task_runner — extracted out of update() (task
+        1728c54b) so a caller that mutates task state WITHOUT going through
+        update() (e.g. conductor_flow.py's step-failure branch, which only
+        calls record_history) can still refresh a live-open browser tab via
+        publish_activity_changed() below. Safe to call with `fields={}` when
+        no task column actually changed — only `activity` is fresh. Never
+        raises: every side effect here is best-effort, exactly as before."""
+        # Real-time activity push (gap: `activity` — {state, task_motion_s,
+        # session_quiet_s, ...} — is computed ONLY inside GET /api/tasks/{id}
+        # (api/tasks.py, ConductorService.activity_for) and is NOT a stored
+        # task column, so it could never ride `changed_fields` above. A
+        # browser tab open on /tasks/{id} therefore never saw a fresh
+        # activity reading over /sse/tasks -- only a full refetch (poll or
+        # remount) picked it up, which read as a frozen "stalled" signal
+        # while a task was genuinely advancing underneath. Compute it here,
+        # at publish time, reusing the SAME method api/tasks.py already
+        # calls (never duplicated) via the late-bound ConductorService.
+        activity: Optional[dict] = None
+        if self._conductor_svc is not None:
+            try:
+                phase_progress = self._conductor_svc.phase_progress(task.id)
+                activity = self._conductor_svc.activity_for(task, phase_progress)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "activity_for failed for %s", task.id, exc_info=True)
+                activity = None
+        # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
+        # it — the write already committed above, so a publish failure
+        # (bus down, serialization) must never surface as a write failure.
+        try:
+            from prism_service.events import bus
+
+            bus.publish({
+                "project": self.project,
+                "type": "task.changed",
+                "task_id": task.id,
+                # gamify round6 item 2 (atomic card+wire): carry the task's
+                # REAL parent_id on every event, not just when parent_id
+                # itself was the field that changed -- the /live SPA can
+                # only ever derive a subtask's parent_of edge at the same
+                # instant its card is born if the very event that births
+                # it already names the parent (empty string = a real
+                # root, no edge expected).
+                "parent_id": task.parent_id or "",
+                "fields": fields,
+                # Fresh activity at this instant (see block above) — None
+                # when no ConductorService is attached (bare TaskService).
+                # The client only merges this key in when it is present.
+                "activity": activity,
+                "updated_at": task.updated_at,
+            })
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task.changed publish failed for %s", task.id, exc_info=True)
+        # Wake task_runner's background loop on the SAME event, so a task
+        # that just became eligible (status -> in_progress, or a step/gate
+        # transition) gets swept immediately instead of waiting out
+        # PRISM_TASK_RUNNER_INTERVAL -- observed live sitting idle ~16min
+        # as the ONLY eligible task in the project before this existed.
+        # wake() is a no-op-safe flag set; never raises, never blocks.
+        try:
+            from prism_service.services import task_runner
+
+            task_runner.wake()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task_runner.wake() failed for %s", task.id, exc_info=True)
+
+    def publish_activity_changed(self, task_id: str) -> None:
+        """Push a fresh `activity` reading for `task_id` with no column
+        change — for a caller that mutated task state via a raw write (e.g.
+        record_history) rather than update(), so a live-open browser tab
+        still sees the new activity over /sse/tasks (task 1728c54b: a
+        reported step failure recorded via record_history in
+        conductor_flow.py never called update(), so an open tab kept
+        showing pre-failure state — e.g. "driving" — until a manual
+        reload). Safe to call even when the task is missing, or when
+        _conductor_svc is unattached / activity_for raises: never raises."""
+        try:
+            task = self.get(task_id)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "publish_activity_changed: get() failed for %s", task_id,
+                exc_info=True)
+            return
+        if task is None:
+            return
+        try:
+            self._publish_task_changed(task, {})
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "publish_activity_changed failed for %s", task_id,
+                exc_info=True)
+
     def update(self, task_id: str, **kwargs: object) -> Optional[Task]:
         """Update arbitrary fields on a task. Records change history."""
         task = self.get(task_id)
@@ -1139,66 +1235,14 @@ class TaskService:
                 task.id, "ste_normalise",
                 "rules=" + ",".join(ste_rules)
                 + " before=" + json.dumps(changed_before))
-        # Real-time activity push (gap: `activity` — {state, task_motion_s,
-        # session_quiet_s, ...} — is computed ONLY inside GET /api/tasks/{id}
-        # (api/tasks.py, ConductorService.activity_for) and is NOT a stored
-        # task column, so it could never ride `changed_fields` above. A
-        # browser tab open on /tasks/{id} therefore never saw a fresh
-        # activity reading over /sse/tasks -- only a full refetch (poll or
-        # remount) picked it up, which read as a frozen "stalled" signal
-        # while a task was genuinely advancing underneath. Compute it here,
-        # at publish time, reusing the SAME method api/tasks.py already
-        # calls (never duplicated) via the late-bound ConductorService.
-        activity: Optional[dict] = None
-        if self._conductor_svc is not None:
-            try:
-                phase_progress = self._conductor_svc.phase_progress(task.id)
-                activity = self._conductor_svc.activity_for(task, phase_progress)
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "activity_for failed for %s", task.id, exc_info=True)
-                activity = None
-        # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
-        # it — the write already committed above, so a publish failure
-        # (bus down, serialization) must never surface as a write failure.
-        try:
-            from prism_service.events import bus
-
-            bus.publish({
-                "project": self.project,
-                "type": "task.changed",
-                "task_id": task.id,
-                # gamify round6 item 2 (atomic card+wire): carry the task's
-                # REAL parent_id on every event, not just when parent_id
-                # itself was the field that changed -- the /live SPA can
-                # only ever derive a subtask's parent_of edge at the same
-                # instant its card is born if the very event that births
-                # it already names the parent (empty string = a real
-                # root, no edge expected).
-                "parent_id": task.parent_id or "",
-                "fields": changed_fields,
-                # Fresh activity at this instant (see block above) — None
-                # when no ConductorService is attached (bare TaskService).
-                # The client only merges this key in when it is present.
-                "activity": activity,
-                "updated_at": task.updated_at,
-            })
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "task.changed publish failed for %s", task.id, exc_info=True)
-        # Wake task_runner's background loop on the SAME event, so a task
-        # that just became eligible (status -> in_progress, or a step/gate
-        # transition) gets swept immediately instead of waiting out
-        # PRISM_TASK_RUNNER_INTERVAL -- observed live sitting idle ~16min
-        # as the ONLY eligible task in the project before this existed.
-        # wake() is a no-op-safe flag set; never raises, never blocks.
-        try:
-            from prism_service.services import task_runner
-
-            task_runner.wake()
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "task_runner.wake() failed for %s", task.id, exc_info=True)
+        # Real-time activity push + bus event + task_runner wake, extracted
+        # into _publish_task_changed (task 1728c54b) so a step FAILURE that
+        # never touches this update() path (conductor_flow.py's `elif
+        # failed:` branch — a raw record_history insert, no update() call)
+        # can still push a fresh activity reading via
+        # publish_activity_changed() below, instead of leaving an
+        # already-open browser tab frozen on stale pre-failure state.
+        self._publish_task_changed(task, changed_fields)
         # LL-03: re-embed only when the title or description changed.
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:
