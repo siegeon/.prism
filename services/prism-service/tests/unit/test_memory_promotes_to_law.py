@@ -401,6 +401,49 @@ def test_plain_approve_with_no_override_passes_the_review_gate(
     assert task.gate_state == "none"
 
 
+def test_a_review_gate_stuck_failed_from_the_old_bug_recovers_on_a_plain_approve(
+    real_project, no_real_worktree,
+):
+    """A task that hit the ORIGINAL bug before this fix existed (like the
+    owner's own live task 44c7e2d0) is left with gate_state="failed" on
+    disk. The first-approve fix above only helps a FRESH pending gate --
+    a task already stuck in "failed" goes through gate_decide's SEPARATE
+    recovery branch, which needed the identical plain-owner-gate carve-out
+    or it would refuse forever, exactly like the live task did on this
+    session's own recovery attempts ("Approve (recover)" resubmitting the
+    same plain approve and hitting the same refusal).
+    """
+    from prism_service.api import conductor_flow as flow
+    from prism_service.services import law_promotion
+    from prism_service.project_context import get_project as _get_project
+
+    memory = _principle_memory(real_project, name="ARC-PROMOTE-3")
+    task_svc = _get_project(real_project).task_svc
+
+    started = law_promotion.start_promotion(real_project, memory.id)
+    assert started["ok"], started
+    run_task_id = started["run_task_id"]
+
+    # Simulate the pre-fix stuck state directly (the real task 44c7e2d0's
+    # own on-disk shape after this session's first Approve attempts,
+    # before either fix existed).
+    task_svc.update(run_task_id, gate_state="failed",
+                     gate_reason="gate has no validation kind")
+    task = task_svc.get(run_task_id)
+    assert task.gate_state == "failed"
+
+    recovered = flow.flow_report(flow.Ident(
+        task_id=run_task_id, session_id="owner-review-recover",
+        outcome="approved: matches ARC-PROMOTE-3",
+        expected_step="review"), project=real_project)
+    assert recovered["ok"], \
+        f"a stuck plain-owner gate must recover on a plain approve, not refuse forever: {recovered}"
+
+    task = task_svc.get(run_task_id)
+    assert task.workflow_step == "install"
+    assert task.gate_state == "none"
+
+
 def test_review_gate_readiness_is_the_human_judgment_path_not_a_missing_receipt(
     real_project, no_real_worktree,
 ):
