@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.109"
+PRISM_VERSION = "7.13.110"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7388,4 +7388,14 @@ PRISM_VERSION_NOTES += (
     "Knowledge health entry on /workflows carries live metrics "
     "(services/knowledge_health.py). Full unit suite on the merged tree: "
     "3248 passed (wave 35); real vite build green."
+    "\n7.13.110: epic 61821448 follow-ups. task 408138e8: every workflow and "
+    "step description on GET /api/workflows says when it runs ('Runs when a "
+    "task enters draft_story, right after review_previous_notes.'), so the "
+    "rule skill-description-says-when (rdfs:comment on o:Agent) is quiet; "
+    "test_workflow_descriptions_say_when parses the regex out of the shape "
+    "so it cannot drift. task aa7fab99: SignalStore.update re-aligns "
+    "aligned_subject / aligned_body / style when subject or body change (a "
+    "refreshed ontology signal shows current text on the Queue), and a rule "
+    "signal names its target class by local name ('fires on 8 Class'), "
+    "never a full IRI."
 )
