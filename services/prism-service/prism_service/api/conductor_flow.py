@@ -387,30 +387,22 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
             except Exception:
                 pass
         return None
-    if step["id"] == "plan_gate":
-        # ROOT PLAN-GATE STOP (task 3c774abd): a passing rubric on a ROOT
-        # conductor task is the MACHINE's review, not the owner's approval
-        # — park pending and wait for a real human gate_decide. Never call
-        # gate_decide as conductor-autoclear here, even once a design
-        # packet is later approved; only a genuine distinct-actor approve
-        # releases a root plan.
-        if _is_root_conductor_task(task):
-            if ROOT_PLAN_GATE_REASON != (getattr(task, "gate_reason", "") or ""):
-                try:
-                    svc._task_svc.update(task_id, gate_reason=ROOT_PLAN_GATE_REASON)
-                except Exception:
-                    pass
-            return None
-        # FR-4/FR-5 (task c016667f): the rubric alone is no longer enough —
-        # a design-packet owner approval must be on file too, unconditionally
-        # (AC-10: no ui-tag narrowing). A missing/stale approval parks the
-        # gate pending with an actionable reason instead of clearing.
+    if step["id"] == "plan_gate" and _is_root_conductor_task(task):
+        # OWNER'S PLAN STOP (task c016667f FR-4/FR-5, scoped by task 3c774abd
+        # per owner 2026-08-27: "users approve the plans for parent level
+        # tasks ... subtasks do not need user approval"): a ROOT conductor
+        # task clears plan_gate only once the owner's design-packet approval
+        # is on file (the task page's Approve records it); the rubric pass is
+        # the machine's review, never the approval. A CHILD task skips this
+        # ledger and clears on the rubric alone - the system manages its own
+        # subtasks. A missing/stale approval parks the gate pending with an
+        # actionable reason instead of clearing.
         from prism_service.services import design_packet as dp
         project = svc._project_name or "default"
         status = dp.approval_status(project, task_id, task)
         if not status.get("approved"):
-            _r = str(status.get("reason", "") or "")
-            if _r and _r != (getattr(task, "gate_reason", "") or ""):
+            _r = str(status.get("reason", "") or "") or ROOT_PLAN_GATE_REASON
+            if _r != (getattr(task, "gate_reason", "") or ""):
                 try:
                     svc._task_svc.update(task_id, gate_reason=_r)
                 except Exception:

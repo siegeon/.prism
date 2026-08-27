@@ -3102,33 +3102,25 @@ class ConductorService:
             # "implement" (not the UI catalog id "conductor") is the honest
             # marker — task_workflow is normalize_workflow's own output,
             # which never applies WORKFLOW_ALIASES.
+            # Owner 2026-08-27 (task 3c774abd): only a ROOT conductor task
+            # needs the owner's design-packet approval on file; a CHILD clears
+            # on the rubric alone. Mirrors api/conductor_flow.py so every seat
+            # consults the same ledger.
             if not str(getattr(task, "parent_id", "") or "").strip() \
                     and task_workflow == "implement":
-                _root_reason = ("Plan rubric passed (machine review). Your "
-                                "approval releases the plan.")
-                if _root_reason != (getattr(task, "gate_reason", "") or ""):
-                    try:
-                        self._task_svc.update(
-                            task_id, gate_reason=_root_reason)
-                    except Exception:
-                        pass
-                return None
-            # FR-4/FR-5 (task c016667f): the rubric alone is no longer enough
-            # — a design-packet owner approval must be on file too,
-            # unconditionally (AC-10: no ui-tag narrowing). Mirrors the
-            # entry-time autoclear check in api/conductor_flow.py so every
-            # seat consults the same ledger.
-            from prism_service.services import design_packet as dp
-            project = self._project_name or "default"
-            status = dp.approval_status(project, task_id, task)
-            if not status.get("approved"):
-                _r = str(status.get("reason", "") or "")
-                if _r and _r != (getattr(task, "gate_reason", "") or ""):
-                    try:
-                        self._task_svc.update(task_id, gate_reason=_r)
-                    except Exception:
-                        pass
-                return None
+                from prism_service.services import design_packet as dp
+                project = self._project_name or "default"
+                status = dp.approval_status(project, task_id, task)
+                if not status.get("approved"):
+                    _r = str(status.get("reason", "") or "") or (
+                        "Plan rubric passed (machine review). Your "
+                        "approval releases the plan.")
+                    if _r != (getattr(task, "gate_reason", "") or ""):
+                        try:
+                            self._task_svc.update(task_id, gate_reason=_r)
+                        except Exception:
+                            pass
+                    return None
         try:
             from prism_service.services import control_plane as _cp
             if _cp.candidate_controls_judge_reason(task):

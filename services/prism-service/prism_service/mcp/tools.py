@@ -2667,7 +2667,7 @@ autoclears on every task, root or child — the owner's two stops are
 `align_language` / `promote_to_law` workflows) is root by construction
 (`parent_id=""`) but is NOT on the conductor workflow, so it never counts
 as a root SDLC task under this rule and keeps whatever autoclear its own
-named workflow already gives it.
+named workflow already gives it. The owner's approval is the design-packet Approve on the task page (task c016667f); a child task clears plan_gate on the rubric alone.
 
 ## Report audit — before any step's final report
 

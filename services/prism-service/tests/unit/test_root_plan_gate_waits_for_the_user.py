@@ -112,9 +112,11 @@ def test_root_task_plan_gate_parks_for_the_owner(tmp_path, monkeypatch):
     after = task_svc.get(task.id)
     assert after.workflow_step == "plan_gate"
     assert after.gate_state == "pending"
-    assert after.gate_reason == cf.ROOT_PLAN_GATE_REASON, after.gate_reason
-    assert "Plan rubric passed" in after.gate_reason
-    assert "approval releases the plan" in after.gate_reason
+    # Re-anchored 2026-08-27: the owner's stop IS the design-packet approval
+    # (task c016667f); a root task parks on that ledger's own reason, and
+    # ROOT_PLAN_GATE_REASON is only the fallback when the ledger gives none.
+    assert ("owner approval" in after.gate_reason
+            or after.gate_reason == cf.ROOT_PLAN_GATE_REASON), after.gate_reason
     assert not _autoclear_rows(task_svc, task.id), (
         "a root plan_gate must never be decided by conductor-autoclear")
 
@@ -301,9 +303,16 @@ def test_readiness_for_root_plan_gate_says_adapter_human(tmp_path, monkeypatch):
 
     out = capi.gate_readiness(task_id=task.id, project=cond._project_name)
 
-    assert out["receipt_ok"] is True, out
-    assert out["receipt"]["adapter"] == "human", out
-    assert "approval releases the plan" in out["receipt"]["reason"]
+    # Re-anchored 2026-08-27: readiness speaks design-packet for a root task
+    # - not ok until the owner's approval is on file, ok once it is.
+    assert out["receipt_ok"] is False, out
+    assert out["receipt"]["adapter"] == "design-packet", out
+    from prism_service.services import design_packet as dp
+    dp.record_approval(cond._project_name, task.id, task_svc.get(task.id),
+                       approver="owner", method="task-page")
+    out2 = capi.gate_readiness(task_id=task.id, project=cond._project_name)
+    assert out2["receipt_ok"] is True, out2
+    assert out2["receipt"]["adapter"] == "design-packet", out2
 
 
 def test_readiness_for_child_plan_gate_stays_the_machines_reading(
