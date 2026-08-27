@@ -2843,17 +2843,41 @@ class Brain:
         for token in tokens[:8]:
             try:
                 rows = self._graph.execute(
-                    "SELECT DISTINCT file FROM entities WHERE name LIKE ? LIMIT ?",
+                    "SELECT DISTINCT file, name FROM entities "
+                    "WHERE name LIKE ? LIMIT ?",
                     (f"%{token}%", limit),
                 ).fetchall()
-                for row in rows:
-                    f = row["file"]
-                    if f and f not in seen:
-                        seen.add(f)
-                        results.append({"doc_id": f, "score": 1.0})
+                for r in self._resolve_graph_doc_ids(rows):
+                    if r["doc_id"] not in seen:
+                        seen.add(r["doc_id"])
+                        results.append(r)
             except Exception:
                 pass
         return results[:limit]
+
+    def _resolve_graph_doc_ids(self, rows) -> list[dict]:
+        """Map graph.db entity rows (file, name) onto docs.id rows.
+
+        entities.file is graph.db's own id space (a bare path); the space
+        BM25/vector/RRF fuse on is docs.id = "<file>::<name>". Only ids
+        with a real docs row are returned, so the graph leg never surfaces
+        a pseudo-id that nothing downstream can score (task e58543b8).
+        """
+        candidates: list[str] = []
+        for r in rows:
+            if r["file"] and r["name"]:
+                cid = f"{r['file']}::{r['name']}"
+                if cid not in candidates:
+                    candidates.append(cid)
+        if not candidates:
+            return []
+        placeholders = ",".join("?" * len(candidates))
+        present = {
+            row["id"] for row in self._brain.execute(
+                f"SELECT id FROM docs WHERE id IN ({placeholders})", candidates
+            ).fetchall()
+        }
+        return [{"doc_id": c, "score": 1.0} for c in candidates if c in present]
 
     def _traverse_graph(
         self, entity_name: str, relation: Optional[str], limit: int
@@ -2867,19 +2891,19 @@ class Brain:
             eid = ent["id"]
             if relation:
                 rows = self._graph.execute(
-                    "SELECT e.file FROM relationships r "
+                    "SELECT e.file, e.name FROM relationships r "
                     "JOIN entities e ON e.id = r.target_id "
                     "WHERE r.source_id = ? AND r.relation = ? LIMIT ?",
                     (eid, relation, limit),
                 ).fetchall()
             else:
                 rows = self._graph.execute(
-                    "SELECT e.file FROM relationships r "
+                    "SELECT e.file, e.name FROM relationships r "
                     "JOIN entities e ON e.id = r.target_id "
                     "WHERE r.source_id = ? LIMIT ?",
                     (eid, limit),
                 ).fetchall()
-            return [{"doc_id": r["file"], "score": 1.0} for r in rows if r["file"]]
+            return self._resolve_graph_doc_ids(rows)
         except Exception:
             return []
 
