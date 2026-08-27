@@ -52,10 +52,10 @@ which then becomes the dedup target for later re-validations. The old
 dropped row is never touched again.
 
 signal.state values this module writes -- "resolved" (accept, codify, or
-exempt reaching zero) and "promoted" (fix) -- are deliberately NOT in
-models.signal.SIGNAL_STATES (out of this task's allowed_files): nothing
-in the store enforces membership in that tuple, and the dedup check here
-tests state membership directly rather than trusting it.
+exempt reaching zero) and "promoted" (fix) -- are declared in
+models.signal.SIGNAL_STATES (task afb47c33). Nothing in the store
+enforces membership in that tuple, so the dedup check here still tests
+state membership directly rather than trusting it.
 """
 
 from __future__ import annotations
@@ -75,9 +75,9 @@ logger = logging.getLogger(__name__)
 
 # A signal in one of these states is decided -- the dedup check and the
 # "how many are still open" scoreboard count both skip it. Distinct from
-# SIGNAL_STATES (models/signal.py, out of allowed_files): "dropped" is
-# that tuple's own value (the owner's plain Queue drop), "resolved" and
-# "promoted" are this module's own decision states.
+# SIGNAL_STATES (models/signal.py), which declares all of them: "dropped"
+# is the owner's plain Queue drop, "resolved" and "promoted" are this
+# module's own decision states.
 _CLOSED_STATES = frozenset({"resolved", "dropped", "promoted"})
 
 _FOCUS_LABEL_CAP = 5
@@ -438,9 +438,8 @@ def decide(project: str, signal: Signal, action: str, reason: str,
 
         title = f"Fix: {_rule_title_now(project, rule_name)}"
         description = signal.aligned_body or signal.body
-        # channel is deliberately left blank, never signal.channel="ontology"
-        # -- models.task.CHANNELS (out of this task's allowed_files) has no
-        # "ontology" entry, so passing it through would 400 on every fix.
+        # channel is left blank: the fix task is the owner's, not a row
+        # that arrived on the "ontology" channel the way the signal did.
         task = get_project(project).task_svc.create(
             title=title, description=description,
             channel_ref=signal.channel_ref, workflow="triage",

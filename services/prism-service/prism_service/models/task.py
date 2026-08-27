@@ -10,7 +10,7 @@ from uuid import uuid4
 # Defined ONCE here; every entry point (REST, MCP, mirror import) validates
 # against this tuple. Blank is allowed (legacy rows predate the field).
 CHANNELS: tuple[str, ...] = (
-    "ui", "mcp", "github", "jira", "slack", "outlook", "daemon",
+    "ui", "mcp", "github", "jira", "slack", "outlook", "daemon", "ontology",
 )
 
 
@@ -105,10 +105,11 @@ def validate_status(status: str) -> str:
 # Proof-type vocabulary (task f5352fa1) -- the kind of completion evidence a
 # task's green_gate demands (see Task.proof_type below). Kept in sync with
 # the values mcp/tools.py's task_create/task_update schemas already
-# document (test|demo|artifact|metric|review|source_backed_answer|decision).
+# document (test|demo|artifact|metric|review|source_backed_answer|decision),
+# plus "pr" (task afb47c33): the evidence is a merged pull request.
 PROOF_TYPES: tuple[str, ...] = (
     "test", "demo", "artifact", "metric", "review",
-    "source_backed_answer", "decision",
+    "source_backed_answer", "decision", "pr",
 )
 
 

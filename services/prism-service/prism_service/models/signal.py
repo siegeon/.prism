@@ -20,8 +20,12 @@ from uuid import uuid4
 
 # A signal's lifecycle: open (just arrived, undecided) -> became_task (the
 # owner acted on it, task_id names the resulting task) or dropped (the
-# owner dismissed it, drop_reason says why).
-SIGNAL_STATES: tuple[str, ...] = ("open", "became_task", "dropped")
+# owner dismissed it, drop_reason says why). A rule signal (Rules tab,
+# services/rule_decisions.py) also ends as resolved (accept, codify, or
+# exempt reached zero) or promoted (fix, task_id names the fix task).
+SIGNAL_STATES: tuple[str, ...] = (
+    "open", "became_task", "dropped", "resolved", "promoted",
+)
 
 
 @dataclass
