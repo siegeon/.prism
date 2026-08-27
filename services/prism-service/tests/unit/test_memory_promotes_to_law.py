@@ -352,6 +352,55 @@ def test_principle_promotion_walks_to_review_then_installs_after_approval(
         "a done task is no longer awaiting install -- must not re-run it"
 
 
+def test_plain_approve_with_no_override_passes_the_review_gate(
+    real_project, no_real_worktree,
+):
+    """Live repro (owner, 2026-08-27, task 44c7e2d0): a plain Approve click
+    (no override) on the review gate failed every time with "gate has no
+    validation kind" -- because review is a plain owner gate BY DESIGN
+    (models/workflow.py's PROMOTE_TO_LAW_STEPS, the same shape triage's
+    decide step uses), so it never had a rubric for the verifier to
+    consult. gate_decide treated that "nothing to check" None the same as
+    an explicit verifier REJECTION, and the live UI's Evidence tab has no
+    override control at all -- the error text said "recover manually with
+    override=True" while giving no way to do that, so the gate was
+    permanently stuck for a human clicking the only Approve button the
+    page has. Fixed in conductor_service.py's gate_decide: verified=None
+    is now distinguished from an explicit False specifically when
+    validation is also None (a step that never declared a rubric), and
+    that case passes on a plain approve, same as the human's review
+    already being the sign-off everywhere else this shape is used.
+    """
+    from prism_service.api import conductor_flow as flow
+    from prism_service.services import law_promotion
+
+    from prism_service.project_context import get_project as _get_project
+
+    memory = _principle_memory(real_project, name="ARC-PROMOTE-2")
+    task_svc = _get_project(real_project).task_svc
+
+    started = law_promotion.start_promotion(real_project, memory.id)
+    assert started["ok"], started
+    run_task_id = started["run_task_id"]
+
+    task = task_svc.get(run_task_id)
+    assert task.workflow_step == "review"
+    assert task.gate_state == "pending"
+
+    # THE ACTUAL FIX UNDER TEST: override is NOT passed (defaults False) --
+    # exactly what a plain Approve click on the live Evidence tab sends.
+    approved = flow.flow_report(flow.Ident(
+        task_id=run_task_id, session_id="owner-review-plain",
+        outcome="approved: matches ARC-PROMOTE-2",
+        expected_step="review"), project=real_project)
+    assert approved["ok"], \
+        f"a plain Approve on a by-design no-rubric gate must pass, not fail: {approved}"
+
+    task = task_svc.get(run_task_id)
+    assert task.workflow_step == "install"
+    assert task.gate_state == "none"
+
+
 def test_review_gate_readiness_is_the_human_judgment_path_not_a_missing_receipt(
     real_project, no_real_worktree,
 ):
