@@ -343,8 +343,20 @@ def _mark_twin_classes(g: rdflib.Graph, project: str | None = None) -> None:
     TBox, and carries no rdfs: declaration of its own for that reason."""
     skip = _skippable_code_classes(g, project)
     classes = {c for c in g.subjects(_RDF.type, _RDFS.Class) if c not in skip}
+    # task cacfb628 (owner 2026-08-27 via Extract Superclass): a parent that
+    # DECLARES two or more subclasses is not a twin of the one child that
+    # happens to hold instances today - the other siblings are unpopulated,
+    # not redundant (Work/JiraIssue+PullRequest, Party/Person+Group+...,
+    # Ask/five kinds all fired on the prism project for that reason). A
+    # twin is a parent with exactly one declared child, or two unrelated
+    # classes, sharing every instance.
+    declared_children: dict = {}
+    for child, parent in g.subject_objects(_RDFS.subClassOf):
+        declared_children.setdefault(parent, set()).add(child)
     by_instances: dict = {}
     for cls in classes:
+        if len(declared_children.get(cls, ())) >= 2:
+            continue
         instances = frozenset(g.subjects(_RDF.type, cls))
         if not instances:
             continue

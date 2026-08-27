@@ -283,3 +283,32 @@ def test_no_python_or_tsx_constructs_a_collapsed_parent_as_a_class():
             offenders.append(f"{path}: literal QueueItem in TSX source")
 
     assert not offenders, offenders
+
+
+def test_a_parent_with_two_declared_children_is_not_a_twin_of_the_populated_one():
+    """task cacfb628: Work declares JiraIssue and PullRequest; with only
+    PullRequests in the data, Work and PullRequest share every instance,
+    but Work is a parent waiting for its second child, not a twin. A parent
+    with ONE declared child that holds every instance IS a twin."""
+    import rdflib
+    from prism_service.services.ontology_rules import (
+        _mark_twin_classes, _expand_subclass_types, _TWIN_MARKER)
+    from prism_service.services.ontology_graph import NS
+
+    O = rdflib.Namespace(NS)
+    RDF, RDFS = rdflib.RDF, rdflib.RDFS
+    g = rdflib.Graph()
+    for c in ("Work", "JiraIssue", "PullRequest", "Lone", "OnlyChild"):
+        g.add((O[c], RDF.type, RDFS.Class))
+    g.add((O.JiraIssue, RDFS.subClassOf, O.Work))
+    g.add((O.PullRequest, RDFS.subClassOf, O.Work))
+    g.add((O.OnlyChild, RDFS.subClassOf, O.Lone))
+    for i in range(3):
+        g.add((O[f"pr{i}"], RDF.type, O.PullRequest))
+        g.add((O[f"pr{i}"], RDF.type, O.Work))
+        g.add((O[f"oc{i}"], RDF.type, O.OnlyChild))
+        g.add((O[f"oc{i}"], RDF.type, O.Lone))
+    _mark_twin_classes(g, None)
+    marked = {str(s).rsplit(":", 1)[-1] for s in g.subjects(_TWIN_MARKER, None)}
+    assert "Work" not in marked and "PullRequest" not in marked
+    assert marked == {"Lone", "OnlyChild"}

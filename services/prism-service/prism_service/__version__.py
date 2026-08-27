@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.111"
+PRISM_VERSION = "7.13.112"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7404,4 +7404,20 @@ PRISM_VERSION_NOTES += (
     "there was never an upsert); when the count moves the rule opens a new "
     "signal whose body says 'Count moved from 8 to 9 since you dropped "
     "this.' Resolved and promoted rows keep their behaviour."
+    "\n7.13.112: the owner's answers to the four ontology rule questions "
+    "(mx-536732). task 3c774abd: plan_gate on a ROOT implement task waits "
+    "for the user ('Plan rubric passed (machine review). Your approval "
+    "releases the plan.', readiness adapter=human, task page 'AWAITING "
+    "YOUR APPROVAL'); child tasks and the daemon's run tasks "
+    "(align_language, promote_to_law) keep the machine seat; red_gate "
+    "stays the machine's. task cacfb628: QueueItem collapses into Signal, "
+    "its one child (Extract Superclass: pull up only what is truly common); "
+    "Work, Party and Ask keep their 2-5 declared children, and twin-classes "
+    "no longer marks a parent that declares two or more subclasses when "
+    "only one is populated. task 6e858c89: the memory projection reads "
+    "every evidence shape PRISM writes (task, task_id, tasks, file_paths, "
+    "files, source_file) - 74 of 82 decision-has-evidence violations were "
+    "memories whose evidence sat in an unread shape - and "
+    "services/decision_evidence.py backfills evidence from a memory's own "
+    "text, verbatim only, after a dry run with samples (7 applied live)."
 )
