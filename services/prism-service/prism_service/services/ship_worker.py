@@ -205,6 +205,54 @@ def _audit(task_svc, task_id: str, stage: str, detail: str = "") -> None:
         pass
 
 
+def _rebase_onto_main(run: Runner, path: str) -> dict:
+    """Fetch origin/main and rebase (or fast-forward) the task's own branch
+    onto its current tip BEFORE push (task 229954e4). A branch cut hours
+    earlier, based on a commit main has since moved past, gets pushed
+    as-is otherwise -- GitHub cannot resolve mergeable/statusCheckRollup
+    (both read UNKNOWN/CONFLICTING), and `gh pr checks` reports "no checks
+    reported" forever. That is a stale-base symptom, not a real CI failure.
+
+    Returns {"ok": True} on an already-current fast path (no `git rebase`
+    call issued at all -- AC(c)), {"ok": True, "rebased": True} after a
+    clean rebase, or {"ok": False, "stage", "error"} on a genuine conflict
+    or any other rebase/fetch failure.
+
+    NEVER auto-resolves a real content conflict -- not even the common case
+    of two branches both bumping PRISM_VERSION on the same line. Per this
+    task's own likely_misfire, a silent guess here is worse than parking:
+    the rebase is aborted CLEANLY (the worktree is left exactly as it was,
+    never mid-rebase) and the conflicting file(s) are named verbatim so the
+    stall-guard's blocked_reason gives a human something to act on.
+    """
+    rc, out, err = _run(run, ["git", "fetch", "origin", "main"], path)
+    if rc != 0:
+        return {"ok": False, "stage": "fetch_main",
+                "error": err or out or f"git fetch exited {rc}"}
+
+    rc, _out, _err = _run(
+        run, ["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], path)
+    if rc == 0:
+        return {"ok": True}  # already current -- no wasted rebase attempt
+
+    rc, out, err = _run(run, ["git", "rebase", "origin/main"], path)
+    if rc == 0:
+        return {"ok": True, "rebased": True}
+
+    # Genuine conflict (or another rebase failure): name it, then abort so
+    # the worktree returns to its pre-rebase state -- never leave it
+    # mid-rebase for the next sweep or a human to trip over.
+    _rc, conflicts_out, _err = _run(
+        run, ["git", "diff", "--name-only", "--diff-filter=U"], path)
+    files = [f for f in conflicts_out.splitlines() if f.strip()]
+    _run(run, ["git", "rebase", "--abort"], path)
+    detail = (f"conflicts in {', '.join(files)}" if files
+             else (err or out or f"git rebase exited {rc}"))
+    return {"ok": False, "stage": "rebase",
+            "error": f"rebase onto origin/main {detail} -- needs manual "
+                     "resolution"}
+
+
 def ship_task(task_id: str, project: str = "default", *,
               runner: Optional[Runner] = None,
               task_svc=None, cond=None,
@@ -213,9 +261,10 @@ def ship_task(task_id: str, project: str = "default", *,
               on_landed: Optional[Callable[..., bool]] = None) -> dict:
     """Land this task's workspace branch. DETERMINISTIC — no model calls.
 
-    push -> gh pr create (body carries the `[task:<id8>]` trailer, which is
-    what `api/tasks.py::_is_shipped_on_main` greps for on origin/main) ->
-    gh pr checks polled to completion -> gh pr merge -> fetch, so the local
+    rebase (or fast-forward) onto current origin/main -> push -> gh pr create
+    (body carries the `[task:<id8>]` trailer, which is what
+    `api/tasks.py::_is_shipped_on_main` greps for on origin/main) -> gh pr
+    checks polled to completion -> gh pr merge -> fetch, so the local
     origin/main ref reflects the landing the shipped-ness tooth is about to
     re-read.
 
@@ -242,8 +291,25 @@ def ship_task(task_id: str, project: str = "default", *,
         _park(task_svc, task_id, res["stage"], res["error"])
         return res
 
+    # ---- rebase onto current origin/main, before push -----------------------
+    rebase_res = _rebase_onto_main(run, path)
+    if not rebase_res.get("ok"):
+        res = _fail(rebase_res["stage"], rebase_res["error"])
+        _park(task_svc, task_id, res["stage"], res["error"])
+        return res
+    rebased = bool(rebase_res.get("rebased"))
+    if rebased:
+        _audit(task_svc, task_id, "rebase", "onto origin/main")
+
     # ---- push --------------------------------------------------------------
-    rc, out, err = _run(run, ["git", "push", "origin", branch], path)
+    # A clean rebase rewrites the branch's commit shas, so a plain push would
+    # be refused as non-fast-forward -- force-with-lease (never bare --force)
+    # only on that path, so a concurrent push to the SAME task branch by
+    # something else is still refused rather than silently overwritten.
+    push_argv = ["git", "push", "origin", branch]
+    if rebased:
+        push_argv.append("--force-with-lease")
+    rc, out, err = _run(run, push_argv, path)
     if rc != 0:
         res = _fail("push", err or out or f"git push exited {rc}")
         _park(task_svc, task_id, res["stage"], res["error"])
