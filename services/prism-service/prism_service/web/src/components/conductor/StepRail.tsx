@@ -89,12 +89,19 @@ function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open, isGate }: 
   const max = useTokens ? sumTokens : sumDur;
   const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
   const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
-  // Owner 2026-08-27: "this bar is not taking up the length of the area
-  // STILL ... it should be like 40%-60%" -- the track is HALF the row (same
-  // on every row, so it stays label-independent), never a 220px stub at the
-  // right edge.
+  // Owner 2026-08-27, 4th pass: "why is there STILL so much dark space, are
+  // you not using the remote browser to see all of the dead space on each
+  // of those lines?" -- a fixed w-[50%] slot, right-aligned via ml-auto,
+  // still left a large UNUSED gap between the step label and where the bar
+  // started, because the bar's own width was capped well short of the real
+  // remaining row space. flex-1 makes the bar's container GROW to fill
+  // every pixel left over after the label -- no gap, no fixed cap. Rows
+  // with a short label (more leftover room) get a wider bar than rows with
+  // a long label; that is correct, not a regression -- the earlier
+  // "uniform width" framing solved label-independence but reintroduced the
+  // dead-space bug in the process.
   return (
-    <div className="ml-auto flex items-center gap-2 w-[50%] min-w-[220px] flex-none pl-6">
+    <div className="flex items-center gap-2 flex-1 min-w-[220px] pl-6">
       <div className="flex-1 min-w-0 flex flex-col gap-1">
         {/* Owner 2026-07-19: render the bar ONLY when this step actually spent
             something. A gate with no real tokens gets NO grey track (was a
@@ -361,10 +368,10 @@ export default function StepRail({
                             had this problem, which is why testing missed it. */}
                         {cur ? (
                           <div className="ml-auto flex items-center gap-2 min-w-0">
-                            {!isGate && verifierPersona && (
+                            {cur && !isGate && verifierPersona && (
                               <VerifiedBy persona={verifierPersona} decided={!!gateFor(nextGate?.id ?? "")} />
                             )}
-                            {!isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
+                            {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
                               <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
                                 title="ephemeral sub-agents dispatched vs returned for this step">
                                 <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
@@ -376,11 +383,11 @@ export default function StepRail({
                                 </span>
                               </span>
                             )}
-                            {!isGate && signal.lost ? (
+                            {cur && !isGate && signal.lost ? (
                               <span className="text-2xs font-mono flex items-center gap-1.5 flex-none" style={{ color: "var(--text-muted)" }}>
                                 {signal.label}
                               </span>
-                            ) : !isGate && (
+                            ) : cur && !isGate && (
                               <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
                                 <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
                                   animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
@@ -388,7 +395,7 @@ export default function StepRail({
                                 {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
                               </span>
                             )}
-                            {hasTurns && (
+                            {cur && hasTurns && (
                               <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
                             )}
                           </div>
