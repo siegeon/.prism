@@ -508,6 +508,21 @@ const locate = await agent(
   `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen, IN THIS ORDER - visibility precedes reading:\n${claimFirstInstr}- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first; disk grep - the Grep tool OR Bash-shelled grep/rg/sed/find - only for gaps the Brain does not answer), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list - each item independently testable.\n- PUSH-INJECT CONVENTIONS (task 0c811636): call \`context_bundle(persona="dev")\` ONCE and return its \`conventions\` array verbatim as the \`conventions\` field - this is PRISM's importance-ranked, top-N-capped living feedback doctrine (the domain="feedback" conventions - render policy, gate enforcement, board hygiene, etc.) that the drive injects into EVERY subsequent step agent's preamble. If the tool result OVERFLOWS the harness cap ("exceeds maximum allowed tokens ... saved to <path>.txt" - observed at 1.5 MB on drive wf_c7bae879, task 3a3f90da AC-2), do NOT return \`[]\`: read the saved file and extract the \`conventions\` array from it (\`grep -o '"conventions": *\\[' -A 200 <path>\` or Read with offset). If the bundle truly has no \`conventions\` key or it is empty, return \`[]\` (the drive falls back to the static procedural spine + memory_recall self-heal).\n- CLAIM THE TASK WORKTREE (this REPLACES cutting a feature branch in the shared checkout). ${DRY ? 'Report the workspace path you WOULD claim (data_dir/task_workspaces/<task_id>) without calling conductor_work.' : 'Call `conductor_work(id="<the task id>")` with NO outcome - that is the idempotent START/PEEK: it enters the flow, runs task_workspace.ensure_workspace(), and returns `workspace` {path, branch, baseline, repo_root} together with the first self-describing `job`. Report workspace.path as `workspace`, workspace.branch as `branch`, the job\'s `step` as current_step, and its gate_state.'} EVERY later edit, test run and commit for this task happens with \`git -C <workspace.path>\` or cwd=<workspace.path> - the gate verifier reads exactly that path, and work left in the shared E:/.prism checkout is invisible to it. A conductor_work ok:false carrying a workspace error is a HARD stop (it fails closed on purpose so two tasks can never share a branch): put it in halt_reason and do not proceed.\n- BRANCH: BASE SAFETY. The server cuts the worktree for you, but \`ensure_workspace\` defaults its base_ref to the repo's CURRENT HEAD - NOT origin/main - so a stale shared checkout silently yields a stale worktree, and the slice would be built on code that is behind. Verify it rather than assume: \`git -C "<workspace.path>" fetch -q origin main && git -C "<workspace.path>" rev-list --count HEAD..origin/main\` MUST return 0. If the worktree base is BEHIND origin/main, STOP and say so in halt_reason (name the count) - do not drive a slice onto a stale base.${DRY ? ' In DRY-RUN, report the base you WOULD verify and the depends_on you WOULD check, without claiming a workspace.' : ''}\n- DEPENDENCY CHECK (do NOT pick a base - the server already cut the worktree): read this task's \`depends_on\`. For each dep that is DONE, confirm its \`[task:<dep8>]\` / \`[conductor:<dep8>]\` commit is reachable from the worktree baseline (\`git -C <workspace.path> log --grep "<dep8>" -n1\`, falling back to \`git -C E:/.prism log --all --grep "<dep8>" -n1\`). A dep that is NOT done means this task is BLOCKED: report that in halt_reason and do not drive.\n\nReturn the structured locate result.`,
   { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA, model: TIER_MODEL.balanced })
 
+// NULL-AGENT GUARD (task bb388e9d): agent() resolves to null when the step
+// agent is killed before it returns - permission/safety classifier block,
+// user skip, or a terminal API error after retries. Seen twice on
+// 2026-08-17 as "null is not an object (evaluating 't.step')". Halt with the
+// real blocker instead of crashing on the dereference below.
+if (!locate) {
+  return {
+    task_id: TASK_ID, dry_run: DRY, done: false, shipped: false,
+    halted: {
+      at: 'locate', kind: 'blocked',
+      reason: 'step agent "locate" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); the drive cannot orient without it',
+      gate_state: 'unknown',
+    },
+  }
+}
 if (locate.halt_reason && String(locate.halt_reason).trim()) {
   throw new Error(`LOCATE HALT - ${locate.halt_reason}`)
 }
@@ -788,6 +803,16 @@ const graph = await agent(
   ].filter(Boolean).join('\n'),
   { label: 'graph-blast-radius', phase: 'Graph', schema: GRAPH_SCHEMA, model: TIER_MODEL.balanced })
 
+if (!graph) {
+  return {
+    task_id: locate.task_id, title: locate.title, workspace: WS, branch: locate.branch, dry_run: DRY, done: false, shipped: false,
+    halted: {
+      at: 'graph', kind: 'blocked',
+      reason: 'step agent "graph-blast-radius" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); no blast radius means nothing can be planned safely',
+      gate_state: locate.gate_state || 'none',
+    },
+  }
+}
 GRAPH_BRIEF = [
   '',
   'GRAPH BRIEF (call-graph derived - this is the slice\'s real blast radius, not a guess):',
@@ -950,6 +975,14 @@ for (let i = 0; i < MAX_JOBS; i++) {
     isGate ? gatePrompt(job) : workerPrompt(job),
     { label: job.step || 'peek', phase: phaseName, schema: JOB_RESULT_SCHEMA,
       model: modelFor(job.role, job.step, isGate) })
+  if (!res) {
+    halted = {
+      at: job.step, kind: 'blocked',
+      reason: `step agent "${job.step || 'peek'}" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); halting before the null reaches the trace`,
+      gate_state: job.gate_state,
+    }
+    break
+  }
   trace.push(res)
   await postAgentRun(res, { role: job.role || '', step: job.step })
 
