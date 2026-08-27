@@ -66,6 +66,11 @@ def _seed_code_graph(pid: str) -> None:
             # bundles.py covers the purge; this pins the projection side).
             (6, "bundle_fn", "function",
              "prism_service/web_dist/assets/index-abc.js", 1),
+            # task 2bfe49db: a module row whose file sits under the package
+            # root -- its label must be the PACKAGE-RELATIVE path, the same
+            # label law_check emits over a diff.
+            (7, "x.py", "module",
+             "services/prism-service/prism_service/models/x.py", 1),
         ],
     )
     conn.executemany(
@@ -189,7 +194,8 @@ def test_structure_rolls_up_code_kinds_correctly(project):
     assert by_id["Method"]["own_count"] == 1
     assert by_id["Rationale"]["own_count"] == 1
     # o:Code rolls up Function+Class+Method+Rationale+Module+Interface+Variable.
-    assert by_id["Code"]["count"] == 5
+    # 6 since task 2bfe49db seeded a module row (models/x.py) too.
+    assert by_id["Code"]["count"] == 6
 
 
 def test_a_second_rebuild_does_not_double_the_triples(project):
@@ -246,3 +252,16 @@ def test_large_graph_validates_on_a_single_flight_thread(monkeypatch):
         time.sleep(0.05)
     assert calls == ["p-big", "p-big"]
     assert not r.validation_in_flight("p-big")
+
+
+def test_a_module_is_labelled_by_its_package_relative_path(project):
+    """task 2bfe49db: the promoted-rule SPARQL filters on
+    STRSTARTS(?fromPath, "models"); the full projection and the diff check
+    (law_check._label_for) must agree on that label or the rule fires at
+    the gate and stays quiet on the Ontology page."""
+    from prism_service.services.ontology_graph import OntologyGraph
+
+    og = OntologyGraph(project)
+    og.rebuild()
+    assert _ask(og, "?m a o:Module ; rdfs:label 'models/x.py' .")
+    assert not _ask(og, "?m a o:Module ; rdfs:label 'x.py' .")

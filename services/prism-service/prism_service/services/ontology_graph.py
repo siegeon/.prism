@@ -728,7 +728,18 @@ class OntologyGraph:
                     g.add((u, RDFS.comment, rdflib.Literal(name)))
                     g.add((u, RDFS.label, rdflib.Literal(name[:80])))
             else:
-                g.add((u, RDFS.label, rdflib.Literal(name)))
+                label = name
+                file_path = sym.get("file") or ""
+                if kind == "module" and file_path:
+                    # task 2bfe49db: a module's label is its package-relative
+                    # path ("models/x.py"), the SAME label law_check emits
+                    # over a diff, so a promoted rule's
+                    # FILTER(STRSTARTS(?fromPath, "models")) fires on the
+                    # full graph and at the gate alike. Lazy import: law_check
+                    # imports NS from this module.
+                    from prism_service.services.law_check import _label_for
+                    label = _label_for(file_path)
+                g.add((u, RDFS.label, rdflib.Literal(label)))
             file_path = sym.get("file") or ""
             if file_path:
                 g.add((u, CLS("inFile"), rdflib.Literal(file_path)))
