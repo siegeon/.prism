@@ -16,6 +16,9 @@ AC-2, AC-3, AC-4 and AC-5 are transcript-driven: they require a REAL fresh
 `implement` drive's subagent transcripts, located via env vars:
   PRISM_BRAIN_FIRST_DRIVE_SESSION       -- the drive's session/run id
   PRISM_BRAIN_FIRST_TRANSCRIPT_ROOT     -- defaults to ~/.claude/projects
+  PRISM_BRAIN_FIRST_DRIVE_RUN           -- optional wf_<id> run dir; scopes the
+                                           measurement to ONE workflow run when a
+                                           session hosts several relaunched drives
   PRISM_BRAIN_FIRST_BLAST_RADIUS_SYMBOLS -- comma-separated symbols from
                                              that drive's own plan_doc
       (AC-4 only)
@@ -148,6 +151,9 @@ def _locate_drive_transcripts() -> list[Path]:
             continue
         session_dir = proj_dir / session
         subagents = session_dir / "subagents"
+        run = os.environ.get("PRISM_BRAIN_FIRST_DRIVE_RUN", "").strip()
+        if run:
+            subagents = subagents / "workflows" / run
         if subagents.is_dir():
             hits.extend(sorted(subagents.rglob("*.jsonl")))
         parent_file = proj_dir / f"{session}.jsonl"
