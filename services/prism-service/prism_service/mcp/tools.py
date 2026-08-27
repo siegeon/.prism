@@ -1170,6 +1170,30 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="memory_promote",
+        description=(
+            "Promote a memory in Understand to a rule or a term the "
+            "ontology holds (task c5650403, epic 61821448). Drafts a "
+            "SHACL rule or a lexicon term from the memory, each with its "
+            "own compliant and violating fixture, then drives one visible "
+            "run task to an owner review gate. The owner approves or "
+            "rejects; an approve installs the draft into the project's "
+            "own law and proves the violating fixture fires before it "
+            "commits."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "string",
+                    "description": "The mx-... memory id to promote.",
+                },
+            },
+            "required": ["memory_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
         name="workflow_fix_request",
         description=(
             "Queue a governed repair for an authoritative failed scripted workflow step. "
@@ -1899,6 +1923,10 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "prism_onboard",
     "task_create",
     "task_align_language",
+    # task c5650403 (epic 61821448): memory_promote joined the interactive
+    # profile as the trigger for the Promote-to-law workflow, the same way
+    # task_align_language did for align-language above.
+    "memory_promote",
     "workflow_fix_request",
     "workflow_behavior_get",
     "workflow_behavior_provide",
@@ -4684,6 +4712,12 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 }))]
             return [TextContent(type="text", text=_json(
                 {"run_task_id": None, "report": _result}))]
+
+        if name == "memory_promote":
+            from prism_service.services import law_promotion
+            _memory_id = arguments.get("memory_id", "")
+            _result = law_promotion.start_promotion(project_id, _memory_id)
+            return [TextContent(type="text", text=_json(_result))]
 
         if name == "task_list":
             _status = arguments.get("status")

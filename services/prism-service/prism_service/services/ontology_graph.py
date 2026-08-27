@@ -287,7 +287,11 @@ class OntologyGraph:
     def load_model(self) -> int:
         """Parse model.ttl AND every ontology/model-*.ttl extension (task
         f5352fa1: model-knowledge.ttl's o:Concept/o:Domain layer) into the
-        SAME shared TBox named graph, replacing it whole. Returns the
+        SAME shared TBox named graph, replacing it whole. Also loads this
+        PROJECT's own promoted-model.ttl when present (task c5650403: "a
+        memory in Understand becomes a rule or a term in the ontology") --
+        terms services/law_promotion.py installs after an owner approves
+        them at the promote_to_law workflow's review gate. Returns the
         triple count loaded — always called at the start of rebuild() so
         the TBox never drifts from the files on disk."""
         self._store.remove_graph(self._model_iri)
@@ -297,6 +301,11 @@ class OntologyGraph:
         for extra in sorted(_ONTOLOGY_DIR.glob("model-*.ttl")):
             extra_ttl = extra.read_text(encoding="utf-8")
             self._store.load(input=extra_ttl, format=ox.RdfFormat.TURTLE,
+                              base_iri=NS, to_graph=self._model_iri)
+        promoted = project_data_dir(self.project) / "ontology" / "promoted-model.ttl"
+        if promoted.exists():
+            promoted_ttl = promoted.read_text(encoding="utf-8")
+            self._store.load(input=promoted_ttl, format=ox.RdfFormat.TURTLE,
                               base_iri=NS, to_graph=self._model_iri)
         return sum(1 for _ in self._store.quads_for_pattern(
             None, None, None, self._model_iri))

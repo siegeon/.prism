@@ -65,6 +65,24 @@ ALIGN_LANGUAGE_STEPS = [
     {"id": "done", "agent": None, "type": "done", "validation": None},
 ]
 
+# Promote-to-law workflow (task c5650403, epic 61821448: "Understand writes
+# the law, the ontology holds it, the code obeys it"). A fifth, deliberately
+# SHORT named workflow: it turns one memory into a rule or a term the
+# ontology can check. draft (role dev) drafts a SHACL rule or a lexicon
+# term, with its own compliant and violating fixture, from the memory;
+# review is the ONE owner stop -- the same gate type the triage workflow's
+# decide step uses (a plain gate, agent=None, validation=None, so no
+# conductor_service.py rubric wiring is needed); install (role dev) writes
+# the approved draft into the project's own law, proves the violating
+# fixture fires, and refuses install with a clear reason when it does not;
+# done is terminal.
+PROMOTE_TO_LAW_STEPS = [
+    {"id": "draft", "agent": "dev", "type": "agent", "validation": None},
+    {"id": "review", "agent": None, "type": "gate", "validation": None},
+    {"id": "install", "agent": "dev", "type": "agent", "validation": None},
+    {"id": "done", "agent": None, "type": "done", "validation": None},
+]
+
 # NAMED workflow registry (task b837bc98): every step list a task can be
 # driven by, keyed by the SAME worker-facing value models.task.Task.workflow
 # stores ("implement" is models.task.DEFAULT_WORKFLOW). WORKFLOW_STEPS above
@@ -76,6 +94,7 @@ WORKFLOWS: dict[str, list[dict]] = {
     "implement": WORKFLOW_STEPS,
     "triage": TRIAGE_STEPS,
     "align_language": ALIGN_LANGUAGE_STEPS,
+    "promote_to_law": PROMOTE_TO_LAW_STEPS,
 }
 
 

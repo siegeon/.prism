@@ -90,45 +90,75 @@ def _local_name(iri: str) -> str:
     return iri[len(NS):] if iri.startswith(NS) else iri
 
 
-def _shapes_paths() -> list[Path]:
+def _project_shapes_path(project: str | None) -> Path | None:
+    """<project data dir>/ontology/promoted-shapes.ttl when `project` is
+    given and the file exists -- rules services/law_promotion.py installs
+    after an owner approves them (task c5650403). None (never a path that
+    doesn't exist) so callers can just skip it."""
+    if not project:
+        return None
+    from prism_service.config import project_data_dir
+    path = project_data_dir(project) / "ontology" / "promoted-shapes.ttl"
+    return path if path.exists() else None
+
+
+def _shapes_paths(project: str | None = None) -> list[Path]:
     """Every rule file: shapes.ttl plus any ontology/shapes*.ttl extension
     (task f5352fa1's shapes-knowledge.ttl) -- sorted so load order is
-    deterministic across runs."""
-    return sorted(_ONTOLOGY_DIR.glob("shapes*.ttl"))
+    deterministic across runs. Also `project`'s own promoted-shapes.ttl,
+    appended last, when given and on file."""
+    paths = sorted(_ONTOLOGY_DIR.glob("shapes*.ttl"))
+    extra = _project_shapes_path(project)
+    if extra is not None:
+        paths.append(extra)
+    return paths
 
 
-def _shapes_graph() -> rdflib.Graph:
-    """Every shapes*.ttl file merged into one graph -- rule_catalog() and
-    run_shapes() both read this, so a new rule file is picked up by both
-    without a second load path that could drift."""
+def _shapes_graph(project: str | None = None) -> rdflib.Graph:
+    """Every shapes*.ttl file (plus `project`'s own promoted-shapes.ttl,
+    when given) merged into one graph -- rule_catalog() and run_shapes()
+    both read this, so a new rule file is picked up by both without a
+    second load path that could drift."""
     g = rdflib.Graph()
-    for path in _shapes_paths():
+    for path in _shapes_paths(project):
         g.parse(str(path), format="turtle")
     return g
 
 
-def rule_catalog() -> list[dict]:
-    """The rules declared in shapes*.ttl (read via rdflib SPARQL — pyparsing
-    recursion, hence the big-stack thread; see _run_with_big_stack)."""
-    return _run_with_big_stack(_rule_catalog_impl)
+def _derived_from_local(iri: str) -> str:
+    """<urn:prism:onto:instance/memory/mx-...> -> "mx-..." -- the memory
+    id a promoted rule or term's o:derivedFrom points at (task c5650403).
+    Any other IRI shape passes through unchanged."""
+    prefix = f"{NS}instance/memory/"
+    return iri[len(prefix):] if iri.startswith(prefix) else iri
 
 
-def _rule_catalog_impl() -> list[dict]:
-    """Rule metadata (name/description/message/target_class), read
-    straight off shapes.ttl: one row per <rule>.target node shape. This
-    is the ONLY place rule names/descriptions live — never re-declared in
-    Python, so shapes.ttl cannot silently drift from what this module
+def rule_catalog(project: str | None = None) -> list[dict]:
+    """The rules declared in shapes*.ttl, plus `project`'s own promoted
+    rules when given (read via rdflib SPARQL — pyparsing recursion, hence
+    the big-stack thread; see _run_with_big_stack). Omitting `project`
+    keeps the original, project-agnostic behaviour."""
+    return _run_with_big_stack(_rule_catalog_impl, project)
+
+
+def _rule_catalog_impl(project: str | None = None) -> list[dict]:
+    """Rule metadata (name/description/message/target_class/derived_from),
+    read straight off shapes.ttl: one row per <rule>.target node shape.
+    This is the ONLY place rule names/descriptions live — never re-declared
+    in Python, so shapes.ttl cannot silently drift from what this module
     reports."""
-    g = _shapes_graph()
+    g = _shapes_graph(project)
     q = f"""
         PREFIX sh: <{_SH}>
         PREFIX rdfs: <{_RDFS}>
-        SELECT ?rule ?target ?name ?desc ?msg WHERE {{
+        PREFIX o: <{NS}>
+        SELECT ?rule ?target ?name ?desc ?msg ?derived WHERE {{
             ?node a sh:NodeShape ; sh:targetClass ?target .
             {{ ?node sh:property ?rule }} UNION {{ ?node sh:sparql ?rule }}
             OPTIONAL {{ ?rule sh:name ?name }}
             OPTIONAL {{ ?rule sh:description ?desc }}
             OPTIONAL {{ ?rule sh:message ?msg }}
+            OPTIONAL {{ ?rule o:derivedFrom ?derived }}
         }}
     """
     # One row per RULE. A constraint shared by several node shapes (the
@@ -146,6 +176,7 @@ def _rule_catalog_impl() -> list[dict]:
                 "title": str(row.name) if row.name else "",
                 "description": str(row.desc) if row.desc else "",
                 "message": str(row.msg) if row.msg else "",
+                "derived_from": _derived_from_local(str(row.derived)) if row.derived else "",
             }
         if str(row.target) not in entry["target_classes"]:
             entry["target_classes"].append(str(row.target))
@@ -166,16 +197,22 @@ def _rule_catalog_impl() -> list[dict]:
 _WORKER_TIMEOUT_S = 900
 
 
-def run_shapes(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[str]]]:
+def run_shapes(
+    data_graph: rdflib.Graph, project: str | None = None,
+) -> tuple[rdflib.Graph, dict[str, list[str]]]:
     """owlrl closure + pyshacl over shapes*.ttl in an isolated child process
-    (see the note above) — the tests call this directly with fixture graphs."""
+    (see the note above) — the tests call this directly with fixture
+    graphs. `project`, when given, also merges that project's own
+    promoted-shapes.ttl (task c5650403)."""
     if os.environ.get("PRISM_SHACL_IN_PROCESS") == "1":
-        return _run_with_big_stack(_run_shapes_impl, data_graph)
+        return _run_with_big_stack(_run_shapes_impl, data_graph, project)
     nt = data_graph.serialize(format="nt")
+    argv = [sys.executable, "-m", "prism_service.services.ontology_rules", "--worker"]
+    if project:
+        argv.append(project)
     proc = subprocess.run(
-        [sys.executable, "-m", "prism_service.services.ontology_rules", "--worker"],
-        input=nt.encode("utf-8"), capture_output=True, timeout=_WORKER_TIMEOUT_S,
-        env=os.environ.copy(),
+        argv, input=nt.encode("utf-8"), capture_output=True,
+        timeout=_WORKER_TIMEOUT_S, env=os.environ.copy(),
     )
     if proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "replace")[-4000:]
@@ -187,10 +224,13 @@ def run_shapes(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[s
 
 
 def _worker_main() -> int:
-    """Child-process entry: N-Triples on stdin -> JSON on stdout."""
+    """Child-process entry: N-Triples on stdin -> JSON on stdout. An
+    optional project name on argv[2] merges that project's own
+    promoted-shapes.ttl (task c5650403)."""
     data = rdflib.Graph()
     data.parse(data=sys.stdin.read(), format="nt")
-    inferred, violations = _run_with_big_stack(_run_shapes_impl, data)
+    project = sys.argv[2] if len(sys.argv) > 2 else None
+    inferred, violations = _run_with_big_stack(_run_shapes_impl, data, project)
     # owlrl's RDFS closure asserts `<literal> rdf:type rdfs:Resource`; rdflib
     # holds literal subjects in memory but no RDF syntax can carry them, and
     # the parent's N-Triples parser rejects the line — drop them here.
@@ -204,19 +244,22 @@ def _worker_main() -> int:
     return 0
 
 
-def _run_shapes_impl(data_graph: rdflib.Graph) -> tuple[rdflib.Graph, dict[str, list[str]]]:
+def _run_shapes_impl(
+    data_graph: rdflib.Graph, project: str | None = None,
+) -> tuple[rdflib.Graph, dict[str, list[str]]]:
     """Run owlrl RDFS closure + pyshacl SHACL validation of shapes.ttl
-    over a COPY of `data_graph` (the caller's own graph is left
-    untouched). Pure — no store I/O. Returns (inferred_graph, violations)
-    where violations maps rule name -> [focus node IRI, ...]; a rule
-    absent from the dict had zero violations for this run — a rule that
-    cannot appear here at all is decoration, not a rule."""
+    (plus `project`'s own promoted-shapes.ttl, when given) over a COPY of
+    `data_graph` (the caller's own graph is left untouched). Pure — no
+    store I/O. Returns (inferred_graph, violations) where violations maps
+    rule name -> [focus node IRI, ...]; a rule absent from the dict had
+    zero violations for this run — a rule that cannot appear here at all
+    is decoration, not a rule."""
     g = rdflib.Graph()
     g += data_graph
     owlrl.DeductiveClosure(owlrl.RDFS_Semantics).expand(g)
 
     _conforms, report_graph, _text = pyshacl.validate(
-        data_graph=g, shacl_graph=_shapes_graph(),
+        data_graph=g, shacl_graph=_shapes_graph(project),
         data_graph_format=None, shacl_graph_format="turtle",
         advanced=True, meta_shacl=False, inference="none",
     )
@@ -290,8 +333,8 @@ def validate(project: str) -> list[dict]:
 def _validate_impl(project: str) -> list[dict]:
     graph = OntologyGraph(project)
     base = graph.to_rdflib()
-    catalog = rule_catalog()
-    inferred, violations = run_shapes(base)
+    catalog = rule_catalog(project)
+    inferred, violations = run_shapes(base, project)
     looked_at = looked_at_counts(inferred, catalog)
 
     now = datetime.now(timezone.utc).isoformat()
@@ -385,14 +428,17 @@ def last_validated_at(project: str) -> str:
 def full_report(project: str) -> dict:
     """GET /api/okf/ontology/rules — the whole persisted report, per rule:
     title (sh:name), description, focus as [{iri, label}] capped at 20
-    (labels via rdfs:label off the live graph), and need_decision/total —
-    task 7dbb242f."""
+    (labels via rdfs:label off the live graph), derived_from (task
+    c5650403: which memory produced a promoted rule, empty for every
+    built-in rule), and need_decision/total — task 7dbb242f."""
     rows = _read_report(project)
     if not rows:
         validate(project)
         rows = _read_report(project)
 
     graph = OntologyGraph(project)
+    derived_by_name = {r["name"]: r.get("derived_from", "")
+                       for r in rule_catalog(project)}
     rules = []
     need_decision = 0
     validated_at = ""
@@ -408,6 +454,7 @@ def full_report(project: str) -> dict:
             "looked_at": r["looked_at"], "violations": n_violations,
             "focus": [{"iri": iri, "label": graph.label_of(iri)} for iri in focus_iris],
             "validated_at": r["validated_at"],
+            "derived_from": derived_by_name.get(r["name"], ""),
         })
     return {"rules": rules, "need_decision": need_decision,
             "total": len(rules), "validated_at": validated_at}

@@ -154,6 +154,46 @@ DEFAULT_ALIGN_LANGUAGE_BEHAVIOR: dict = {
     "include_imported": True,
 }
 
+# Promote-to-law workflow (task c5650403): step content for the catalog
+# entry, same role STEP_ACTIONS plays for the implement/conductor steps
+# above -- kept separate since this workflow's step ids (draft/review/
+# install/done) aren't in models.roles.STEP_ROLES.
+PROMOTE_TO_LAW_STEP_CONTENT = {
+    "draft": (
+        "A memory worth promoting",
+        "Draft a rule or a term from the memory, with its own fixtures",
+        "A draft TTL, ready for the owner to review",
+    ),
+    "review": (
+        "The drafted TTL and its fixtures",
+        "The owner reviews the draft against the memory it came from",
+        "An approved or a rejected draft",
+    ),
+    "install": (
+        "An approved draft",
+        "Write the TTL into the project's own law and prove the "
+        "violating fixture fires",
+        "An installed rule or term, or a clear refusal reason",
+    ),
+    "done": (
+        "An installed rule or term",
+        "Close out this promotion",
+        "A promoted memory",
+    ),
+}
+
+# Default promote-to-law behaviour (task c5650403): every project starts
+# here until it calls provide_workflow_behavior("promote_to_law", ...) to
+# override a field. require_fixture keeps install() honest -- a draft
+# with no demonstrable violating fixture is refused, never installed
+# quiet. target is always "project": a promoted rule or term is scoped to
+# the project it was drafted in, never the shared package ontology.
+DEFAULT_PROMOTE_TO_LAW_BEHAVIOR: dict = {
+    "enabled": True,
+    "require_fixture": True,
+    "target": "project",
+}
+
 GATE_AUTHORITY = {
     "story_gate": (
         "Decided by an independent Steward — machine-adjudicable when the "
@@ -369,6 +409,31 @@ def align_language_behavior_document(project: str) -> dict:
     return document
 
 
+def promote_to_law_behavior_document(project: str) -> dict:
+    """The promote_to_law workflow's current versioned behaviour for
+    `project`: DEFAULT_PROMOTE_TO_LAW_BEHAVIOR merged under whatever
+    .prism/behaviors/promote_to_law.json (this project's own override
+    file, via _behavior_file) carries, plus its own behaviorVersion. A
+    missing or unreadable file reads as version 1 with every default
+    untouched -- never raises."""
+    path = _behavior_file(project, "promote_to_law")
+    data: dict = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    document = dict(DEFAULT_PROMOTE_TO_LAW_BEHAVIOR)
+    for key in DEFAULT_PROMOTE_TO_LAW_BEHAVIOR:
+        if key in data:
+            document[key] = data[key]
+    try:
+        document["behaviorVersion"] = int(data.get("behaviorVersion") or 1)
+    except (TypeError, ValueError):
+        document["behaviorVersion"] = 1
+    return document
+
+
 def get_workflow_behavior(project: str, behavior_path: str = "validation") -> dict:
     workflow_id, _, step_id = behavior_path.strip("/").partition("/")
     if workflow_id == "align_language":
@@ -378,6 +443,12 @@ def get_workflow_behavior(project: str, behavior_path: str = "validation") -> di
                 404, "the align_language behaviour has no child steps")
         return {"path": workflow_id,
                 "behavior": align_language_behavior_document(project)}
+    if workflow_id == "promote_to_law":
+        if step_id:
+            raise HTTPException(
+                404, "the promote_to_law behaviour has no child steps")
+        return {"path": workflow_id,
+                "behavior": promote_to_law_behavior_document(project)}
     if workflow_id != "validation":
         raise HTTPException(404, "unknown workflow behavior")
     definition = ProjectWorkflow.model_validate(
@@ -420,6 +491,30 @@ def provide_workflow_behavior(
         temporary.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, destination)
         return {"ok": True, "path": "align_language",
+                "version": merged["behaviorVersion"]}
+    if workflow_id == "promote_to_law":
+        if separator or step_id:
+            raise HTTPException(
+                400, "the promote_to_law behaviour has no child steps")
+        current = promote_to_law_behavior_document(project)
+        if current["behaviorVersion"] != expected_version:
+            raise HTTPException(
+                409, f"behavior revision changed: expected "
+                     f"{expected_version}, current {current['behaviorVersion']}")
+        allowed = set(DEFAULT_PROMOTE_TO_LAW_BEHAVIOR)
+        unknown = set(behavior) - allowed
+        if unknown:
+            raise HTTPException(
+                422, f"unsupported behavior fields: {', '.join(sorted(unknown))}")
+        merged = dict(current)
+        merged.update({k: v for k, v in behavior.items() if k in allowed})
+        merged["behaviorVersion"] = current["behaviorVersion"] + 1
+        destination = _behavior_file(project, "promote_to_law")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, destination)
+        return {"ok": True, "path": "promote_to_law",
                 "version": merged["behaviorVersion"]}
     if workflow_id != "validation" or not separator or not step_id:
         raise HTTPException(400, "provide a child path such as validation/test")
@@ -887,6 +982,52 @@ def _align_language_workflow(project: str, svc=None) -> dict:
     }
 
 
+def _promote_to_law_workflow(project: str, svc=None) -> dict:
+    """The promote-to-law workflow's own catalog entry (task c5650403,
+    epic 61821448: "Understand writes the law, the ontology holds it, the
+    code obeys it"): a fifth first-class root workflow, built from
+    models.workflow.WORKFLOWS["promote_to_law"] the same way
+    _align_language_workflow builds align_language's. review is the ONE
+    owner stop -- persona resolves off each step's own `agent` (falling
+    back to "sm"), same as triage/align_language above."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    steps = []
+    for step in WORKFLOWS["promote_to_law"]:
+        persona = step["agent"] or "sm"
+        content = PROMOTE_TO_LAW_STEP_CONTENT[step["id"]]
+        steps.append({
+            "id": step["id"],
+            "agent": step["agent"],
+            "type": step["type"],
+            "validation": step["validation"],
+            "persona": persona,
+            "persona_label": _persona_label(persona),
+            "purpose": step["id"].replace("_", " ").capitalize(),
+            "input": content[0],
+            "action": content[1],
+            "output": content[2],
+            "authority": (
+                "Decided by the owner — the single human stop in this "
+                "promotion." if step["id"] == "review" else ""
+            ),
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
+    return {
+        "id": "promote_to_law",
+        "name": "Promote to law",
+        "description": (
+            "Turn a memory into a rule or a term the ontology holds, "
+            "with one owner review"
+        ),
+        "steps": steps,
+        "bots": [],
+        "occupancy": occupancy,
+    }
+
+
 @router.get("")
 def get_workflows(project: str = Query("default")) -> dict:
     """The conductor FSM, the bots that drive it, and who is standing where."""
@@ -980,7 +1121,11 @@ def get_workflows(project: str = Query("default")) -> dict:
     # as triage above -- no parent_id, since it is not one of conductor's
     # own nested capabilities.
     align_language = _align_language_workflow(project, svc=_svc)
-    catalog = [conductor, validation, triage, align_language, *conductor_behaviors]
+    # promote_to_law (task c5650403): a sixth root workflow, same posture
+    # as triage/align_language above -- no parent_id.
+    promote_to_law = _promote_to_law_workflow(project, svc=_svc)
+    catalog = [conductor, validation, triage, align_language, promote_to_law,
+              *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
