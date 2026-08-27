@@ -135,12 +135,18 @@ def dry_run(project: str, limit: int = 200) -> dict:
             "error": str(e),
         }
 
-    # List all decision memories in the understand domain
-    decisions = memory_svc.list_entries(
-        domain="understand",
-        type_filter="decision",
-        status_filter="active",
-    )[:limit]
+    # Gather all decision memories across all domains
+    all_decisions = []
+    for domain in memory_svc.list_domains():
+        entries = memory_svc.list_entries(
+            domain=domain,
+            type_filter="decision",
+            status_filter="active",
+        )
+        all_decisions.extend(entries)
+
+    # Limit to requested amount
+    decisions = all_decisions[:limit]
 
     total_empty = 0
     would_backfill = 0
