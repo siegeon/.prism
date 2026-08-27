@@ -118,11 +118,12 @@ def test_ac4_diff_base_is_merge_base_and_no_laundering(repos, monkeypatch):
     monkeypatch.setattr(_vs, "_git_changed_files",
                         lambda ws, baseline=None: (seen.append(baseline or ""),
                                                    real(ws, baseline))[1])
-    for n in range(2):  # origin/main advances twice; candidate never lands
-        _commit(up, "README.md", f"adv{n}", f"advance {n}")
-        _run(wt, "fetch", "-q", "origin")
+    for n in range(2):  # main advances + is merged forward; candidate never lands
+        _merge_main_forward(up, wt, "README.md", f"adv{n}", f"advance {n}")
+        mb = _run(wt, "merge-base", "origin/main", "HEAD")
+        assert mb != _c1, "merge-base must have moved off the frozen baseline"
         assert _cp.candidate_policy_edits(_TASK_ID) == [rel]
-        assert seen[-1] == _run(wt, "merge-base", "origin/main", "HEAD")
+        assert seen[-1] == mb, "judge must diff against merge-base at judge time"
 
 
 class _FakeTaskSvc:
