@@ -293,7 +293,7 @@ def unreachable_entry_point_reason_for_diff(workspace, baseline: str) -> str:
     return "\n".join(lines)
 
 
-def _fresh_merge_base(workspace: Path) -> str:
+def _fresh_merge_base(workspace: Path, stale_baseline: str) -> str:
     """Fresh diff base against origin/main's current tip, computed locally
     (no fetch -- whatever origin/main the workspace already has cached from
     its last fetch). A task's stored `baseline` is set once at worktree
@@ -304,7 +304,19 @@ def _fresh_merge_base(workspace: Path) -> str:
     it to this candidate (live incident: task 8582921d, 2026-08-26, a
     3-day-stale baseline produced a 168-file / +26093-line / 213-commit
     diff for a 4-file change and refused green_gate on symbols the task
-    never touched). Returns "" on any failure so the caller falls back to
+    never touched).
+
+    BUT origin/main can also lag BEHIND the stored baseline -- this repo's
+    own self-dev carve-out commits straight to dev/main and pushes moments
+    later, so a fresh worktree created off local HEAD while a just-made
+    commit is still unpushed has a baseline AHEAD of origin/main. Blindly
+    preferring the fresh point there would walk the diff base backward past
+    real, already-landed, unrelated local commits and blame the candidate
+    for them -- the identical-shaped defect found and fixed the same day in
+    control_plane.py's `_fresh_diff_base` (candidate_policy_edits). So the
+    fresh point is only adopted when the stored baseline is its ancestor
+    (or equal) -- i.e. genuinely FORWARD motion, never backward. Returns ""
+    on any failure (including "would regress") so the caller falls back to
     the stored baseline unchanged -- never raise, never refuse blind."""
     try:
         out = subprocess.run(
@@ -312,9 +324,18 @@ def _fresh_merge_base(workspace: Path) -> str:
             cwd=str(workspace), capture_output=True, text=True, timeout=10)
     except Exception:
         return ""
-    if out.returncode != 0:
+    if out.returncode != 0 or not out.stdout.strip():
         return ""
-    return out.stdout.strip()
+    fresh = out.stdout.strip().splitlines()[0]
+    if not stale_baseline or fresh == stale_baseline:
+        return fresh
+    try:
+        anc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", stale_baseline, fresh],
+            cwd=str(workspace), capture_output=True, text=True, timeout=10)
+    except Exception:
+        return ""
+    return fresh if anc.returncode == 0 else ""
 
 
 def unreachable_entry_point_reason(task) -> str:
@@ -343,7 +364,7 @@ def unreachable_entry_point_reason(task) -> str:
     try:
         if not Path(path).is_dir():
             return ""
-        baseline = _fresh_merge_base(Path(path)) or baseline
+        baseline = _fresh_merge_base(Path(path), baseline) or baseline
         return unreachable_entry_point_reason_for_diff(Path(path), baseline)
     except Exception:
         return ""

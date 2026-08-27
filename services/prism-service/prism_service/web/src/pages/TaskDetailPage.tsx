@@ -1241,13 +1241,21 @@ export default function TaskDetailPage() {
     });
   }, [id, project]);
 
-  // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
-  // (run=false — AST scan only), readiness, delivery. The old shape awaited
-  // tests?run=true FIRST, so every page open ran a real pytest suite and
-  // readiness/delivery queued behind it — with the browser's 6-connection
-  // limit + SSE + the 5s poll, the page sat on "Loading…" for 30-60s
-  // (owner 2026-07-16: "it's not even running?").
+  // ONE-SHOT PER TRANSITION, all in PARALLEL and all CHEAP: test discovery
+  // (run=false — AST scan only) and delivery. The old shape keyed only on
+  // [id, project] and never re-ran for the rest of the session, so a page
+  // opened BEFORE a gate resolves (e.g. green_gate approved live) kept
+  // showing the stale pre-approval delivery object forever — a "DONE"
+  // header next to a "NOT DELIVERED YET · GATE NOT PASSED YET" badge, even
+  // after the work actually shipped (task 8582921d). deliveryRunFor uses
+  // the SAME runKey/re-observe shape as readinessRunFor/ranPinTestsFor
+  // above: re-fetch on a gate_state/workflow_step/status TRANSITION, never
+  // a fixed-interval timer.
+  const deliveryRunFor = useRef<string>("");
   useEffect(() => {
+    const runKey = `${id}:${project}:${task?.workflow_step || ""}:${task?.gate_state || ""}:${task?.status || ""}`;
+    if (!id || deliveryRunFor.current === runKey) return;
+    deliveryRunFor.current = runKey;
     let cancelled = false;
     (async () => {
       try {
@@ -1263,7 +1271,7 @@ export default function TaskDetailPage() {
       } catch { if (!cancelled) setDelivery(null); }
     })();
     return () => { cancelled = true; };
-  }, [id, project]);
+  }, [id, project, task?.workflow_step, task?.gate_state, task?.status]);
 
   // Re-fetch readiness on a gate_state/workflow_step/status TRANSITION —
   // never a fixed-interval timer (stop_if). Same runKey/re-observe shape as

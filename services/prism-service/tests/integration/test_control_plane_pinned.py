@@ -318,6 +318,79 @@ def test_gate_still_refuses_a_genuine_conflict_resolution_edit(tmp_path):
     assert "governance_rubrics.yaml" in res["reason"]
 
 
+def test_gate_not_refused_when_baseline_stale_after_legitimate_rebase(tmp_path):
+    """The stored `baseline` is set ONCE at worktree creation and never
+    updated -- not even when the worktree is legitimately rebased onto a
+    newer origin/main to stay shippable. A rebase folds the absorbed commits
+    into the worktree's OWN first-parent lineage (no merge commit for the
+    existing first-parent scoping to exempt them via), so diffing against
+    the STALE stored baseline blames the candidate for a policy file an
+    UNRELATED task changed on main after the candidate's baseline was
+    recorded but before its rebase (suspected live incident, task 3a3f90da,
+    2026-08-26). The fix resolves the diff base FRESH via
+    merge-base(HEAD, origin/main) instead of trusting the stale stored
+    value."""
+    task_svc, cond = _services(tmp_path)
+
+    bare = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(bare))
+    repo = tmp_path / "repo"
+    _git(tmp_path, "clone", "-q", str(bare), str(repo))
+    _git(repo, "checkout", "-q", "-b", "main")
+    _write(repo, _RUBRIC_REL, _PINNED_RUBRIC)
+    _write(repo, _NONPOLICY_REL, "# non-policy source\nX = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "baseline")
+    _git(repo, "push", "-q", "-u", "origin", "main")
+    stale_baseline = _git(repo, "rev-parse", "HEAD")
+
+    # The candidate's task worktree is created off the (soon-to-be-stale)
+    # baseline, sharing the repo's object store/remotes -- exactly as a real
+    # `git worktree add` off the PRISM checkout does.
+    wt = tmp_path / "wt"
+    _git(repo, "worktree", "add", "-q", "-b", "prism/ws/t3", str(wt), stale_baseline)
+
+    # The candidate makes its OWN commit, touching only a non-policy file.
+    _write(wt, _NONPOLICY_REL, "# non-policy source\nX = 2  # candidate edit\n")
+    _git(wt, "commit", "-qam", "candidate: own non-policy change")
+
+    # Meanwhile an UNRELATED task lands its own, already-authorized policy
+    # change on main (a separate clone, pushed to the same bare origin).
+    other = tmp_path / "other"
+    _git(tmp_path, "clone", "-q", str(bare), str(other))
+    _git(other, "checkout", "-q", "-B", "main", "origin/main")
+    _write(other, _RUBRIC_REL, _LOOSENED_RUBRIC)
+    _git(other, "commit", "-qam", "unrelated task: authorized rubric change")
+    _git(other, "push", "-q", "origin", "main")
+
+    # The repo (sharing its .git with `wt`) refreshes its cached origin/main
+    # -- exactly what the fix relies on already being there. The fix itself
+    # never runs `git fetch`.
+    _git(repo, "fetch", "-q", "origin")
+
+    # The candidate's worktree is legitimately rebased onto the new
+    # origin/main -- folding the unrelated rubric commit into its own
+    # first-parent lineage, with NO merge commit for the existing
+    # first-parent scoping to exempt it via.
+    _git(wt, "rebase", "-q", "origin/main")
+
+    # Sanity: a blind diff against the STALE stored baseline WOULD show the
+    # rubric as changed -- this is exactly the shape that used to
+    # false-refuse (task 3a3f90da).
+    from prism_service.services.verifier_service import _git_changed_files
+    stale_diff = _git_changed_files(wt, stale_baseline)
+    assert any(cp.is_policy_file(f) for f in stale_diff), stale_diff
+
+    t = task_svc.create(title="long-running feature task rebased onto newer main")
+    _register_ws(t.id, wt, stale_baseline, repo)
+    assert cp.candidate_policy_edits(t.id) == []
+    _advance_to(cond, t.id, "story_gate")
+    res = cond.gate_decide(t.id, "approve", reason="story looks good",
+                           override=True, actor="s1", session_id="s1")
+    assert res["ok"] is True, res
+    assert res["gate_state"] == "passed"
+
+
 def test_authorized_policy_change_env_allowed(tmp_path, monkeypatch):
     task_svc, cond = _services(tmp_path)
     repo, baseline, wt = _policy_repo(tmp_path)
