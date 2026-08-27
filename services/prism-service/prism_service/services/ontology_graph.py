@@ -419,9 +419,14 @@ class OntologyGraph:
                 per_class[f"CodeGraph::{cls_local}"] = n
 
         # SHACL re-validation (task 8eeb3e65): every rebuild re-validates,
-        # so the persisted report never trails the ABox it describes.
+        # so the persisted report never trails the ABox it describes. With
+        # the full code graph projected (task f9e0745e) validation costs
+        # about a minute on the prism project, so above a triple threshold
+        # it runs on a single-flight background thread and the report
+        # lands when it is done (validated_at shows the lag). Small graphs,
+        # which every test fixture is, still validate inline.
         from prism_service.services import ontology_rules
-        ontology_rules.validate(self.project)
+        ontology_rules.validate_after_rebuild(self.project, len(g))
 
         return {"total_triples": len(g), "per_class": per_class}
 

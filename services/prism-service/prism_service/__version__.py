@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.101"
+PRISM_VERSION = "7.13.102"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7259,4 +7259,33 @@ PRISM_VERSION_NOTES += (
     "reload path (task b15e84b2) -- a dropped connection is not a "
     "version mismatch, and sharedStream.ts must never call reload "
     "itself, per that task's own regression test."
+    "\n\n7.13.102: Understand writes the law, the ontology holds it, the code "
+    "obeys it (epic 61821448, owner: the ontology is the lexicon and the law, "
+    "Understand feeds it, the law dictates the code; unify, do not subdivide). "
+    "EXPLORE TRUTH (f9e0745e): every indexer reads ONE skip list "
+    "(source_service._INGEST_SKIP_DIRS; brain_engine kept a private copy "
+    "without web_dist, which is how 24439 minified bundle symbols became the "
+    "code graph), a purge by path segment removes staged files and graph rows "
+    "under skipped dirs on every ingest (52978 entities and 104130 edges on "
+    "the prism project), a module doc over 4 KB indexes as a bounded head "
+    "chunk so __version__.py stops matching every query, and the ontology "
+    "projects EVERY real code symbol and its calls / contains / uses / "
+    "imports / inherits / rationale_for / method edges (o:Rationale joins "
+    "o:Code). The full graph makes SHACL validation cost about a minute "
+    "(owlrl closure 34 s), so above 20k triples validation runs on a "
+    "single-flight background thread after the ABox swap and the report "
+    "lands when done (follow-up 6503d7f8 makes it fast). PROMOTE TO LAW "
+    "(c5650403): a new top-level workflow on /workflows, draft -> owner "
+    "review gate -> install -> done; services/law_promotion.py drafts a SHACL "
+    "rule from an architecture-principle memory (a real constraint over "
+    "o:imports between o:Module paths), a rule skeleton from a convention or "
+    "pattern, or an o:Term from a memory that names a word; every draft "
+    "carries o:derivedFrom the memory; POST /api/memory/{id}/promote and MCP "
+    "memory_promote start the run; install writes the project's own "
+    "promoted-shapes.ttl / promoted-model.ttl, which the graph and the rule "
+    "catalog load beside the package TTL; the Rules and Terms tabs show "
+    "'from mx-...' linking to the memory. Tests: "
+    "test_explore_indexes_source_not_bundles (8), "
+    "test_ontology_projects_the_code_graph (8), test_memory_promotes_to_law "
+    "(11); two re-anchors named in place."
 )

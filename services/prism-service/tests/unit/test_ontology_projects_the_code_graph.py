@@ -204,3 +204,45 @@ def test_a_second_rebuild_does_not_double_the_triples(project):
     assert first["total_triples"] == second["total_triples"]
     assert first["per_class"] == second["per_class"]
     assert og._count("Function") == 2
+
+
+# ----------------------------------------------------------------------
+# Validation after a rebuild (task f9e0745e): a small graph validates
+# inline, a large one schedules one background validation and coalesces
+# rebuilds that land while it runs.
+# ----------------------------------------------------------------------
+
+
+def test_small_graph_validates_inline(monkeypatch):
+    from prism_service.services import ontology_rules as r
+
+    calls = []
+    monkeypatch.setattr(r, "validate", lambda project: calls.append(project))
+    assert r.validate_after_rebuild("p-small", 10) == "inline"
+    assert calls == ["p-small"]
+
+
+def test_large_graph_validates_on_a_single_flight_thread(monkeypatch):
+    import threading, time
+    from prism_service.services import ontology_rules as r
+
+    started = threading.Event(); release = threading.Event(); calls = []
+
+    def slow_validate(project):
+        calls.append(project); started.set(); release.wait(5)
+
+    monkeypatch.setattr(r, "validate", slow_validate)
+    monkeypatch.setattr(r, "ASYNC_VALIDATE_TRIPLES", 100)
+    assert r.validate_after_rebuild("p-big", 1000) == "scheduled"
+    assert started.wait(5)
+    assert r.validation_in_flight("p-big")
+    # a second rebuild while running coalesces into one more run
+    assert r.validate_after_rebuild("p-big", 1000) == "queued"
+    assert r.validate_after_rebuild("p-big", 1000) == "queued"
+    release.set()
+    for _ in range(100):
+        if not r.validation_in_flight("p-big") and len(calls) >= 2:
+            break
+        time.sleep(0.05)
+    assert calls == ["p-big", "p-big"]
+    assert not r.validation_in_flight("p-big")

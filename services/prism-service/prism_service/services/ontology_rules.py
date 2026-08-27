@@ -458,3 +458,61 @@ def full_report(project: str) -> dict:
         })
     return {"rules": rules, "need_decision": need_decision,
             "total": len(rules), "validated_at": validated_at}
+
+
+# ----------------------------------------------------------------------
+# Validation after a rebuild (task f9e0745e). A full code graph makes
+# validate() cost about a minute (owlrl closure plus pyshacl over 56k
+# triples on the prism project). Above ASYNC_VALIDATE_TRIPLES the work
+# runs on one background thread per project; a rebuild that lands while
+# a validation is running marks it and the thread runs once more when it
+# finishes, so the report always reflects the last ABox. Below the
+# threshold (every test fixture) validation stays inline. Task 6503d7f8
+# makes validation itself fast.
+# ----------------------------------------------------------------------
+
+ASYNC_VALIDATE_TRIPLES = 20_000
+_ASYNC_LOCK = __import__("threading").Lock()
+_ASYNC_RUNNING: set = set()
+_ASYNC_PENDING: set = set()
+
+
+def validate_after_rebuild(project: str, triple_count: int) -> str:
+    """Validate inline for a small graph. For a large one, validate on a
+    background thread and return "scheduled" (or "queued" when a run is
+    already in flight). Returns "inline" when it ran synchronously."""
+    import threading
+
+    if triple_count < ASYNC_VALIDATE_TRIPLES or os.environ.get("PRISM_ONTOLOGY_VALIDATE_SYNC") == "1":
+        validate(project)
+        return "inline"
+    with _ASYNC_LOCK:
+        if project in _ASYNC_RUNNING:
+            _ASYNC_PENDING.add(project)
+            return "queued"
+        _ASYNC_RUNNING.add(project)
+
+    def _run() -> None:
+        try:
+            while True:
+                try:
+                    validate(project)
+                except Exception:  # noqa: BLE001 - a failed validation must not kill the thread
+                    pass
+                with _ASYNC_LOCK:
+                    if project in _ASYNC_PENDING:
+                        _ASYNC_PENDING.discard(project)
+                        continue
+                    _ASYNC_RUNNING.discard(project)
+                    return
+        finally:
+            with _ASYNC_LOCK:
+                _ASYNC_RUNNING.discard(project)
+
+    threading.Thread(target=_run, name=f"ontology-validate-{project}", daemon=True).start()
+    return "scheduled"
+
+
+def validation_in_flight(project: str) -> bool:
+    with _ASYNC_LOCK:
+        return project in _ASYNC_RUNNING
