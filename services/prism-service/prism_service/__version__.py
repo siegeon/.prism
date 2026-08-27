@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.108"
+PRISM_VERSION = "7.13.109"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7363,4 +7363,29 @@ PRISM_VERSION_NOTES += (
     "test_ship_worker_machine_track.py, "
     "test_ship_worker_stall_guard.py) + related gate/shipped-ness suites: "
     "65 passed."
+    "\n7.13.109: epic 61821448 slices 3-6, the law and the code graph become "
+    "one loop. (1) task 93ca4274: graphify emits no kind for Python, so every "
+    "def/class/module landed as kind=code; graph_service._import_graph_json "
+    "now derives module / class / method / function from graphify's own edge "
+    "structure (file self-node, method edge, contains edge + '()' label), "
+    "never from name shape; on the prism graph: function 5684, module 568, "
+    "class 312, method 854, code 550 (TS/JS). (2) task 6503d7f8: validation "
+    "108 s -> ~9.7 s on the live store: a targeted rdfs:subClassOf type "
+    "expansion in plain Python replaces owlrl's full closure, twin-classes is "
+    "precomputed in Python and read by the shape as a marker triple, a "
+    "compiled-SPARQL cache stops pyshacl re-parsing the same text per focus "
+    "node, and code triples stay out of the worker unless a promoted rule "
+    "targets o:Code. (3) task 2bfe49db: green_gate runs the project's "
+    "promoted rules over the task DIFF (services/law_check.py, in-process, "
+    "tens of triples) and parks with 'Rule <name> fires on this diff. Module "
+    "<path> imports <path>. From memory mx-... (Understand).'; the task page "
+    "links the rule and the memory (LinkedText); the full projection now "
+    "labels a module by its package-relative path so the same rule fires on "
+    "the Ontology page and at the gate. (4) task b1971944: a firing rule "
+    "posts ONE deduplicated 'ontology' signal on the Queue; POST "
+    "/api/signals/{id}/decide takes accept / exempt / fix / codify "
+    "(ontology/decisions.json; exemptions filtered at read time); a "
+    "Knowledge health entry on /workflows carries live metrics "
+    "(services/knowledge_health.py). Full unit suite on the merged tree: "
+    "3248 passed (wave 35); real vite build green."
 )
