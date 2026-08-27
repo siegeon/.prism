@@ -68,8 +68,11 @@ def project(tmp_path, monkeypatch):
 def test_channel_vocabulary_is_defined_once_on_the_model():
     from prism_service.models import task as task_model
 
+    # "ontology" joined the vocabulary in task afb47c33 (7.13.124): a rule
+    # decision on the Rules tab writes channel="ontology" on the Signal it
+    # records, so the model declares that value once, here.
     assert tuple(task_model.CHANNELS) == (
-        "ui", "mcp", "github", "jira", "slack", "outlook", "daemon")
+        "ui", "mcp", "github", "jira", "slack", "outlook", "daemon", "ontology")
 
 
 def test_task_defaults_to_blank_channel():
