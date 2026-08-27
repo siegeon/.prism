@@ -602,6 +602,23 @@ def _to_evaluate_shape(rows: list[dict]) -> list[dict]:
     return out
 
 
+# A firing rule becomes a decision on the Queue (task b1971944, epic
+# 61821448). Listeners registered here run at the end of every
+# _validate_impl, with (project, report_rows) -- report_rows is the SAME
+# list _persist writes from, before any focus cap is applied. A listener
+# that raises never breaks validate() itself.
+_ON_VALIDATED: list = []
+
+
+def on_validated(callback) -> None:
+    """Register `callback(project, report_rows)` to run after every
+    validate() persists its report. report_rows is a list of
+    {"name","title","description","message","looked_at","focus","validated_at"}
+    dicts, one per rule in the catalog (a quiet rule has an empty
+    "focus")."""
+    _ON_VALIDATED.append(callback)
+
+
 def validate(project: str) -> list[dict]:
     """Run the full SHACL pass for `project` and PERSIST the report,
     replacing whatever was on file. Returns the same shape evaluate()
@@ -626,6 +643,11 @@ def _validate_impl(project: str) -> list[dict]:
             "focus": violations.get(r["name"], []), "validated_at": now,
         })
     _persist(graph, project, rows)
+    for _cb in _ON_VALIDATED:
+        try:
+            _cb(project, rows)
+        except Exception:
+            pass
     return _to_evaluate_shape(rows)
 
 

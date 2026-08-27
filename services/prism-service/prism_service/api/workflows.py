@@ -1028,6 +1028,32 @@ def _promote_to_law_workflow(project: str, svc=None) -> dict:
     }
 
 
+def _knowledge_health_workflow(project: str) -> dict:
+    """The Knowledge health scoreboard's own catalog entry (task
+    b1971944, epic 61821448): a seventh root workflow, same posture as
+    triage/align_language/promote_to_law above -- no parent_id. It has no
+    steps of its own (the metrics are a live read, never a run a person
+    starts), so it carries "metrics" (services/knowledge_health.py)
+    instead of the step/occupancy pair every other entry above builds."""
+    try:
+        from prism_service.services import knowledge_health
+        metrics = knowledge_health.metrics(project)
+    except Exception:
+        metrics = {}
+    return {
+        "id": "knowledge_health",
+        "name": "Knowledge health",
+        "description": (
+            "Is Understand actually helping? Search feedback, recall-to-use, "
+            "evidence, and how many rules and modules carry real provenance"
+        ),
+        "steps": [],
+        "bots": [],
+        "occupancy": {},
+        "metrics": metrics,
+    }
+
+
 @router.get("")
 def get_workflows(project: str = Query("default")) -> dict:
     """The conductor FSM, the bots that drive it, and who is standing where."""
@@ -1124,8 +1150,11 @@ def get_workflows(project: str = Query("default")) -> dict:
     # promote_to_law (task c5650403): a sixth root workflow, same posture
     # as triage/align_language above -- no parent_id.
     promote_to_law = _promote_to_law_workflow(project, svc=_svc)
+    # knowledge_health (task b1971944): a seventh root workflow, same
+    # posture -- no parent_id.
+    knowledge_health = _knowledge_health_workflow(project)
     catalog = [conductor, validation, triage, align_language, promote_to_law,
-              *conductor_behaviors]
+              knowledge_health, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
