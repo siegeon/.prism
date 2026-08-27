@@ -127,3 +127,69 @@ def test_step_meta_track_width_is_fixed_not_data_dependent():
         f"the outer wrapper must not use flex-1 (flex-grown) sizing — width must be fixed, not data-dependent; got: {outer_class!r}"
     assert not any(t.startswith("max-w-") for t in outer_tokens), \
         f"the old max-w-[...] CAP (not a fixed width) must not remain on StepMeta's outer wrapper; got: {outer_class!r}"
+
+
+def test_gate_wait_time_is_excluded_from_the_bar_scale():
+    """Second follow-up (task c5b70c27): sumDur/sumTokens previously summed
+    EVERY step including GATE steps. A gate's duration is human approval wait
+    time, not agent work — one gate that sat pending 85h49m dwarfed every
+    real agent step (30s-3min) so completely that every real step's bar was
+    crushed to the 2% floor while the gate's bar alone read ~100%. The fix
+    excludes gate steps from the accumulation loop entirely.
+    """
+    src = _read()
+
+    sum_block_idx = src.index("let sumTokens")
+    # Grab through the closing brace of the accumulation loop.
+    loop_end_idx = src.index("}", src.index("for (const s of steps)", sum_block_idx))
+    sum_block = src[sum_block_idx:loop_end_idx + 1]
+
+    assert "for (const s of steps)" in sum_block, \
+        "sumTokens/sumDur must be accumulated by iterating `steps`"
+    assert 'if (s.type === "gate") continue' in sum_block, \
+        "the accumulation loop must skip gate steps (s.type === \"gate\") before adding to sumTokens/sumDur"
+
+    # The skip must appear BEFORE either accumulation line, so a gate step
+    # never contributes to either sum (order matters — a skip placed after
+    # the += lines would be dead code).
+    skip_idx = sum_block.index('if (s.type === "gate") continue')
+    tokens_add_idx = sum_block.index("sumTokens +=")
+    dur_add_idx = sum_block.index("sumDur +=")
+    assert skip_idx < tokens_add_idx and skip_idx < dur_add_idx, \
+        "the gate-skip must run before sumTokens/sumDur are incremented, or gate durations still leak into the sum"
+
+
+def test_gate_row_never_renders_a_proportional_bar():
+    """A resolved (non-pending) gate row must render its duration/tokens as
+    plain caption text ONLY — never through the proportional-bar-rendering
+    path used for real agent-step bars. A gate's wait time is not
+    commensurable with agent work, so a `pct`-based fill for it is
+    misleading no matter what it's scaled against.
+    """
+    src = _read()
+
+    # GateRow's resolved-gate branch (the `else` of `gi.state === "pending"`)
+    # must pass isGate into StepMeta so the bar-rendering branch is skipped.
+    # GateRow is the last function declared in the file, so there is no
+    # following "\nfunction " to bound it — read to end of file instead.
+    gate_row_idx = src.index("function GateRow")
+    gate_row_src = src[gate_row_idx:]
+
+    assert "<StepMeta durMs={durMs} tokens={tokens} sumTokens={sumTokens} sumDur={sumDur} hasTurns={(turns?.length ?? 0) > 0} open={open} isGate />" in gate_row_src, \
+        "GateRow's resolved-gate call site must pass isGate to StepMeta so no proportional bar renders for a gate"
+
+    # StepMeta itself: the bar `<div className="h-2 rounded-full` track must
+    # be conditioned on NOT isGate, so no code path can render a bar for a
+    # gate regardless of its val/pct.
+    step_meta_idx = src.index("function StepMeta")
+    step_meta_next_fn_idx = src.index("\nfunction ", step_meta_idx + 1)
+    step_meta_src = src[step_meta_idx:step_meta_next_fn_idx]
+
+    assert "isGate" in step_meta_src, \
+        "StepMeta must accept an isGate prop"
+    bar_div_idx = step_meta_src.index('<div className="h-2 rounded-full')
+    # The condition guarding that div must appear on the line(s) just before
+    # it and must reference !isGate.
+    guard_window = step_meta_src[max(0, bar_div_idx - 200):bar_div_idx]
+    assert "!isGate" in guard_window, \
+        "the bar track div (`h-2 rounded-full`) must be conditioned on !isGate so a gate never renders a proportional fill"

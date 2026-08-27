@@ -81,8 +81,8 @@ function stageDurations(turns: StepTurn[]): Record<string, number> {
 // bar's width is directly comparable to every other bar's. The bar tracks
 // tokens when any stage spent tokens, else duration; the caption shows both.
 // Replaces the redundant passed-pill — the spine ✓ already says "done".
-function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open }: {
-  durMs?: number; tokens: number; sumTokens: number; sumDur: number; hasTurns: boolean; open: boolean;
+function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open, isGate }: {
+  durMs?: number; tokens: number; sumTokens: number; sumDur: number; hasTurns: boolean; open: boolean; isGate?: boolean;
 }) {
   const useTokens = sumTokens > 0;
   const val = useTokens ? tokens : (durMs ?? 0);
@@ -95,8 +95,13 @@ function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open }: {
         {/* Owner 2026-07-19: render the bar ONLY when this step actually spent
             something. A gate with no real tokens gets NO grey track (was a
             full-width 'massive grey line'); the bars that DO show are
-            proportional to the heaviest step. */}
-        {val > 0 && (
+            proportional to the heaviest step.
+            Task c5b70c27: a GATE's own duration is human wait time, not agent
+            work — it is excluded from sumDur/sumTokens (see StepRail) AND
+            never rendered as a proportional bar here (isGate skips the bar
+            entirely), so a resolved gate reads as plain duration/token text,
+            never a misleadingly-scaled fill. */}
+        {val > 0 && !isGate && (
           <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-3)", boxShadow: "inset 0 0 0 1px var(--border-default)" }}>
             <div className="h-full rounded-full" style={{
               width: `${pct}%`,
@@ -205,12 +210,17 @@ export default function StepRail({
   const steps = useWorkflowSteps();
   const byStep = turnsByStep(turns ?? []);
   const durByStep = stageDurations(turns ?? []);
-  // Bar scale: the TOTAL across every stage in the run (so each bar's width
-  // is that stage's share of the whole run, and bars are directly
+  // Bar scale: the TOTAL across every AGENT stage in the run (so each bar's
+  // width is that stage's share of the real work, and bars are directly
   // comparable to each other — not each independently normalized against
   // the single heaviest stage, which made bar lengths look arbitrary).
+  // Task c5b70c27: GATE steps are EXCLUDED here — a gate's duration is human
+  // approval wait time (observed: plan_gate sat 85h49m on one task while
+  // real agent steps ran 30s-3min), not commensurable agent work, so letting
+  // it into the sum crushed every real step's bar to the 2% floor.
   let sumTokens = 0, sumDur = 0;
   for (const s of steps) {
+    if (s.type === "gate") continue;
     sumTokens += stepTokens?.[s.id] ?? 0;
     sumDur += durByStep[s.id] ?? 0;
   }
@@ -551,7 +561,7 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, sumTokens, sumDu
             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
-          <StepMeta durMs={durMs} tokens={tokens} sumTokens={sumTokens} sumDur={sumDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+          <StepMeta durMs={durMs} tokens={tokens} sumTokens={sumTokens} sumDur={sumDur} hasTurns={(turns?.length ?? 0) > 0} open={open} isGate />
         )}
       </button>
       {open && g && (
