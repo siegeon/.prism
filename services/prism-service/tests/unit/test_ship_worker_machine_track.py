@@ -390,3 +390,108 @@ def test_sweep_once_ships_machine_track_when_no_human_track_pending(
     assert captured["tid"] == task_id
     assert captured["pid"] == "default"
     assert captured["on_landed"] is ship_worker._adjudicate_after_ship
+
+
+# --- task 8b4e7cb6: a timed-out git/gh call must not orphan its helper -----
+#
+# `_default_runner` used `subprocess.run(timeout=120)`, which on timeout kills
+# only the DIRECT child. `git push` over HTTPS spawns `git-remote-https`
+# beneath it; that grandchild kept its github.com connection open long after
+# the runner reported a timeout (two orphans observed live 2026-08-26). The
+# tests below run the REAL runner against short `python -c` children, never
+# the FakeGh stub, so the process-tree behaviour is what is measured.
+
+import inspect
+import time
+
+
+def _pid_is_gone(pid: int) -> bool:
+    """True when `pid` is dead: no such process, or a zombie (reparented to a
+    non-reaping PID 1 in a container). A zombie holds no socket, so it is dead
+    for the oracle's purpose."""
+    if sys.platform.startswith("win"):
+        try:
+            import psutil  # type: ignore
+            return not psutil.pid_exists(pid)
+        except ImportError:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"],
+                                 capture_output=True, text=True).stdout
+            return str(pid) not in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+        return state == "Z"
+    except (OSError, IndexError):
+        return False
+
+
+_CHILD_THAT_SPAWNS_A_GRANDCHILD = (
+    "import os, subprocess, sys, time\n"
+    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "pgid = os.getpgid(0) if hasattr(os, 'getpgid') else -1\n"
+    "open(sys.argv[1], 'w').write(f'{g.pid} {pgid}')\n"
+    "time.sleep(60)\n"
+)
+
+
+def test_default_runner_kills_orphaned_grandchild_on_timeout(tmp_path, monkeypatch):
+    """AC-1, AC-2, AC-5: the whole process group dies, the contract holds."""
+    from prism_service.services import ship_worker
+
+    monkeypatch.setattr(ship_worker, "RUN_TIMEOUT_S", 2, raising=False)
+    pids = tmp_path / "pids"
+    argv = [sys.executable, "-c", _CHILD_THAT_SPAWNS_A_GRANDCHILD, str(pids)]
+
+    started = time.monotonic()
+    rc, out, err = ship_worker._run(ship_worker._default_runner, argv)
+    elapsed = time.monotonic() - started
+
+    # AC-2: the timeout still surfaces through `_run`'s existing contract.
+    assert rc == 1
+    assert out == ""
+    assert err.startswith(f"{sys.executable} failed to run:")
+    assert "timed out" in err.lower()
+    # AC-4 (runtime half): the ceiling is RUN_TIMEOUT_S, not a hard-coded 120.
+    assert elapsed < 10, f"runner took {elapsed:.1f}s; RUN_TIMEOUT_S=2 was not honoured"
+
+    grandchild_pid, child_pgid = pids.read_text().split()
+    grandchild_pid, child_pgid = int(grandchild_pid), int(child_pgid)
+
+    # AC-1: the grandchild is dead within 3s of the runner returning.
+    deadline = time.monotonic() + 3
+    while not _pid_is_gone(grandchild_pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    try:
+        assert _pid_is_gone(grandchild_pid), (
+            f"grandchild {grandchild_pid} survived the timeout: only the direct "
+            "child was killed, the helper process was orphaned")
+    finally:
+        if not _pid_is_gone(grandchild_pid):
+            os.kill(grandchild_pid, 9)  # do not leak the orphan out of the suite
+
+    # AC-5: the child ran in its OWN process group, so a group kill cannot hit
+    # the daemon (this test process) itself.
+    if hasattr(os, "getpgid"):
+        assert child_pgid != os.getpgid(os.getpid())
+
+
+def test_default_runner_passes_through_rc_stdout_stderr():
+    """AC-3: a call that finishes inside the timeout is returned unchanged."""
+    from prism_service.services import ship_worker
+
+    rc, out, err = ship_worker._default_runner([
+        sys.executable, "-c",
+        "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)",
+    ])
+    assert (rc, out, err) == (3, "out\n", "err\n")
+
+
+def test_run_timeout_is_a_module_constant():
+    """AC-4 (form half): the ceiling is one named constant the runner reads."""
+    from prism_service.services import ship_worker
+
+    assert ship_worker.RUN_TIMEOUT_S == 120
+    assert "RUN_TIMEOUT_S" in inspect.getsource(ship_worker._default_runner)
