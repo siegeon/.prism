@@ -5187,7 +5187,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # (on the FINAL step AND that gate passed) — advance past green_gate
             # is a no-op, so next_job is never null at terminal.
             from prism_service.api import conductor_flow as _flow
-            from prism_service.models.workflow import WORKFLOW_STEPS as _STEPS
+            from prism_service.models.workflow import steps_for as _steps_for
             _sid = str(arguments.get("session_id") or "").strip() \
                 or _resolve_link_session_id()
             _task_id = str(arguments.get("id") or "").strip()
@@ -5197,13 +5197,27 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 _proof and str(_proof).strip())
 
             def _terminal(t) -> bool:
+                # Task 811fcce0 follow-on defect (found alongside the
+                # _step_by_id workflow-arg bug above, same root cause): this
+                # hardcoded the DEFAULT "implement" workflow's last step id
+                # (green_gate) regardless of the task's own workflow, so a
+                # triage/align_language/promote_to_law/quickfix task could
+                # never be recognized as terminal here — reaching its OWN
+                # last step ("done", never a gate) always read as "not
+                # done", so this tool never flipped its status to "done"
+                # and never returned done=true. Resolve the task's own
+                # workflow's last step instead, the same pattern the
+                # _step_by_id fix above uses.
                 if t is None:
                     return False
                 if str(getattr(t, "status", "") or "") in ("done", "cancelled"):
                     return True
-                _last = _STEPS[-1]["id"]
-                return (getattr(t, "workflow_step", "") == _last
-                        and getattr(t, "gate_state", "") == "passed")
+                _last = _steps_for(_flow._task_workflow(t))[-1]
+                if getattr(t, "workflow_step", "") != _last["id"]:
+                    return False
+                if _last["type"] == "gate":
+                    return getattr(t, "gate_state", "") == "passed"
+                return True
 
             # Kickoff: no id -> pull the next task. Can't report without an id.
             if not _task_id:

@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.125"
+PRISM_VERSION = "7.13.126"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.126: fix: a second, related substrate defect in conductor_work's "
+    "REPORT branch (mcp/tools.py), found immediately after 7.13.125's "
+    "_step_by_id fix while actually driving task 811fcce0 to done: "
+    "_terminal() hardcoded models.workflow.WORKFLOW_STEPS[-1] (\"implement\"'s "
+    "own green_gate) regardless of the task's own workflow, so a triage/"
+    "align_language/promote_to_law/quickfix task reaching its OWN last step "
+    "(\"done\", never a gate) was never recognized as terminal -- "
+    "conductor_work never returned done=true and never flipped task.status "
+    "to \"done\". Fixed by resolving the task's own workflow's last step via "
+    "models.workflow.steps_for, same pattern as the _step_by_id fix. Extended "
+    "tests/unit/test_conductor_work_report_resolves_task_workflow.py with "
+    "test_a_quickfix_task_reaches_done_true_and_status_done, driving a "
+    "quickfix task fully through conductor_work end to end. "
     "7.13.125: fix: ship_worker's ci_wait stage treated \"no checks reported "
     "on the 'main' branch\" as an immediate hard failure right after push+"
     "pr_create, when GitHub simply had not registered the PR's checks yet -- "

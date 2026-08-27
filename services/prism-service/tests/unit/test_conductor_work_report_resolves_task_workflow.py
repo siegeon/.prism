@@ -106,3 +106,54 @@ def test_report_on_a_triage_task_advances_past_its_first_step(project):
     assert "note" not in reported2, reported2
     assert reported2["ok"] is True, reported2
     assert reported2["job"]["step"] == "decide", reported2
+
+
+def test_a_quickfix_task_reaches_done_true_and_status_done(project):
+    """Companion defect in the SAME code block: `_terminal()` hardcoded
+    "implement"'s own last step id (green_gate), so a quickfix/triage/
+    align_language/promote_to_law task reaching its OWN last step ("done",
+    never a gate) was never recognized as terminal -- conductor_work never
+    returned done=true and never flipped task.status to "done". Drives a
+    "quickfix" task (no gates at all) all the way through via
+    conductor_work and confirms both."""
+    from prism_service.project_context import get_project
+
+    ctx = get_project(project)
+    t = ctx.task_svc.create(title="A small, already-diagnosed fix")
+    ctx.task_svc.update(t.id, workflow="quickfix")
+
+    session_id = "test-driver-session"
+    started = _body(_call(
+        "conductor_work", {"id": t.id, "session_id": session_id}, project))
+    assert started["job"]["step"] == "intake", started
+
+    reported = _body(_call(
+        "conductor_work",
+        {"id": t.id, "session_id": session_id, "outcome": "pass",
+         "proof": "registered"}, project))
+    assert reported["job"]["step"] == "apply_fix", reported
+    assert reported["done"] is False, reported
+
+    reported2 = _body(_call(
+        "conductor_work",
+        {"id": t.id, "session_id": session_id, "outcome": "pass",
+         "proof": "made the exact change the oracle describes; pinned "
+                  "test passes"}, project))
+    assert reported2["job"]["step"] == "verify_fix", reported2
+    assert reported2["done"] is False, reported2
+
+    reported3 = _body(_call(
+        "conductor_work",
+        {"id": t.id, "session_id": session_id, "outcome": "pass",
+         "proof": "full pinned suite green; committed and pushed"},
+        project))
+    assert reported3["ok"] is True, reported3
+    assert reported3["done"] is True, (
+        "reaching the workflow's own terminal 'done' step must report "
+        f"done=true -- got: {reported3}")
+
+    refreshed = ctx.task_svc.get(t.id)
+    assert refreshed.workflow_step == "done", refreshed
+    assert refreshed.status == "done", (
+        "conductor_work must flip a terminal quickfix task's status to "
+        f"'done' on its own -- got status={refreshed.status!r}")
