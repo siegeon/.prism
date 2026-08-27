@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.105"
+PRISM_VERSION = "7.13.106"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7312,4 +7312,20 @@ PRISM_VERSION_NOTES += (
     "and conductor_service.py already pairs with a task_svc.update() for "
     "the real state change -- record_history there is audit-trail only, "
     "same shape as before; no other site needed this fix."
+)
+PRISM_VERSION_NOTES += (
+    "7.13.106: .claude/workflows/implement.js had an unescaped apostrophe "
+    "in a single-quoted string (review_previous_notes' RUBRIC CONTRACT "
+    "text, \"the claim's own bullet\" / \"draft_story's oracle\") -- "
+    "present since 13:40 today, silently blocking every attempt to "
+    "launch the implement Workflow all evening. Node's own --check "
+    "reported the file as syntactically valid (the broken string "
+    "apparently re-synchronizes on later prose by accident, without a "
+    "hard SyntaxError), but the Workflow tool's own script loader "
+    "correctly refused it: 'Unexpected token (572:330)'. Escaped both "
+    "apostrophes to match this file's own established convention "
+    "(see the existing \\' escapes at lines 208-210, 541). Confirmed "
+    "fixed live: Workflow({scriptPath:'.claude/workflows/implement.js', "
+    "...}) now loads and launches (run wf_21b3a191-0a4) where it "
+    "previously refused outright."
 )
