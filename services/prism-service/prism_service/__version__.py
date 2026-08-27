@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.106"
+PRISM_VERSION = "7.13.107"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7328,4 +7328,38 @@ PRISM_VERSION_NOTES += (
     "fixed live: Workflow({scriptPath:'.claude/workflows/implement.js', "
     "...}) now loads and launches (run wf_21b3a191-0a4) where it "
     "previously refused outright."
+)
+PRISM_VERSION_NOTES += (
+    "7.13.107: ship_worker.sweep_once() shipped AT MOST one task per pass "
+    "and returned immediately regardless of outcome -- so one persistently "
+    "failing task occupied the whole slot forever. Confirmed live: task "
+    "0e2c82f3's PR #2348 was genuinely CONFLICTING, and dozens of "
+    "consecutive sweeps re-selected it and hit the identical merge failure "
+    "while an unrelated, already green_gate-passed task (8b4e7cb6) starved "
+    "behind it for 20+ minutes. Fix, two parts. (1) sweep_once now tries up "
+    "to MAX_SHIP_ATTEMPTS_PER_SWEEP=3 eligible tasks per pass (human track "
+    "then machine track) instead of stopping at the first attempt -- 3 lets "
+    "a handful of ready tasks make real progress, including skipping past "
+    "a stuck one, without unbounded gh/network calls if the whole board "
+    "becomes eligible at once; it returns the LAST attempt's result, same "
+    "shape as before. (2) new _note_ship_result() tracks consecutive "
+    "identical (stage, error) failures per task_id in an in-memory dict "
+    "(_FAILURE_STREAKS, reset on daemon restart -- fine, since a genuinely "
+    "stuck task re-accumulates identical failures within a few sweeps and "
+    "gets re-blocked); after STALL_THRESHOLD=3 in a row (enough to rule out "
+    "a one-off flake, which usually clears or at least changes its message "
+    "within a retry or two) it sets status=blocked with a concrete "
+    "blocked_reason naming the real stage/error, which also drops it out "
+    "of _awaiting_ship/_awaiting_ship_machine's next scan (both only read "
+    "status=in_progress). A task whose failures differ in stage or error "
+    "each time never trips the guard, and success resets its streak. New "
+    "tests/unit/test_ship_worker_stall_guard.py (6 tests) pin: a stuck task "
+    "does not starve a healthy one in the same sweep, the per-sweep cap "
+    "holds, a task blocks after N identical failures and disappears from "
+    "eligibility, a different task still ships after the first blocks, "
+    "non-identical failures never block, and success resets the streak. "
+    "Full ship_worker suite (test_ship_worker.py, "
+    "test_ship_worker_machine_track.py, "
+    "test_ship_worker_stall_guard.py) + related gate/shipped-ness suites: "
+    "65 passed."
 )

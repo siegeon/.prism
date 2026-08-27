@@ -390,6 +390,84 @@ def _awaiting_ship(project: str) -> list:
     return out
 
 
+MAX_SHIP_ATTEMPTS_PER_SWEEP = 3
+# Bounds blast radius per tick, mirroring task_runner's own per-tick caps
+# (_max_turns, _max_load_per_core, etc.): a pass with several simultaneously
+# eligible tasks makes real progress on more than one of them (including
+# skipping past a stuck task) without unbounded gh/network traffic if the
+# whole board suddenly becomes eligible at once. The next sweep picks up
+# wherever this one left off, so 3 is a modest per-tick budget, not a hard
+# ceiling on throughput.
+STALL_THRESHOLD = 3
+# 3 consecutive IDENTICAL (stage, error) failures for the SAME task is
+# enough to rule out a one-off transient flake -- a genuine flake usually
+# clears, or at least changes its error text, within a retry or two -- while
+# not being so low that a single bad poll permanently blacklists a task that
+# would have shipped on a normal retry.
+
+_FAILURE_STREAKS: dict[str, dict] = {}
+# In-memory, per-process counter of consecutive identical (stage, error)
+# ship failures, keyed by task_id. Cleared on any success and on daemon
+# restart. A restart resetting this is fine: it is a fresh start for the
+# circuit breaker, and a GENUINELY stuck task (a real merge conflict, a
+# permanently broken CI check) simply re-accumulates identical failures
+# across the next few sweeps and gets re-blocked -- the same root cause
+# keeps producing the same stage/error, so it does not quietly retry
+# forever just because a restart cleared the counter.
+
+
+def _note_ship_result(pid: str, task_id: str, res: dict) -> None:
+    """Update task_id's consecutive-identical-failure streak; once it hits
+    STALL_THRESHOLD, flip the task to `blocked` with a real reason so
+    sweep_once stops retrying it (task_svc.list(status="in_progress") — what
+    _awaiting_ship/_awaiting_ship_machine both scan — naturally excludes a
+    blocked task from the next sweep) and a human or another workflow can
+    see and act on the real problem.
+
+    A failure whose stage OR error text differs from the running streak
+    resets the count to 1 rather than blocking early — see AC(c): only a
+    task that fails the SAME way repeatedly is stuck; one that fails
+    differently each time is still making distinguishable attempts.
+    """
+    if res.get("ok"):
+        _FAILURE_STREAKS.pop(task_id, None)
+        return
+
+    stage = str(res.get("stage") or "")
+    error = str(res.get("error") or "")
+    prev = _FAILURE_STREAKS.get(task_id)
+    if prev and prev.get("stage") == stage and prev.get("error") == error:
+        count = int(prev.get("count", 0)) + 1
+    else:
+        count = 1
+    _FAILURE_STREAKS[task_id] = {"stage": stage, "error": error, "count": count}
+
+    if count < STALL_THRESHOLD:
+        return
+
+    _FAILURE_STREAKS.pop(task_id, None)
+    task_svc, _cond = _services(pid, None, None)
+    reason = (
+        f"ship_worker: stuck at {stage} for {STALL_THRESHOLD} consecutive "
+        f"identical attempts -- {error} (needs a manual fix -- e.g. "
+        "resolving a merge conflict or fixing a broken CI check -- before "
+        "ship_worker will retry it automatically)")
+    if task_svc is not None:
+        try:
+            task_svc.update(task_id, status="blocked", blocked_reason=reason)
+        except Exception:
+            pass
+        try:
+            task_svc.record_history(
+                task_id, action="ship",
+                details=f"stage={stage}; result=blocked; error={error}",
+                actor=SEAT_ID)
+        except Exception:
+            pass
+    _log(f"{task_id[:8]}: blocked after {STALL_THRESHOLD} identical "
+         f"failures at {stage} -- {error}")
+
+
 def _awaiting_ship_machine(project: str) -> list:
     """Task ids on the MACHINE-adjudicated track (proof_type NOT demo/review)
     parked at a pending green_gate for shipped-ness — no human approval
@@ -422,32 +500,61 @@ def _awaiting_ship_machine(project: str) -> list:
 
 
 def sweep_once() -> Optional[dict]:
-    """One pass over every project: ship AT MOST one task, bounding blast
-    radius exactly as task_runner.sweep_once does. Checks the human-approved
-    track first (an explicit owner decision waiting to land), then the
-    machine track (nothing is waiting on a person)."""
+    """One pass over every project: attempt up to MAX_SHIP_ATTEMPTS_PER_SWEEP
+    eligible tasks, bounding blast radius the way task_runner bounds its own
+    per-tick work. Checks the human-approved track first (an explicit owner
+    decision waiting to land), then the machine track (nothing is waiting on
+    a person).
+
+    Previously this returned on the FIRST attempt regardless of outcome, so
+    one persistently failing task (a genuinely conflicting PR) occupied the
+    single per-pass slot forever and starved every OTHER eligible task —
+    observed live: task 0e2c82f3's merge-conflicted PR #2348 starved the
+    healthy, already-green_gate-passed task 8b4e7cb6 for 20+ minutes. Now a
+    failed attempt moves on to the next eligible task within the same pass
+    (bounded by MAX_SHIP_ATTEMPTS_PER_SWEEP), and a task that keeps failing
+    the same way is blocked by _note_ship_result so it stops consuming the
+    queue's attention entirely.
+
+    Returns the result of the LAST ship attempt made this pass (or None if
+    nothing was eligible) — the same single-result shape callers/tests
+    already rely on.
+    """
     from prism_service.project_context import get_all_projects
+
+    attempts = 0
+    last: Optional[dict] = None
 
     for pid in get_all_projects():
         try:
             pending = _awaiting_ship(pid)
         except Exception as exc:
             _log(f"{pid}: eligibility check failed: {exc}")
-            continue
+            pending = []
         for tid in pending:
+            if attempts >= MAX_SHIP_ATTEMPTS_PER_SWEEP:
+                return last
             res = ship_task(tid, pid)
+            attempts += 1
+            last = res
             _log(f"{pid}/{tid[:8]}: {res}")
-            return res
+            _note_ship_result(pid, tid, res)
+
         try:
             pending_machine = _awaiting_ship_machine(pid)
         except Exception as exc:
             _log(f"{pid}: machine-track eligibility check failed: {exc}")
-            continue
+            pending_machine = []
         for tid in pending_machine:
+            if attempts >= MAX_SHIP_ATTEMPTS_PER_SWEEP:
+                return last
             res = ship_task(tid, pid, on_landed=_adjudicate_after_ship)
+            attempts += 1
+            last = res
             _log(f"{pid}/{tid[:8]}: {res}")
-            return res
-    return None
+            _note_ship_result(pid, tid, res)
+
+    return last
 
 
 def _loop(interval_s: int) -> None:
