@@ -82,6 +82,14 @@ o:Interface a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Interface" ;
     rdfs:comment "A contract other code promises to fulfill." .
 o:Variable a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Variable" ;
     rdfs:comment "A named slot holding a value." .
+# task f9e0745e: Rationale is its own subclass of o:Code, not a property
+# of one. graphify extracts a rationale row (a # WHY:/# HACK:/# NOTE:
+# comment) as its OWN graph.db entity, with its own file and line, and it
+# can be the source or target of a real edge (o:rationaleFor) to the code
+# it explains -- the same shape every other o:Code subclass has. Folding
+# it into o:Code's rdfs:comment instead would lose that edge.
+o:Rationale a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Rationale" ;
+    rdfs:comment "A WHY, HACK, or NOTE comment attached to real code." .
 
 # ---------------------------------------------------------------------
 # Properties — "The four surfaces, and how they join" + PRISM's own edges
@@ -127,16 +135,42 @@ o:parent a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:Task ;
 o:relatesTo a rdf:Property ; rdfs:domain o:Code ; rdfs:range o:Code ;
     rdfs:label "relatesTo" ;
     rdfs:comment "Supertype of the code-graph edge kinds." .
-o:calls a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "calls" .
-o:imports a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "imports" .
+# task f9e0745e: each sub-property below now carries its OWN
+# rdfs:domain/rdfs:range (o:Code -> o:Code, same as the supertype -- RDFS
+# does not infer domain/range down a subPropertyOf chain on its own, so a
+# SHACL shape or a reasoner that reads one property in isolation still
+# sees the real constraint) plus a plain-English comment. Names are
+# UNCHANGED from before this task -- api/xref.py's _ONTOLOGY_EDGE_
+# PROPERTIES reads a graph.db relation string straight through as the o:
+# local name, so a rename here would silently break the Explore page's
+# edge labels.
+o:calls a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "calls" ;
+    rdfs:comment "One piece of code calls another." .
+o:imports a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "imports" ;
+    rdfs:comment "One module brings in another module." .
 o:imports_from a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
-    rdfs:label "imports_from" .
-o:inherits a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "inherits" .
-o:contains a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "contains" .
-o:uses a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "uses" .
-o:method a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "method" .
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "imports_from" ;
+    rdfs:comment "One module names WHERE an import comes from." .
+o:inherits a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Class ; rdfs:range o:Class ; rdfs:label "inherits" ;
+    rdfs:comment "One class extends another class." .
+o:contains a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "contains" ;
+    rdfs:comment "One piece of code holds another inside it." .
+o:uses a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "uses" ;
+    rdfs:comment "One piece of code reads or writes another." .
+o:method a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Class ; rdfs:range o:Method ; rdfs:label "method" ;
+    rdfs:comment "A class has this method." .
 o:rationale_for a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
-    rdfs:label "rationale_for" .
+    rdfs:domain o:Rationale ; rdfs:range o:Code ; rdfs:label "rationale_for" ;
+    rdfs:comment "A WHY, HACK, or NOTE comment explains this code." .
+o:inFile a rdf:Property ; rdfs:domain o:Code ; rdfs:range xsd:string ;
+    rdfs:label "inFile" ;
+    rdfs:comment "The source file path where this code lives." .
 
 # ---------------------------------------------------------------------
 # The rules are SHACL shapes (task 8eeb3e65, epic 3efbcd89) — Step/Rule
