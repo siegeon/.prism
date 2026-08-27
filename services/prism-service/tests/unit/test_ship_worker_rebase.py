@@ -64,6 +64,18 @@ def _unshipped_workspace(tmp_path: Path, task_id: str = TASK_ID,
     test_ship_worker.py's fixture."""
     origin = tmp_path / "origin.git"
     _git(tmp_path, "init", "--bare", "-q", str(origin))
+    # Force the bare origin's default branch to 'main' regardless of the
+    # runner's own git config (init.defaultBranch). Without this,
+    # _advance_origin_main's SECOND clone of `origin` checks out whatever
+    # HEAD's symref names -- 'main' only on a box whose global git config
+    # sets init.defaultBranch=main (masks this locally); a bare CI runner's
+    # built-in default ('master') doesn't exist on this repo, so that clone
+    # lands on an unborn branch and its later `git push origin main` fails
+    # with "src refspec main does not match any" (rc=1) -- the exact
+    # CI-only failure this fixture hit (task 8b4e7cb6, run 33045863069).
+    # Same fix already applied once in
+    # test_green_gate_requires_reachability.py (7.13.100).
+    _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
 
     work = tmp_path / "work"
     _git(tmp_path, "clone", "-q", str(origin), str(work))
