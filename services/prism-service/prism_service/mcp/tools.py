@@ -2042,6 +2042,29 @@ AUTOMATION_TOOL_NAMES: set[str] = {
     "understand_status",
 }
 
+# Task 0e2c82f3 "Brain retrieval costs a tool load, Bash does not": a
+# conductor drive lane connects with tool_profile=drive so the MCP surface
+# is small enough that the harness does NOT defer brain_* behind ToolSearch.
+# Retrieval + conductor verbs only; no admin / hooks / learning / automation
+# tools (test_drive_retrieval_tool_cost.py pins the members).
+DRIVE_TOOL_NAMES: set[str] = {
+    "brain_search",
+    "brain_understand",
+    "brain_call_chain",
+    "brain_find_references",
+    "brain_find_symbol",
+    "brain_outline",
+    "context_bundle",
+    "conductor_work",
+    "task_list",
+    "task_update",
+    "task_link_session",
+    "task_create",
+    "memory_recall",
+    "memory_store",
+    "prism_guide",
+}
+
 TOOL_PROFILE_ALIASES: dict[str, str] = {
     "all": "all",
     "default": "interactive",
@@ -2054,6 +2077,7 @@ TOOL_PROFILE_ALIASES: dict[str, str] = {
     "learning": "learning",
     "automation": "automation",
     "hooks_api": "automation",
+    "drive": "drive",
 }
 
 
@@ -2074,6 +2098,8 @@ def tool_names_for_profile(profile: str | None) -> set[str]:
         return LEARNING_TOOL_NAMES & all_names
     if profile_key == "automation":
         return AUTOMATION_TOOL_NAMES & all_names
+    if profile_key == "drive":
+        return DRIVE_TOOL_NAMES & all_names
     return all_names
 
 
