@@ -84,9 +84,14 @@ def test_api_exempt_empty(seeded):
     rule = _rule(rd, pid)
     assert rule["exempt"] == []
     assert rule["violations"] == 2 and rule["looked_at"] == 941
+    # Key set widened by two sibling tasks landed on main after this test was
+    # first written: "exempted" (iri/label/reason/at, task e1888b31) and
+    # "verified_by" (task b41d4aa1) are independent fields, not a
+    # replacement for "exempt" -- all three now coexist on decorated_report.
     assert set(rule) - {"decision"} == {
         "name", "title", "description", "message", "looked_at",
-        "violations", "focus", "exempt", "validated_at", "derived_from"}
+        "violations", "focus", "exempt", "exempted", "validated_at",
+        "derived_from", "verified_by"}
 
 
 def test_unexempt_route_writes_decisions(seeded):
