@@ -347,39 +347,54 @@ export default function StepRail({
                         <span className={"text-[13px] " + (future ? "text-[color:var(--text-disabled)]" : "text-[color:var(--text-primary)]")}>
                           {stepLabel(s.id)}
                         </span>
-                        <div className="ml-auto flex items-center gap-2 min-w-0">
-                          {cur && !isGate && verifierPersona && (
-                            <VerifiedBy persona={verifierPersona} decided={!!gateFor(nextGate?.id ?? "")} />
-                          )}
-                          {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
-                            <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
-                              title="ephemeral sub-agents dispatched vs returned for this step">
-                              <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
-                              <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
-                                <span className="block h-full rounded-full" style={{
-                                  width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
-                                  background: "var(--accent-teal-bg)",
-                                }} />
+                        {/* Owner 2026-08-27 (3rd pass): a percentage width on
+                            StepMeta's OWN div never resolved, because it sat
+                            NESTED inside this "ml-auto ... min-w-0" wrapper —
+                            an auto-sized flex item. A CSS percentage width on
+                            a descendant of an auto-sized flex item collapses
+                            to 0 (spec'd, not a bug in the browser), so it
+                            silently fell back to min-w-[220px] every time —
+                            same ~220px as before, despite the class saying
+                            50%. StepMeta must be a DIRECT child of THIS row
+                            (which has a real, definite width) for its own
+                            percentage width to mean anything. Gate rows never
+                            had this problem, which is why testing missed it. */}
+                        {cur ? (
+                          <div className="ml-auto flex items-center gap-2 min-w-0">
+                            {!isGate && verifierPersona && (
+                              <VerifiedBy persona={verifierPersona} decided={!!gateFor(nextGate?.id ?? "")} />
+                            )}
+                            {!isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
+                              <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
+                                title="ephemeral sub-agents dispatched vs returned for this step">
+                                <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
+                                <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                                  <span className="block h-full rounded-full" style={{
+                                    width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
+                                    background: "var(--accent-teal-bg)",
+                                  }} />
+                                </span>
                               </span>
-                            </span>
-                          )}
-                          {cur && !isGate && signal.lost ? (
-                            <span className="text-2xs font-mono flex items-center gap-1.5 flex-none" style={{ color: "var(--text-muted)" }}>
-                              {signal.label}
-                            </span>
-                          ) : cur && !isGate && (
-                            <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
-                              <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
-                                animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
-                                transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
-                              {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
-                            </span>
-                          )}
-                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} hasTurns={hasTurns} open={rowOpen} />}
-                          {cur && hasTurns && (
-                            <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
-                          )}
-                        </div>
+                            )}
+                            {!isGate && signal.lost ? (
+                              <span className="text-2xs font-mono flex items-center gap-1.5 flex-none" style={{ color: "var(--text-muted)" }}>
+                                {signal.label}
+                              </span>
+                            ) : !isGate && (
+                              <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
+                                <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
+                                  animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
+                                  transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
+                                {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
+                              </span>
+                            )}
+                            {hasTurns && (
+                              <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
+                            )}
+                          </div>
+                        ) : (
+                          <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} hasTurns={hasTurns} open={rowOpen} />
+                        )}
                       </div>
                       {rowOpen && hasTurns && <TurnList rows={stepTurns} />}
                     </div>

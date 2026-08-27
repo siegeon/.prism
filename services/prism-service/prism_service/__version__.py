@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.119"
+PRISM_VERSION = "7.13.120"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7483,4 +7483,5 @@ PRISM_VERSION_NOTES += (
     "that both the token and duration branches divide by the sum."
     "\n7.13.117: \"bot\" is no longer a synonym of Agent in model-lexicon.ttl (owner 2026-08-27, mx-0e5a88: a Bot is a tier-1 deterministic workflow; agentic behaviours sit under it). The aligner had rewritten the ticket that describes the fix into \"Agent is its own term, not a synonym of Agent\". Guard: test_bot_is_never_a_synonym. The Bot / FSM / State / Transition / Behavior classes come with task 8bcd4cb3 under epic 12029f92."
     "\n7.13.119: StepRail per-step bar track is HALF the row (w-[50%], min 220px) instead of a 220px stub at the right edge - owner 2026-08-27: \"this bar is not taking up the length of the area STILL ... it should be like 40%-60%\"; 7.13.114-116 had only changed the fill math. test_step_meta_track_width_is_fixed_not_data_dependent now accepts a fixed row share (w-[40-60%]) as label-independent."
+    "\n7.13.120: 7.13.119's w-[50%] never actually rendered wider (owner, 3rd report: \"you keep saying its working, but we can see its not\"). Root cause: for a real agent-work step, StepMeta rendered NESTED inside an extra ml-auto/min-w-0 wrapper div that has no width of its own (shrinks to fit content) -- a CSS percentage width on a descendant of an auto-sized flex item resolves to 0 per spec, so it silently fell back to StepMeta's own min-w-[220px] floor every time, identical to the pre-7.13.119 pixel width despite the class correctly saying 50%. Gate rows never had this extra wrapper and were unaffected, which is why testing missed it twice. Fixed by rendering StepMeta as a DIRECT child of the row (which has a real, definite width) for the non-current-step case -- only the current step's status badges keep the inner wrapper now. New regression guard: test_step_meta_is_a_direct_row_child_for_agent_steps."
 )
