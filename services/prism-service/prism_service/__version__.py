@@ -13,10 +13,17 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.22"
+PRISM_VERSION = "7.13.23"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.23: task 292e8ea2 retire-dead-code sweep, first slice -- removed "
+    "the version-pinned docker-compose.v51.yml duplicate and the three "
+    "docs/tasks/PLAT-0042-T3/T4/T5 docs (their story, query decomposition, "
+    "was fully retired by task 19e4e7f7). desktop/tauri-shell and "
+    "docs/stories left as-is (see docs/removal-ledger.md) -- Tauri is a "
+    "one-way shipping decision escalated to the owner, docs/stories never "
+    "existed in this tree. Delete-only, no behaviour change. "
     "7.13.20: two follow-ups landed alongside the brain-bloat fix above -- "
     "(1) dashboard.py's /activity and /state routes opened ~18 short-lived "
     "sqlite connections per request (one per _count/_rows call across 3-4 "
