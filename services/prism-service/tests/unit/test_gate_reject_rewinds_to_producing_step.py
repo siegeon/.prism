@@ -146,3 +146,42 @@ def test_reject_rewind_is_bounded_by_the_auto_rewind_budget(make_task):
 
     refreshed = ctx.task_svc.get(task.id)
     assert refreshed.workflow_step == "plan_gate"
+
+
+def test_failed_gate_reject_override_recovers_via_rewind(make_task):
+    """A gate stuck gate_state="failed" from a standing reject (real task
+    12029f92: rejected before this rewind mechanism existed) has no
+    forward recovery worth taking while the underlying work still needs a
+    redo. action="reject" with override=True reuses the same
+    producing-step rewind a fresh reject gets, instead of the old
+    unconditional "recovery requires action='approve'" refusal."""
+    ctx, task, _project = make_task()
+    cond = ctx.conductor_svc
+    _walk_to_gate(cond, task.id, _gate_id("plan_gate"))
+    # exhaust the rewind budget so the gate genuinely parks "failed"
+    # (mirrors the real task, rejected repeatedly before ever being fixed)
+    from prism_service.services.conductor_service import MAX_AUTO_REWINDS
+    for _ in range(MAX_AUTO_REWINDS + 1):
+        cond._task_svc.update(task.id, workflow_step="plan_gate",
+                              gate_state="pending")
+        cond.gate_decide(task.id, action="reject", reason="uses Agent, not Bot",
+                         actor="owner", session_id="owner")
+    stuck = ctx.task_svc.get(task.id)
+    assert stuck.workflow_step == "plan_gate" and stuck.gate_state == "failed"
+
+    plain_reject = cond.gate_decide(task.id, action="reject",
+                                    reason="still stuck", actor="owner",
+                                    session_id="owner")
+    assert plain_reject["ok"] is False, (
+        "a plain reject (no override) on an already-failed gate must "
+        "still refuse -- override is what signals manual recovery")
+
+    result = cond.gate_decide(task.id, action="reject", override=True,
+                              reason="revise with Bot terminology",
+                              actor="owner", session_id="owner")
+    assert result["ok"] is True
+    assert result["rewound_to"] == "verify_plan"
+    refreshed = ctx.task_svc.get(task.id)
+    assert refreshed.workflow_step == "verify_plan"
+    assert refreshed.gate_state == "none"
+    assert refreshed.gate_reason == "revise with Bot terminology"

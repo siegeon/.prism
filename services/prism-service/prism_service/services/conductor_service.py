@@ -2517,7 +2517,8 @@ class ConductorService:
                 break
         return n
 
-    def _auto_rewind(self, task_id, target_step, reason, evidence_ref):
+    def _auto_rewind(self, task_id, target_step, reason, evidence_ref,
+                     from_step="green_gate"):
         """AC-6: move the task back with the seat and evidence on the row;
         the refusal text becomes the next step's work order."""
         self._task_svc.update(task_id, workflow_step=target_step,
@@ -2525,8 +2526,45 @@ class ConductorService:
                               blocked_reason="")
         self._record_seat_row(
             task_id, "auto_rewind",
-            f"green_gate -> {target_step}; {evidence_ref}; reason={reason}")
+            f"{from_step} -> {target_step}; {evidence_ref}; reason={reason}")
         return {"ok": True, "rewound_to": target_step}
+
+    def _reject_gate(self, task_id, gate_step_id, task_workflow, reason,
+                     session_id, model, decided_by, override=False) -> dict:
+        """Shared body for gate_decide's action='reject' -- both a fresh
+        pending gate and, with override=True, recovery from an already-
+        failed one (see the "failed" branch above and
+        test_gate_reject_rewinds_to_producing_step.py /
+        test_failed_gate_reject_override_recovers_via_rewind). Rewinds to
+        the producing step when the auto-rewind budget allows, else parks
+        'failed' exactly like the pre-rewind contract. override=True is an
+        explicit human recovery decision, not an unsupervised loop, so it
+        is never bound by MAX_AUTO_REWINDS."""
+        self._task_svc.update(task_id, gate_state="failed", gate_reason=reason)
+        self._task_svc.record_history(
+            task_id, action="gate_decide",
+            details=f"gate={gate_step_id}; action=reject; reason={reason}",
+            actor=decided_by("conductor"))
+        self._record_agent_run(
+            task_id, gate_step_id, session_id, model=model,
+            gate_state="failed", ok=False,
+            verdict_summary=("reject: " + (reason or ""))[:200])
+        rewound_to = None
+        if override or self._consecutive_auto_rewinds(task_id) < MAX_AUTO_REWINDS:
+            idx = self._step_index(gate_step_id, task_workflow)
+            if idx > 0:
+                producing = self._workflow_steps(task_workflow)[idx - 1]
+                if producing["type"] != "gate":
+                    self._auto_rewind(task_id, producing["id"], reason,
+                                      "manual reject", from_step=gate_step_id)
+                    rewound_to = producing["id"]
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "gate_step": gate_step_id,
+            "gate_state": "none" if rewound_to else "failed",
+            "rewound_to": rewound_to,
+        }
 
     def _evaluate_green_gate_rewind(self, task, tree_sha, tried, refusal,
                                     remint_attempted):
@@ -3946,6 +3984,16 @@ class ConductorService:
                         "verifier": recheck.get("verifier"),
                     }
                 # verified recheck: fall through to the normal approve path.
+            elif action == "reject" and override:
+                # A gate stuck 'failed' from BEFORE this rewind mechanism
+                # existed (or any standing reject) has no forward recovery
+                # worth taking when the underlying work still needs a redo
+                # -- override=True says so explicitly and reuses the same
+                # producing-step rewind a fresh reject gets (task 12029f92).
+                return self._reject_gate(
+                    task_id, task.workflow_step, task_workflow, reason,
+                    session_id, model, lambda fb: actor or session_id or fb,
+                    override=True)
             elif not (action == "approve" and override):
                 return {
                     "ok": False,
@@ -3982,47 +4030,8 @@ class ConductorService:
             return actor or session_id or fallback
 
         if action == "reject":
-            self._task_svc.update(
-                task_id,
-                gate_state="failed",
-                gate_reason=reason,
-            )
-            self._task_svc.record_history(
-                task_id,
-                action="gate_decide",
-                details=f"gate={gate_step_id}; action=reject; reason={reason}",
-                actor=_decided_by("conductor"),
-            )
-            self._record_agent_run(
-                task_id, gate_step_id, session_id, model=model,
-                gate_state="failed", ok=False,
-                verdict_summary=("reject: " + (reason or ""))[:200],
-            )
-            # Reject rewinds to the producing step (see test_gate_reject_
-            # rewinds_to_producing_step.py); budget shared with green_gate's
-            # auto-rewind.
-            rewound_to = None
-            if self._consecutive_auto_rewinds(task_id) < MAX_AUTO_REWINDS:
-                idx = self._step_index(gate_step_id, task_workflow)
-                if idx > 0:
-                    producing = self._workflow_steps(task_workflow)[idx - 1]
-                    if producing["type"] != "gate":
-                        self._task_svc.update(
-                            task_id, workflow_step=producing["id"],
-                            gate_state="none", gate_reason=reason,
-                            blocked_reason="")
-                        self._record_seat_row(
-                            task_id, "auto_rewind",
-                            f"{gate_step_id} -> {producing['id']}; "
-                            f"reason={reason}")
-                        rewound_to = producing["id"]
-            return {
-                "ok": True,
-                "task_id": task_id,
-                "gate_step": gate_step_id,
-                "gate_state": "none" if rewound_to else "failed",
-                "rewound_to": rewound_to,
-            }
+            return self._reject_gate(task_id, gate_step_id, task_workflow,
+                                     reason, session_id, model, _decided_by)
 
         # action == 'approve' - validation evidence is REQUIRED.
         # Every approve must describe what was used to satisfy the gate
