@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.98"
+PRISM_VERSION = "7.13.99"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7173,7 +7173,23 @@ PRISM_VERSION_NOTES += (
     "which ran ProjectContext's lazy brain_svc property and opened sqlite "
     "inside the observer; the 7.13.93 suite stalled 30 s in "
     "TaskService.create and died rc=139. The hook now walks frame objects "
-    "with sys._getframe and reads plain __dict__ attributes only."
+    "with sys._getframe and reads plain __dict__ attributes only. "
+    "7.13.99: a live /tasks/{id} tab's activity reading (working/stalled/"
+    "adrift/...) never updated over SSE, only on a full refetch, because "
+    "`activity` is computed server-side (ConductorService.activity_for) "
+    "and is not a DB column, so it could never ride task.changed's `fields`. "
+    "TaskService.update() now late-binds a ConductorService reference "
+    "(attach_conductor_service, wired by ProjectContext right after both "
+    "services are built) and computes a fresh activity block at publish "
+    "time, added to the event as a new `activity` key -- a failure to "
+    "compute it (or no conductor attached, e.g. a bare TaskService in "
+    "tests/scripts) falls back to None and never breaks the publish. "
+    "TaskDetailPage.tsx's SSE handler now merges that key into task state "
+    "the same way it already merges `fields`. Backend covered by 3 new "
+    "tests in test_task_page_payload_scope.py (fresh activity on publish, "
+    "None with no conductor attached, activity_for raising never breaks "
+    "the publish); frontend by a source-reading test per this repo's "
+    "no-JS-test-runner convention."
 )
 
 PRISM_VERSION_NOTES += (

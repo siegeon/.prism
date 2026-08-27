@@ -1229,14 +1229,22 @@ export default function TaskDetailPage() {
   // within ~1s of a backend change — never refetch on every event, that
   // is the SessionsPage.tsx:80 `es.onmessage = () => load();`
   // refetch-everything anti-pattern this task's likely_misfire names.
+  //
+  // `activity` (real-time activity push): activity is computed server-side
+  // and is NOT a DB column, so it never rides `fields` above — the backend
+  // now ALSO carries a freshly-computed `activity` block alongside `fields`
+  // on every task.changed event (TaskService.update()). Merge it into the
+  // same `task` state `fields` already patches — additive only, never
+  // replaces the initial-load/poll path that already sets it.
   useEffect(() => {
     if (!id) return;
     return subscribeStream(`/sse/tasks?project=${project}&task_id=${id}`, (data) => {
       try {
-        const payload = JSON.parse(data) as { task_id?: string; fields?: Partial<Task> };
+        const payload = JSON.parse(data) as { task_id?: string; fields?: Partial<Task>; activity?: Activity | null };
         if (payload.task_id !== id || !payload.fields) return;
         const fields = payload.fields;
-        setTask((prev) => (prev ? { ...prev, ...fields } : prev));
+        const hasActivity = Object.prototype.hasOwnProperty.call(payload, "activity");
+        setTask((prev) => (prev ? { ...prev, ...fields, ...(hasActivity ? { activity: payload.activity } : {}) } : prev));
       } catch { /* ignore malformed payloads */ }
     });
   }, [id, project]);

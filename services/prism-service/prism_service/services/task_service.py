@@ -9,7 +9,7 @@ import sqlite3
 from prism_service.services import sqlite_db
 import threading
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from prism_service.models.task import (
     DEFAULT_WORKFLOW,
@@ -297,6 +297,13 @@ class TaskService:
         # downstream lookup is project-scoped, and a service that cannot say
         # which project it is cannot hand that on.
         self.project = project
+        # Late-bound ConductorService reference (real-time activity push):
+        # ProjectContext wires this AFTER building both services, mirroring
+        # ConductorService.attach_task_service's own late-binding (task_svc
+        # is always built first, so neither constructor can require the
+        # other). Optional: a bare TaskService (tests, scripts) simply never
+        # computes `activity` on publish — see update()'s try/except below.
+        self._conductor_svc: Any = None
         # THREAD-SAFE STORAGE (task 0584addb, PR #196 follow-up): one
         # sqlite connection PER THREAD via a thread-local factory — the
         # old single shared handle (check_same_thread=False) let
@@ -993,6 +1000,15 @@ class TaskService:
         ).fetchall()
         return [r["id"] for r in rows]
 
+    def attach_conductor_service(self, conductor_svc: Any) -> None:
+        """Late-bind the project's ConductorService so update()'s task.changed
+        publish (below) can compute a fresh `activity` block at the moment of
+        the write — mirrors ConductorService.attach_task_service's own late
+        binding for the same reason (build-order: task_svc always exists
+        first). Never required: update() degrades to publishing no activity
+        key when this is never called (bare TaskService in tests/scripts)."""
+        self._conductor_svc = conductor_svc
+
     def update(self, task_id: str, **kwargs: object) -> Optional[Task]:
         """Update arbitrary fields on a task. Records change history."""
         task = self.get(task_id)
@@ -1123,6 +1139,25 @@ class TaskService:
                 task.id, "ste_normalise",
                 "rules=" + ",".join(ste_rules)
                 + " before=" + json.dumps(changed_before))
+        # Real-time activity push (gap: `activity` — {state, task_motion_s,
+        # session_quiet_s, ...} — is computed ONLY inside GET /api/tasks/{id}
+        # (api/tasks.py, ConductorService.activity_for) and is NOT a stored
+        # task column, so it could never ride `changed_fields` above. A
+        # browser tab open on /tasks/{id} therefore never saw a fresh
+        # activity reading over /sse/tasks -- only a full refetch (poll or
+        # remount) picked it up, which read as a frozen "stalled" signal
+        # while a task was genuinely advancing underneath. Compute it here,
+        # at publish time, reusing the SAME method api/tasks.py already
+        # calls (never duplicated) via the late-bound ConductorService.
+        activity: Optional[dict] = None
+        if self._conductor_svc is not None:
+            try:
+                phase_progress = self._conductor_svc.phase_progress(task.id)
+                activity = self._conductor_svc.activity_for(task, phase_progress)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "activity_for failed for %s", task.id, exc_info=True)
+                activity = None
         # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
         # it — the write already committed above, so a publish failure
         # (bus down, serialization) must never surface as a write failure.
@@ -1142,6 +1177,10 @@ class TaskService:
                 # root, no edge expected).
                 "parent_id": task.parent_id or "",
                 "fields": changed_fields,
+                # Fresh activity at this instant (see block above) — None
+                # when no ConductorService is attached (bare TaskService).
+                # The client only merges this key in when it is present.
+                "activity": activity,
                 "updated_at": task.updated_at,
             })
         except Exception:
