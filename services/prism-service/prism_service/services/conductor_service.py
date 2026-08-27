@@ -3091,10 +3091,33 @@ class ConductorService:
         if check.get("verified") is not True:
             return None
         if step == "plan_gate":
-            # FR-4/FR-5 (task c016667f): the re-sweep seat withholds too — the
-            # rubric alone no longer clears plan_gate, unconditionally (AC-10:
-            # no ui-tag narrowing). Mirrors the entry-time autoclear check in
-            # api/conductor_flow.py so every seat consults the same ledger.
+            # ROOT PLAN-GATE STOP (task 3c774abd, owner rule 2026-08-27): the
+            # re-sweep seat withholds too — a ROOT task on the real
+            # conductor SDLC with a passing rubric stays parked for the
+            # owner's own gate_decide; the rubric pass is the machine's
+            # review, never the approval. Mirrors api/conductor_flow.py's
+            # entry-time check (ROOT_PLAN_GATE_REASON / same test there) so
+            # every seat agrees — duplicated as a plain check here rather
+            # than imported, so services never depends on the api layer.
+            # "implement" (not the UI catalog id "conductor") is the honest
+            # marker — task_workflow is normalize_workflow's own output,
+            # which never applies WORKFLOW_ALIASES.
+            if not str(getattr(task, "parent_id", "") or "").strip() \
+                    and task_workflow == "implement":
+                _root_reason = ("Plan rubric passed (machine review). Your "
+                                "approval releases the plan.")
+                if _root_reason != (getattr(task, "gate_reason", "") or ""):
+                    try:
+                        self._task_svc.update(
+                            task_id, gate_reason=_root_reason)
+                    except Exception:
+                        pass
+                return None
+            # FR-4/FR-5 (task c016667f): the rubric alone is no longer enough
+            # — a design-packet owner approval must be on file too,
+            # unconditionally (AC-10: no ui-tag narrowing). Mirrors the
+            # entry-time autoclear check in api/conductor_flow.py so every
+            # seat consults the same ledger.
             from prism_service.services import design_packet as dp
             project = self._project_name or "default"
             status = dp.approval_status(project, task_id, task)

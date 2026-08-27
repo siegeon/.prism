@@ -300,6 +300,35 @@ def _is_failure(outcome: object) -> bool:
 _AUTOCLEAR_GATES = {"story_gate", "plan_gate"}
 
 
+# ROOT PLAN-GATE STOP (task 3c774abd, owner rule 2026-08-27): "the users
+# approve the plans for parent level tasks, the system can make and manage
+# as many sub agents as they want to manage subtasks that do not need user
+# approval." A ROOT task is one whose parent_id is empty. Only a ROOT task
+# on the real conductor/implement SDLC ever reaches a step literally named
+# "plan_gate" with a human decision at stake — a daemon run task (align_
+# language, promote_to_law, ...) uses its OWN workflow name and its own gate
+# ids, so this check also guards against a future workflow that reuses the
+# "plan_gate" id: only workflow == "implement" (models.task.DEFAULT_WORKFLOW
+# — the honest marker: normalize_workflow never applies WORKFLOW_ALIASES, so
+# a real conductor task's stored/normalized workflow value is the literal
+# string "implement", never the UI catalog id "conductor" that alias maps
+# to) counts as the owner's SDLC.
+ROOT_PLAN_GATE_REASON = ("Plan rubric passed (machine review). Your "
+                          "approval releases the plan.")
+
+
+def _is_root_conductor_task(task) -> bool:
+    """True for a ROOT task (parent_id empty) driven by the real conductor
+    workflow — the only shape whose plan_gate needs the owner's own click.
+    A child task, or a daemon run task on a different named workflow
+    (align_language/promote_to_law/triage/...), returns False and keeps
+    today's machine autoclear."""
+    from prism_service.models.task import normalize_workflow
+    parent_id = str(getattr(task, "parent_id", "") or "").strip()
+    workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+    return not parent_id and workflow == "implement"
+
+
 def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     """Approve a just-entered PENDING rubric gate iff its machine check says
     verified=True. Anything else (fail, None, non-rubric gate) is left
@@ -359,6 +388,19 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
                 pass
         return None
     if step["id"] == "plan_gate":
+        # ROOT PLAN-GATE STOP (task 3c774abd): a passing rubric on a ROOT
+        # conductor task is the MACHINE's review, not the owner's approval
+        # — park pending and wait for a real human gate_decide. Never call
+        # gate_decide as conductor-autoclear here, even once a design
+        # packet is later approved; only a genuine distinct-actor approve
+        # releases a root plan.
+        if _is_root_conductor_task(task):
+            if ROOT_PLAN_GATE_REASON != (getattr(task, "gate_reason", "") or ""):
+                try:
+                    svc._task_svc.update(task_id, gate_reason=ROOT_PLAN_GATE_REASON)
+                except Exception:
+                    pass
+            return None
         # FR-4/FR-5 (task c016667f): the rubric alone is no longer enough —
         # a design-packet owner approval must be on file too, unconditionally
         # (AC-10: no ui-tag narrowing). A missing/stale approval parks the

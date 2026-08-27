@@ -2631,17 +2631,43 @@ creep, not conductor work.
 
 ## Two things a human decides; nothing else
 
-The owner stops at exactly two gates: `plan_gate` (approve the direction)
-and `green_gate` (approve the final state). `red_gate` belongs to the
-machine seat and must never be routed to a human — a machine seat that
-abstains at red is a system defect to fix, never a click to request.
-`readiness` (`GET /api/conductor/gate/readiness`) describes the RECEIPT
-SHAPE a gate would accept, never the verdict; `task.gate_state` is the
-verdict. Read both before telling anyone a gate is or isn't waiting on
-them, and never quote a gate's state from a stored field
-(`task.gate_reason`, `task.workflow_step`) without re-deriving it live —
-those are snapshots that go stale the instant a drive rewrites the
+The owner stops at exactly two gates on a ROOT task (`parent_id` empty) —
+`plan_gate` (approve the direction) and `green_gate` (approve the final
+state). `red_gate` belongs to the machine seat and must never be routed to
+a human — a machine seat that abstains at red is a system defect to fix,
+never a click to request. `readiness` (`GET /api/conductor/gate/readiness`)
+describes the RECEIPT SHAPE a gate would accept, never the verdict;
+`task.gate_state` is the verdict. Read both before telling anyone a gate is
+or isn't waiting on them, and never quote a gate's state from a stored
+field (`task.gate_reason`, `task.workflow_step`) without re-deriving it
+live — those are snapshots that go stale the instant a drive rewrites the
 artifact they describe.
+
+**Root plan_gate waits for the owner; every child's is the machine's**
+(task 3c774abd, owner rule 2026-08-27: "the users approve the plans for
+parent level tasks, the system can make and manage as many sub agents as
+they want to manage subtasks that do not need user approval"). A ROOT task
+(`parent_id` empty) on the real conductor/implement SDLC — `normalize_
+workflow(task.workflow) == "implement"` (models.task.DEFAULT_WORKFLOW) is
+the honest marker; `normalize_workflow` never applies `WORKFLOW_ALIASES`,
+so the stored/normalized value is the literal string "implement", never
+the UI catalog id "conductor" that alias maps to — never auto-clears
+`plan_gate`: once the plan rubric passes, the gate parks pending with
+`gate_reason` "Plan rubric passed (machine review). Your approval releases
+the plan.", `readiness` answers `adapter=human`, and only a genuine,
+distinct-actor `gate_decide`
+call releases it — `conductor-autoclear` (session_id) must never be the
+actor on a root plan_gate's history row. A CHILD task's `plan_gate` keeps
+autoclearing on a passing rubric, exactly as before — it is beneath the
+owner's notice by the same rule that makes a subtask mine to finish in
+its entirety (see the `## A stuck step` doctrine below). `story_gate`
+autoclears on every task, root or child — the owner's two stops are
+`plan_gate` and `green_gate` only. A daemon-created RUN task (the
+`language_alignment_worker.py` / `law_promotion.py` workers' own
+`align_language` / `promote_to_law` workflows) is root by construction
+(`parent_id=""`) but is NOT on the conductor workflow, so it never counts
+as a root SDLC task under this rule and keeps whatever autoclear its own
+named workflow already gives it.
 
 ## Report audit — before any step's final report
 
