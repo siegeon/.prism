@@ -198,30 +198,22 @@ def test_structure_rolls_up_code_kinds_correctly(project):
     assert by_id["Code"]["count"] == 6
 
 
-def test_a_second_rebuild_does_not_double_the_triples(project):
+def test_a_second_rebuild_does_not_double_the_triples(project, monkeypatch):
     """remove_graph + bulk_load, never an incremental add -- rebuilding
     twice on unchanged rows must not double the count of edges or nodes."""
     from prism_service.services.ontology_graph import OntologyGraph
 
     og = OntologyGraph(project)
-    # Re-anchored for task b1971944 ("a firing rule becomes a decision on
-    # the Queue"): a rebuild's own validate() pass can post NEW
-    # "ontology"-channel Queue signals for a rule this project's baseline
-    # data violates, and each of those signals itself projects as a
-    # QueueItem the NEXT time round -- which can trip a SECOND rule (e.g.
-    # "twin-classes" once two distinct o:Signal-like classes exist), so
-    # more than one rebuild can be needed before the signal set itself
-    # stops growing. Warm up until two consecutive rebuilds agree (a still
-    # -firing rule updates its own open signal in place, so this always
-    # terminates), THEN assert the real idempotency this test pins.
-    warm = og.rebuild()
-    for _ in range(5):
-        again = og.rebuild()
-        if again["total_triples"] == warm["total_triples"]:
-            break
-        warm = again
-    else:
-        pytest.fail("the ontology Queue-signal backlog never stabilized")
+    # task b1971944 made validate() post one "ontology" Queue signal per
+    # firing rule, and each signal projects as a QueueItem on the NEXT
+    # rebuild, so with the listener live the triple count moves once
+    # before it settles. That convergence is pinned in
+    # test_firing_rules_become_decisions; THIS test pins that rebuild
+    # itself is REPLACE-not-append, so it runs with the listener silent
+    # (a warm-up loop of rebuild+validate+subprocess took >30 s under the
+    # full suite and tripped the faulthandler dump; waves 34/36/37).
+    from prism_service.services import ontology_rules
+    monkeypatch.setattr(ontology_rules, "_ON_VALIDATED", [])
 
     first = og.rebuild()
     second = og.rebuild()

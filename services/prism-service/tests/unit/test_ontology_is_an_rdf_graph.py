@@ -98,7 +98,7 @@ def test_model_ttl_parses_and_declares_classes_with_subclass_edges():
 # REPLACES the named graph rather than appending to it
 # ---------------------------------------------------------------------------
 
-def test_rebuild_writes_triples_and_second_rebuild_replaces(project):
+def test_rebuild_writes_triples_and_second_rebuild_replaces(project, monkeypatch):
     from prism_service.services.ontology_graph import OntologyGraph
 
     graph = OntologyGraph(project)
@@ -110,26 +110,14 @@ def test_rebuild_writes_triples_and_second_rebuild_replaces(project):
 
     count_q = "SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }"
 
-    # Re-anchored for task b1971944 ("a firing rule becomes a decision on
-    # the Queue"): a rebuild's own validate() pass can post NEW
-    # "ontology"-channel Queue signals for a rule this project's baseline
-    # data violates, and each of those signals itself projects as a
-    # QueueItem the NEXT time round -- which can trip a SECOND rule (e.g.
-    # "twin-classes" once two distinct o:Signal-like classes exist), so
-    # more than one rebuild can be needed before the signal set itself
-    # stops growing. Warm up until two consecutive rebuilds agree (a
-    # still-firing rule updates its own open signal in place, so this
-    # always terminates), THEN assert the real REPLACE-not-append
-    # invariant this test pins.
-    warm_total = int(next(iter(graph.query(count_q)["bindings"]))["n"])
-    for _ in range(5):
-        graph.rebuild()
-        again_total = int(next(iter(graph.query(count_q)["bindings"]))["n"])
-        if again_total == warm_total:
-            break
-        warm_total = again_total
-    else:
-        pytest.fail("the ontology Queue-signal backlog never stabilized")
+    # task b1971944: validate() posts Queue signals that project as
+    # QueueItems on the next rebuild; that convergence is pinned in
+    # test_firing_rules_become_decisions. This test pins REPLACE-not-append,
+    # so the listener stays silent here (the warm-up loop it replaced took
+    # >30 s under the full suite; waves 34/36/37).
+    from prism_service.services import ontology_rules
+    monkeypatch.setattr(ontology_rules, "_ON_VALIDATED", [])
+    graph.rebuild()
 
     first_total = int(next(iter(graph.query(count_q)["bindings"]))["n"])
 
