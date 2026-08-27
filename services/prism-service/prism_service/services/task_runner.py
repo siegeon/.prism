@@ -27,6 +27,17 @@ rules; this runner only ever plays an AGENT step and hands the result to
 the same `flow_report` a human session would call, which enforces every
 rule (distinct-actor, worker contract, proof-carrying artifact) on its
 own — this module adds no new gate logic of its own.
+
+HOST-LOAD CIRCUIT BREAKER (real incident, 2026-08-26): this seat is
+willing to spawn a real `claude -p` subprocess for every eligible task,
+and this host runs MANY concurrent tasks/agents by design -- with no
+check on actual host resource pressure, a heavily loaded night can pile
+new subprocesses onto an already-saturated box (one background fix that
+night was independently killed by its own internal timeout purely from
+host contention). `_system_overloaded()` refuses new work, ACTIVE by
+default whenever this seat is enabled (PRISM_TASK_RUNNER_MAX_LOAD_PER_
+CORE, default 8.0 per core), the same two call sites as the spend
+ceiling below.
 """
 from __future__ import annotations
 
@@ -104,6 +115,68 @@ def _max_total_usd() -> Optional[float]:
         return max(0.0, float(raw))
     except ValueError:
         return None
+
+
+def _max_load_per_core() -> float:
+    """Per-core 1-minute load-average ceiling for the host-overload circuit
+    breaker (real incident, 2026-08-26: 30+ PRISM tasks sat `in_progress`
+    simultaneously on this same host, each one this module is willing to
+    spawn a real `claude -p` subprocess for, contending with many other
+    concurrent agent/pytest processes already running -- one of that
+    night's own background fixes was independently killed by its own
+    internal timeout purely from host contention).
+
+    Unlike `_max_total_usd` (an aggregate spend ceiling that is
+    meaningless without an owner-chosen dollar figure, so it defaults to
+    None/unbounded until explicitly set), a host-load ceiling has a sane
+    universal default -- so this mirrors `_max_turns`/`_max_budget_usd`/
+    `_step_timeout_s`'s shape instead: a real numeric default that is
+    ACTIVE the moment task_runner itself is enabled, no second opt-in
+    required. Deliberately NOT matching `_spend_ceiling_crossed`'s
+    unset-means-unbounded posture: that would leave exactly the gap the
+    owner asked to close (a heavily-loaded box with no guard at all until
+    someone remembers a second env var).
+
+    Default 8.0: this host idles around 0.15-0.2 per core (`uptime`
+    observed load average 3.74 on 24 cores while quiet). Most concurrent-
+    agent load is TIME SPENT BLOCKED ON NETWORK I/O (waiting on LLM
+    calls), which Linux's load average does not count as runnable, so
+    legitimate heavy multi-agent concurrency -- the normal, by-design
+    state of this box -- should stay well under this ceiling. 8.0/core is
+    reserved for genuine saturation (many CPU-runnable or disk-blocked
+    processes queued for the same cores), the failure mode that silently
+    killed one of tonight's background fixes via its own internal
+    timeout.
+    """
+    try:
+        return max(0.1, float(
+            os.environ.get("PRISM_TASK_RUNNER_MAX_LOAD_PER_CORE", "8.0")))
+    except ValueError:
+        return 8.0
+
+
+def _system_overloaded() -> bool:
+    """True (and logged) once the 1-minute load average per CPU core
+    exceeds `_max_load_per_core()`. Fails SAFE -- returns False, never
+    raises -- on any platform/environment where `os.getloadavg()` is
+    unavailable (Windows, some containers): exactly like
+    `_spend_ceiling_crossed()` fails safe (False) when its own env var is
+    unset, a check this module cannot perform must never be treated as a
+    reason to refuse work."""
+    try:
+        load1, _, _ = os.getloadavg()
+        cpu_count = os.cpu_count() or 1
+    except (OSError, AttributeError, NotImplementedError):
+        return False
+    ceiling = _max_load_per_core()
+    per_core = load1 / cpu_count
+    if per_core <= ceiling:
+        return False
+    _log(f"host overloaded: {load1:.2f} 1-min load avg / {cpu_count} cores "
+         f"= {per_core:.2f} per-core > {ceiling:.2f} ceiling "
+         "(PRISM_TASK_RUNNER_MAX_LOAD_PER_CORE) -- refusing further work "
+         "until load drops")
+    return True
 
 
 def _log(msg: str) -> None:
@@ -206,6 +279,8 @@ def eligible_task(project: str) -> Optional[str]:
     from prism_service.services.conductor_service import ConductorService
 
     if _spend_ceiling_crossed():
+        return None
+    if _system_overloaded():
         return None
 
     ctx = get_project(project)
@@ -350,6 +425,8 @@ def sweep_once() -> Optional[dict]:
     from prism_service.project_context import get_all_projects
 
     if _spend_ceiling_crossed():
+        return None
+    if _system_overloaded():
         return None
 
     global _rr_index
