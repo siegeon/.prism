@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.100"
+PRISM_VERSION = "7.13.101"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7242,4 +7242,21 @@ PRISM_VERSION_NOTES += (
     "`git init --bare`, so the fixture is deterministic regardless of "
     "the runner's git config. Reproduced and confirmed fixed locally "
     "via GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null."
+)
+PRISM_VERSION_NOTES += (
+    "v7.13.101: a browser tab left open through a daemon restart stayed "
+    "frozen on stale task data forever, even after the daemon came back "
+    "healthy within seconds. Root cause: lib/sharedStream.ts's "
+    "openStream() guards re-entry with `if (e.es) return`, but its "
+    "es.onerror handler never cleared that reference on a permanently "
+    "closed connection -- so once the daemon dropped the connection, "
+    "the module believed a dead EventSource was still live forever, and "
+    "no future subscriber could ever reopen it. Fix: onerror now checks "
+    "es.readyState === EventSource.CLOSED (as opposed to CONNECTING, "
+    "where the browser is already auto-retrying), clears e.es, and "
+    "retries openStream(url) after a short delay while subscribers "
+    "remain. Does not touch version.ts's separate, already-guarded "
+    "reload path (task b15e84b2) -- a dropped connection is not a "
+    "version mismatch, and sharedStream.ts must never call reload "
+    "itself, per that task's own regression test."
 )

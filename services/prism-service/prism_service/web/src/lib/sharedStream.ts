@@ -44,6 +44,7 @@ type Entry = {
 
 const CHANNEL_NAME = "prism-sse";
 const LOCK_NAME = "prism-sse-leader";
+const RECONNECT_DELAY_MS = 3000;
 
 const entries = new Map<string, Entry>();
 
@@ -103,6 +104,20 @@ function openStream(url: string): void {
     es.onerror = () => {
       setHealth(url, false);
       post({ t: "health", url, healthy: false });
+      if (es.readyState === EventSource.CLOSED) {
+        // The browser has given up retrying (as opposed to CONNECTING,
+        // where it is already auto-retrying on its own) -- e.g. the daemon
+        // was bounced and came back on a fresh process. openStream()'s
+        // `if (e.es) return` guard would otherwise treat this dead object
+        // as a live connection forever, so no future subscriber could ever
+        // reopen it. Clear it and try again after a short delay.
+        if (e.es === es) e.es = null;
+        if (e.subs.size > 0) {
+          setTimeout(() => {
+            if (isLeader && e.subs.size > 0 && !e.es) openStream(url);
+          }, RECONNECT_DELAY_MS);
+        }
+      }
     };
   } catch {
     // EventSource unavailable — consumers keep their own fallbacks (version.ts
