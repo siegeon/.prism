@@ -7389,3 +7389,19 @@ PRISM_VERSION_NOTES += (
     "(services/knowledge_health.py). Full unit suite on the merged tree: "
     "3248 passed (wave 35); real vite build green."
 )
+PRISM_VERSION_NOTES += (
+    "7.13.109: ship_worker._default_runner used subprocess.run(timeout=120), "
+    "which on timeout kills ONLY the direct child; `git push` over HTTPS "
+    "spawns git-remote-https beneath it, and that grandchild kept its "
+    "github.com connection open after the runner reported a timeout (two "
+    "orphans observed live 2026-08-26). The runner now starts the call in "
+    "its OWN session/process group (start_new_session on POSIX, "
+    "CREATE_NEW_PROCESS_GROUP + taskkill /T on Windows), kills the whole "
+    "group on timeout, and re-raises TimeoutExpired so _run's rc=1 / "
+    "'failed to run: ... timed out' contract is unchanged. The ceiling is "
+    "the named module constant RUN_TIMEOUT_S = 120. Pinned by "
+    "tests/unit/test_ship_worker_machine_track.py (task 8b4e7cb6). "
+    "Rebased onto main's 7.13.108 (ship_worker rebase-before-push fix) and "
+    "renumbered from the original 7.13.107 to resolve the version-line "
+    "collision; both fixes' code merged cleanly, only this file conflicted."
+)
