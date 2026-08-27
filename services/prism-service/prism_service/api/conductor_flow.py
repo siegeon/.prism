@@ -619,6 +619,16 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 actor=body.session_id)
         except Exception:
             pass
+        # record_history is a raw history-table insert — it does NOT compute
+        # a fresh `activity` block or publish the `task.changed` bus event
+        # that TaskDetailPage's /sse/tasks subscription relies on, so an
+        # already-open tab kept showing pre-failure state (e.g. "driving")
+        # forever, until a manual reload (task 1728c54b). Push one now; this
+        # must never break the failure-report response itself.
+        try:
+            svc._task_svc.publish_activity_changed(body.task_id)
+        except Exception:
+            pass
         return {"ok": False, "step": step["id"], "advanced": False,
                 "reason": "reported failure: step not advanced (a reported "
                 "outcome is not step completion)",
