@@ -17,6 +17,7 @@
     "github",
     "jira",
     "mcp",
+    "ontology",
     "outlook",
     "slack",
     "ui"
@@ -34,12 +35,15 @@
     "metric",
     "review",
     "source_backed_answer",
-    "decision"
+    "decision",
+    "pr"
   ],
   "signal_state": [
     "open",
     "became_task",
-    "dropped"
+    "dropped",
+    "resolved",
+    "promoted"
   ],
   "task_status": [
     "pending",
