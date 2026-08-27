@@ -2306,7 +2306,9 @@ class ConductorService:
             return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, "green_gate", _pr)
                 return None
         except Exception:
             return None
@@ -2649,6 +2651,28 @@ class ConductorService:
                 "it cannot have exercised this change; a distinct actor "
                 "must decide")
 
+    def _park_policy_abstention(self, task_id: str, gate: str,
+                                reason: str) -> None:
+        """RECORD a policy-judge abstention at the seat that decides (task
+        dd2b87c8): pending (never failed) + gate_reason + blocked_reason, plus
+        ONE gate_decide audit row per unresolved condition (de-duped across
+        re-sweeps) — a bare `return None` threw the reason away so no driver
+        could self-diagnose (same defect as e0149f1f, four seats over)."""
+        if self._task_svc is None:
+            return
+        try:
+            task = self._task_svc.get(task_id)
+            prior = str(_task_attr(task, "gate_reason", "") or "")
+            self._task_svc.update(task_id, gate_state="pending",
+                                  gate_reason=reason, blocked_reason=reason)
+            if prior.strip() != reason.strip():
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate}; action=approve; "
+                             f"machine=abstained; reason={reason}"))
+        except Exception:
+            return
+
     def _park_green_refusal(self, task_id: str, reason: str) -> None:
         """RECORD a machine refusal instead of discarding it (task e0149f1f).
 
@@ -2917,7 +2941,9 @@ class ConductorService:
             return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, "red_gate", _pr)
                 return None
         except Exception:
             return None
@@ -3026,7 +3052,9 @@ class ConductorService:
             return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, "red_gate", _pr)
                 return None
         except Exception:
             return None
@@ -3163,7 +3191,9 @@ class ConductorService:
                     return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, step, _pr)
                 return None
         except Exception:
             return None
