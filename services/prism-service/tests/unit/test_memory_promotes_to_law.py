@@ -301,6 +301,17 @@ def test_principle_promotion_walks_to_review_then_installs_after_approval(
     assert task.gate_state == "pending", \
         "the review gate must PARK for a distinct actor, never auto-clear"
     assert drafted["name"] in (task.plan_doc or "")
+    # An unset proof_type falls through conductor_service.py's demo-shaped
+    # evidence path, which wants a trusted-runner oracle receipt a
+    # promote_to_law task can never produce -- every run parked at
+    # "review" showed BLOCKED / "evidence not on file" in the live UI no
+    # matter how good the draft was (owner, 2026-08-27, live repro on
+    # task 44c7e2d0). review is a pure human sign-off; it must declare
+    # proof_type="review" so the readiness/approve path treats it as
+    # human-judgment, never as a missing machine receipt.
+    assert task.proof_type == "review", \
+        "a promote_to_law run task must declare proof_type='review' so its " \
+        "one owner gate is never blocked on a machine oracle receipt"
 
     # A distinct actor approves -- never the drafting seat's own session.
     # override=True: "review" carries no rubric validation kind (by
@@ -339,6 +350,39 @@ def test_principle_promotion_walks_to_review_then_installs_after_approval(
     again = law_promotion.install_pending(project, task_id=run_task_id)
     assert again["ok"] is False, \
         "a done task is no longer awaiting install -- must not re-run it"
+
+
+def test_review_gate_readiness_is_the_human_judgment_path_not_a_missing_receipt(
+    real_project, no_real_worktree,
+):
+    """The exact live-UI bug (owner, 2026-08-27, task 44c7e2d0): the
+    Evidence tab's Approve control read "BLOCKED - evidence not on file"
+    for a review-step task with a genuinely good draft, because an unset
+    proof_type falls into api/conductor.py:gate_readiness's generic
+    trusted-runner EvidenceReceipt branch, which a promote_to_law task can
+    never satisfy (it has no pinned pytest oracle). Calls the SAME
+    gate_readiness function the live Approve button's card reads, not
+    just the stored task field, so a regression here reproduces the
+    actual UI symptom, not just a missing attribute.
+    """
+    from prism_service.api.conductor import gate_readiness
+    from prism_service.services import law_promotion
+
+    memory = _principle_memory(real_project)
+    started = law_promotion.start_promotion(real_project, memory.id)
+    assert started["ok"], started
+    run_task_id = started["run_task_id"]
+
+    readiness = gate_readiness(run_task_id, project=real_project)
+
+    assert readiness["receipt_ok"] is True, \
+        f"review must be READY to approve, not blocked on a missing machine receipt: {readiness}"
+    assert readiness.get("manual_review") is True
+    assert readiness["receipt"]["adapter"] == "human", \
+        f"review's evidence tooth must be the human-judgment path, not a trusted-runner receipt: {readiness}"
+    reason = str(readiness["receipt"].get("reason") or "")
+    assert "evidence not on file" not in reason.lower()
+    assert "missing" not in reason.lower()
 
 
 def test_installed_rule_fires_on_its_violating_fixture_and_stays_quiet_on_compliant(

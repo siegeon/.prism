@@ -285,6 +285,15 @@ def start_promotion(project: str, memory_id: str) -> dict:
         ),
         channel="daemon", tags=["promote-to-law", "daemon", f"memory:{memory.id}"],
         parent_id="", workflow="promote_to_law",
+        # review is this workflow's ONE owner stop -- a pure human
+        # sign-off on the drafted rule, never a machine-runnable check.
+        # An unset proof_type falls through conductor_service.py's
+        # demo-shaped evidence path (it wants a trusted-runner oracle
+        # receipt), which a promote_to_law task can never produce, so
+        # every run parked at "review" showed BLOCKED - evidence not on
+        # file no matter how good the draft was. proof_type="review"
+        # routes it to the human-judgment path this gate actually is.
+        proof_type="review",
     )
     task_svc.update(run_task.id, plan_doc=_plan_doc(drafted, memory))
 

@@ -544,12 +544,26 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             # Reflect the artifact tooth HONESTLY so the card never says READY
             # and then refuses the approve: READY only when the evidence is on
             # file, else an actionable 'attach a screenshot' (not a machine fail).
-            cp = getattr(task, "completion_proof", "")
-            art = (green_gate_artifact_reason(cp, "", pt)
-                   or ui_artifact_gate_reason(getattr(task, "tags", None),
-                                              pt, cp))
-            if art and has_captured_evidence(task_id):
-                art = ""  # a captured screenshot satisfies the requirement
+            #
+            # SCOPED TO green_gate ONLY (task 44c7e2d0, owner 2026-08-27): this
+            # tooth's own wording ("green_gate requires a captured full-suite-
+            # green artifact") names the implement workflow's green_gate step
+            # specifically — a code change's tested-and-working proof. It was
+            # firing for ANY demo/review-proof-type task regardless of which
+            # gate step it was actually at, so promote_to_law's review step
+            # (reviewing a drafted TTL rule, never a code/UI change) was
+            # blocked demanding a screenshot that step has no reason to have.
+            # A workflow with its own real artifact expectation at its own
+            # gate step should gain its own scoped check here, not reuse
+            # green_gate's.
+            art = ""
+            if getattr(task, "workflow_step", "") == "green_gate":
+                cp = getattr(task, "completion_proof", "")
+                art = (green_gate_artifact_reason(cp, "", pt)
+                       or ui_artifact_gate_reason(getattr(task, "tags", None),
+                                                  pt, cp))
+                if art and has_captured_evidence(task_id):
+                    art = ""  # a captured screenshot satisfies the requirement
             if art:
                 return {"receipt_ok": False, "manual_review": True,
                         "receipt_refusal": art,
