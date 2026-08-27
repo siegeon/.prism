@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.101"
+PRISM_VERSION = "7.13.102"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.102: fix: task_runner._run_one_step discarded a COMPLETE, usable step report whenever claude -p exited non-zero, even when the non-zero exit was only a post-hoc --max-budget-usd/--max-turns flag raised AFTER the model's own turn had already ended normally (stop_reason==end_turn). Confirmed live on tasks 85f92e4b, 0e2c82f3 and 82cc05ee, all stuck at review_previous_notes with a perfect '## Premises' report thrown away as 'exit=1, no usable output'. Added ClaudeCliResult.graceful_budget_stop() (inference/claude_cli.py) to name the condition (subtype in error_max_budget_usd/error_max_turns AND stop_reason==end_turn), and task_runner now routes the proof and passes when that condition holds with non-empty final_text; a genuinely empty proof, or any non-graceful failure (crash, auth failure, truncation mid-generation), still fails exactly as before. The $2.00 default budget ceiling itself is unchanged -- this fixes the discard, not the ceiling. "
     "7.13.25: agent-bridge remote-assist no longer needs a human to "
     "copy/paste a session id every reload or daemon restart. Added "
     "GET /api/agent-bridge/sessions (auth'd exactly like session creation) "
