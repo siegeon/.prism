@@ -1,31 +1,19 @@
-"""Pin AC-1..AC-7 of task 3a3f90da "Make the Brain the default retrieval
-path on drives" (see task.plan_doc for the full design this file follows).
+# split from test_implement_brain_first_retrieval.py -- see task 3a3f90da: AC-2..AC-5 need a live drive transcript and cannot gate a single implement_tasks step
+"""Pin AC-1, AC-6 and AC-7 of task 3a3f90da "Make the Brain the default
+retrieval path on drives" (see task.plan_doc for the full design this file
+follows).
 
-These tests measure a REAL drive's subagent transcripts by parsing JSONL --
-never implement.js's own prompt text -- per the task's own named misfire: a
-source-text presence check proves the words exist, not that behaviour
-changed (memory mx-53efa3: a prior 14:1 baseline counted only the Grep
-TOOL; a re-measure found the Grep tool called 0 times while Bash carried
-832 shelled `grep` invocations, true ratio 416:1).
+These are the fixture-driven / source-reading ACs that need no live drive:
+AC-1 pins the DISK-RETRIEVAL counter's own definition (FR-1), AC-7 pins the
+refuse-on-absent-evidence contract (NFR-3), and AC-6 pins that implement.js
+names Bash-shelled retrieval by name (necessary but explicitly NOT
+sufficient -- AC-3/AC-5, in the sibling live-drive file, prove the
+behaviour actually moved).
 
-AC-1 and AC-7 are fixture-driven and need no live drive: they pin the
-DISK-RETRIEVAL counter's own definition (FR-1) and the refuse-on-absent-
-evidence contract (NFR-3).
-
-AC-2, AC-3, AC-4 and AC-5 are transcript-driven: they require a REAL fresh
-`implement` drive's subagent transcripts, located via env vars:
-  PRISM_BRAIN_FIRST_DRIVE_SESSION       -- the drive's session/run id
-  PRISM_BRAIN_FIRST_TRANSCRIPT_ROOT     -- defaults to ~/.claude/projects
-  PRISM_BRAIN_FIRST_DRIVE_RUN           -- optional wf_<id> run dir; scopes the
-                                           measurement to ONE workflow run when a
-                                           session hosts several relaunched drives
-  PRISM_BRAIN_FIRST_BLAST_RADIUS_SYMBOLS -- comma-separated symbols from
-                                             that drive's own plan_doc
-      (AC-4 only)
-Per the task's own NFR-3, when the evidence is missing these FAIL LOUDLY
-with the exact reason -- never skip silently, never report a vacuous pass.
-This is why they are red today: no fresh drive has been run yet for this
-env to point at.
+AC-2, AC-3, AC-4 and AC-5 -- which require a REAL fresh `implement` drive's
+subagent transcripts on disk -- live in
+test_implement_brain_first_retrieval_live.py so they cannot block this
+task's green_gate on a live drive that is itself a separate, later action.
 """
 
 from __future__ import annotations
@@ -39,7 +27,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _IMPLEMENT_JS = _REPO_ROOT / ".claude" / "workflows" / "implement.js"
 
 LOCATE_MARKER = "Build a brain-first context_summary"
-PLAN_MARKER = "GRAPH RUNG (blast radius, and this is what makes green honest)"
 
 # FR-1: DISK-RETRIEVAL = the Grep tool, OR a Bash call whose command text
 # shells out to a disk-search program. Word-boundary match so e.g. "cathedral"
@@ -115,7 +102,7 @@ def _walk_events(path: Path):
 
 
 def _scan(path: Path):
-    """(tool_name, tool_input) pairs in order -- the walk AC-1/AC-5/AC-6 need."""
+    """(tool_name, tool_input) pairs in order -- the walk AC-1 needs."""
     for ev in _walk_events(path):
         if ev["kind"] == "tool_use":
             yield ev["name"], ev["input"]
@@ -176,61 +163,6 @@ def _locate_drive_transcripts() -> list[Path]:
     return hits
 
 
-def _find_transcript_by_marker(transcripts: list[Path], marker: str) -> Path:
-    for path in transcripts:
-        for ev in _walk_events(path):
-            if ev["kind"] == "text" and marker in ev["text"]:
-                return path
-    raise AssertionError(
-        f"No transcript among {[str(p) for p in transcripts]} contains the "
-        f"marker {marker!r} -- cannot identify which subagent ran that step."
-    )
-
-
-_SAVED_RESULT_RE = re.compile(r"saved to (\S+?\.txt)")
-
-
-def _extract_conventions(result_text: str) -> list[str]:
-    # The real context_bundle reply is ~1.5 MB (active_tasks + context_pack
-    # measured at 748 KB and 756 KB on drive wf_c7bae879), so the harness
-    # replaces the inline tool_result with "exceeds maximum allowed tokens
-    # ... saved to <path>.txt". The conventions the tool RETURNED live in that
-    # file, so follow the pointer -- reading the notice alone would fail AC-2
-    # on every drive regardless of what the drive did (task 3a3f90da).
-    m = _SAVED_RESULT_RE.search(result_text or "")
-    if m and "conventions" not in result_text:
-        try:
-            result_text = Path(m.group(1)).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return []
-    try:
-        obj = json.loads(result_text)
-    except (json.JSONDecodeError, TypeError):
-        obj = None
-    if isinstance(obj, dict):
-        conv = obj.get("conventions")
-        if isinstance(conv, list):
-            return [str(c) for c in conv if c]
-    m = re.search(r'"conventions"\s*:\s*\[(.*?)\]', result_text, re.S)
-    if m:
-        items = re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
-        return [i for i in items if i]
-    return []
-
-
-def _blast_radius_symbols() -> list[str]:
-    raw = os.environ.get("PRISM_BRAIN_FIRST_BLAST_RADIUS_SYMBOLS", "").strip()
-    if not raw:
-        raise AssertionError(
-            "PRISM_BRAIN_FIRST_BLAST_RADIUS_SYMBOLS is not set. AC-4 reads "
-            "the blast-radius symbol list from the fresh drive's own "
-            "task.plan_doc; pass those symbol names, comma-separated, via "
-            "this env var. Refusing to report a vacuous pass "
-            "(task 3a3f90da NFR-3)."
-        )
-    return [s.strip() for s in raw.split(",") if s.strip()]
-
-
 # ---------------------------------------------------------------------------
 # AC-1 -- fixture-driven, no live drive needed.
 # ---------------------------------------------------------------------------
@@ -284,121 +216,8 @@ def test_ac7_refuses_to_pass_on_absent_evidence(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# AC-2..AC-5 -- transcript-driven, require a fresh drive (see module docstring).
-# ---------------------------------------------------------------------------
-
-def test_ac2_context_bundle_called_once_and_conventions_reach_a_later_preamble():
-    transcripts = _locate_drive_transcripts()
-    cb_calls = []
-    result_by_id: dict[str, str] = {}
-    for path in transcripts:
-        for ev in _walk_events(path):
-            if ev["kind"] == "tool_use" and ev["name"] == "mcp__prism__context_bundle":
-                cb_calls.append((path, ev))
-            elif ev["kind"] == "tool_result":
-                result_by_id[ev["tool_use_id"]] = ev["text"]
-    assert len(cb_calls) == 1, (
-        f"Expected exactly one context_bundle call across the whole drive, "
-        f"found {len(cb_calls)}: {[str(p) for p, _ in cb_calls]}"
-    )
-    cb_path, cb_ev = cb_calls[0]
-    result_text = result_by_id.get(cb_ev["tool_use_id"], "")
-    assert result_text, f"No tool_result found for the context_bundle call in {cb_path}"
-    conventions = _extract_conventions(result_text)
-    assert conventions, (
-        f"context_bundle returned no non-empty conventions array "
-        f"(raw result: {result_text[:300]!r})"
-    )
-    later_hit = None
-    for path in transcripts:
-        if path == cb_path:
-            continue
-        for ev in _walk_events(path):
-            if ev["kind"] == "text" and any(c and c in ev["text"] for c in conventions):
-                later_hit = (path, ev["text"][:200])
-                break
-        if later_hit:
-            break
-    assert later_hit is not None, (
-        f"None of the {len(conventions)} conventions from context_bundle "
-        f"appeared in any later step transcript's preamble text."
-    )
-
-
-def test_ac3_brain_call_precedes_first_disk_retrieval_in_locate_and_plan():
-    transcripts = _locate_drive_transcripts()
-    locate_path = _find_transcript_by_marker(transcripts, LOCATE_MARKER)
-    plan_path = _find_transcript_by_marker(transcripts, PLAN_MARKER)
-    for label, path in (("locate", locate_path), ("plan", plan_path)):
-        brain_idx = None
-        disk_idx = None
-        for i, ev in enumerate(_walk_events(path)):
-            if ev["kind"] != "tool_use":
-                continue
-            if brain_idx is None and ev["name"] in (
-                "mcp__prism__brain_search", "mcp__prism__brain_understand",
-            ):
-                brain_idx = i
-            if disk_idx is None and _is_disk_retrieval(ev["name"], ev["input"]):
-                disk_idx = i
-        assert brain_idx is not None, (
-            f"{label} transcript {path} never called brain_search/brain_understand."
-        )
-        assert disk_idx is None or brain_idx < disk_idx, (
-            f"{label} transcript {path}: first DISK-RETRIEVAL call is at event "
-            f"#{disk_idx}, before the first brain_search/brain_understand call "
-            f"at event #{brain_idx}."
-        )
-
-
-def test_ac4_brain_call_chain_and_find_references_per_blast_radius_symbol():
-    transcripts = _locate_drive_transcripts()
-    symbols = _blast_radius_symbols()
-    call_chain_args: set[str] = set()
-    find_refs_args: set[str] = set()
-    for path in transcripts:
-        for name, inp in _scan(path):
-            if name == "mcp__prism__brain_call_chain":
-                call_chain_args.add(str(inp.get("entity", "")))
-            elif name == "mcp__prism__brain_find_references":
-                find_refs_args.add(str(inp.get("name", "")))
-    missing_cc = [s for s in symbols if s not in call_chain_args]
-    missing_fr = [s for s in symbols if s not in find_refs_args]
-    assert not missing_cc, (
-        f"brain_call_chain never ran for: {missing_cc} "
-        f"(ran for: {sorted(call_chain_args)})"
-    )
-    assert not missing_fr, (
-        f"brain_find_references never ran for: {missing_fr} "
-        f"(ran for: {sorted(find_refs_args)})"
-    )
-
-
-def test_ac5_disk_to_brain_search_ratio_under_4_to_1():
-    transcripts = _locate_drive_transcripts()
-    disk = 0
-    brain = 0
-    for path in transcripts:
-        for name, inp in _scan(path):
-            if _is_disk_retrieval(name, inp):
-                disk += 1
-            if name == "mcp__prism__brain_search":
-                brain += 1
-    assert brain > 0, (
-        f"brain_search was called 0 times across the drive ({disk} disk-"
-        "retrieval calls counted) -- a zero count is a FAILURE, never a "
-        "divide-by-zero skip."
-    )
-    ratio = disk / brain
-    assert ratio < 4.0, (
-        f"disk-retrieval:brain_search ratio is {disk}:{brain} = {ratio:.2f}, "
-        "not under the required 4.0."
-    )
-
-
-# ---------------------------------------------------------------------------
 # AC-6 -- source-reading, necessary but explicitly NOT sufficient (AC-3/AC-5
-# prove the behaviour actually moved).
+# in the sibling live-drive file prove the behaviour actually moved).
 # ---------------------------------------------------------------------------
 
 def test_ac6_implement_js_names_bash_shelled_retrieval_by_name():
