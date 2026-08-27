@@ -73,17 +73,23 @@ router = APIRouter()
 # hat worth drawing, so it is listed explicitly rather than derived.
 BOT_IDS = ("sm", "qa", "dev", "architect")
 
+# task 408138e8 (epic 61821448): every step's `action` text names the
+# trigger that starts it -- the skill-description-says-when SHACL rule
+# (ontology/shapes.ttl) reads this text (via _catalog_entries' network-
+# free fallback, ontology_prototype_projection.py) when the live /api/
+# workflows catalog is unreachable, so the trigger clause must live HERE,
+# not only in the live catalog's own description strings below.
 STEP_ACTIONS = {
-    "review_previous_notes": ("Existing project memory and source", "Review prior decisions and ground every premise in evidence", "A cited premise report"),
-    "draft_story": ("Grounded premises and the requested outcome", "Author requirements and acceptance criteria with observable oracles", "A reviewable story"),
-    "story_gate": ("The authored story", "An independent Steward adjudicates story completeness", "Approved story or a concrete refusal reason"),
-    "verify_plan": ("The approved story", "Check that the implementation plan covers every acceptance criterion", "A coverage-backed plan"),
-    "plan_gate": ("The verified plan", "An independent Steward adjudicates plan coverage", "Approved plan or a concrete refusal reason"),
-    "write_failing_tests": ("Acceptance criteria and plan", "Write traced tests that fail for the missing behavior", "Reproducible red evidence"),
-    "red_gate": ("Failing test evidence", "An independent Steward confirms the failure is relevant and honest", "Approved red state or a refusal reason"),
-    "implement_tasks": ("Approved plan and failing tests", "Make the smallest source change that turns the tests green", "Implemented source changes"),
-    "verify_green_state": ("Implementation and its verification commands", "Run the real verification suite and inspect the resulting evidence", "Full green evidence"),
-    "green_gate": ("Green evidence and acceptance oracles", "An independent Steward decides whether the requested outcome is actually complete", "Accepted outcome or follow-up work"),
+    "review_previous_notes": ("Existing project memory and source", "Review prior decisions and ground every premise in evidence. Runs first, when a task starts the implement workflow.", "A cited premise report"),
+    "draft_story": ("Grounded premises and the requested outcome", "Author requirements and acceptance criteria with observable oracles. Runs when a task enters draft_story, right after review_previous_notes.", "A reviewable story"),
+    "story_gate": ("The authored story", "An independent Steward adjudicates story completeness. Runs when a task's draft_story step finishes.", "Approved story or a concrete refusal reason"),
+    "verify_plan": ("The approved story", "Check that the implementation plan covers every acceptance criterion. Runs when a task enters verify_plan, right after story_gate.", "A coverage-backed plan"),
+    "plan_gate": ("The verified plan", "An independent Steward adjudicates plan coverage. Runs when a task's verify_plan step finishes.", "Approved plan or a concrete refusal reason"),
+    "write_failing_tests": ("Acceptance criteria and plan", "Write traced tests that fail for the missing behavior. Runs when a task enters write_failing_tests, right after plan_gate.", "Reproducible red evidence"),
+    "red_gate": ("Failing test evidence", "An independent Steward confirms the failure is relevant and honest. Runs when a task's write_failing_tests step finishes.", "Approved red state or a refusal reason"),
+    "implement_tasks": ("Approved plan and failing tests", "Make the smallest source change that turns the tests green. Runs when a task enters implement_tasks, right after red_gate.", "Implemented source changes"),
+    "verify_green_state": ("Implementation and its verification commands", "Run the real verification suite and inspect the resulting evidence. Runs when a task enters verify_green_state, right after implement_tasks.", "Full green evidence"),
+    "green_gate": ("Green evidence and acceptance oracles", "An independent Steward decides whether the requested outcome is actually complete. Runs when a task's verify_green_state step finishes.", "Accepted outcome or follow-up work"),
 }
 
 # "Who may decide this gate, and how to recover from a wrong decision" —
@@ -363,10 +369,17 @@ def _project_validation_workflow(project: str) -> dict:
             "average_duration_seconds": scripted.average_duration_seconds,
             "duration_sample_count": scripted.duration_sample_count,
         })
+    # task 408138e8 (epic 61821448): the AosWorkflows engine owns
+    # definition.description's own text -- append the real trigger
+    # (verify_green_state links here, see get_workflows' linked_workflow_id
+    # map) so the skill-description-says-when SHACL rule reads a true
+    # "when" clause no matter what the engine's own text says.
+    trigger = "Runs when a task's verify_green_state step needs to build and test the project."
+    description = f"{definition.description.rstrip()} {trigger}".strip()
     return {
         "id": definition.id,
         "name": definition.name,
-        "description": definition.description,
+        "description": description,
         "project_type": definition.project_type,
         "steps": steps,
         "bots": [],
@@ -780,6 +793,29 @@ def _task_count_by_workflow(project: str, catalog_ids: list[str], svc=None) -> d
     return counts
 
 
+# task 408138e8 (epic 61821448): the real trigger for each conductor
+# behavior, keyed by its AosWorkflows behavior_id -- matches
+# get_workflows' own linked_workflow_id map (a conductor FSM state calls
+# most of these) plus land (green_gate's ship step) and ci-local-dev (no
+# FSM state calls it; a person runs it by hand). Read by
+# _conductor_behavior_workflows below so every behavior's description
+# names a real "when", never the generic fallback text only.
+_BEHAVIOR_TRIGGER = {
+    "draft-story-loop": "Runs when a task starts the implement workflow.",
+    "story-gate-check": "Runs when a task's draft_story step finishes and story_gate needs a decision.",
+    "verify-plan-loop": "Runs when a task's story_gate is approved and verify_plan starts.",
+    "plan-gate-check": "Runs when a task's verify_plan step finishes and plan_gate needs a decision.",
+    "write-failing-tests-loop": "Runs when a task's plan_gate is approved and write_failing_tests starts.",
+    "red-gate-status": "Runs when a task's write_failing_tests step finishes and red_gate needs a decision.",
+    "implement-tasks-loop": "Runs when a task's red_gate is approved and implement_tasks starts.",
+    "green-gate-status": "Runs when a task's verify_green_state step finishes and green_gate needs a decision.",
+    "review-previous-notes-loop": "Runs first, when a task starts the implement workflow.",
+    "land": "Runs when a task's green_gate is approved and the branch is ready to ship.",
+    "ci-local-dev": "Run this when a developer wants local CI results before pushing.",
+}
+_DEFAULT_BEHAVIOR_TRIGGER = "Runs when the conductor bot's own FSM calls this behavior."
+
+
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
@@ -870,10 +906,11 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                     "timeout_seconds": step.get("timeoutSeconds") or step.get("TimeoutSeconds") or 300,
                     "depends_on": [raw_steps[i - 1].get("id") or raw_steps[i - 1].get("Id")] if i else [],
                 })
+            trigger = _BEHAVIOR_TRIGGER.get(behavior_id, _DEFAULT_BEHAVIOR_TRIGGER)
             entries.append({
                 "id": behavior_id,
                 "name": behavior.get("name") or behavior.get("Name") or behavior_id.replace("-", " ").title(),
-                "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows",
+                "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows. {trigger}",
                 "steps": steps,
                 "bots": [],
                 "occupancy": {step["id"]: 0 for step in steps},
@@ -920,7 +957,10 @@ def _triage_workflow(project: str, svc=None) -> dict:
     return {
         "id": "triage",
         "name": "Triage",
-        "description": "Bucket an item and stop once for the owner's decision",
+        "description": (
+            "Bucket an item and stop once for the owner's decision. "
+            "Runs when a new signal or task needs a decision."
+        ),
         "steps": steps,
         "bots": [],
         "occupancy": occupancy,
@@ -973,7 +1013,9 @@ def _align_language_workflow(project: str, svc=None) -> dict:
         "name": "Align language",
         "description": (
             "Bring loose task text into plain Simplified Technical "
-            "English — a fully machine-run pass, no owner stop"
+            "English — a fully machine-run pass, no owner stop. Runs "
+            "when its own timer fires, sweeping every task's text for "
+            "loose language."
         ),
         "steps": steps,
         "bots": [],
@@ -1020,7 +1062,8 @@ def _promote_to_law_workflow(project: str, svc=None) -> dict:
         "name": "Promote to law",
         "description": (
             "Turn a memory into a rule or a term the ontology holds, "
-            "with one owner review"
+            "with one owner review. Runs when a memory is ready to "
+            "promote to law."
         ),
         "steps": steps,
         "bots": [],
@@ -1045,7 +1088,8 @@ def _knowledge_health_workflow(project: str) -> dict:
         "name": "Knowledge health",
         "description": (
             "Is Understand actually helping? Search feedback, recall-to-use, "
-            "evidence, and how many rules and modules carry real provenance"
+            "evidence, and how many rules and modules carry real "
+            "provenance. Runs when a person opens the Knowledge health tab."
         ),
         "steps": [],
         "bots": [],
@@ -1105,7 +1149,10 @@ def get_workflows(project: str = Query("default")) -> dict:
     conductor = {
         "id": "conductor",
         "name": "Conductor",
-        "description": "PRISM delivery workflow",
+        "description": (
+            "PRISM delivery workflow. Runs when a task moves through "
+            "story, plan, red, and green steps to a shipped change."
+        ),
         "steps": steps,
         "bots": bots,
         "occupancy": occupancy,
