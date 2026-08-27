@@ -86,16 +86,25 @@ def test_bars_scale_to_sum_not_max():
         "both StepMeta/GateRow call sites must pass the sum-based sumTokens/sumDur props"
 
 
-def test_step_meta_track_width_is_fixed_not_data_dependent():
-    """Follow-up bug (still visible after the sum-based pct fix, task
-    c5b70c27): StepMeta's OUTER wrapper div sized the bar's track with
-    `flex-1` + `max-w-[420px]` — a flex-grown width capped, not fixed. That
-    made the track's actual rendered width depend on how much horizontal
-    space was left over after each row's own label text, so rows with
-    longer labels rendered a visibly NARROWER bar even though the fill pct
-    math was already correct. The fix is a FIXED pixel width (`w-[Npx]` with
-    `flex-none`) so every row's track renders at the same width regardless
-    of sibling label length.
+def test_step_meta_track_fills_remaining_row_space_with_no_gap():
+    """SUPERSEDES test_step_meta_track_width_is_fixed_not_data_dependent
+    (same name kept in history, not in this file — the fixed-width/fixed-%
+    contract it pinned is retired here, not just relaxed).
+
+    Two prior fixes both pinned a WIDTH capped well short of the real
+    available space (first w-[220px], then w-[50%] of the row) and
+    right-aligned it with ml-auto. Both left a large UNUSED gap between the
+    step label and where the bar started, because the bar's own width was
+    never allowed to reach the space right after the label. Owner, 4th
+    report: "why is there STILL so much dark space, are you not using the
+    remote browser to see all of the dead space on each of those lines?"
+
+    The fix: StepMeta's outer wrapper GROWS (flex-1) to consume every pixel
+    left over after the row's label/badges, so there is no gap at all
+    between the label and the bar. A short label leaves more room, so its
+    bar is wider than a long label's bar -- that is correct, not a
+    regression; label-independent width was the wrong goal, no dead space
+    is the right one.
     """
     src = _read()
 
@@ -113,25 +122,16 @@ def test_step_meta_track_width_is_fixed_not_data_dependent():
     outer_class = outer_match.group(1)
     outer_tokens = outer_class.split()
 
-    # The wrapper must declare a fixed pixel width combined with flex-none —
-    # not a flex-grown/capped sizing mechanism.
-    # Owner 2026-08-27 ("this bar is not taking up the length of the area
-    # STILL ... it should be like 40%-60%"): the width is a fixed SHARE of
-    # the row (w-[N%], 40..60) or a fixed pixel width -- either is
-    # label-independent, which is what this test guards; a 220px stub at the
-    # right edge of a 900px row was the bug the owner saw.
-    assert any(re.fullmatch(r"w-\[(\d+px|[4-6]\d%)\]", t) for t in outer_tokens), \
-        f"StepMeta's outer wrapper must use a fixed width (w-[Npx]) or a fixed row share (w-[40-60%]); got: {outer_class!r}"
-    assert "flex-none" in outer_tokens, \
-        f"StepMeta's outer wrapper must be flex-none so its width is not flex-grown; got: {outer_class!r}"
-
-    # The old data-dependent sizing mechanism must be gone from the wrapper
-    # entirely — a row-length-dependent width is exactly the bug this test
-    # guards against.
-    assert "flex-1" not in outer_tokens, \
-        f"the outer wrapper must not use flex-1 (flex-grown) sizing — width must be fixed, not data-dependent; got: {outer_class!r}"
+    # The wrapper must GROW to fill whatever space is left after the label —
+    # no width cap, no flex-none, no fixed pixel/percent value.
+    assert "flex-1" in outer_tokens, \
+        f"StepMeta's outer wrapper must be flex-1 so it grows to fill the space left after the label, closing the dead gap; got: {outer_class!r}"
+    assert "flex-none" not in outer_tokens, \
+        f"flex-none would cap the wrapper back to a fixed size and reopen the dead-space bug; got: {outer_class!r}"
+    assert not any(re.fullmatch(r"w-\[(\d+px|\d+%)\]", t) for t in outer_tokens), \
+        f"a fixed w-[...] width (px or %) caps the bar short of the real available space; got: {outer_class!r}"
     assert not any(t.startswith("max-w-") for t in outer_tokens), \
-        f"the old max-w-[...] CAP (not a fixed width) must not remain on StepMeta's outer wrapper; got: {outer_class!r}"
+        f"a max-w-[...] cap reopens the dead-space bug just like a fixed width would; got: {outer_class!r}"
 
 
 def test_gate_wait_time_is_excluded_from_the_bar_scale():
