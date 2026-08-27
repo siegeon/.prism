@@ -405,10 +405,10 @@ o:task-blocked-needs-decomposition.target a sh:NodeShape ;
     sh:sparql o:task-blocked-needs-decomposition .
 
 o:task-blocked-needs-decomposition a sh:SPARQLConstraint ;
-    rdfs:comment "A blocked task with no subtasks split off it is a dead end, not a decision point -- decompose it, or name the ontology gap that stopped it." ;
+    rdfs:comment "A blocked task with no child tasks is a dead end, not a decision point. Decompose it, or name the ontology gap that stopped it." ;
     sh:name "A blocked task splits into subtasks" ;
     sh:description "A blocked task with no subtasks split off it. Decompose it into child tasks, or file this as a gap needing an ontology rule or a human decision." ;
-    sh:message "task is blocked and has no child tasks split off it" ;
+    sh:message "a blocked task has no child tasks" ;
     sh:select """
         PREFIX o: <urn:prism:onto:>
         SELECT $this WHERE {

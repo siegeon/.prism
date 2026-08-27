@@ -295,6 +295,17 @@ def test_stale_stored_baseline_self_heals_via_fresh_merge_base(
 
     origin = tmp_path / "origin.git"
     _git(["init", "-q", "--bare", str(origin)], tmp_path)
+    # Force the bare repo's default branch deterministically -- git's
+    # built-in fallback (absent an explicit init.defaultBranch config,
+    # which this machine happens to set but a bare CI runner may not)
+    # is "master". Every push below uses an explicit "HEAD:main"
+    # refspec, so a later `clone` of this non-empty origin tries to
+    # check out the advertised default branch -- if that still says
+    # "master" (nonexistent), the clone silently leaves an unborn,
+    # UNRELATED "master" branch checked out instead of "main", so the
+    # next commit there has no shared history with origin/main and its
+    # push is rejected (non-fast-forward) without the fixture noticing.
+    _git(["symbolic-ref", "HEAD", "refs/heads/main"], origin)
 
     work = tmp_path / "work"
     _git(["clone", "-q", str(origin), str(work)], tmp_path)
@@ -382,6 +393,17 @@ def test_fresh_merge_base_never_regresses_the_baseline_backward(
 
     origin = tmp_path / "origin.git"
     _git(["init", "-q", "--bare", str(origin)], tmp_path)
+    # Force the bare repo's default branch deterministically -- git's
+    # built-in fallback (absent an explicit init.defaultBranch config,
+    # which this machine happens to set but a bare CI runner may not)
+    # is "master". Every push below uses an explicit "HEAD:main"
+    # refspec, so a later `clone` of this non-empty origin tries to
+    # check out the advertised default branch -- if that still says
+    # "master" (nonexistent), the clone silently leaves an unborn,
+    # UNRELATED "master" branch checked out instead of "main", so the
+    # next commit there has no shared history with origin/main and its
+    # push is rejected (non-fast-forward) without the fixture noticing.
+    _git(["symbolic-ref", "HEAD", "refs/heads/main"], origin)
 
     work = tmp_path / "work"
     _git(["clone", "-q", str(origin), str(work)], tmp_path)

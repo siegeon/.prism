@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.99"
+PRISM_VERSION = "7.13.100"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7214,4 +7214,32 @@ PRISM_VERSION_NOTES += (
     "Follow-up noted, not built here: task_runner.py itself does not "
     "yet detect a stalled loop and act on this doctrine automatically "
     "-- that is separately-scoped loop-detection work."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.100: fixes real CI red on main (PR #2347, run 33031994653). "
+    "(1) shapes.ttl's new task-blocked-needs-decomposition rule broke "
+    "test_ontology_text_is_ste.py: sh:message 'task is blocked and has "
+    "no child tasks split off it' read as passive voice ('is blocked'), "
+    "reworded to 'a blocked task has no child tasks'; rdfs:comment ran "
+    "28 words against a 25-word flavored-mode limit, split into two "
+    "sentences with the same meaning. (2) "
+    "test_green_gate_requires_reachability.py::"
+    "test_stale_stored_baseline_self_heals_via_fresh_merge_base failed "
+    "only in CI, not locally: this dev machine's global git config sets "
+    "init.defaultBranch=main, masking a fixture bug that a bare CI "
+    "runner's default (git's built-in 'master') exposes. The fixture's "
+    "bare origin repo never got its HEAD symref pointed at 'main', so "
+    "cloning it a second time (the 'other' worktree, after 'main' "
+    "already had commits) tried to check out a nonexistent 'master' "
+    "and silently left an unborn, unrelated branch checked out instead. "
+    "The next commit there had no shared history with origin/main, so "
+    "its push (HEAD:main) was rejected as non-fast-forward -- ignored, "
+    "since the fixture never checks push return codes -- and the "
+    "orphan symbol it was supposed to add never actually reached the "
+    "tree the test measures. Fix: force the bare origin's default "
+    "branch with `git symbolic-ref HEAD refs/heads/main` right after "
+    "`git init --bare`, so the fixture is deterministic regardless of "
+    "the runner's git config. Reproduced and confirmed fixed locally "
+    "via GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null."
 )
