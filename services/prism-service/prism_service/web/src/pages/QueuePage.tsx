@@ -30,6 +30,17 @@ type Signal = {
   style?: Record<string, unknown>;
 };
 
+const FOCUS_PREVIEW_LIMIT = 6;
+
+/** A long focus list shows a count and the first names, never every URN. */
+function focusPreview(k: string, v: unknown): string {
+  if (k === "focus" && Array.isArray(v) && v.length > FOCUS_PREVIEW_LIMIT) {
+    const names = v.slice(0, FOCUS_PREVIEW_LIMIT).map((x) => String(x).split("/").pop()).join(", ");
+    return `${v.length} nodes: ${names}, …`;
+  }
+  return String(v);
+}
+
 function relTime(iso?: string): string {
   if (!iso) return "—";
   const t = Date.parse(iso);
@@ -193,14 +204,14 @@ function SignalRow({ signal, onPromote, onDrop, onDecide }: {
       </div>
       <details className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>
         <summary className="cursor-pointer select-none">As arrived</summary>
-        <div className="mt-1">
+        <div className="mt-1 max-h-40 overflow-y-auto break-all">
           <div>{signal.subject}</div>
           <div>{signal.body}</div>
         </div>
       </details>
       {matches.length > 0 && (
         <div className="text-2xs mt-1 flex flex-wrap gap-x-3" style={{ color: "var(--text-muted)" }}>
-          {matches.map(([k, v]) => <span key={k}>{k}: {String(v)}</span>)}
+          {matches.map(([k, v]) => <span key={k}>{k}: {focusPreview(k, v)}</span>)}
         </div>
       )}
       {!isRuleDecision && (
@@ -274,6 +285,8 @@ function RuleDecisionRow({ signal, onDecide }: {
     ? ((signal.matches as { focus: string[] }).focus)
     : [];
   const [selected, setSelected] = useState<string[]>([]);
+  const [showAllFocus, setShowAllFocus] = useState(false);
+  const visibleFocus = showAllFocus ? focusIris : focusIris.slice(0, FOCUS_PREVIEW_LIMIT);
   const toggle = (iri: string) => {
     setSelected((cur) => (cur.includes(iri) ? cur.filter((x) => x !== iri) : [...cur, iri]));
   };
@@ -290,9 +303,14 @@ function RuleDecisionRow({ signal, onDecide }: {
         className="w-full px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
         style={{ color: "var(--text-secondary)" }}
       />
+      {focusIris.length > FOCUS_PREVIEW_LIMIT && (
+        <div className="text-2xs" style={{ color: "var(--text-muted)" }} data-signal-decide-focus-count>
+          {focusIris.length} nodes
+        </div>
+      )}
       {focusIris.length > 0 && (
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-2xs" style={{ color: "var(--text-muted)" }}>
-          {focusIris.map((iri) => (
+          {visibleFocus.map((iri) => (
             <label key={iri} className="flex items-center gap-1">
               <input
                 data-signal-decide-focus
@@ -303,6 +321,15 @@ function RuleDecisionRow({ signal, onDecide }: {
               {iri.split("/").pop()}
             </label>
           ))}
+          {focusIris.length > FOCUS_PREVIEW_LIMIT && !showAllFocus && (
+            <button
+              type="button"
+              data-signal-decide-focus-show-all
+              className="underline"
+              onClick={() => setShowAllFocus(true)}>
+              show all {focusIris.length}
+            </button>
+          )}
         </div>
       )}
       <div className="flex items-center gap-2">
