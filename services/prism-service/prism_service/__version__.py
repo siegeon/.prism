@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.121"
+PRISM_VERSION = "7.13.122"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7485,4 +7485,5 @@ PRISM_VERSION_NOTES += (
     "\n7.13.119: StepRail per-step bar track is HALF the row (w-[50%], min 220px) instead of a 220px stub at the right edge - owner 2026-08-27: \"this bar is not taking up the length of the area STILL ... it should be like 40%-60%\"; 7.13.114-116 had only changed the fill math. test_step_meta_track_width_is_fixed_not_data_dependent now accepts a fixed row share (w-[40-60%]) as label-independent."
     "\n7.13.120: 7.13.119's w-[50%] never actually rendered wider (owner, 3rd report: \"you keep saying its working, but we can see its not\"). Root cause: for a real agent-work step, StepMeta rendered NESTED inside an extra ml-auto/min-w-0 wrapper div that has no width of its own (shrinks to fit content) -- a CSS percentage width on a descendant of an auto-sized flex item resolves to 0 per spec, so it silently fell back to StepMeta's own min-w-[220px] floor every time, identical to the pre-7.13.119 pixel width despite the class correctly saying 50%. Gate rows never had this extra wrapper and were unaffected, which is why testing missed it twice. Fixed by rendering StepMeta as a DIRECT child of the row (which has a real, definite width) for the non-current-step case -- only the current step's status badges keep the inner wrapper now. New regression guard: test_step_meta_is_a_direct_row_child_for_agent_steps."
     "\n7.13.121: even at a correctly-resolving w-[50%], a large gap of unused dark space remained between the step label and where the bar started, because the bar was capped short of the real available room and right-aligned into a small slot (owner, 4th report: \"why is there STILL so much dark space, are you not using the remote browser to see all of the dead space on each of those lines?\"). Fixed by making StepMeta's outer wrapper flex-1 so it GROWS to fill every pixel left over after the label -- no fixed width, no cap, no gap. A short label now yields a wider bar than a long label; that is correct, not a regression. Superseded test_step_meta_track_width_is_fixed_not_data_dependent with test_step_meta_track_fills_remaining_row_space_with_no_gap."
+    "\n7.13.122: the owner's plan stop is the design-packet approval (task c016667f) on a ROOT task; a CHILD clears plan_gate on the rubric alone (owner 2026-08-27). 7.13.113 (task 3c774abd) had stacked a second stop ('Plan rubric passed... adapter=human') on top of the ledger, so a root task with the owner's approval on file still parked and three integration tests went red on main (test_gate_adjudicator_seat, test_owner_gate_click_records_design_approval); readiness speaks design-packet again and TaskDetailPage drops the dead root-approval banner."
 )

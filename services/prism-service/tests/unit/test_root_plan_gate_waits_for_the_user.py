@@ -309,7 +309,7 @@ def test_readiness_for_root_plan_gate_says_adapter_human(tmp_path, monkeypatch):
     assert out["receipt"]["adapter"] == "design-packet", out
     from prism_service.services import design_packet as dp
     dp.record_approval(cond._project_name, task.id, task_svc.get(task.id),
-                       approver="owner", method="task-page")
+                       approver="owner", method="owner_explicit")
     out2 = capi.gate_readiness(task_id=task.id, project=cond._project_name)
     assert out2["receipt_ok"] is True, out2
     assert out2["receipt"]["adapter"] == "design-packet", out2
