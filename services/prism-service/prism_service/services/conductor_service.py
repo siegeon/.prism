@@ -3916,7 +3916,19 @@ class ConductorService:
                     recheck = self._verify_gate(
                         task, task.workflow_step,
                         getattr(task, "proof_type", None))
-                if recheck.get("verified") is not True:
+                # Same PLAIN OWNER GATE carve-out as the first-time approve
+                # path below (task 44c7e2d0): a step that never declared a
+                # rubric (validation=None, by design -- triage's decide,
+                # promote_to_law's review) recovers on a plain approve too.
+                # Without this, a gate that failed ONCE on the bug this
+                # task fixes could never recover EXCEPT via override=True,
+                # which the live Evidence tab has no control for at all --
+                # a task could be permanently stuck even after the
+                # first-approve bug above was fixed.
+                recheck_plain_owner_gate = (recheck.get("verified") is None
+                                             and recheck.get("validation") is None)
+                if (recheck.get("verified") is not True
+                        and not recheck_plain_owner_gate):
                     return {
                         "ok": False,
                         "task_id": task_id,
