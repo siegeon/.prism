@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.116"
+PRISM_VERSION = "7.13.117"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7473,4 +7473,5 @@ PRISM_VERSION_NOTES += (
     "tests/unit/test_step_rail_bar_scale_is_total.py, which source-reads "
     "StepRail.tsx and asserts no maxTokens/maxDur denominator remains and "
     "that both the token and duration branches divide by the sum."
+    "\n7.13.117: \"bot\" is no longer a synonym of Agent in model-lexicon.ttl (owner 2026-08-27, mx-0e5a88: a Bot is a tier-1 deterministic workflow; agentic behaviours sit under it). The aligner had rewritten the ticket that describes the fix into \"Agent is its own term, not a synonym of Agent\". Guard: test_bot_is_never_a_synonym. The Bot / FSM / State / Transition / Behavior classes come with task 8bcd4cb3 under epic 12029f92."
 )

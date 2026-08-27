@@ -89,7 +89,9 @@ o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
 <urn:prism:onto:term/agent> a o:Term ;
     rdfs:label "Agent" ;
     rdfs:comment "A catalog entry for one person, team, or automated worker." ;
-    o:altLabel "bot", "assistant" ;
+    # "bot" is NOT a synonym of Agent (owner 2026-08-27, mx-0e5a88): a Bot
+    # is a tier-1 deterministic workflow; the agentic behaviours sit under it.
+    o:altLabel "assistant" ;
     o:denotes o:Agent .
 
 <urn:prism:onto:term/session> a o:Term ;
