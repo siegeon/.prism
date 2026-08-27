@@ -2464,16 +2464,20 @@ export default function TaskDetailPage() {
                   >
                     {busy ? "checking…" : task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
                   </button>
-                  {task.gate_state !== "failed" && (
+                  {/* Reject-on-a-failed-gate recovery (task 12029f92, backend
+                      fix 7.13.134): a standing-failed gate can now rewind via
+                      reject+override, but only with override armed -- stays
+                      mounted and relabels so a real user can reach it. */}
+                  {(task.gate_state !== "failed" || gateOverride) && (
                     <button
                       id="gate-decide-reject"
                       type="button"
-                      disabled={busy || !gateReason.trim()}
+                      disabled={busy || !gateReason.trim() || (task.gate_state === "failed" && !gateOverride)}
                       onClick={() => gateDecide("reject")}
                       className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
                       style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
                     >
-                      Reject
+                      {task.gate_state === "failed" ? "Reject (redo)" : "Reject"}
                     </button>
                   )}
                   <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
