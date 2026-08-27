@@ -152,3 +152,27 @@ def test_graph_leg_never_returns_a_pseudo_id_with_no_docs_row(brain, tmp_path):
     assert not pseudo_ids, (
         f"graph leg surfaced pseudo-id(s) with no docs row, which can "
         f"starve a file's real chunk downstream: {pseudo_ids}")
+
+
+def test_graph_leg_resolution_count_over_seeded_corpus(brain, tmp_path):
+    """AC-3 metric receipt (proof_type=metric): over a seeded corpus of 40
+    entities that ALL have a real docs row, count how many graph-leg
+    doc_ids land in docs.id. Live on the real prism index this session:
+    0/358 emitted ids resolve (docs=15062, entities=10973, 50 queries).
+    Today this seeded count is 0/40; the fix must make it 40/40."""
+    graph_db = str(tmp_path / "graph.db")
+    n = 40
+    for i in range(n):
+        name, file = f"WidgetService{i:02d}", f"src/svc_{i:02d}.py"
+        _seed_entity(graph_db, name, file)
+        brain._ingest_single(
+            f"{file}::{name}", f"class {name}:\n    ...\n",
+            source_file=file, domain="py", entity_name=name, entity_kind="class",
+        )
+    docs_rows = {r["id"] for r in brain._brain.execute("SELECT id FROM docs")}
+    emitted = {r["doc_id"] for r in brain._graph_search("WidgetService", limit=n)}
+    resolved = len(emitted & docs_rows)
+    print(f"RECEIPT graph-leg resolution: {resolved}/{n} (emitted={len(emitted)})")
+    assert resolved == n, (
+        f"graph-leg resolution count {resolved}/{n} — every seeded entity has "
+        f"a docs row, yet the leg keys on entities.file: {sorted(emitted)[:3]}")
