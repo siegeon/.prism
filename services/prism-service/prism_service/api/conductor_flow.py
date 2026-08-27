@@ -202,6 +202,12 @@ def _job(task) -> Optional[dict]:
     # above too), since they're never driven by claude_cli at all.
     if kind != "gate":
         instructions = _FINAL_MESSAGE_CAVEAT + "\n\n" + instructions
+    # Rewound drive (task ad92c0e9): green_rewind parks the failing test
+    # ids in gate_reason when it sends the task back to implement_tasks;
+    # surface them on the job so the builder knows WHAT to turn green.
+    rewind_reason = getattr(task, "gate_reason", "") or ""
+    if step["id"] == "implement_tasks" and rewind_reason.startswith("Rewind"):
+        instructions += "\n\nREWOUND FROM green_gate: " + rewind_reason
     return {
         "task_id": task.id,
         "step": step["id"],
