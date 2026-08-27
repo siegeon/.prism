@@ -31,6 +31,7 @@ own — this module adds no new gate logic of its own.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -47,6 +48,14 @@ BUILD_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
 # runner-produced report reads identically to a human-driven one.
 _PLAN_STEPS = ("draft_story", "verify_plan")
 _PREMISE_STEP = "review_previous_notes"
+# Stall detection (task 82cc05ee): after this many non-advancing reports
+# on ONE step, the next tick does NOT spawn another identical attempt --
+# it splits the red test ids named in the last proof into children, or
+# blocks the task with a reason naming the step. The count lives in task
+# history (action=ATTEMPT_ACTION), never in process memory.
+STALL_ATTEMPTS = 3
+ATTEMPT_ACTION = "runner_attempt"
+_TEST_ID_RE = re.compile(r"(?m)(?:^|\s)((?:[\w./-]+)\.py::[\w\[\]./:-]+)")
 
 
 def _scores_db_for(project: str) -> str:
@@ -236,6 +245,51 @@ def _route_proof(task_svc, task_id: str, step_id: str, proof: str) -> None:
         pass
 
 
+def _stall_count(task_svc, task_id: str, step_id: str) -> int:
+    """Non-advancing runner reports recorded on `step_id` (durable)."""
+    marker = f"step={step_id}; advanced=false"
+    return sum(1 for h in task_svc.history(task_id)
+               if h.action == ATTEMPT_ACTION and marker in h.details)
+
+
+def red_test_ids(proof: str) -> list[str]:
+    """Distinct pytest node ids named in a proof, in first-seen order."""
+    seen: list[str] = []
+    for m in _TEST_ID_RE.findall(proof or ""):
+        if m not in seen:
+            seen.append(m)
+    return seen
+
+
+def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
+    """Fourth tick on a stalled step: decompose or block, never invoke."""
+    parent = task_svc.get(task_id)
+    ids = red_test_ids(getattr(parent, "completion_proof", "") or "")
+    children: list[str] = []
+    for test_id in ids:
+        child = task_svc.create(
+            title=f"Make {test_id.rsplit('::', 1)[-1]} green",
+            description=f"Split from {task_id} at step {step_id}: "
+                        f"{test_id} stayed red for {STALL_ATTEMPTS} attempts.",
+            priority=getattr(parent, "priority", 0) or 0,
+            tags=list(getattr(parent, "tags", []) or []),
+            parent_id=task_id, verify=[test_id], proof_type="test",
+            oracle=f"pytest {test_id} passes with rc 0.")
+        children.append(child.id)
+    action = "decomposed" if children else "blocked"
+    reason = (f"step {step_id} did not advance after {STALL_ATTEMPTS} "
+              f"attempts; ")
+    reason += (f"split into children: {', '.join(children)}" if children
+               else "no red test id was named in the last proof")
+    task_svc.update(task_id, status="blocked", blocked_reason=reason)
+    task_svc.record_history(task_id, action="runner_stall",
+                            details=reason, actor=SEAT_ID)
+    return {"ok": True, "task_id": task_id, "step": step_id, "run_id": "",
+            "tokens": 0, "cost_usd": 0.0, "report": None,
+            "stalled": {"action": action, "children": children,
+                        "reason": reason}}
+
+
 def run_one_step(project: str, task_id: str) -> dict:
     """Drive exactly one AGENT step of `task_id` end to end: fetch the
     job via `flow_start`, invoke `claude_cli` against the task's OWN
@@ -266,6 +320,9 @@ def _run_one_step(project: str, task_id: str) -> dict:
     if not job or job.get("kind") == "gate":
         return {"ok": False, "task_id": task_id,
                 "reason": "no eligible agent job (gate or terminal)"}
+
+    if _stall_count(task_svc, task_id, job["step"]) >= STALL_ATTEMPTS:
+        return _handle_stall(task_svc, task_id, job["step"])
 
     ws = task_workspace.workspace_for(task_id) or {}
     work_dir = ws.get("path")
@@ -320,6 +377,10 @@ def _run_one_step(project: str, task_id: str) -> dict:
         task_id=task_id, session_id=SEAT_ID, outcome=outcome,
         expected_step=step_id, usage=usage,
         model=(usage or {}).get("model") or None), project=project)
+    if not report.get("advanced", report.get("ok")):
+        task_svc.record_history(
+            task_id, action=ATTEMPT_ACTION, actor=SEAT_ID,
+            details=f"step={step_id}; advanced=false; proof={proof[:2000]}")
     return {"ok": bool(report.get("ok")), "task_id": task_id,
             "step": step_id, "run_id": result.run_id,
             "tokens": (int((usage or {}).get("input_tokens") or 0)
