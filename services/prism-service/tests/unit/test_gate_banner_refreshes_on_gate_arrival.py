@@ -317,7 +317,10 @@ _MATRIX = {
         "receipt_ok": True, "manual_review": True, "receipt": {"adapter": "human"}}},
     "verifier_refused": {"gate_state": "pending", "verifier_refused": True, "readiness": {
         "receipt_ok": False, "receipt": {"adapter": "green"}}},
-    "epic_rollup_blocked": {"gate_state": "pending", "readiness": {
+    # Renamed from "epic_rollup_blocked" (superseded: an epic-rollup
+    # refusal is no longer the alarm-word BLOCKED — see
+    # test_epic_rollup_gate_severity_reads_waiting_not_blocked.py).
+    "epic_rollup_waiting": {"gate_state": "pending", "readiness": {
         "receipt_ok": False, "receipt": {"adapter": "epic-rollup"},
         "blocking_children": [{"id": "c1", "title": "child"}]}},
     "receipt_ok": {"gate_state": "pending", "readiness": {
@@ -325,7 +328,8 @@ _MATRIX = {
     "readiness_null": {"gate_state": "pending", "readiness": None},
 }
 
-_ALLOWED_LABELS = {"READY", "PENDING", "AWAITING YOU", "BLOCKED"}
+# Five labels (was four — see test_epic_rollup_gate_severity_reads_waiting_not_blocked.py).
+_ALLOWED_LABELS = {"READY", "PENDING", "AWAITING YOU", "WAITING ON CHILDREN", "BLOCKED"}
 
 
 def test_gate_severity_matrix_stays_within_four_labels():

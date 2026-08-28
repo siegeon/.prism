@@ -9,11 +9,22 @@
 // ONE shared severity vocabulary for a pending/failed gate, consumed by the
 // TaskDetailPage banner, StepRail's gate row and ConductorPage's tile
 // handoff line (task 8e5aa63b) — so the three surfaces cannot legitimately
-// disagree at the same moment for the same gate. Four labels only: READY,
-// PENDING, AWAITING YOU, BLOCKED. A null/missing readiness (the tile's input
-// today) must never escalate to BLOCKED or AWAITING YOU — that would be
-// claiming a verdict the caller does not actually have evidence for.
-export type GateSeverityKey = "ready" | "pending" | "awaiting_you" | "blocked";
+// disagree at the same moment for the same gate. Five labels: READY,
+// PENDING, AWAITING YOU, WAITING ON CHILDREN, BLOCKED. A null/missing
+// readiness (the tile's input today) must never escalate to BLOCKED or
+// AWAITING YOU — that would be claiming a verdict the caller does not
+// actually have evidence for.
+//
+// WAITING ON CHILDREN is its own label, not BLOCKED (owner, live, task
+// 95474ec7: "no it reads blocked as best i can tell" while a
+// great-grandchild was mid-implement) — an epic-rollup refusal is never
+// something the owner can act on directly (they cannot force a child to
+// finish), so it must not carry the same alarm word as a genuine stuck
+// state (verifier_refused, no evidence at all). Same reasoning already
+// applied to activity_for's "idle"/"stalled" wording (mx-dfd56a): render
+// alarm vocabulary only when the owner actually has an action.
+export type GateSeverityKey =
+  | "ready" | "pending" | "awaiting_you" | "waiting_on_children" | "blocked";
 export type GateSeverityResult = { key: GateSeverityKey; label: string };
 export type GateSeveritySnapshot = {
   gate_state?: string | null;
@@ -62,7 +73,7 @@ function gateSeverity(snap) {
   }
   var blockingChildren = readiness.blocking_children || [];
   if (adapter === "epic-rollup" && blockingChildren.length > 0) {
-    return { key: "blocked", label: "BLOCKED" };
+    return { key: "waiting_on_children", label: "WAITING ON CHILDREN" };
   }
   return { key: "blocked", label: "BLOCKED" };
 }

@@ -2108,7 +2108,7 @@ export default function TaskDetailPage() {
                     ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
                     : "READY · evidence passing")
                 : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
-                ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
+                ? `WAITING ON CHILDREN · ${gateReadiness!.blocking_children!.length} child task(s) not done`
                 : verifierRefusal ? "BLOCKED · verifier rejected current evidence"
                 // The legacy generic literal (mx-a31a3d precedent) survives,
                 // reachable ONLY behind the shared function's blocked verdict —
