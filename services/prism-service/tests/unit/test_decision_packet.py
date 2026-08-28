@@ -145,6 +145,43 @@ def test_a_task_with_no_children_still_falls_back_to_its_own_receipt(monkeypatch
     assert pkt["receipt"]["passed"] is True, pkt["receipt"]
 
 
+def test_diff_and_commits_resolve_a_fresh_baseline_not_the_stale_stored_one(
+    tmp_path, monkeypatch,
+):
+    """Live, 2026-08-28 (task bb388e9d): the Evidence tab showed "Diff vs
+    baseline +52404 -2078, 292 files" and "413 commits" for a candidate whose
+    REAL diff (against a freshly-resolved merge-base) was 3 files -- because
+    assemble_packet read ws["baseline"] verbatim, a value set ONCE at
+    workspace creation and never updated as origin/main moved forward. The
+    packet must resolve the SAME forward-corrected baseline the gate-policy
+    tooth already trusts (control_plane.resolve_fresh_baseline), never the
+    raw stored one."""
+    from prism_service.services import decision_packet, task_workspace, control_plane
+    baseline = _temp_repo(tmp_path)
+    monkeypatch.setattr(task_workspace, "workspace_for",
+                        lambda tid: {"path": str(tmp_path), "baseline": baseline})
+    monkeypatch.setattr(decision_packet, "_receipt", lambda p, t: None)
+    monkeypatch.setattr(decision_packet, "_screenshots", lambda t: [])
+
+    calls = []
+
+    def _fake_resolve(path, stale):
+        calls.append((path, stale))
+        return baseline  # forward-corrected value the real function would pick
+
+    monkeypatch.setattr(control_plane, "resolve_fresh_baseline", _fake_resolve)
+    task = SimpleNamespace(workflow_step="green_gate", gate_state="pending",
+                           status="in_progress", gate_reason="")
+    decision_packet.assemble_packet("prism", "a1e4120f", task)
+
+    assert calls == [(str(tmp_path), baseline)], (
+        "assemble_packet must resolve the baseline through "
+        "control_plane.resolve_fresh_baseline before diffing, passing the "
+        "workspace path and the RAW stored baseline — never diff against "
+        "the stored baseline directly"
+    )
+
+
 def test_empty_when_no_worktree(monkeypatch):
     """AC-3: no registered worktree -> well-formed empty packet, never raises."""
     from prism_service.services import decision_packet, task_workspace

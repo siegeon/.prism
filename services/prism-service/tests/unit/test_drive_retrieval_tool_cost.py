@@ -199,3 +199,99 @@ def test_drive_wide_ratio():
     print(f"disk={got['disk']} brain={got['brain']} ratio={ratio:.2f}")
     assert got["brain"] > 0, f"no Brain retrieval in the drive: {got}"
     assert ratio <= 5, f"disk={got['disk']} brain={got['brain']} ratio={ratio:.2f} > 5"
+
+
+# ---- task 9b0f7c4b: wire implement step agents to the drive profile ------
+# Source-reading tests (the PRISM workflow scripts have NO JS test runner, so
+# a prompt contract is pinned by parsing the ACTUAL implement.js source). Each
+# assertion parses the enclosing `agent(` block, never a fixed character window.
+
+_REPO_ROOT = _HERE.parents[3]
+_IMPLEMENT_JS = _REPO_ROOT / ".claude" / "workflows" / "implement.js"
+_MCP_JSON = _REPO_ROOT / ".mcp.json"
+# Fixed bare-verb list from AC-3 (task 9b0f7c4b). `conductor_advance`,
+# `conductor_gate`, `workflow_state` are named only as "do not use" prose.
+PROMPT_BARE_VERBS = {
+    "prism_status", "conductor_work", "task_list", "task_update",
+    "task_link_session", "brain_search", "brain_understand", "brain_call_chain",
+    "brain_find_references", "context_bundle", "memory_recall", "memory_store",
+    "janitor_check", "janitor_submit",
+}
+
+
+def _implement_src() -> str:
+    assert _IMPLEMENT_JS.is_file(), f"missing {_IMPLEMENT_JS}"
+    return _IMPLEMENT_JS.read_text("utf-8")
+
+
+def _agent_block(src: str, label: str) -> str:
+    """Return the full `agent(...)` call whose options carry `label: '<label>'`.
+    Walks parens while skipping quoted / template strings, so a `(` inside a
+    prompt never ends the block early."""
+    tag = f"label: '{label}'"
+    at = src.find(tag)
+    assert at >= 0, f"no agent() carries {tag} in implement.js"
+    start = src.rfind("agent(", 0, at)
+    assert start >= 0, f"no `agent(` precedes {tag}"
+    i, depth, quote = start + len("agent("), 1, None
+    while i < len(src) and depth:
+        ch = src[i]
+        if quote:
+            if ch == "\\":
+                i += 1
+            elif ch == quote:
+                quote = None
+        elif ch in "'\"`":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        i += 1
+    assert depth == 0, f"unbalanced agent( block for {tag}"
+    return src[start:i]
+
+
+def test_mcp_json_connects_drive_profile():
+    """AC-1: the PRISM MCP entry connects with tool_profile=drive, same
+    host/port/project (server.py reads the profile from the URL query only)."""
+    url = json.loads(_MCP_JSON.read_text("utf-8"))["mcpServers"]["prism"]["url"]
+    assert url.startswith("http://127.0.0.1:7777/mcp/"), url
+    assert "project=prism" in url, url
+    assert "tool_profile=drive" in url, f"step agents connect without the drive profile: {url}"
+
+
+def test_implement_prompts_do_not_preload_prism_via_toolsearch():
+    """AC-2: no step prompt instructs a ToolSearch preload of PRISM verbs
+    before the first PRISM call (the harness deferral is stop_if #1)."""
+    hits = [f"{n}: {line.strip()[:80]}" for n, line in
+            enumerate(_implement_src().splitlines(), 1)
+            if 'ToolSearch("select:mcp__prism__' in line]
+    assert not hits, "ToolSearch preload of PRISM verbs still in implement.js:\n" + "\n".join(hits)
+
+
+def test_implement_prompt_verbs_are_drive_profile_members():
+    """AC-3: every PRISM MCP verb named in implement.js is served by the
+    drive profile (DRIVE_TOOL_NAMES); a non-member is invisible to a step agent."""
+    import re
+    from prism_service.mcp import tools as t
+
+    src = _implement_src()
+    named = set(re.findall(r"mcp__prism__(\w+)", src))
+    named |= {v for v in PROMPT_BARE_VERBS if re.search(rf"\b{v}\b", src)}
+    assert named, "no PRISM verb named in implement.js at all"
+    missing = named - set(t.DRIVE_TOOL_NAMES)
+    assert not missing, f"verbs named in implement.js but absent from DRIVE_TOOL_NAMES: {sorted(missing)}"
+
+
+def test_preflight_reports_tool_profile():
+    """AC-4: pre-flight schema carries `tool_profile`, and the pre-flight
+    agent() block halts with `expected drive` when the profile is not drive."""
+    src = _implement_src()
+    s = src.find("const PREFLIGHT_SCHEMA = {")
+    assert s >= 0, "no PREFLIGHT_SCHEMA in implement.js"
+    schema = src[s:src.find("\n}\n", s)]
+    assert "tool_profile" in schema, "PREFLIGHT_SCHEMA has no tool_profile field"
+    block = _agent_block(src, "pre-flight")
+    assert "tool_profile" in block, "pre-flight agent() block never reads tool_profile"
+    assert "expected drive" in block, "pre-flight agent() block has no `expected drive` halt_reason"
