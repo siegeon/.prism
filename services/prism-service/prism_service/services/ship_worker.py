@@ -82,6 +82,18 @@ Runner = Callable[..., tuple]
 # the poll needs no JSON parsing.
 GH_CHECKS_PENDING_RC = 8
 
+# task <ship-worker-pending-rc>: GH_CHECKS_PENDING_RC=8 is not what every gh
+# CLI build actually returns for a normal pending check -- this machine's
+# gh 2.4.0 (2022) returns rc=1 with stdout reading exactly
+# "checks\tpending\t0\t<url>", so every pending poll fell straight into the
+# "any OTHER ci_wait failure" branch and failed on its FIRST poll, never
+# once entering the retry-wait loop. The tab-row's own STATUS column
+# already says "pending"/"queued"/"in_progress" in every gh version this
+# was checked against, so that text is trusted over a magic exit code that
+# disagrees across gh builds.
+_PENDING_STATUS_RE = re.compile(
+    r"\b(pending|queued|in_progress|waiting)\b", re.IGNORECASE)
+
 _PR_NUM_RE = re.compile(r"/pull/(\d+)")
 
 
@@ -400,7 +412,9 @@ def ship_task(task_id: str, project: str = "default", *,
         if rc == 0:
             break
         text = err or out or ""
-        if rc != GH_CHECKS_PENDING_RC:
+        is_pending = (rc == GH_CHECKS_PENDING_RC
+                     or _PENDING_STATUS_RE.search(text))
+        if not is_pending:
             if _NO_CHECKS_REGISTERED_RE.search(text):
                 if not_yet_registered_deadline is None:
                     not_yet_registered_deadline = (
