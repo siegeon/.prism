@@ -359,6 +359,20 @@ def _fresh_diff_base(workspace: Path, stale_baseline: Optional[str]) -> Optional
     return fresh if ok is not None else stale_baseline
 
 
+def resolve_fresh_baseline(workspace_path: str, stale_baseline: str) -> str:
+    """PUBLIC wrapper around ``_fresh_diff_base`` for callers OUTSIDE this
+    module that display a task's diff/commit list against its baseline (e.g.
+    decision_packet.assemble_packet) — so a stale ``ws["baseline"]`` (set once
+    at workspace creation, task e14680ba/3a3f90da's own root cause) never
+    shows a false "changed since baseline" view to a human reading the
+    Evidence tab, exactly as it must never false-refuse a gate. Falls back to
+    ``stale_baseline`` verbatim on any resolution failure or an empty path,
+    same fail-safe behavior as the internal caller."""
+    if not workspace_path:
+        return stale_baseline
+    return _fresh_diff_base(Path(workspace_path), stale_baseline or None) or stale_baseline
+
+
 def candidate_policy_edits(task_id: str) -> list[str]:
     """The gate-policy files the task's WORKTREE has modified vs its baseline
     (committed OR working-tree edits). Empty when the task has no worktree or

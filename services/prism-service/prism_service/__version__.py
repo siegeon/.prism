@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.146"
+PRISM_VERSION = "7.13.147"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7589,4 +7589,25 @@ PRISM_VERSION_NOTES += (
     "test_blocked_halt_reason_is_non_empty_and_descriptive extended to "
     "cover all four guard sites. Full neighbouring unit (97 passed, 6 "
     "skipped) and integration (84 passed) suites clean."
+)
+PRISM_VERSION_NOTES += (
+    "\n7.13.147: THE EVIDENCE TAB STOPS SHOWING A FALSE DIFF [task "
+    "0b6b4cff]. Live on task bb388e9d: the Decision Packet read 'Diff vs "
+    "baseline +52404 -2078, 292 files' and '413 commits' for a candidate "
+    "whose real change was 3 files -- owner, watching it live: 'why the "
+    "screen says blocked... users have to believe what we show them, so "
+    "make sure you fix what we show them to be true.' Root cause: "
+    "decision_packet.assemble_packet read the task workspace's stored "
+    "baseline verbatim -- a value set ONCE at workspace creation and "
+    "never updated, so it accumulated every OTHER task's work merged to "
+    "main since. control_plane.py already solved this exact problem for "
+    "the gate-policy tooth (_fresh_diff_base: merge-base(HEAD, "
+    "origin/main), adopted only when it moves the baseline forward, "
+    "never backward) but decision_packet.py never reused it. Added "
+    "control_plane.resolve_fresh_baseline, a public wrapper, and pointed "
+    "assemble_packet at it before computing diff_stat/commits. New test "
+    "test_diff_and_commits_resolve_a_fresh_baseline_not_the_stale_stored_one "
+    "pins that assemble_packet resolves through it rather than diffing "
+    "the raw stored value; full test_decision_packet.py suite green (10 "
+    "tests)."
 )
