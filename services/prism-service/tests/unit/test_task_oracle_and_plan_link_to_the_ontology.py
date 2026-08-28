@@ -56,9 +56,12 @@ def test_get_task_links_returns_spans_per_field(project):
 
     out = tasks_api.get_task_links(t.id, project=project)
 
+    # blocked_reason and gate_reason joined _LINK_FIELDS at task 938b0a2d:
+    # machine-written task text links to the ontology the same way
+    # human-written text does.
     assert set(out["fields"]) == {
         "description", "oracle", "likely_misfire", "plan_doc",
-        "premise_notes", "completion_proof",
+        "premise_notes", "completion_proof", "blocked_reason", "gate_reason",
     }
     # each field's own text resolves its own entities
     assert any(s["text"] == TASK_TITLE for s in out["fields"]["description"])

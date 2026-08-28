@@ -121,10 +121,14 @@ def test_synonym_links_once_per_paragraph(project):
 # TaskService._apply_ste runs lexicon.align() on every WRITE to
 # description/oracle/etc, so a fresh write through the service would
 # already have rewritten "ticket"/"PR" to "Task"/"PullRequest" -- it could
-# never prove old, un-aligned synonym text still links. plan_doc is the
-# one field _apply_ste only CHECKS and never rewrites (task 36283d72: a
-# plan a human already approved at plan_gate must not shift under them),
-# so it is the field that carries real, un-aligned "old text" here.
+# never prove old, un-aligned synonym text still links. plan_doc USED TO
+# be the one field _apply_ste only CHECKED and never rewrote (task
+# 36283d72). Task dc676e24 (2026-08-26) made plan_doc align at write too,
+# through TaskService._align_plan_doc, so a normal update() no longer
+# leaves it un-aligned either -- this test now writes plan_doc with raw
+# SQL (bypassing _apply_ste entirely, the same bypass
+# test_align_language_workflow.py's _seed_tasks uses) to land real,
+# un-aligned "old text" the way a legacy/pre-dc676e24 row would carry it.
 # ---------------------------------------------------------------------------
 
 def test_vocabulary_block_lists_synonyms_and_canonical_labels(project):
@@ -133,7 +137,10 @@ def test_vocabulary_block_lists_synonyms_and_canonical_labels(project):
 
     ctx = get_project(project)
     t = ctx.task_svc.create(title="carrier", channel="ui")
-    ctx.task_svc.update(t.id, plan_doc="Open a ticket for the PR.")
+    ctx.task_svc._db.execute(
+        "UPDATE tasks SET plan_doc=? WHERE id=?",
+        ("Open a ticket for the PR.", t.id))
+    ctx.task_svc._db.commit()
 
     out = tasks_api.get_task_links(t.id, project=project)
     vocab = out["vocabulary"]["plan_doc"]

@@ -136,6 +136,13 @@ class ProjectContext:
             # Brain-stored principles via MemoryService.
             self._conductor_svc.attach_memory_service(
                 self.memory_svc, project_name=self.project_id)
+            # Real-time activity push: let TaskService.update() compute a
+            # fresh `activity` block at task.changed publish time, reusing
+            # THIS SAME ConductorService instance's activity_for/
+            # phase_progress (never a duplicate computation) — closes the
+            # gap where a live /tasks/{id} tab never saw activity update
+            # over SSE, only on a full refetch.
+            self.task_svc.attach_conductor_service(self._conductor_svc)
         return self._conductor_svc
 
     @property

@@ -48,9 +48,10 @@ BASE_CATALOG = [
     {"id": "Agent", "cls": "Agent", "source": "workflows", "bucket": "agent"},
     {"id": "Provider", "cls": "Provider", "source": "integrations", "bucket": "provider"},
     {"id": "Task", "cls": "Task", "source": "tasks", "bucket": "task"},
-    # QueueItem <- SIGNALS (task 785bb4ce): instances are typed o:Signal, a
-    # subclass of o:QueueItem in model.ttl, so both class queries count them.
-    {"id": "QueueItem", "cls": "Signal", "source": "signals", "bucket": "signal"},
+    # Signal <- SIGNALS (task 785bb4ce, then collapsed from o:QueueItem's
+    # catalog id onto its own name by task cacfb628: o:QueueItem was a
+    # Refused Bequest, one class hiding behind two names).
+    {"id": "Signal", "cls": "Signal", "source": "signals", "bucket": "signal"},
     {"id": "Document", "cls": "Document", "source": "brain", "bucket": "document"},
     {"id": "Folder", "cls": "Folder", "source": "brain", "bucket": "folder"},
 ]
@@ -63,7 +64,12 @@ _CODE_KIND_CLASS = {
     "module": "Module", "file": "Module", "interface": "Interface",
     "variable": "Variable", "constant": "Variable",
 }
-CODE_CLASSES = ["Function", "Class", "Method", "Module", "Interface", "Variable", "Code"]
+# "Rationale" (task f9e0745e) is not in _CODE_KIND_CLASS -- a rationale row
+# is typed directly in _emit_code_graph, never via _code_class_for_kind's
+# generic "Code" fallback -- but it still needs to be counted here so
+# rebuild()'s per_class summary reports it.
+CODE_CLASSES = ["Function", "Class", "Method", "Module", "Interface", "Variable",
+                "Code", "Rationale"]
 
 # Memory ExpertiseEntry.type -> o: subclass of o:Concept (model-knowledge.ttl,
 # task f5352fa1). An unmapped/blank type still gets the generic o:Concept.
@@ -287,7 +293,11 @@ class OntologyGraph:
     def load_model(self) -> int:
         """Parse model.ttl AND every ontology/model-*.ttl extension (task
         f5352fa1: model-knowledge.ttl's o:Concept/o:Domain layer) into the
-        SAME shared TBox named graph, replacing it whole. Returns the
+        SAME shared TBox named graph, replacing it whole. Also loads this
+        PROJECT's own promoted-model.ttl when present (task c5650403: "a
+        memory in Understand becomes a rule or a term in the ontology") --
+        terms services/law_promotion.py installs after an owner approves
+        them at the promote_to_law workflow's review gate. Returns the
         triple count loaded — always called at the start of rebuild() so
         the TBox never drifts from the files on disk."""
         self._store.remove_graph(self._model_iri)
@@ -297,6 +307,11 @@ class OntologyGraph:
         for extra in sorted(_ONTOLOGY_DIR.glob("model-*.ttl")):
             extra_ttl = extra.read_text(encoding="utf-8")
             self._store.load(input=extra_ttl, format=ox.RdfFormat.TURTLE,
+                              base_iri=NS, to_graph=self._model_iri)
+        promoted = project_data_dir(self.project) / "ontology" / "promoted-model.ttl"
+        if promoted.exists():
+            promoted_ttl = promoted.read_text(encoding="utf-8")
+            self._store.load(input=promoted_ttl, format=ox.RdfFormat.TURTLE,
                               base_iri=NS, to_graph=self._model_iri)
         return sum(1 for _ in self._store.quads_for_pattern(
             None, None, None, self._model_iri))
@@ -341,7 +356,8 @@ class OntologyGraph:
     def rebuild(self, rows: dict | None = None, *,
                 agent_descriptions: dict[str, str] | None = None,
                 signal_arrived_at: dict[str, str] | None = None,
-                signal_enrichment: dict[str, dict] | None = None) -> dict:
+                signal_enrichment: dict[str, dict] | None = None,
+                signal_body: dict[str, str] | None = None) -> dict:
         """Build the ABox from the SAME real rows ontology_prototype_
         projection reads (gather(project), reused rather than re-queried
         when the caller already has it) and replace the named ABox graph
@@ -350,12 +366,13 @@ class OntologyGraph:
         {"total_triples", "per_class"} — triple counts per catalog class,
         read straight back off the store after the swap.
 
-        agent_descriptions/signal_arrived_at/signal_enrichment (task
-        8eeb3e65's skill-description-* and flagged-signal-is-placed rules;
-        task 31b737fb's aboutTicket/aboutCode/askedBy/raises joins): real
-        data gather()'s own rows don't carry, fetched independently by
-        default (self._agent_descriptions/_signal_arrived_at/
-        _signal_enrichment) — never fabricated; callers (tests) may pass
+        agent_descriptions/signal_arrived_at/signal_enrichment/signal_body
+        (task 8eeb3e65's skill-description-* and flagged-signal-is-placed
+        rules; task 31b737fb's aboutTicket/aboutCode/askedBy/raises joins;
+        task ed034701's rdfs:comment on o:Signal): real data gather()'s
+        own rows don't carry, fetched independently by default (self.
+        _agent_descriptions/_signal_arrived_at/_signal_enrichment/
+        _signal_body) — never fabricated; callers (tests) may pass
         explicit dicts to control a fixture."""
         if rows is None:
             from prism_service.services import ontology_prototype_projection as proj
@@ -366,6 +383,8 @@ class OntologyGraph:
             signal_arrived_at = self._signal_arrived_at()
         if signal_enrichment is None:
             signal_enrichment = self._signal_enrichment()
+        if signal_body is None:
+            signal_body = self._signal_body()
 
         import rdflib
 
@@ -382,7 +401,7 @@ class OntologyGraph:
                                               agent_descriptions)
         self._emit_tasks(g, rows, U, CLS, RDF, RDFS)
         self._emit_signals(g, rows, U, CLS, RDF, RDFS, signal_arrived_at,
-                            signal_enrichment)
+                            signal_enrichment, signal_body)
         self._emit_documents_folders(g, rows, U, CLS, RDF, RDFS)
         self._emit_code_graph(g, rows, U, CLS, RDF, RDFS)
         self._emit_workflow_steps(g, U, CLS, RDF, RDFS)
@@ -401,9 +420,14 @@ class OntologyGraph:
                 per_class[f"CodeGraph::{cls_local}"] = n
 
         # SHACL re-validation (task 8eeb3e65): every rebuild re-validates,
-        # so the persisted report never trails the ABox it describes.
+        # so the persisted report never trails the ABox it describes. With
+        # the full code graph projected (task f9e0745e) validation costs
+        # about a minute on the prism project, so above a triple threshold
+        # it runs on a single-flight background thread and the report
+        # lands when it is done (validated_at shows the lag). Small graphs,
+        # which every test fixture is, still validate inline.
         from prism_service.services import ontology_rules
-        ontology_rules.validate(self.project)
+        ontology_rules.validate_after_rebuild(self.project, len(g))
 
         return {"total_triples": len(g), "per_class": per_class}
 
@@ -461,7 +485,7 @@ class OntologyGraph:
         oracle's own SPARQL shape ('?task a o:Task ; o:arrivedVia ?channel').
         A channel not already emitted by _emit_channels_agents_providers
         (e.g. a project's ad-hoc channel string) is created here so no
-        task's arrivedVia edge ever dangles."""
+        task's arrivedVia edge ever dangles. Also projects o:status (the task-blocked-needs-decomposition rule reads it) and o:parent -> the parent o:Task (child points at its own epic), both real task_svc fields, never fabricated."""
         import rdflib
 
         known = {str(c) for c in rows["channels"]}
@@ -472,6 +496,12 @@ class OntologyGraph:
             body = str(t.get("description") or "").strip()
             if body:
                 g.add((u, RDFS.comment, rdflib.Literal(body)))
+            status = str(t.get("status") or "").strip()
+            if status:
+                g.add((u, CLS("status"), rdflib.Literal(status)))
+            parent_id = str(t.get("parent_id") or "").strip()
+            if parent_id:
+                g.add((u, CLS("parent"), U("task", parent_id)))
             channel = str(t.get("channel") or "").strip()
             if not channel:
                 continue
@@ -485,11 +515,15 @@ class OntologyGraph:
     @staticmethod
     def _emit_signals(g, rows, U, CLS, RDF, RDFS,
                        signal_arrived_at: dict[str, str],
-                       signal_enrichment: dict[str, dict] | None = None) -> None:
-        """Signal rows -> o:Signal (rdfs:subClassOf o:QueueItem in model.ttl,
-        task 785bb4ce: the Queue holds SIGNALS, not tasks), with
+                       signal_enrichment: dict[str, dict] | None = None,
+                       signal_body: dict[str, str] | None = None) -> None:
+        """Signal rows -> o:Signal (task 785bb4ce: the Queue holds SIGNALS,
+        not tasks; task cacfb628 collapsed o:QueueItem into o:Signal, its
+        one child, so Signal carries no rdfs:subClassOf parent), with
         o:arrivedVia -> its o:Channel, o:state as a literal, o:arrivedAt
-        (task 8eeb3e65's flagged-signal-is-placed rule) when known, and
+        (task 8eeb3e65's flagged-signal-is-placed rule) when known,
+        rdfs:comment for its aligned body (task ed034701, mirrors
+        _emit_tasks projecting a task's description as rdfs:comment), and
         o:becameTask -> the o:Task it turned into once the owner acted.
         task 31b737fb: also projects the signal's persisted parse()
         Extraction (matches['extraction']) as aboutTicket/aboutCode/
@@ -498,11 +532,15 @@ class OntologyGraph:
         import rdflib
 
         signal_enrichment = signal_enrichment or {}
+        signal_body = signal_body or {}
         for s in rows.get("signals", []):
             u = U("signal", s["id"])
             g.add((u, RDF.type, CLS("Signal")))
             g.add((u, RDFS.label, rdflib.Literal(s["label"])))
             g.add((u, CLS("state"), rdflib.Literal(s.get("state") or "open")))
+            body = str(signal_body.get(s["id"]) or "").strip()
+            if body:
+                g.add((u, RDFS.comment, rdflib.Literal(body)))
             at = signal_arrived_at.get(s["id"])
             if at:
                 g.add((u, CLS("arrivedAt"),
@@ -586,6 +624,26 @@ class OntologyGraph:
                 g.add((au, CLS("dueBy"),
                        rdflib.Literal(deadlines[0], datatype=rdflib.XSD.date)))
 
+    def _signal_body(self) -> dict[str, str]:
+        """Signal id -> its ALIGNED body text (task ed034701), off the
+        real SignalStore (gather()'s own signal rows carry neither body
+        nor aligned_body) -- falls back to the raw body when a signal
+        predates alignment or the normaliser failed on it. Used by
+        _emit_signals to set rdfs:comment on the o:Signal node, the same
+        way _emit_tasks projects a task's description. Best effort: {}
+        -> no rdfs:comment emitted, same discipline as
+        _signal_arrived_at."""
+        try:
+            from prism_service.services.signal_store import SignalStore
+            store = SignalStore(self.project)
+            try:
+                return {s.id: (s.aligned_body or s.body)
+                        for s in store.list(limit=2000)}
+            finally:
+                store.close()
+        except Exception:
+            return {}
+
     def _signal_enrichment(self) -> dict[str, dict]:
         """Signal id -> its full persisted matches dict, off the real
         SignalStore (task 31b737fb) — used by _emit_extraction_joins to
@@ -627,16 +685,77 @@ class OntologyGraph:
                 g.add((fu, RDFS.label, rdflib.Literal(parent)))
             g.add((u, CLS("inFolder"), fu))
 
+    # graph.db relation -> o: property local name (task f9e0745e). Kept
+    # identical to api/xref.py's own _ONTOLOGY_EDGE_PROPERTIES set (that
+    # module reads a relation string straight through as an o: local name
+    # for the Explore mesh's edge label) so a code-graph edge means the
+    # SAME o: property whichever surface draws it.
+    _RELATION_PROPERTY = {
+        "calls": "calls", "imports": "imports", "imports_from": "imports_from",
+        "inherits": "inherits", "contains": "contains", "uses": "uses",
+        "method": "method", "rationale_for": "rationale_for",
+    }
+
     @staticmethod
     def _emit_code_graph(g, rows, U, CLS, RDF, RDFS) -> None:
+        """Type every real code-graph symbol and rationale row, and draw
+        the real edges between them (task f9e0745e, epic 61821448: "the
+        ontology holds the whole code graph"). code_symbols/code_edges
+        (ontology_prototype_projection.gather()) carry the FULL rows, not
+        a sample -- `.get()` with an empty-list default so a hand-built
+        `rows` fixture that only sets code_kinds (several existing tests)
+        still rebuilds cleanly with no code-graph nodes.
+
+        IRI shape is UNCHANGED from before this task (`code/{kind}/{name}`)
+        -- api/xref.py's neighbors route recomputes the identical IRI to
+        look up a symbol's ontology_class, so a rename here would silently
+        break the Explore page's class pill."""
         import rdflib
 
-        for kind, _count, sample in rows["code_kinds"]:
-            cls_local = _code_class_for_kind(kind)
-            for name in sample:
-                u = U("code", f"{kind}/{name}")
-                g.add((u, RDF.type, CLS(cls_local)))
-                g.add((u, RDFS.label, rdflib.Literal(name)))
+        symbols = rows.get("code_symbols") or []
+        by_id: dict = {}
+        for sym in symbols:
+            kind = str(sym.get("kind") or "")
+            name = sym.get("name") or ""
+            cls_local = _code_class_for_kind(kind) if kind != "rationale" \
+                else "Rationale"
+            u = U("code", f"{kind}/{name}")
+            by_id[sym.get("id")] = u
+            g.add((u, RDF.type, CLS(cls_local)))
+            if kind == "rationale":
+                # A rationale row's own name/label IS the comment text
+                # graphify extracted (# WHY:/# HACK:/# NOTE:) -- project
+                # it as rdfs:comment, never as a label meant for display.
+                if name:
+                    g.add((u, RDFS.comment, rdflib.Literal(name)))
+                    g.add((u, RDFS.label, rdflib.Literal(name[:80])))
+            else:
+                label = name
+                file_path = sym.get("file") or ""
+                if kind == "module" and file_path:
+                    # task 2bfe49db: a module's label is its package-relative
+                    # path ("models/x.py"), the SAME label law_check emits
+                    # over a diff, so a promoted rule's
+                    # FILTER(STRSTARTS(?fromPath, "models")) fires on the
+                    # full graph and at the gate alike. Lazy import: law_check
+                    # imports NS from this module.
+                    from prism_service.services.law_check import _label_for
+                    label = _label_for(file_path)
+                g.add((u, RDFS.label, rdflib.Literal(label)))
+            file_path = sym.get("file") or ""
+            if file_path:
+                g.add((u, CLS("inFile"), rdflib.Literal(file_path)))
+
+        for edge in rows.get("code_edges") or []:
+            src = by_id.get(edge.get("source"))
+            tgt = by_id.get(edge.get("target"))
+            if src is None or tgt is None:
+                continue
+            relation = str(edge.get("relation") or "").strip().lower()
+            prop = OntologyGraph._RELATION_PROPERTY.get(relation)
+            if prop is None:
+                continue  # an edge kind the ontology has no property for yet
+            g.add((src, CLS(prop), tgt))
 
     @staticmethod
     def _emit_workflow_steps(g, U, CLS, RDF, RDFS) -> None:
@@ -693,8 +812,13 @@ class OntologyGraph:
                 g.add((u, CLS("inDomain"), du))
             for target_id in m.get("cites") or []:
                 g.add((u, CLS("cites"), U("memory", target_id)))
-            task_id = str(m.get("evidence_task") or "").strip()
-            if task_id:
+            # task 6e858c89: every task the evidence names, in every shape
+            # (task / task_id / tasks); "evidence_task" stays for old rows.
+            _tasks = list(m.get("evidence_tasks") or [])
+            _one = str(m.get("evidence_task") or "").strip()
+            if _one and _one not in _tasks:
+                _tasks.append(_one)
+            for task_id in _tasks:
                 g.add((u, CLS("evidencedBy"), U("task", task_id)))
             for path in m.get("evidence_files") or []:
                 g.add((u, CLS("evidencedBy"), U("document", path)))

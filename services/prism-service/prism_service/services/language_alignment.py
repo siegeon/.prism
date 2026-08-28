@@ -27,6 +27,13 @@ Two safety properties this module holds itself to:
 
 from __future__ import annotations
 
+import atexit
+import json
+import logging
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
 DEFAULT_FIELDS: list[str] = [
     "title", "description", "oracle", "likely_misfire", "stop_if",
     "completion_proof", "premise_notes",
@@ -180,3 +187,244 @@ def align_language(
     }
     result["changed" if apply else "would_change"] = touched
     return result
+
+
+# ----------------------------------------------------------------------
+# Ingestion-path coverage registry (task c7edf4e2, epic cc9a44c8 — "every
+# text writer registers with Align language and cannot drift").
+#
+# ste.on_apply (services/ste.py) fires a listener every time ste actually
+# normalises a piece of text -- one call per real write, from whichever
+# code path reached it. _on_ste_apply below is that listener: it turns
+# the call's stack frames into ONE path label (_path_label) and records
+# one hit against it (record_coverage), so coverage(project) can answer
+# "which ingestion paths has this project actually seen run through
+# Align language, and which have never fired". A path this module has
+# never heard from is the drift this task exists to catch.
+# ----------------------------------------------------------------------
+
+# Priority-ordered: the FIRST rule whose module appears in a call's frames
+# wins. Order matters where two modules could both appear in one call's
+# stack -- e.g. a REST create that reaches TaskService, which reaches
+# ste -- so the caller-facing module (api.tasks) must be checked before
+# the service module it happens to call (task_service, not even listed
+# below, since nothing REST/MCP-originated should ever attribute there).
+#
+# event_handlers is deliberately checked BEFORE memory_service, even
+# though the write-up that names both lists memory_service first: a
+# reflection write ALWAYS reaches ste through MemoryService.store
+# (services/event_handlers.py's _persist_reflection calls ctx.memory_svc.
+# store directly), so the two modules co-occur in every one call's frames
+# -- if memory_service were checked first, "reflection" could never be
+# produced at all, which defeats the point of naming it. Same "outer,
+# more specific caller wins" rule the mcp.tools check below already
+# applies; task_runner/conductor_flow keep the given order because THEIR
+# real co-occurrence (task_runner.run_one_step calls conductor_flow.
+# flow_report) already resolves correctly that way -- task_runner is the
+# more specific caller there too.
+_LABEL_RULES: list[tuple[str, str]] = [
+    ("prism_service.api.tasks", "api.tasks"),
+    ("prism_service.api.signals", "api.signals"),
+    ("prism_service.api.memory", "api.memory"),
+    ("prism_service.services.work_item_sync", "work_item_sync"),
+    ("prism_service.services.task_runner", "task_runner"),
+    ("prism_service.api.conductor_flow", "conductor_flow"),
+    # Daemon seats that write task text through TaskService (found live on
+    # 7.13.90: gate_adjudicator showed as unknown with 30 hits, 7.13.91).
+    ("prism_service.services.gate_adjudicator", "gate_adjudicator"),
+    ("prism_service.services.ship_worker", "ship_worker"),
+    ("prism_service.services.resume_actuator", "resume_actuator"),
+    ("prism_service.services.conductor_service", "conductor_service"),
+    ("prism_service.services.language_alignment_worker",
+     "language_alignment_worker"),
+    ("prism_service.services.event_handlers", "reflection"),
+    ("prism_service.services.memory_service", "memory_service"),
+    ("prism_service.services.signal_store", "signal_store"),
+]
+
+# The MCP dispatcher (prism_service.mcp.tools) is ONE function branching
+# on `if name == "task_create":` for every tool -- there is no separate
+# function per tool to key off, so this checks the frame's own `name`
+# local (ste's tool_hint, see _caller_frames) instead. Checked before
+# _LABEL_RULES above: an MCP call's frames also include whichever service
+# module it reaches (memory_service for mcp memory_store, etc.), and the
+# caller-facing MCP tool name must win over that.
+_MCP_TOOL_LABELS = {
+    "task_create": "mcp.task_create",
+    "task_update": "mcp.task_update",
+    "memory_store": "mcp.memory_store",
+    "signal_post": "mcp.signal_post",
+}
+
+_COVERAGE_FILE = "align_language_coverage.json"
+_WRITE_DEBOUNCE_S = 1.0
+
+_coverage_cache: dict[str, dict[str, dict]] = {}
+_last_write_at: dict[str, float] = {}
+_dirty_projects: set[str] = set()
+
+
+def _path_label(frames: list[tuple[str, str, str, str]]) -> str:
+    """One label for a call, from its ste-captured frames. First match
+    wins, checked in the fixed priority order documented above; a call
+    that matches nothing named gets "unknown:<outermost prism_service
+    module>" so a genuinely new ingestion path shows up as a name, never
+    silently drops out of the registry."""
+    for module, _function, tool_hint, _project_hint in frames:
+        if module == "prism_service.mcp.tools" and tool_hint in _MCP_TOOL_LABELS:
+            return _MCP_TOOL_LABELS[tool_hint]
+
+    for wanted_module, label in _LABEL_RULES:
+        for module, _function, _tool_hint, _project_hint in frames:
+            if module == wanted_module:
+                return label
+
+    for module, _function, _tool_hint, _project_hint in reversed(frames):
+        if module.startswith("prism_service"):
+            return f"unknown:{module}"
+    return "unknown:unknown"
+
+
+def _project_from_frames(frames: list[tuple[str, str, str, str]]) -> str:
+    """The project a call was made against, read off the same frames
+    (ste's project_hint -- a local `project`/`project_id`, or a
+    TaskService/MemoryService instance's own `.project`). Falls back to
+    "default" when no frame carries one cheaply -- there is no
+    process-wide "current project" helper in project_context.py to fall
+    back to first."""
+    for _module, _function, _tool_hint, project_hint in frames:
+        if project_hint:
+            return project_hint
+    return "default"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _coverage_path(project: str) -> Path:
+    from prism_service.config import project_data_dir
+    return project_data_dir(project) / _COVERAGE_FILE
+
+
+def _load_coverage(project: str) -> dict[str, dict]:
+    if project in _coverage_cache:
+        return _coverage_cache[project]
+    data: dict[str, dict] = {}
+    try:
+        path = _coverage_path(project)
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        data = {}
+    data = _fold_now_known(data)
+    _coverage_cache[project] = data
+    return data
+
+
+def _fold_now_known(data: dict[str, dict]) -> dict[str, dict]:
+    """Merge an "unknown:<module>" row into its label when a later release
+    taught the registry that module (7.13.91 labelled the daemon seats
+    after 7.13.90 had recorded thousands of gate_adjudicator hits as
+    unknown). The count carries over. The later last_seen wins. A row for
+    a module that is still unknown stays as it is."""
+    out: dict[str, dict] = {}
+    for path, row in data.items():
+        target = path
+        if path.startswith("unknown:"):
+            module = path[len("unknown:"):]
+            for wanted_module, label in _LABEL_RULES:
+                if module == wanted_module or module.startswith(wanted_module + "."):
+                    target = label
+                    break
+        if target in out:
+            merged = out[target]
+            merged["count"] = int(merged.get("count", 0)) + int(row.get("count", 0))
+            merged["last_seen"] = max(str(merged.get("last_seen", "")), str(row.get("last_seen", "")))
+        else:
+            out[target] = dict(row)
+    return out
+
+
+def _write_coverage(project: str, force: bool = False) -> None:
+    """Debounced: at most one real disk write per project per second
+    (task c7edf4e2). The in-memory cache (read by coverage() below) is
+    always current -- only the disk write is delayed, and a delayed
+    write is flushed on process exit by _flush_all."""
+    now = time.monotonic()
+    if not force and now - _last_write_at.get(project, 0.0) < _WRITE_DEBOUNCE_S:
+        _dirty_projects.add(project)
+        return
+    data = _coverage_cache.get(project, {})
+    try:
+        path = _coverage_path(project)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "could not persist align-language coverage for %s", project,
+            exc_info=True)
+        return
+    _last_write_at[project] = now
+    _dirty_projects.discard(project)
+
+
+def _flush_all() -> None:
+    """atexit hook: a debounced write still pending when the process
+    exits must not be lost."""
+    for project in list(_dirty_projects):
+        _write_coverage(project, force=True)
+
+
+atexit.register(_flush_all)
+
+
+def record_coverage(project: str, path: str) -> None:
+    """One hit against ``path`` for ``project``: increments its count and
+    stamps last_seen. Called by the ste.on_apply listener below; exposed
+    at module level so a test can also call it directly."""
+    data = _load_coverage(project)
+    entry = dict(data.get(path) or {"count": 0, "last_seen": ""})
+    entry["count"] = int(entry.get("count", 0)) + 1
+    entry["last_seen"] = _now_iso()
+    data[path] = entry
+    _write_coverage(project)
+
+
+def coverage(project: str) -> list[dict]:
+    """{"path", "count", "last_seen", "known"} rows for ``project``,
+    sorted by path. ``known`` is False for an "unknown:<module>" path --
+    a real ingestion path this registry has not been taught to name yet."""
+    data = _load_coverage(project)
+    rows = [
+        {
+            "path": path,
+            "count": entry.get("count", 0),
+            "last_seen": entry.get("last_seen", ""),
+            "known": not path.startswith("unknown:"),
+        }
+        for path, entry in data.items()
+    ]
+    rows.sort(key=lambda row: row["path"])
+    return rows
+
+
+def _on_ste_apply(mode: str, frames: list[tuple[str, str, str, str]]) -> None:
+    """The ste.on_apply listener this module registers at import (below).
+    Never raises past ste -- ste already wraps every listener call in its
+    own try/except, this is a second, redundant belt for the same reason.
+    """
+    del mode  # path classification does not depend on strict/flavored
+    try:
+        project = _project_from_frames(frames)
+        label = _path_label(frames)
+        record_coverage(project, label)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "align-language coverage listener failed", exc_info=True)
+
+
+from prism_service.services import ste as _ste  # noqa: E402
+
+_ste.on_apply(_on_ste_apply)

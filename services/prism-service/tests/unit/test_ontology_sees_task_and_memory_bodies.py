@@ -90,9 +90,13 @@ def test_rule_catalog_lists_a_shared_rule_once_with_all_its_targets():
 
     rows = [r for r in ontology_rules.rule_catalog() if r["name"] == "text-is-plain"]
     assert len(rows) == 1, rows
+    # task ed034701 added o:Signal as a fifth target -- a signal's
+    # aligned body is free text too (services/ontology_graph.py
+    # _emit_signals now projects it as rdfs:comment).
     assert set(rows[0]["target_classes"]) == {
         "urn:prism:onto:Task", "urn:prism:onto:Decision",
         "urn:prism:onto:Term", "urn:prism:onto:Agent",
+        "urn:prism:onto:Signal",
     }
     names = [r["name"] for r in ontology_rules.rule_catalog()]
     assert len(names) == len(set(names)), "a rule appears more than once"

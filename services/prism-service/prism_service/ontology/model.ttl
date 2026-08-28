@@ -53,10 +53,15 @@ o:Provider a rdfs:Class ; rdfs:label "Provider" ;
 o:Script a rdfs:Class ; rdfs:label "Script" ;
     rdfs:comment "An artifact a skill bundles, executed through a provider." .
 
-o:QueueItem a rdfs:Class ; rdfs:label "Queue item" ;
-    rdfs:comment "What arrived, and where from." .
-o:Signal a rdfs:Class ; rdfs:subClassOf o:QueueItem ; rdfs:label "Signal" ;
-    rdfs:comment "A queue item that may become a Task." .
+# task cacfb628, epic 61821448 (owner, via the Extract Superclass article:
+# "pull up only what is truly common"): o:QueueItem is collapsed into
+# o:Signal — it had exactly one child and every instance was already a
+# Signal, a Refused Bequest ("the parent is the real class, hiding in two
+# costumes"). Signal keeps o:QueueItem's own label sense ("what arrived,
+# and where from") folded into its comment below; every property that
+# named o:QueueItem as its domain now names o:Signal directly.
+o:Signal a rdfs:Class ; rdfs:label "Signal" ;
+    rdfs:comment "What arrived, and where from — may become a Task." .
 
 o:Artifact a rdfs:Class ; rdfs:label "Artifact" ;
     rdfs:comment "Folder (where work sits) | Document (what work produced)." .
@@ -82,6 +87,14 @@ o:Interface a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Interface" ;
     rdfs:comment "A contract other code promises to fulfill." .
 o:Variable a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Variable" ;
     rdfs:comment "A named slot holding a value." .
+# task f9e0745e: Rationale is its own subclass of o:Code, not a property
+# of one. graphify extracts a rationale row (a # WHY:/# HACK:/# NOTE:
+# comment) as its OWN graph.db entity, with its own file and line, and it
+# can be the source or target of a real edge (o:rationaleFor) to the code
+# it explains -- the same shape every other o:Code subclass has. Folding
+# it into o:Code's rdfs:comment instead would lose that edge.
+o:Rationale a rdfs:Class ; rdfs:subClassOf o:Code ; rdfs:label "Rationale" ;
+    rdfs:comment "A WHY, HACK, or NOTE comment attached to real code." .
 
 # ---------------------------------------------------------------------
 # Properties — "The four surfaces, and how they join" + PRISM's own edges
@@ -93,7 +106,7 @@ o:insideFolder a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Folder ;
     rdfs:label "insideFolder" ; rdfs:comment "The folder above it." .
 o:keptBy a rdf:Property ; rdfs:domain o:Folder ; rdfs:range o:Party ;
     rdfs:label "keptBy" .
-o:raises a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:Ask ;
+o:raises a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:Ask ;
     rdfs:label "raises" .
 o:askedBy a rdf:Property ; rdfs:domain o:Ask ; rdfs:range o:Party ;
     rdfs:label "askedBy" .
@@ -117,20 +130,52 @@ o:becameTask a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:Task ;
     rdfs:label "becameTask" .
 o:hasWorkflow a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:Agent ;
     rdfs:label "hasWorkflow" .
+o:status a rdf:Property ; rdfs:domain o:Task ; rdfs:range xsd:string ;
+    rdfs:label "status" ;
+    rdfs:comment "pending, in_progress, done, or blocked — the conductor's own task.status." .
+o:parent a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:Task ;
+    rdfs:label "parent" ;
+    rdfs:comment "A child task's own parent_id. Read: child o:parent parent." .
 
 o:relatesTo a rdf:Property ; rdfs:domain o:Code ; rdfs:range o:Code ;
     rdfs:label "relatesTo" ;
     rdfs:comment "Supertype of the code-graph edge kinds." .
-o:calls a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "calls" .
-o:imports a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "imports" .
+# task f9e0745e: each sub-property below now carries its OWN
+# rdfs:domain/rdfs:range (o:Code -> o:Code, same as the supertype -- RDFS
+# does not infer domain/range down a subPropertyOf chain on its own, so a
+# SHACL shape or a reasoner that reads one property in isolation still
+# sees the real constraint) plus a plain-English comment. Names are
+# UNCHANGED from before this task -- api/xref.py's _ONTOLOGY_EDGE_
+# PROPERTIES reads a graph.db relation string straight through as the o:
+# local name, so a rename here would silently break the Explore page's
+# edge labels.
+o:calls a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "calls" ;
+    rdfs:comment "One piece of code calls another." .
+o:imports a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "imports" ;
+    rdfs:comment "One module brings in another module." .
 o:imports_from a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
-    rdfs:label "imports_from" .
-o:inherits a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "inherits" .
-o:contains a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "contains" .
-o:uses a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "uses" .
-o:method a rdf:Property ; rdfs:subPropertyOf o:relatesTo ; rdfs:label "method" .
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "imports_from" ;
+    rdfs:comment "One module names WHERE an import comes from." .
+o:inherits a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Class ; rdfs:range o:Class ; rdfs:label "inherits" ;
+    rdfs:comment "One class extends another class." .
+o:contains a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "contains" ;
+    rdfs:comment "One piece of code holds another inside it." .
+o:uses a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Code ; rdfs:range o:Code ; rdfs:label "uses" ;
+    rdfs:comment "One piece of code reads or writes another." .
+o:method a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
+    rdfs:domain o:Class ; rdfs:range o:Method ; rdfs:label "method" ;
+    rdfs:comment "A class has this method." .
 o:rationale_for a rdf:Property ; rdfs:subPropertyOf o:relatesTo ;
-    rdfs:label "rationale_for" .
+    rdfs:domain o:Rationale ; rdfs:range o:Code ; rdfs:label "rationale_for" ;
+    rdfs:comment "A WHY, HACK, or NOTE comment explains this code." .
+o:inFile a rdf:Property ; rdfs:domain o:Code ; rdfs:range xsd:string ;
+    rdfs:label "inFile" ;
+    rdfs:comment "The source file path where this code lives." .
 
 # ---------------------------------------------------------------------
 # The rules are SHACL shapes (task 8eeb3e65, epic 3efbcd89) — Step/Rule
@@ -199,17 +244,50 @@ o:AskForDeliverable a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "Ask for d
 o:AskFyi a rdfs:Class ; rdfs:subClassOf o:Ask ; rdfs:label "FYI" ;
     rdfs:comment "Informational only — it asks for nothing." .
 
-o:aboutTicket a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:JiraIssue ;
+o:aboutTicket a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:JiraIssue ;
     rdfs:label "aboutTicket" ; rdfs:comment "The Jira issue a signal's text names." .
-o:aboutCode a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range o:PullRequest ;
+o:aboutCode a rdf:Property ; rdfs:domain o:Signal ; rdfs:range o:PullRequest ;
     rdfs:label "aboutCode" ; rdfs:comment "The PR/issue a signal's text names." .
 o:dueBy a rdf:Property ; rdfs:domain o:Ask ; rdfs:range xsd:date ;
     rdfs:label "dueBy" ; rdfs:comment "A deadline resolved from the signal's text." .
 o:email a rdf:Property ; rdfs:domain o:Person ; rdfs:range xsd:string ;
     rdfs:label "email" ;
     rdfs:comment "An address is evidence, a name is a guess — the join key." .
-o:permalink a rdf:Property ; rdfs:domain o:QueueItem ; rdfs:range xsd:string ;
+o:permalink a rdf:Property ; rdfs:domain o:Signal ; rdfs:range xsd:string ;
     rdfs:label "permalink" .
 o:projectKnown a rdf:Property ; rdfs:domain o:JiraIssue ; rdfs:range xsd:boolean ;
     rdfs:label "projectKnown" ;
     rdfs:comment "Set at emission time from the same known-project set parse() enforces." .
+
+# ---------------------------------------------------------------------
+# Bot — its own term, NOT a subclass of o:Agent (task 8bcd4cb3, epic
+# 12029f92, owner 2026-08-27 mx-0e5a88): the top level is a Bot, a
+# tier-1 deterministic workflow run as a finite state machine; the
+# agentic Behaviors are partOf that FSM, one tier down.
+# ---------------------------------------------------------------------
+
+o:Bot a rdfs:Class ; rdfs:label "Bot" ;
+    rdfs:comment "A tier-1 deterministic workflow: it runs one FSM and delegates the agentic work to Behaviors." .
+o:FSM a rdfs:Class ; rdfs:label "FSM" ;
+    rdfs:comment "A finite state machine: the States and Transitions one Bot runs." .
+o:State a rdfs:Class ; rdfs:label "State" ;
+    rdfs:comment "One named position in an FSM." .
+o:Transition a rdfs:Class ; rdfs:label "Transition" ;
+    rdfs:comment "One edge of an FSM: from one State to another." .
+o:Behavior a rdfs:Class ; rdfs:label "Behavior" ;
+    rdfs:comment "A tier-2 agentic unit of work that is part of an FSM." .
+
+o:runsFsm a rdf:Property ; rdfs:domain o:Bot ; rdfs:range o:FSM ;
+    rdfs:label "runsFsm" ; rdfs:comment "The FSM a Bot runs." .
+o:hasState a rdf:Property ; rdfs:domain o:FSM ; rdfs:range o:State ;
+    rdfs:label "hasState" ; rdfs:comment "A State that belongs to an FSM." .
+o:hasTransition a rdf:Property ; rdfs:domain o:FSM ; rdfs:range o:Transition ;
+    rdfs:label "hasTransition" ; rdfs:comment "A Transition that belongs to an FSM." .
+o:fromState a rdf:Property ; rdfs:domain o:Transition ; rdfs:range o:State ;
+    rdfs:label "fromState" ; rdfs:comment "The State a Transition leaves." .
+o:toState a rdf:Property ; rdfs:domain o:Transition ; rdfs:range o:State ;
+    rdfs:label "toState" ; rdfs:comment "The State a Transition enters." .
+o:partOf a rdf:Property ; rdfs:domain o:Behavior ; rdfs:range o:FSM ;
+    rdfs:label "partOf" ; rdfs:comment "The FSM a Behavior is part of." .
+o:tier a rdf:Property ; rdfs:range xsd:integer ;
+    rdfs:label "tier" ; rdfs:comment "1 for a deterministic Bot, 2 for an agentic Behavior." .

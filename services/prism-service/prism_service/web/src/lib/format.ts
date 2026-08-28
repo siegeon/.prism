@@ -12,6 +12,17 @@
 // No JS test rig exists in web/ (no vitest/jest); boundary cases are
 // documented + manually exercised: 999_499 -> "999k", 999_500 -> "1.0M",
 // 99_950_000 -> "100M", 999_500_000 -> "1.0B".
+/** Dollars for the whole SPA. Sub-cent runs are real (a single cheap step
+ * lands around $0.003), so they get 4 decimals rather than rounding to
+ * "$0.00" and reading as free. Callers decide what ABSENCE looks like:
+ * this formats a number it is given, and the Trace dashes instead of
+ * calling it when no cost was attributed. */
+export function fmtUsd(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "$0.00";
+  if (n < 0.01) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
+}
+
 export function fmtTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (n >= 999.5e6) return `${(n / 1e9).toFixed(n >= 99.95e9 ? 0 : 1)}B`;

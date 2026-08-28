@@ -46,12 +46,59 @@ _COMMENTS = {
 }
 
 
+def _promoted_terms(project: str) -> list[dict]:
+    """Terms promoted from Understand memory (task c5650403: "a memory in
+    Understand becomes a rule or a term in the ontology"), read straight
+    off <project data dir>/ontology/promoted-model.ttl -- kept separate
+    from lexicon.load_lexicon()'s own fixed, package-level file, so a
+    promoted term never touches the shared vocabulary on disk. A missing
+    file, or one that does not parse, reads as no promoted terms; never
+    raises."""
+    import rdflib
+
+    from prism_service.config import project_data_dir
+
+    path = project_data_dir(project) / "ontology" / "promoted-model.ttl"
+    if not path.exists():
+        return []
+    g = rdflib.Graph()
+    try:
+        g.parse(str(path), format="turtle")
+    except Exception:
+        return []
+    o = rdflib.Namespace(ontology_graph.NS)
+    rdf = rdflib.RDF
+    rdfs = rdflib.RDFS
+    prefix = f"{ontology_graph.NS}instance/memory/"
+    rows = []
+    for subj in g.subjects(rdf.type, o.Term):
+        label = str(g.value(subj, rdfs.label) or "")
+        if not label:
+            continue
+        comment = str(g.value(subj, rdfs.comment) or "")
+        alt_labels = sorted(str(v) for v in g.objects(subj, o.altLabel))
+        derived = g.value(subj, o.derivedFrom)
+        derived_from = ""
+        if derived is not None:
+            derived_str = str(derived)
+            derived_from = (derived_str[len(prefix):]
+                            if derived_str.startswith(prefix) else derived_str)
+        rows.append({
+            "value": label, "count": 0, "in_use": False, "comment": comment,
+            "synonyms": alt_labels, "denotes": "", "derived_from": derived_from,
+        })
+    rows.sort(key=lambda r: r["value"])
+    return rows
+
+
 def _lexicon_vocabulary(project: str) -> dict:
     """The lexicon vocabulary (task 2ee65e14): one row per canonical
     term, carrying the synonyms it replaces and the count of real
     instances of the class it denotes — 0 when the term denotes no
     class, or when this project has no ontology graph yet (a pure read
-    must never create one, per ontology_graph.open_if_exists)."""
+    must never create one, per ontology_graph.open_if_exists). Also
+    carries every term this project has promoted from a memory (task
+    c5650403), each with its own derived_from."""
     og = ontology_graph.open_if_exists(project)
 
     def _count(denotes: str) -> int:
@@ -69,7 +116,9 @@ def _lexicon_vocabulary(project: str) -> dict:
             "comment": term.definition,
             "synonyms": list(term.alt_labels),
             "denotes": term.denotes,
+            "derived_from": "",
         })
+    rows.extend(_promoted_terms(project))
     return {
         "name": "lexicon",
         "comment": "Canonical terms and the synonyms they replace.",

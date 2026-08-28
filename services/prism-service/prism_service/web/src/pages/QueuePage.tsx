@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, decideSignal, type SignalDecideAction } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Button } from "@/components/ui";
 import { Lozenge } from "@/components/Lozenge";
@@ -22,6 +22,12 @@ type Signal = {
   state: string;
   task_id: string;
   matches?: Record<string, unknown>;
+  // Aligned text (task ed034701): the STE pipeline's output for
+  // subject/body, empty until SignalStore.create() runs. subject/body
+  // stay exactly as the signal arrived.
+  aligned_subject?: string;
+  aligned_body?: string;
+  style?: Record<string, unknown>;
 };
 
 function relTime(iso?: string): string {
@@ -91,6 +97,14 @@ export default function QueuePage() {
       .catch(() => {});
   }, [project, load]);
 
+  // A firing rule becomes a decision on the Queue (task b1971944): an
+  // "ontology" signal gets one of four answers instead of promote/drop.
+  const decide = useCallback((signalId: string, action: SignalDecideAction, reason: string, focus: string[] = []) => {
+    decideSignal(project, signalId, action, reason, focus)
+      .then(load)
+      .catch(() => {});
+  }, [project, load]);
+
   const groups = groupByChannel(open);
 
   return (
@@ -114,7 +128,7 @@ export default function QueuePage() {
                 <Lozenge tone="neutral" className="mb-2">{channel}</Lozenge>
                 <div className="space-y-2">
                   {signals.map((s) => (
-                    <SignalRow key={s.id} signal={s} onPromote={promote} onDrop={drop} />
+                    <SignalRow key={s.id} signal={s} onPromote={promote} onDrop={drop} onDecide={decide} />
                   ))}
                 </div>
               </div>
@@ -146,69 +160,85 @@ export default function QueuePage() {
   );
 }
 
-function SignalRow({ signal, onPromote, onDrop }: {
+function SignalRow({ signal, onPromote, onDrop, onDecide }: {
   signal: Signal;
   onPromote: (signalId: string, title: string, workflow: string) => void;
   onDrop: (signalId: string, reason: string) => void;
+  onDecide: (signalId: string, action: SignalDecideAction, reason: string, focus?: string[]) => void;
 }) {
-  const [title, setTitle] = useState(signal.subject);
+  const displaySubject = signal.aligned_subject || signal.subject;
+  const displayBody = signal.aligned_body || signal.body;
+  const [title, setTitle] = useState(displaySubject);
   const [workflow, setWorkflow] = useState("triage");
   const [dropping, setDropping] = useState(false);
   const [reason, setReason] = useState("");
   const matches = Object.entries(signal.matches ?? {});
+  // A firing rule becomes a decision on the Queue (task b1971944): an
+  // "ontology" signal gets Accept/Exempt/Fix/Codify instead of the plain
+  // promote/drop row every other channel uses.
+  const isRuleDecision = signal.channel === "ontology";
 
   return (
     <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-3">
       <div className="flex items-center gap-2">
         <span className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>
-          <LinkedText text={signal.subject} />
+          <LinkedText text={displaySubject} />
         </span>
         <span className="text-2xs shrink-0" style={{ color: "var(--text-muted)" }}>
           {signal.sender} · {relTime(signal.arrived_at)}
         </span>
       </div>
       <div className="text-xs mt-1 line-clamp-2" style={{ color: "var(--text-secondary)" }}>
-        <LinkedText text={signal.body} />
+        <LinkedText text={displayBody} />
       </div>
+      <details className="text-2xs mt-1" style={{ color: "var(--text-muted)" }}>
+        <summary className="cursor-pointer select-none">As arrived</summary>
+        <div className="mt-1">
+          <div>{signal.subject}</div>
+          <div>{signal.body}</div>
+        </div>
+      </details>
       {matches.length > 0 && (
         <div className="text-2xs mt-1 flex flex-wrap gap-x-3" style={{ color: "var(--text-muted)" }}>
           {matches.map(([k, v]) => <span key={k}>{k}: {String(v)}</span>)}
         </div>
       )}
-      <div className="flex items-center gap-2 mt-2">
-        <input
-          data-queue-title-input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="what should happen?"
-          aria-label="What should happen?"
-          className="flex-1 px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
-          style={{ color: "var(--text-secondary)" }}
-        />
-        <select
-          data-queue-workflow-select
-          value={workflow}
-          onChange={(e) => setWorkflow(e.target.value)}
-          aria-label="Workflow"
-          className="px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
-          style={{ color: "var(--text-secondary)" }}
-        >
-          <option value="triage">triage</option>
-          <option value="implement">implement</option>
-        </select>
-        <Button
-          type="button"
-          variant="primary"
-          onClick={() => onPromote(signal.id, title, workflow)}
-        >
-          Make it a task
-        </Button>
-        <Button type="button" onClick={() => setDropping((d) => !d)}>
-          Drop
-        </Button>
-      </div>
-      {dropping && (
+      {!isRuleDecision && (
+        <div className="flex items-center gap-2 mt-2">
+          <input
+            data-queue-title-input
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="what should happen?"
+            aria-label="What should happen?"
+            className="flex-1 px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
+            style={{ color: "var(--text-secondary)" }}
+          />
+          <select
+            data-queue-workflow-select
+            value={workflow}
+            onChange={(e) => setWorkflow(e.target.value)}
+            aria-label="Workflow"
+            className="px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            <option value="triage">triage</option>
+            <option value="implement">implement</option>
+          </select>
+          <Button
+            type="button"
+            variant="primary"
+            onClick={() => onPromote(signal.id, title, workflow)}
+          >
+            Make it a task
+          </Button>
+          <Button type="button" onClick={() => setDropping((d) => !d)}>
+            Drop
+          </Button>
+        </div>
+      )}
+      {!isRuleDecision && dropping && (
         <div className="flex items-center gap-2 mt-2">
           <input
             data-queue-drop-reason
@@ -225,6 +255,74 @@ function SignalRow({ signal, onPromote, onDrop }: {
           </Button>
         </div>
       )}
+      {isRuleDecision && <RuleDecisionRow signal={signal} onDecide={onDecide} />}
+    </div>
+  );
+}
+
+// A firing rule becomes a decision on the Queue (task b1971944): the four
+// answers an "ontology" signal carries instead of promote/drop. `focus`
+// (task b1971944's exempt payload) comes off signal.matches.focus --
+// the same focus-IRI list rule_decisions.on_rules_validated stashes there
+// at post time, so exempting never needs a second round trip to fetch it.
+function RuleDecisionRow({ signal, onDecide }: {
+  signal: Signal;
+  onDecide: (signalId: string, action: SignalDecideAction, reason: string, focus?: string[]) => void;
+}) {
+  const [reason, setReason] = useState("");
+  const focusIris = Array.isArray((signal.matches as { focus?: unknown } | undefined)?.focus)
+    ? ((signal.matches as { focus: string[] }).focus)
+    : [];
+  const [selected, setSelected] = useState<string[]>([]);
+  const toggle = (iri: string) => {
+    setSelected((cur) => (cur.includes(iri) ? cur.filter((x) => x !== iri) : [...cur, iri]));
+  };
+
+  return (
+    <div className="mt-2 space-y-2" data-signal-decision>
+      <textarea
+        data-signal-decide-reason
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="why?"
+        aria-label="Why?"
+        rows={2}
+        className="w-full px-2 py-1.5 text-xs rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)]"
+        style={{ color: "var(--text-secondary)" }}
+      />
+      {focusIris.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-2xs" style={{ color: "var(--text-muted)" }}>
+          {focusIris.map((iri) => (
+            <label key={iri} className="flex items-center gap-1">
+              <input
+                data-signal-decide-focus
+                type="checkbox"
+                checked={selected.includes(iri)}
+                onChange={() => toggle(iri)}
+              />
+              {iri.split("/").pop()}
+            </label>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Button type="button" data-signal-decide-accept variant="primary"
+          onClick={() => onDecide(signal.id, "accept", reason)}>
+          Accept
+        </Button>
+        <Button type="button" data-signal-decide-exempt
+          onClick={() => onDecide(signal.id, "exempt", reason, selected)}>
+          Exempt
+        </Button>
+        <Button type="button" data-signal-decide-fix
+          onClick={() => onDecide(signal.id, "fix", reason)}>
+          Fix
+        </Button>
+        <Button type="button" data-signal-decide-codify
+          onClick={() => onDecide(signal.id, "codify", reason)}>
+          Codify
+        </Button>
+      </div>
     </div>
   );
 }

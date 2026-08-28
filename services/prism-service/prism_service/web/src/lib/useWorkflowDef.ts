@@ -40,6 +40,11 @@ export type WorkflowStepDef = {
   /** Gate steps only — who may decide it and how to recover from a wrong
    * decision. Empty for non-gate steps. */
   authority?: string;
+  /** Gate steps only — true when a human owner is NEVER the decider,
+   * regardless of task/proof_type (e.g. red_gate). Absent/false elsewhere.
+   * Lets the SPA stop claiming "awaiting review" (a human-owed decision)
+   * for a gate that is unconditionally machine-adjudicated. */
+  machine_only_gate?: boolean;
   execution: "connected" | "scripted" | "definition_only";
   linked_workflow_id?: string | null;
   linked_workflow_step_count?: number;
@@ -67,6 +72,35 @@ export type WorkflowDef = {
   workflows?: WorkflowCatalogEntry[];
 };
 
+/** One ingestion path's hit count in services.language_alignment's
+ * coverage registry (task c7edf4e2, epic cc9a44c8) — a real STE write
+ * this project has actually seen from that path, or never has. Only the
+ * align_language catalog entry carries this. */
+export type WorkflowCoverageRow = {
+  path: string;
+  count: number;
+  last_seen: string;
+  /** False for a path the registry could not name (an "unknown:<module>"
+   * path) — a real ingestion point the label map has not been taught
+   * yet, rendered in a warning tone rather than dropped. */
+  known: boolean;
+};
+
+/** The Knowledge health scoreboard (task b1971944, services/
+ * knowledge_health.py) — present only on the knowledge_health catalog
+ * entry, which carries no steps of its own. */
+export type WorkflowMetrics = {
+  search_feedback_rate: number;
+  recall_to_use_rate: number;
+  median_memory_chars: number;
+  evidence_ratio: number;
+  concepts_grounded_in_code: number;
+  modules_with_knowledge: number;
+  rules_with_provenance: number;
+  open_rule_decisions: number;
+  computed_at: string;
+};
+
 export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
   id: string;
   name: string;
@@ -80,6 +114,14 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
    * af396b2c) — the queue behind this agent. Absent only for an older
    * service. */
   task_count?: number;
+  /** Ingestion-path coverage (task c7edf4e2) — present only on the
+   * align_language catalog entry. Absent for every other entry and for
+   * an older service. */
+  coverage?: WorkflowCoverageRow[];
+  /** Knowledge health metrics (task b1971944) — present only on the
+   * knowledge_health catalog entry. Absent for every other entry and for
+   * an older service. */
+  metrics?: WorkflowMetrics;
 };
 
 export type WorkflowStepResult = {
@@ -135,7 +177,7 @@ export type WorkflowRun = {
 /** The shape the conductor rail renders. Deliberately the same {id, persona,
  * type} triple the rail already consumed, so moving the SOURCE of the list
  * costs its consumers one line each and changes nothing downstream. */
-export type RailStep = { id: string; persona: string; type: WorkflowStepType };
+export type RailStep = { id: string; persona: string; type: WorkflowStepType; machine_only_gate?: boolean };
 
 /** `intake` is NOT a conductor step: it is the pre-conductor state a task
  * sits in before the first agent step, which is why models/workflow.py has
@@ -339,30 +381,63 @@ export function fetchConductorRunFromTask(project: string, task: ConductorRunTas
 }
 
 function railFrom(steps: WorkflowStepDef[]): RailStep[] {
-  return [INTAKE, ...steps.map((s) => ({ id: s.id, persona: s.persona, type: s.type }))];
+  return [INTAKE, ...steps.map((s) => ({ id: s.id, persona: s.persona, type: s.type, machine_only_gate: s.machine_only_gate }))];
 }
 
-// Tab-lifetime cache: the ordering is identical for every project and never
+// Tab-lifetime cache: the catalog is identical for every project and never
 // changes while the tab is open, so the rail must not refetch it per mount
-// (SdlcProgress renders once per task card on the board).
+// (SdlcProgress renders once per task card on the board). Caches the WHOLE
+// parsed WorkflowDef now, not just one flattened rail — a task's own
+// workflow (task.workflow: "implement", "triage", "align_language",
+// "promote_to_law", "quickfix", ...) picks a DIFFERENT catalog entry's
+// steps out of `def.workflows`, so one fetch must serve every workflow's
+// rail, not just the top-level "implement"/conductor one.
 let pending: Promise<WorkflowDef> | null = null;
-let railCache: RailStep[] | null = null;
+let defCache: WorkflowDef | null = null;
 
-/** The ordered conductor rail: intake followed by the service's FSM.
- * Returns just the intake row until the first fetch resolves — honest about
- * what it knows, rather than seeding a hardcoded list that would quietly
- * become the duplicate this module exists to delete. */
-export function useWorkflowSteps(): RailStep[] {
-  const [steps, setSteps] = useState<RailStep[]>(railCache ?? [INTAKE]);
+/** Mirrors the backend's models.task.WORKFLOW_ALIASES: a worker-facing
+ * task.workflow value that names something OTHER than its own catalog
+ * entry id. "implement" is the only one today (-> the "conductor" catalog
+ * entry) — every other named workflow (triage, align_language,
+ * promote_to_law, quickfix) stores the SAME string as its own catalog id,
+ * exactly like the backend's steps_for()/​_task_count_by_workflow's alias
+ * join, so no entry is needed for them here. */
+const WORKFLOW_ID_ALIASES: Record<string, string> = { implement: "conductor" };
+
+/** Resolves a task's own workflow (task.workflow) to its ordered rail,
+ * mirroring the backend's models.workflow.steps_for(): look up the
+ * matching catalog entry in `def.workflows` (through the alias above when
+ * needed) and use ITS steps; fall back to the top-level (conductor/
+ * "implement") steps for a blank/unknown value or an older service that
+ * hasn't sent `workflows` yet — never blank, never throws. */
+function railForWorkflow(def: WorkflowDef, workflow?: string): RailStep[] {
+  const value = (workflow ?? "").trim().toLowerCase();
+  const catalogId = WORKFLOW_ID_ALIASES[value] ?? value;
+  const entry = def.workflows?.find((w) => w.id === catalogId);
+  return railFrom(entry ? entry.steps : def.steps);
+}
+
+/** The ordered rail for one workflow: intake followed by that workflow's own
+ * FSM steps (defaulting to the "implement" conductor's steps when `workflow`
+ * is omitted). Returns just the intake row until the first fetch resolves —
+ * honest about what it knows, rather than seeding a hardcoded list that
+ * would quietly become the duplicate this module exists to delete. */
+export function useWorkflowSteps(workflow?: string): RailStep[] {
+  const [steps, setSteps] = useState<RailStep[]>(
+    defCache ? railForWorkflow(defCache, workflow) : [INTAKE],
+  );
 
   useEffect(() => {
-    if (railCache) return;
+    if (defCache) {
+      setSteps(railForWorkflow(defCache, workflow));
+      return;
+    }
     let cancel = false;
     if (!pending) pending = fetchWorkflowDef(getProject());
     pending
       .then((def) => {
-        railCache = railFrom(def.steps);
-        if (!cancel) setSteps(railCache);
+        defCache = def;
+        if (!cancel) setSteps(railForWorkflow(def, workflow));
       })
       .catch(() => {
         // Service unreachable — retry on the next mount rather than
@@ -370,7 +445,7 @@ export function useWorkflowSteps(): RailStep[] {
         pending = null;
       });
     return () => { cancel = true; };
-  }, []);
+  }, [workflow]);
 
   return steps;
 }

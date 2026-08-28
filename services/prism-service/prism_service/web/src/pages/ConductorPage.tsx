@@ -8,6 +8,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { type PhaseProgress, ACTIVITY_META } from "@/components/conductor/SdlcProgress";
 import TokenTurns from "@/components/conductor/TokenTurns";
 import { activityLabel } from "@/lib/activityLabel";
+import { useWorkflowSteps } from "@/lib/useWorkflowDef";
 import { fmtTokens } from "@/lib/format";
 import { relativeTime } from "@/lib/relativeTime";
 // ONE shared severity vocabulary (task 8e5aa63b) — the tile's at-gate
@@ -189,7 +190,17 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
   // gates ALL SDLC-drive chrome below (header, timeline, pill, handoff).
   const claimed = task.claimed === true;
   const status = (task.status ?? "").toLowerCase();
-  const actState = (task.activity?.state ?? status).toLowerCase();
+  const rawActState = (task.activity?.state ?? status).toLowerCase();
+  // Same override SdlcProgress applies to its own tile (task be158613
+  // follow-on): a gate step whose machine_only_gate is true (red_gate)
+  // never renders "awaiting review" — no human reviewer is owed a
+  // decision there, so the pill and its tone must not claim one.
+  const steps = useWorkflowSteps();
+  const curStepIdx = steps.findIndex((s) => s.id === task.workflow_step);
+  const curStepMachineOnly = curStepIdx >= 0 && steps[curStepIdx].machine_only_gate === true;
+  const actState = rawActState === "awaiting_gate" && curStepMachineOnly
+    ? "awaiting_gate_machine"
+    : rawActState;
   // Shared vocabulary (task 40c29b83 FR-7): ACTIVITY_META is the ONE map
   // every activity surface renders through (LiveBar included) — supersedes
   // this file's former own private activity map, which had no `driving`
@@ -227,11 +238,12 @@ function TaskTile({ task, reduced, sinceFetchS, onClick }: { task: ManagedTask; 
     : actState === "driving" && hb?.last_tool ? `driving · ${hb.last_tool}`
     : actState === "stalled" ? `no active driver${idle ? ` · idle ${idle}` : ""}`
     : actState === "paused" ? `paused · ${kids} done${idle ? ` · idle ${idle}` : ""}`
-    // "awaiting_gate" reads through the shared map like any other honest
-    // state, named explicitly here (not just via the fallback below) so a
-    // human/machine reviewer owed a decision is never silently swallowed
-    // into a generic default.
+    // "awaiting_gate" and "awaiting_gate_machine" (see actState above) read
+    // through the shared map like any other honest state, named explicitly
+    // here (not just via the fallback below) so a human/machine reviewer
+    // owed a decision is never silently swallowed into a generic default.
     : actState === "awaiting_gate" ? (ACTIVITY_META[actState]?.label ?? "awaiting review")
+    : actState === "awaiting_gate_machine" ? (ACTIVITY_META[actState]?.label ?? "machine deciding")
     : (ACTIVITY_META[actState]?.label ?? (status || "—"));
   const actToneFinal: PillTone = claimed
     ? (signal.lost ? "slate" : actTone)

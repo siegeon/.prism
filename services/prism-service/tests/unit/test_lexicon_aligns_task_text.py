@@ -79,13 +79,13 @@ def test_every_synonym_aligns_to_its_canonical_label(synonym, label):
 
 
 def test_worked_example_aligns_three_synonyms_at_once():
-    text = "Open a ticket for the PR and link the memory"
+    text = "Open a ticket for the PR and link the memory entry"
     aligned, applied = lexicon.align(text)
     assert aligned == "Open a Task for the PullRequest and link the Concept"
     assert applied == [
         {"from": "ticket", "to": "Task"},
         {"from": "PR", "to": "PullRequest"},
-        {"from": "memory", "to": "Concept"},
+        {"from": "memory entry", "to": "Concept"},
     ]
 
 
@@ -106,7 +106,7 @@ def test_plural_synonyms_align_to_plural_canonical_labels():
 
 
 def test_singular_form_still_aligns_next_to_its_plural():
-    aligned, _applied = lexicon.align("One story became three stories.")
+    aligned, _applied = lexicon.align("One ticket became three tickets.")
     assert aligned == "One Task became three Tasks."
 
 
@@ -239,7 +239,7 @@ def test_terms_payload_carries_the_lexicon_vocabulary():
 
     task_term = next(t for t in lex["terms"] if t["value"] == "Task")
     assert task_term["comment"]
-    assert set(task_term["synonyms"]) == {"ticket", "work item", "story", "card", "todo"}
+    assert set(task_term["synonyms"]) == {"ticket", "work item"}
     assert task_term["denotes"] == "Task"
     assert task_term["count"] >= 0
 
@@ -275,3 +275,48 @@ def test_ontology_page_renders_lexicon_synonyms_in_its_own_jsx_branch():
     branch = src[branch_start:branch_end]
     assert "{t.comment}" in branch
     assert "also: {t.synonyms.join(" in branch
+
+
+# ----------------------------------------------------------------------
+# Guard (epic cc9a44c8, 2026-08-26): a single common English word as a
+# synonym changes meaning at scale. The live backfill rewrote "story",
+# "card", "proof" and "memory" in 525 tasks before this guard existed.
+# Every one-word synonym must be a deliberate entry in this allowlist.
+# ----------------------------------------------------------------------
+
+_SINGLE_WORD_SYNONYMS_ALLOWED = {
+    "ticket", "PR", "MR", "ADR", "doc", "assistant", "behaviour",
+    # "bot" left this list on 2026-08-27 (mx-0e5a88): a Bot is a tier-1
+    # deterministic workflow, not an Agent; see test_bot_is_never_a_synonym.
+}
+
+
+def test_every_single_word_synonym_is_deliberately_allowed():
+    offenders = []
+    for term in lexicon.load_lexicon():
+        for alt in term.alt_labels:
+            if " " not in alt and "-" not in alt and alt not in _SINGLE_WORD_SYNONYMS_ALLOWED:
+                offenders.append((alt, term.label))
+    assert not offenders, f"single-word synonyms need a deliberate allowlist entry: {offenders}"
+
+
+def test_common_words_never_align():
+    for text in ("The story step drafts the story.", "The gate card shows the proof.",
+                 "Keep it in memory.", "Run the CI pipeline.", "Add a checkpoint.", "Get sign-off."):
+        aligned, applied = lexicon.align(text)
+        assert aligned == text and applied == [], (text, aligned, applied)
+
+
+def test_bot_is_never_a_synonym():
+    """Owner 2026-08-27 (mx-0e5a88): "the top level are bots (tier 1
+    workflows) that have deterministic flows"; a Bot is not an Agent, so the
+    lexicon must leave the word alone. Before this the aligner rewrote a
+    ticket titled "Bot is its own term, not a synonym of Agent" into "Agent
+    is its own term, not a synonym of Agent" (task 8bcd4cb3)."""
+    from prism_service.services.lexicon import load_lexicon, align
+
+    for term in load_lexicon():
+        assert "bot" not in [a.lower() for a in term.alt_labels], term.label
+    text = "The Bot runs a deterministic flow. A bot is not an agent."
+    aligned, _changes = align(text)
+    assert aligned == text

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from prism_service.models.signal import Signal
 from prism_service.models.task import validate_channel, validate_workflow
 from prism_service.project_context import get_project
+from prism_service.services import rule_decisions
 from prism_service.services.signal_store import SignalStore
 
 router = APIRouter()
@@ -89,16 +90,20 @@ def get_signals(
 
 
 class SignalPromote(BaseModel):
-    title: str
+    title: str = ""
     workflow: str = "triage"
     description: str = ""
 
 
 # The owner's model (mx-0889e4): a signal becomes a task ONLY when the
-# owner types what to do and clicks -- promote is that click. Description
-# defaults to the signal's own body plus a plain context line naming where
-# it came from (NOT the mirror-trailer format another slice owns -- this is
-# just context for whoever reads the new task).
+# owner types what to do and clicks -- promote is that click. Title/
+# description default to the signal's ALIGNED subject/body (task
+# ed034701) when present, else the raw text, plus a plain context line
+# naming where it came from (NOT the mirror-trailer format another slice
+# owns -- this is just context for whoever reads the new task).
+# TaskService.create() runs its own STE+lexicon pass over title/
+# description again (task_service.py's _apply_ste) -- aligning already-
+# aligned text is idempotent, so this is never a double rewrite.
 @router.post("/{signal_id}/promote")
 def promote_signal(signal_id: str, body: SignalPromote, project: str = Query("default")) -> dict:
     store = SignalStore(project)
@@ -113,14 +118,17 @@ def promote_signal(signal_id: str, body: SignalPromote, project: str = Query("de
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    title = body.title or signal.aligned_subject or signal.subject
+
     description = body.description
     if not description:
+        signal_body = signal.aligned_body or signal.body
         context = f"From {signal.channel}: {signal.channel_ref}"
-        description = f"{signal.body}\n\n{context}" if signal.body else context
+        description = f"{signal_body}\n\n{context}" if signal_body else context
 
     tags = ["queue"] + ([signal.channel] if signal.channel else [])
     task = get_project(project).task_svc.create(
-        title=body.title,
+        title=title,
         description=description,
         channel=signal.channel,
         channel_ref=signal.channel_ref,
@@ -149,3 +157,32 @@ def drop_signal(signal_id: str, body: SignalDrop, project: str = Query("default"
     store.update(signal_id, state="dropped", drop_reason=body.reason)
     updated = store.get(signal_id)
     return {"signal": updated.__dict__}
+
+
+# ── A firing rule becomes a decision on the Queue (task b1971944) ──────────
+# An ontology signal (channel="ontology", channel_ref="rule:<name>") gets one
+# of four answers instead of promote/drop -- rule_decisions.decide() owns
+# every branch's actual effect (decisions.json, GET /ontology/rules
+# exemptions, a "Fix: ..." task, or an Understand memory).
+
+class SignalDecide(BaseModel):
+    action: str = ""  # accept | exempt | fix | codify
+    reason: str = ""
+    focus: list[str] = []
+
+
+@router.post("/{signal_id}/decide")
+def decide_signal(signal_id: str, body: SignalDecide, project: str = Query("default")) -> dict:
+    store = SignalStore(project)
+    signal = store.get(signal_id)
+    if signal is None:
+        raise HTTPException(status_code=404, detail="signal not found")
+
+    try:
+        result = rule_decisions.decide(project, signal, body.action, body.reason, body.focus)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    updated = store.get(signal_id)
+    result["signal"] = updated.__dict__ if updated else None
+    return result

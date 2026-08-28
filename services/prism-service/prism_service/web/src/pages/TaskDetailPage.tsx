@@ -17,7 +17,7 @@ import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcPr
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
-import { fmtTokens } from "@/lib/format";
+import { fmtTokens, fmtUsd } from "@/lib/format";
 import { relativeTime } from "@/lib/relativeTime";
 import SpendPanel, { type SpendData } from "@/components/SpendPanel";
 import { gateSeverity } from "../lib/gateSeverity";
@@ -159,6 +159,12 @@ type GateReadiness = {
   // blocking a green_gate roll-up, named by id/title so the banner can link
   // them instead of only quoting "N child task(s) not done" prose.
   blocking_children?: { id: string; title: string }[];
+  // Epic-rollup adapter: recursive status counts across the WHOLE
+  // descendant subtree (owner, live, task 95474ec7: "impossobvle to see
+  // at this top level how much work is actualy done") — blocking_children
+  // above only names the direct unfinished child, this answers the
+  // aggregate question without drilling through several epic levels.
+  subtree_progress?: { total: number; done: number; in_progress: number; blocked: number; pending: number };
 };
 
 // GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
@@ -228,6 +234,10 @@ type TraceStep = {
   role?: string | null;
   model?: string | null;
   tokens: number;
+  // Authoritative per-run dollar cost, straight off the payload
+  // (agent_runs_data.py:489). Never derived here — recomputing cost
+  // client-side is this ticket's stop_if.
+  cost_usd?: number | null;
   gate_state?: string | null;
   // Provenance of a PASSING gate_state, derived server-side: "machine" (the
   // conductor's own seat, server-clock stamped) vs "unattributed" (written
@@ -238,11 +248,12 @@ type TraceStep = {
 type TraceSession = {
   session_id: string;
   tokens_total: number;
+  cost_total?: number | null;
   steps: TraceStep[];
 };
 type TaskTrace = {
   sessions: TraceSession[];
-  totals: { tokens: number; steps: number; sessions: number };
+  totals: { tokens: number; cost_usd?: number | null; steps: number; sessions: number };
 };
 
 // Staggered Card-stack wrapper: each card fades + rises into place with a
@@ -714,6 +725,13 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
           {tokens > 0 ? fmtTokens(tokens) : "—"}
         </span>
       </span>
+      {/* Dollars are READ, never derived — the payload's own per-run figure.
+          A falsy cost means "not attributed" (runs predating cost capture
+          report 0.0), so it dashes: an absent measurement must not read as a
+          measured zero. */}
+      <span className="font-mono text-2xs tabular-nums text-[color:var(--accent-sage-fg)] w-[64px] text-right shrink-0" title="cost for this step, from the trace payload">
+        {step.cost_usd ? fmtUsd(step.cost_usd) : "—"}
+      </span>
     </div>
   );
 }
@@ -880,8 +898,9 @@ function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading
   return (
     <div className="space-y-4">
       <SpendPanel spend={spend} />
-      <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 min-[560px]:grid-cols-5 gap-3">
         <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
+        <TraceKpi label="Total cost" value={t.cost_usd ? fmtUsd(t.cost_usd) : "—"} hint="sum of per-step cost on the trace payload" />
         <TraceKpi label="Steps" value={String(t.steps)} />
         <TraceKpi label="Sessions" value={String(t.sessions)} />
         <TraceKpi label="Tokens / step" value={fmtTokens(perStep)} />
@@ -1229,25 +1248,41 @@ export default function TaskDetailPage() {
   // within ~1s of a backend change — never refetch on every event, that
   // is the SessionsPage.tsx:80 `es.onmessage = () => load();`
   // refetch-everything anti-pattern this task's likely_misfire names.
+  //
+  // `activity` (real-time activity push): activity is computed server-side
+  // and is NOT a DB column, so it never rides `fields` above — the backend
+  // now ALSO carries a freshly-computed `activity` block alongside `fields`
+  // on every task.changed event (TaskService.update()). Merge it into the
+  // same `task` state `fields` already patches — additive only, never
+  // replaces the initial-load/poll path that already sets it.
   useEffect(() => {
     if (!id) return;
     return subscribeStream(`/sse/tasks?project=${project}&task_id=${id}`, (data) => {
       try {
-        const payload = JSON.parse(data) as { task_id?: string; fields?: Partial<Task> };
+        const payload = JSON.parse(data) as { task_id?: string; fields?: Partial<Task>; activity?: Activity | null };
         if (payload.task_id !== id || !payload.fields) return;
         const fields = payload.fields;
-        setTask((prev) => (prev ? { ...prev, ...fields } : prev));
+        const hasActivity = Object.prototype.hasOwnProperty.call(payload, "activity");
+        setTask((prev) => (prev ? { ...prev, ...fields, ...(hasActivity ? { activity: payload.activity } : {}) } : prev));
       } catch { /* ignore malformed payloads */ }
     });
   }, [id, project]);
 
-  // ONE-SHOT per task, all in PARALLEL and all CHEAP: test discovery
-  // (run=false — AST scan only), readiness, delivery. The old shape awaited
-  // tests?run=true FIRST, so every page open ran a real pytest suite and
-  // readiness/delivery queued behind it — with the browser's 6-connection
-  // limit + SSE + the 5s poll, the page sat on "Loading…" for 30-60s
-  // (owner 2026-07-16: "it's not even running?").
+  // ONE-SHOT PER TRANSITION, all in PARALLEL and all CHEAP: test discovery
+  // (run=false — AST scan only) and delivery. The old shape keyed only on
+  // [id, project] and never re-ran for the rest of the session, so a page
+  // opened BEFORE a gate resolves (e.g. green_gate approved live) kept
+  // showing the stale pre-approval delivery object forever — a "DONE"
+  // header next to a "NOT DELIVERED YET · GATE NOT PASSED YET" badge, even
+  // after the work actually shipped (task 8582921d). deliveryRunFor uses
+  // the SAME runKey/re-observe shape as readinessRunFor/ranPinTestsFor
+  // above: re-fetch on a gate_state/workflow_step/status TRANSITION, never
+  // a fixed-interval timer.
+  const deliveryRunFor = useRef<string>("");
   useEffect(() => {
+    const runKey = `${id}:${project}:${task?.workflow_step || ""}:${task?.gate_state || ""}:${task?.status || ""}`;
+    if (!id || deliveryRunFor.current === runKey) return;
+    deliveryRunFor.current = runKey;
     let cancelled = false;
     (async () => {
       try {
@@ -1263,7 +1298,7 @@ export default function TaskDetailPage() {
       } catch { if (!cancelled) setDelivery(null); }
     })();
     return () => { cancelled = true; };
-  }, [id, project]);
+  }, [id, project, task?.workflow_step, task?.gate_state, task?.status]);
 
   // Re-fetch readiness on a gate_state/workflow_step/status TRANSITION —
   // never a fixed-interval timer (stop_if). Same runKey/re-observe shape as
@@ -1930,10 +1965,10 @@ export default function TaskDetailPage() {
         </div>
       </div>
 
-      {task.blocked_reason && (
+      {task.status === "blocked" && task.blocked_reason && (
         <Card>
           <SectionLabel>Blocked because</SectionLabel>
-          <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1">{task.blocked_reason}</div>
+          <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1"><LinkedText text={task.blocked_reason} /></div>
         </Card>
       )}
 
@@ -2079,7 +2114,7 @@ export default function TaskDetailPage() {
                     ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
                     : "READY · evidence passing")
                 : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
-                ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
+                ? `WAITING ON CHILDREN · ${gateReadiness!.blocking_children!.length} child task(s) not done`
                 : verifierRefusal ? "BLOCKED · verifier rejected current evidence"
                 // The legacy generic literal (mx-a31a3d precedent) survives,
                 // reachable ONLY behind the shared function's blocked verdict —
@@ -2094,6 +2129,20 @@ export default function TaskDetailPage() {
       </div>
 
             <div className="bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)] border rounded-md" style={{ borderColor: "var(--border-subtle)" }}>
+              {/* SUBTREE PROGRESS (task 95474ec7): the aggregate "how much
+                  work is actually done" answer, across every descendant at
+                  any depth — not just the direct child(ren) named below. */}
+              {gateReadiness?.subtree_progress && gateReadiness.subtree_progress.total > 0 && (
+                <div className="p-4 space-y-1.5">
+                  <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>subtree progress</div>
+                  <div className="text-[13px]" style={{ color: "var(--text-primary)" }}>
+                    {gateReadiness.subtree_progress.done} of {gateReadiness.subtree_progress.total} done
+                    {gateReadiness.subtree_progress.in_progress > 0 && ` · ${gateReadiness.subtree_progress.in_progress} in progress`}
+                    {gateReadiness.subtree_progress.blocked > 0 && ` · ${gateReadiness.subtree_progress.blocked} blocked`}
+                    {gateReadiness.subtree_progress.pending > 0 && ` · ${gateReadiness.subtree_progress.pending} not started`}
+                  </div>
+                </div>
+              )}
               {/* BLOCKED-ON CHILDREN (task a646cbd1): name + link the
                   specific unfinished child(ren), not just roll-up prose —
                   same EntityChip -> /tasks/${id} pattern as the Children
@@ -2393,7 +2442,7 @@ export default function TaskDetailPage() {
                     summary="audit detail (machine text)"
                   >
                     <div className="mt-1.5 space-y-1">
-                      {task.gate_reason && gateReadiness?.receipt_ok !== false && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                      {task.gate_reason && gateReadiness?.receipt_ok !== false && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}><LinkedText text={task.gate_reason} /></div>}
                       {gateReadiness?.receipt_ok === false && gateReadiness?.receipt_refusal && (
                         <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>live: {gateReadiness.receipt_refusal}</div>
                       )}
@@ -2448,16 +2497,20 @@ export default function TaskDetailPage() {
                   >
                     {busy ? "checking…" : task.gate_state === "failed" ? "Approve (recover)" : "Approve"}
                   </button>
-                  {task.gate_state !== "failed" && (
+                  {/* Reject-on-a-failed-gate recovery (task 12029f92, backend
+                      fix 7.13.134): a standing-failed gate can now rewind via
+                      reject+override, but only with override armed -- stays
+                      mounted and relabels so a real user can reach it. */}
+                  {(task.gate_state !== "failed" || gateOverride) && (
                     <button
                       id="gate-decide-reject"
                       type="button"
-                      disabled={busy || !gateReason.trim()}
+                      disabled={busy || !gateReason.trim() || (task.gate_state === "failed" && !gateOverride)}
                       onClick={() => gateDecide("reject")}
                       className="text-2xs uppercase tracking-wider px-3.5 py-1.5 rounded disabled:opacity-40"
                       style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
                     >
-                      Reject
+                      {task.gate_state === "failed" ? "Reject (redo)" : "Reject"}
                     </button>
                   )}
                   <span className="text-2xs" style={{ color: "var(--text-muted)" }}>
@@ -2505,7 +2558,7 @@ export default function TaskDetailPage() {
             )}
             {(task.gate_reason || gateEvidenceLines(history).length > 0) && (
               <div className="space-y-1">
-                {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>{task.gate_reason}</div>}
+                {task.gate_reason && <div className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}><LinkedText text={task.gate_reason} /></div>}
                 {gateEvidenceLines(history).slice(0, 4).map((l, i) => (
                   <div key={i} className="font-mono text-2xs leading-relaxed" style={{ color: "var(--text-muted)" }}>• {l}</div>
                 ))}
@@ -2520,7 +2573,7 @@ export default function TaskDetailPage() {
           style={{ background: "var(--accent-rose-bg)", color: "var(--accent-rose-fg)", boxShadow: "inset 0 0 0 1px var(--accent-rose-ring)" }}
         >
           <span className="text-2xs uppercase tracking-wider font-semibold mr-2">blocked</span>
-          {task.blocked_reason}
+          <LinkedText text={task.blocked_reason} />
         </div>
       )}
 
@@ -2567,6 +2620,7 @@ export default function TaskDetailPage() {
               timeline,
               turns: history,
               stepTokens: task.step_tokens,
+              workflow: task.workflow,
             } : null}
             gate={null /* the gate DECISION lives in the top-level action
               panel on Overview now (owner: notifications must be top-level

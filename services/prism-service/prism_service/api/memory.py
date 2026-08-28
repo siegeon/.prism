@@ -143,6 +143,33 @@ def entry_detail(entry_id: str, project: str = Query("default")) -> dict:
     return {"entry": entry, "chain": chain}
 
 
+@router.post("/{entry_id}/promote")
+def promote_entry(entry_id: str, project: str = Query("default")) -> dict:
+    """Promote a memory to a rule or a term the ontology holds (task
+    c5650403). Drafts the rule or term, creates ONE visible run task, and
+    drives it to the promote_to_law workflow's review gate -- the ONE
+    owner stop. Approving the gate then calls the install endpoint below."""
+    svc = _svc(project)
+    entry = svc.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(404, f"unknown entry: {entry_id}")
+    from prism_service.services import law_promotion
+    result = law_promotion.start_promotion(project, entry_id)
+    if not result.get("ok") and not result.get("run_task_id"):
+        raise HTTPException(422, result.get("reason", "promotion could not start"))
+    return result
+
+
+@router.post("/promote/{task_id}/install")
+def install_promotion(task_id: str, project: str = Query("default")) -> dict:
+    """Install an approved promote_to_law draft (task c5650403): call this
+    right after the owner approves the review gate. Writes the draft into
+    the project's own law and proves the violating fixture fires before
+    it commits; refuses with a clear reason otherwise."""
+    from prism_service.services import law_promotion
+    return law_promotion.install_pending(project, task_id=task_id)
+
+
 @router.post("/entry/{entry_id}/action")
 def entry_action(
     entry_id: str,

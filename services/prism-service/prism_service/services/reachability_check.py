@@ -272,17 +272,70 @@ def unreachable_entry_point_reason_for_diff(workspace, baseline: str) -> str:
             if _has_production_reference(name, rel, workspace,
                                          defining_lineno=lineno):
                 continue
-            violations.append(f"{qualname} in {rel}")
+            violations.append(f"{qualname} ({rel})")
 
     if not violations:
         return ""
-    names = ", ".join(sorted(set(violations)))
-    return (
-        f"unreachable entry point(s): {names} -- new production symbol(s) "
-        "with no non-test production caller anywhere in the tree (no "
-        "explicit call site, route decorator, dynamic-dispatch key, or "
-        "SPA route reference found); this adds a construction site with "
-        "nothing wiring it into the running system")
+    # STE (task 938b0a2d): the old message packed every fact into one
+    # long clause with a semicolon. This shape keeps every fact — the
+    # symbol list, "new production symbol", "no caller", and the four
+    # tolerated wiring shapes (call site, route, dispatch key, SPA
+    # route) — as short active sentences, one symbol per line, so
+    # ste.check("flavored") finds nothing to fix.
+    lines = ["Unreachable entry points:"]
+    for entry in sorted(set(violations)):
+        lines.append(f"- {entry}")
+    lines.append(
+        "These are new production symbols. No production code calls "
+        "them. No route, dispatch key or SPA route references them. "
+        "The slice adds code that nothing wires into the running "
+        "system.")
+    return "\n".join(lines)
+
+
+def _fresh_merge_base(workspace: Path, stale_baseline: str) -> str:
+    """Fresh diff base against origin/main's current tip, computed locally
+    (no fetch -- whatever origin/main the workspace already has cached from
+    its last fetch). A task's stored `baseline` is set once at worktree
+    creation (task_workspace.ensure_workspace) and never updated afterward
+    by any code path -- so it goes stale the moment the workspace is
+    legitimately rebased onto a newer origin/main, and the stale baseline
+    then diffs against every OTHER task's landed work too, misattributing
+    it to this candidate (live incident: task 8582921d, 2026-08-26, a
+    3-day-stale baseline produced a 168-file / +26093-line / 213-commit
+    diff for a 4-file change and refused green_gate on symbols the task
+    never touched).
+
+    BUT origin/main can also lag BEHIND the stored baseline -- this repo's
+    own self-dev carve-out commits straight to dev/main and pushes moments
+    later, so a fresh worktree created off local HEAD while a just-made
+    commit is still unpushed has a baseline AHEAD of origin/main. Blindly
+    preferring the fresh point there would walk the diff base backward past
+    real, already-landed, unrelated local commits and blame the candidate
+    for them -- the identical-shaped defect found and fixed the same day in
+    control_plane.py's `_fresh_diff_base` (candidate_policy_edits). So the
+    fresh point is only adopted when the stored baseline is its ancestor
+    (or equal) -- i.e. genuinely FORWARD motion, never backward. Returns ""
+    on any failure (including "would regress") so the caller falls back to
+    the stored baseline unchanged -- never raise, never refuse blind."""
+    try:
+        out = subprocess.run(
+            ["git", "merge-base", "HEAD", "origin/main"],
+            cwd=str(workspace), capture_output=True, text=True, timeout=10)
+    except Exception:
+        return ""
+    if out.returncode != 0 or not out.stdout.strip():
+        return ""
+    fresh = out.stdout.strip().splitlines()[0]
+    if not stale_baseline or fresh == stale_baseline:
+        return fresh
+    try:
+        anc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", stale_baseline, fresh],
+            cwd=str(workspace), capture_output=True, text=True, timeout=10)
+    except Exception:
+        return ""
+    return fresh if anc.returncode == 0 else ""
 
 
 def unreachable_entry_point_reason(task) -> str:
@@ -311,6 +364,7 @@ def unreachable_entry_point_reason(task) -> str:
     try:
         if not Path(path).is_dir():
             return ""
+        baseline = _fresh_merge_base(Path(path), baseline) or baseline
         return unreachable_entry_point_reason_for_diff(Path(path), baseline)
     except Exception:
         return ""

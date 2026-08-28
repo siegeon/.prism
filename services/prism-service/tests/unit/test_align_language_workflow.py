@@ -114,17 +114,19 @@ def _seed_tasks(project: str):
     written directly to the row with raw SQL, bypassing that pipeline, so
     they land genuinely loose the way an older pre-36283d72 row (or a
     direct DB write) would -- exactly the backlog align_language exists
-    to clean up. plan_doc is the one exception: TaskService only ever
-    CHECKS it, never rewrites it, so passing it straight to create() is
-    fine and proves nothing touched it before align_language runs either.
+    to clean up. plan_doc used to be the one exception (TaskService only
+    CHECKED it): task dc676e24 (2026-08-26) made plan_doc align at write
+    too, through TaskService._align_plan_doc, so it now needs the SAME
+    raw-SQL bypass as the other loose fields to land genuinely loose here
+    -- a legacy/pre-dc676e24 row is exactly the shape align_language's
+    plan_doc/plan_diagram exclusion still exists to leave alone.
     """
     from prism_service.project_context import get_project
 
     ctx = get_project(project)
     task_svc = ctx.task_svc
 
-    loose_a = task_svc.create(title="placeholder a",
-                              plan_doc="This isn't final; check it.")
+    loose_a = task_svc.create(title="placeholder a")
     loose_b = task_svc.create(title="placeholder b")
     clean = task_svc.create(title="Ship the widget")
     fenced = task_svc.create(title="placeholder fenced")
@@ -137,7 +139,11 @@ def _seed_tasks(project: str):
             (*fields.values(), task_id))
         task_svc._db.commit()
 
-    _raw_set(loose_a.id, title="We don't need this; it's fine.")
+    # plan_doc (task dc676e24, 2026-08-26): seeded via the same raw-SQL
+    # bypass as title/description above, now that TaskService aligns
+    # plan_doc at write -- see the docstring note.
+    _raw_set(loose_a.id, title="We don't need this; it's fine.",
+             plan_doc="This isn't final; check it.")
     _raw_set(loose_b.id, title="It doesn't matter; ship it.")
     _raw_set(
         fenced.id, title="See the plan below",
@@ -309,10 +315,22 @@ def test_plan_doc_is_never_touched_even_when_named_in_fields(project):
         "plan_doc/plan_diagram must be filtered out even when explicitly named"
     assert task_svc.get(ids["loose_a"]).plan_doc == original_plan_doc
 
-    # A normal pass (default fields) still leaves plan_doc alone even
-    # though it fixes the task's title.
+    # Re-anchored (task dc676e24, 2026-08-26): align_language itself still
+    # never SELECTS plan_doc as a field to change (proven above -- the
+    # explicit-fields call is a no-op and touches nothing). But plan_doc
+    # now aligns at write like every other flavored field (task dc676e24),
+    # and TaskService._apply_ste runs UNCONDITIONALLY on every update()
+    # call, on every flavored field, not just the ones the caller named
+    # (same pre-existing rule title/description already lived under --
+    # see _apply_ste's own docstring). So a normal pass that fixes only
+    # loose_a's TITLE rides that same write and realigns plan_doc as a
+    # side effect -- this is the new, correct contract, not a leak.
     language_alignment.align_language(project, apply=True)
-    assert task_svc.get(ids["loose_a"]).plan_doc == original_plan_doc
+    # "This isn't final; check it." -> contraction expanded, semicolon
+    # becomes a sentence break (ste.normalize's documented rules; no
+    # lexicon synonym in this text, so lexicon.align is a no-op here).
+    assert (task_svc.get(ids["loose_a"]).plan_doc
+            == "This is not final. Check it.")
 
 
 def test_batch_size_caps_tasks_touched_per_call(project):

@@ -38,6 +38,11 @@ export type ConductorInfo = {
   // windowed to each step's own [entry, exit) span — see StepRail's prop
   // comment for why this can't be derived from summing turns[].turn_tokens.
   stepTokens?: Record<string, number>;
+  // The task's own workflow (task.workflow — "implement", "triage",
+  // "align_language", "promote_to_law", "quickfix", ...). Threaded into
+  // SdlcProgress/StepRail below so a non-implement task's rail renders ITS
+  // OWN FSM steps instead of always the conductor's 10-step SDLC.
+  workflow?: string;
 };
 export type GateControls = {
   reason: string;
@@ -558,7 +563,7 @@ export default function PlanView({
                 </span>
               </div>
             ) : (
-              <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} />
+              <SdlcProgress step={c.step} phase={c.phase} status={c.status} activity={c.activity} reduced={reduced} workflow={c.workflow} />
             )}
           </div>
 
@@ -576,6 +581,7 @@ export default function PlanView({
             gates={c.timeline?.gates ?? []}
             turns={c.turns ?? []}
             stepTokens={c.stepTokens}
+            workflow={c.workflow}
             reduced={reduced}
             evidence={evidence}
             proofType={proofType}

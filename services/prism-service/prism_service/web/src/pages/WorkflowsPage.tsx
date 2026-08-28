@@ -120,6 +120,33 @@ function replaySpanMs(event: ReplayEvent, next?: ReplayEvent, speed: number = RE
   return Math.min(REPLAY_MAX_STEP_MS, replayStepMs(event, speed) + replayGapMs(event, next, speed));
 }
 
+/** p95 of a step's REAL durations across the last N completed runs -- the
+ * exact same dataset the pill rail counts (visibleRunHistory, capped at
+ * RUN_RAIL_PILLS), never a separately-fetched sample set. A plain mean
+ * (the previous pacing source, server's average_duration_seconds) gets
+ * dragged around by one fast or slow outlier and reads as a bar that
+ * either rockets to 98% early or crawls long past when the step usually
+ * finishes -- p95 is the "this is how long it takes most of the time"
+ * number a person actually wants from a progress bar. Null (not 0) below
+ * the 3-sample floor, so the caller's existing fallback chain (server
+ * average, then the indeterminate wiggle) still applies rather than
+ * pacing off one or two noisy runs. Owner 2026-08-26, watching this bar
+ * live on the Workflows canvas: "it should be the p95 duration of the
+ * last x runs (like the count of the pills or something)". */
+function p95StepDurationSeconds(runs: WorkflowRun[], stepId: string): number | null {
+  const samples: number[] = [];
+  for (const run of runs) {
+    const entry = run.timeline?.find((t) => t.step === stepId && t.endedAt);
+    if (!entry?.startedAt || !entry.endedAt) continue;
+    const secs = (Date.parse(entry.endedAt) - Date.parse(entry.startedAt)) / 1000;
+    if (Number.isFinite(secs) && secs > 0) samples.push(secs);
+  }
+  if (samples.length < 3) return null;
+  samples.sort((a, b) => a - b);
+  const idx = Math.min(samples.length - 1, Math.ceil(0.95 * samples.length) - 1);
+  return samples[idx];
+}
+
 function pillIndexTitle(index: number, offset: number, runs: WorkflowRun[]): string | undefined {
   const run = runs[index - offset];
   if (!run) return undefined;
@@ -1142,17 +1169,35 @@ export default function WorkflowsPage() {
       let activeProgress: ActiveNodeProgress | null = null;
       const runtime = workflowRun?.runtime;
       if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
-        const step = selectedWorkflow.steps.find((candidate) => candidate.id === runtime.currentStep);
+        // A linked CHILD node (e.g. verify_green_state's "Build and test",
+        // whose own steps are "build"/"test" from the external AOS engine)
+        // never appears in selectedWorkflow.steps (the CONDUCTOR's own 10
+        // steps) -- search the full connected catalog as a fallback so its
+        // real average_duration_seconds is found instead of silently
+        // falling through to the indeterminate wiggle every time (owner
+        // 2026-08-26, screenshot showing "Build and test" stuck cycling at
+        // ~23% after 4m51s of real elapsed time).
+        const step = selectedWorkflow.steps.find((candidate) => candidate.id === runtime.currentStep)
+          ?? workflows.flatMap((wf) => wf.steps).find((candidate) => candidate.id === runtime.currentStep);
         const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(runtime.startedAt)) / 1000);
-        const average = step?.average_duration_seconds;
+        // p95 of this step's real recent durations paces the bar when
+        // there is enough history; the server's plain mean is the
+        // fallback for a step still short on same-step samples, and the
+        // indeterminate wiggle is the last resort with neither. p95 stays
+        // scoped to the conductor's OWN run history (visibleRunHistory) --
+        // a linked child step's timeline never appears there, so it
+        // correctly returns null and pacing falls through to `step`
+        // (now catalog-wide) above.
+        const p95 = p95StepDurationSeconds(visibleRunHistory, runtime.currentStep);
+        const pacing = p95 ?? step?.average_duration_seconds;
         activeProgress = {
           nodeId: runtime.currentStep,
-          progress: average && average > 0
-            ? Math.min(0.98, elapsedSeconds / average)
+          progress: pacing && pacing > 0
+            ? Math.min(0.98, elapsedSeconds / pacing)
             : 0.12 + ((elapsedSeconds % 18) / 18) * 0.68,
-          indeterminate: !(average && average > 0),
+          indeterminate: !(pacing && pacing > 0),
           elapsedSeconds,
-          averageSeconds: average && average > 0 ? average : null,
+          averageSeconds: pacing && pacing > 0 ? pacing : null,
         };
       } else if (testModeRef.current === "replay" && testStep !== null && selectedWorkflow) {
         const nodeId = testStep < 0
@@ -1198,7 +1243,7 @@ export default function WorkflowsPage() {
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
@@ -1606,6 +1651,70 @@ export default function WorkflowsPage() {
                         </button>
                       );
                     })}
+                    {/* Ingestion paths (task c7edf4e2, epic cc9a44c8): only the
+                        align_language catalog entry carries `coverage` — the
+                        real write paths services.language_alignment has seen
+                        register STE, so "every text writer registers ... and
+                        cannot drift" is something a person can SEE, not just
+                        a claim in a docstring. Shown only while this entry is
+                        selected/expanded, same posture as its children above. */}
+                    {selected && workflow.coverage && workflow.coverage.length > 0 && (
+                      <div
+                        aria-label="Ingestion paths"
+                        className="mx-2 mb-2 mt-1 border border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-2 py-2"
+                      >
+                        <div className="px-1 pb-1 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] opacity-70">
+                          Ingestion paths
+                        </div>
+                        {workflow.coverage.map((row) => (
+                          <div
+                            key={row.path}
+                            className={`flex items-center gap-2 px-1 py-1 text-2xs ${row.known ? "text-[color:var(--nav-text)]" : "text-amber-400"}`}
+                            title={row.known ? "" : "This path has not been named in the coverage registry's label map yet."}
+                          >
+                            <span className="flex-1 truncate font-mono lowercase">{row.path}</span>
+                            <span className="shrink-0 font-mono opacity-80">{row.count}</span>
+                            <span className="shrink-0 font-mono opacity-60">
+                              {row.last_seen ? new Date(row.last_seen).toLocaleString() : "never"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* Knowledge health (task b1971944, epic 61821448): only the
+                        knowledge_health catalog entry carries `metrics` — a
+                        small table, same posture as align_language's own
+                        "Ingestion paths" panel above, shown only while this
+                        entry is selected. */}
+                    {selected && workflow.metrics && (
+                      <div
+                        aria-label="Knowledge health metrics"
+                        className="mx-2 mb-2 mt-1 border border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-2 py-2"
+                      >
+                        <div className="px-1 pb-1 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] opacity-70">
+                          Knowledge health
+                        </div>
+                        <table className="w-full text-2xs">
+                          <tbody>
+                            {([
+                              ["Search feedback rate", workflow.metrics.search_feedback_rate],
+                              ["Recall-to-use rate", workflow.metrics.recall_to_use_rate],
+                              ["Median memory chars", workflow.metrics.median_memory_chars],
+                              ["Evidence ratio", workflow.metrics.evidence_ratio],
+                              ["Concepts grounded in code", workflow.metrics.concepts_grounded_in_code],
+                              ["Modules with knowledge", workflow.metrics.modules_with_knowledge],
+                              ["Rules with provenance", workflow.metrics.rules_with_provenance],
+                              ["Open rule decisions", workflow.metrics.open_rule_decisions],
+                            ] as const).map(([label, value]) => (
+                              <tr key={label}>
+                                <td className="px-1 py-0.5 text-[color:var(--nav-text)]">{label}</td>
+                                <td className="px-1 py-0.5 text-right font-mono opacity-80">{value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1731,6 +1840,7 @@ export default function WorkflowsPage() {
                 activity={conductorLiveActivity}
                 reduced={reduced}
                 hideTokens
+                workflow={selectedWorkflowId}
               />
             )}
             {replayEventIndex !== null && (

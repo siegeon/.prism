@@ -113,6 +113,15 @@ export const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   driving: { label: "driving", tone: "teal" },
   paused: { label: "paused", tone: "teal" },   // epic between slices — progress, NOT stalled
   awaiting_gate: { label: "awaiting review", tone: "amber" },
+  // A gate step whose `machine_only_gate` is true (red_gate — the ONE gate
+  // a human owner is never routed to, see api/workflows.py
+  // MACHINE_ONLY_GATES) resolves here instead of awaiting_gate above, so
+  // the pill never claims a human reviewer is owed a decision that does
+  // not exist. Non-alarm tone: there is nothing for the owner to do, same
+  // as `working`/`driving` (owner 2026-08-26, caught live on their own
+  // screen via remote assist: "dont show the user things that are not
+  // real").
+  awaiting_gate_machine: { label: "machine deciding", tone: "teal" },
   adrift: { label: "driver active · between step reports", tone: "teal" },
   // "needs you" was a lie here: when nothing is driving a mid-flow step the
   // OWNER has no affordance to click, the fix is a driver relaunch (the
@@ -142,6 +151,7 @@ export default function SdlcProgress({
   reduced,
   showCaption = true,
   hideTokens = false,
+  workflow,
 }: {
   step?: string;
   phase?: PhaseProgress | null;
@@ -154,8 +164,12 @@ export default function SdlcProgress({
   // When the tile renders a dedicated TokenTurns graph, suppress the caption's
   // token readout + the amber token bar so token info isn't duplicated.
   hideTokens?: boolean;
+  // The task's own workflow (task.workflow) — resolves the minimap to THAT
+  // workflow's own FSM steps via useWorkflowSteps, same as StepRail. See
+  // StepRail.tsx's `workflow` prop doc for the full rationale.
+  workflow?: string;
 }) {
-  const steps = useWorkflowSteps();
+  const steps = useWorkflowSteps(workflow);
   const curIdx = steps.findIndex((s) => s.id === step);
   const tokens = phase?.tokens_since_step ?? 0;
   const basis = phase?.basis ?? "time";
@@ -170,7 +184,13 @@ export default function SdlcProgress({
   // mid-execution non-gate step. Keys off the step's `type` field, never a
   // step id, so a new workflow step can't reintroduce the same phantom claim.
   const curStepType = curIdx >= 0 ? steps[curIdx].type : undefined;
-  const effectiveState = state === "awaiting_gate" && curStepType !== "gate" ? "working" : state;
+  // Same defensive pattern, one gate further: a gate step whose OWN
+  // machine_only_gate is true (fetched from GET /api/workflows, never a
+  // hardcoded id here) never renders the human-reviewer claim either.
+  const curStepMachineOnly = curIdx >= 0 && steps[curIdx].machine_only_gate === true;
+  const effectiveState = state === "awaiting_gate" && curStepType !== "gate" ? "working"
+    : state === "awaiting_gate" && curStepMachineOnly ? "awaiting_gate_machine"
+    : state;
   const meta = ACTIVITY_META[effectiveState] ?? { label: effectiveState || "", tone: "slate" };
   // How long since the last conductor STEP BOUNDARY (task_motion_s). On `adrift`
   // that is a "last report" age, NOT an idle time — the driver is mid-step and
@@ -354,7 +374,18 @@ export default function SdlcProgress({
               {counting ? (
                 <span>{fmtClock(liveInStep)}</span>
               ) : (
-                <span className="opacity-70">waiting {fmtClock(phase?.in_step_s ?? 0)}</span>
+                <span className="opacity-70">
+                  {/* "waiting" contradicts a "working" state label (task
+                      95474ec7, owner live: "still looks like you have now
+                      been waiting for 90+ mins" on an epic whose subtree was
+                      genuinely active) — an epic-rollup can be state=working
+                      via _subtree_active (deep descendant motion) while THIS
+                      task's own step never streams a token, so `counting`
+                      stays false. Say "elapsed" there instead; every other
+                      not-counting state (the true parked case) keeps
+                      "waiting", unchanged. */}
+                  {state === "working" ? "elapsed" : "waiting"} {fmtClock(phase?.in_step_s ?? 0)}
+                </span>
               )}
               {counting && (phase?.eta_s ?? 0) > 5 && (
                 <span

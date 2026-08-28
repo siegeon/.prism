@@ -22,6 +22,16 @@ recorded on the task before this step ran:
        poll outright would repeat the PR #257 mistake of losing a real
        safety property (a throttled tab whose SSE stalled) along with the
        code around it.
+  D-7  `activity` ({state, task_motion_s, session_quiet_s, ...}) is
+       computed server-side ONLY inside GET /api/tasks/{id}
+       (ConductorService.activity_for) — it is not a DB column, so it can
+       never ride `fields` above. A live task.changed publish must ALSO
+       carry a freshly-computed `activity` key (via a late-bound
+       ConductorService, TaskService.attach_conductor_service), and the
+       client's SSE handler must merge it into task state the same way it
+       merges `fields` — otherwise a watching browser tab can never see a
+       fresh activity reading without a full refetch, and reads real,
+       advancing work as frozen/stalled.
 
 FAILS TODAY because:
   - TaskService.update() has no call into prism_service.events.bus at all
@@ -185,6 +195,102 @@ def test_task_update_still_commits_when_the_bus_raises(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Backend: task.changed carries a FRESH `activity` block (D-7)
+# ---------------------------------------------------------------------------
+
+class _FakeConductor:
+    """Stands in for ConductorService: only the two methods update() calls."""
+
+    def __init__(self, activity_by_status):
+        self._activity_by_status = activity_by_status
+        self.calls = []
+
+    def phase_progress(self, task_id):
+        return {"session_quiet_s": None}
+
+    def activity_for(self, task, phase_progress):
+        self.calls.append((task.id, phase_progress))
+        return self._activity_by_status[task.status]
+
+
+def test_task_update_publishes_fresh_activity_when_conductor_attached(tmp_path):
+    async def body(q):
+        svc = _svc(tmp_path)
+        cond = _FakeConductor({
+            "pending": {"state": "pending"},
+            "in_progress": {"state": "working"},
+        })
+        svc.attach_conductor_service(cond)
+        task = svc.create(title="poll fix")
+        while not q.empty():
+            q.get_nowait()
+        svc.update(task.id, status="in_progress")
+        body.task = task
+        body.cond = cond
+
+    events = asyncio.run(_drain_after(body))
+    task = body.task
+    cond = body.cond
+
+    assert events, "expected a task.changed event to be published"
+    evt = events[-1]
+    assert evt.get("activity") == {"state": "working"}, (
+        "a task.changed event must carry a FRESHLY computed `activity` "
+        "block (D-7), reusing ConductorService.activity_for at the moment "
+        f"of the write — got {evt!r}")
+    assert cond.calls and cond.calls[-1][0] == task.id, (
+        "activity_for must be called with the just-updated task, not a "
+        "stale snapshot")
+
+
+def test_task_update_publishes_no_activity_key_error_when_no_conductor_attached(tmp_path):
+    # A bare TaskService (no attach_conductor_service call — every existing
+    # test/script that builds one directly) must keep working exactly as
+    # before: no exception, `activity` simply reads None.
+    async def body(q):
+        svc = _svc(tmp_path)
+        task = svc.create(title="poll fix")
+        while not q.empty():
+            q.get_nowait()
+        svc.update(task.id, status="in_progress")
+        body.task = task
+
+    events = asyncio.run(_drain_after(body))
+    assert events and events[-1].get("activity") is None, (
+        f"with no ConductorService attached, activity must be None (never "
+        f"raise, never fabricate a value); got {events[-1] if events else None!r}")
+
+
+def test_activity_for_failure_never_breaks_the_publish(tmp_path):
+    class _BoomConductor:
+        def phase_progress(self, task_id):
+            return {}
+
+        def activity_for(self, task, phase_progress):
+            raise RuntimeError("activity computation blew up")
+
+    async def body(q):
+        svc = _svc(tmp_path)
+        svc.attach_conductor_service(_BoomConductor())
+        task = svc.create(title="poll fix")
+        while not q.empty():
+            q.get_nowait()
+        svc.update(task.id, status="in_progress")
+        body.task = task
+
+    events = asyncio.run(_drain_after(body))
+    task = body.task
+    assert events, "a raising activity_for must not swallow the whole publish"
+    evt = events[-1]
+    assert evt.get("type") == "task.changed" and evt.get("task_id") == task.id, (
+        f"the task.changed event must still be published with the real "
+        f"fields when activity_for raises; got {evt!r}")
+    assert evt.get("activity") is None, (
+        f"activity must fall back to None when activity_for raises, never "
+        f"propagate the exception into the publish; got {evt!r}")
+
+
+# ---------------------------------------------------------------------------
 # Backend: GET /sse/tasks scopes to project + task_id (D-3)
 # ---------------------------------------------------------------------------
 
@@ -264,6 +370,25 @@ def test_sse_handler_patches_state_and_never_refetches():
     assert "fields" in handler_body, (
         "the handler must read the pushed event's `fields` payload to "
         f"patch state (D-1/D-4); got handler body: {handler_body!r}")
+
+
+def test_sse_handler_also_merges_pushed_activity():
+    # D-7: activity is computed server-side and never rides `fields` (it is
+    # not a DB column) — the handler must read a SEPARATE `activity` key off
+    # the same event and merge it into task state the same way `fields` is
+    # merged, so a live tab's activity reading is never stuck on the
+    # initial-load/poll snapshot.
+    src = _read("pages/TaskDetailPage.tsx")
+    handler_body = _subscribe_callback_body(src)
+    assert "activity" in handler_body, (
+        "the onmessage handler must also read the pushed event's "
+        "`activity` key (D-7) and merge it into task state — otherwise a "
+        "live tab can never see a fresh activity reading over SSE, only on "
+        f"a full refetch; got handler body: {handler_body!r}")
+    set_task_call = handler_body[handler_body.index("setTask("):]
+    assert "activity" in set_task_call, (
+        "the handler must actually MERGE `activity` into the setTask() "
+        f"updater, not just read it off the payload; got: {set_task_call!r}")
 
 
 # RETARGETED (task d9f082fe follow-up, owner live, 2026-08-24): LiveBar.tsx

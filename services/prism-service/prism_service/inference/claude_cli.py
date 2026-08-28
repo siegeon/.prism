@@ -70,6 +70,25 @@ class ClaudeCliResult:
         be unified later)."""
         return _final_assistant_text(self.parsed_events)
 
+    def graceful_budget_stop(self) -> bool:
+        """True when the run ended because a turn/budget CEILING was hit
+        AFTER the model finished a complete message, not mid-generation.
+
+        `task_runner._run_one_step` used to treat any non-zero exit_code
+        as "no usable output" and discard `final_text()` outright — but a
+        step whose own grounding-heavy work costs right around
+        `--max-budget-usd` gets `is_error:true` from a POST-HOC budget
+        check even when the model's own turn ended normally. The tell is
+        the terminal `type=="result"` event: `stop_reason=="end_turn"`
+        means the model was not cut off mid-answer, while
+        `subtype` in ("error_max_budget_usd", "error_max_turns") names
+        which ceiling stopped the run. Both conditions together mean the
+        run has a complete, usable final message despite the non-zero
+        exit code; a crash, auth failure, or a truncation mid-generation
+        (any other stop_reason) must still be treated as a real failure.
+        """
+        return _graceful_budget_stop(self.parsed_events)
+
 
 # Default tool whitelist for batch / background invocations
 # (Understand-Anything analyzers, drift sync, etc.). Strictly
@@ -178,6 +197,28 @@ def _final_assistant_text(parsed_events: list[dict]) -> str:
             if isinstance(block, dict) and block.get("type") == "text":
                 text_blocks.append(block.get("text", ""))
     return (text_blocks[-1] if text_blocks else "").strip()
+
+
+_GRACEFUL_STOP_SUBTYPES = frozenset({
+    "error_max_budget_usd",
+    "error_max_turns",
+})
+
+
+def _graceful_budget_stop(parsed_events: list[dict]) -> bool:
+    """See ClaudeCliResult.graceful_budget_stop -- standalone so callers
+    without a ClaudeCliResult (e.g. a raw parsed-events list in a test)
+    can check the same condition. False when there is no result event at
+    all (a crash never gets to emit one)."""
+    result = next(
+        (e for e in reversed(parsed_events) if e.get("type") == "result"),
+        None,
+    )
+    if result is None:
+        return False
+    subtype = result.get("subtype")
+    stop_reason = result.get("stop_reason")
+    return subtype in _GRACEFUL_STOP_SUBTYPES and stop_reason == "end_turn"
 
 
 def _usage_from_result(parsed: list[dict]) -> dict:

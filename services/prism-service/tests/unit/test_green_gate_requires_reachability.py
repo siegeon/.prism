@@ -271,6 +271,200 @@ def test_real_repo_task_mirror_install_has_a_production_caller():
         "production; the tooth must not false-refuse this real wired shape")
 
 
+def test_stale_stored_baseline_self_heals_via_fresh_merge_base(
+        tmp_path, monkeypatch):
+    """Live incident, task 8582921d (2026-08-26): `workspace_for`'s stored
+    `baseline` is set ONCE at worktree creation (task_workspace.py:250) and
+    never updated afterward -- so once the worktree is legitimately
+    rebased/fast-forwarded onto a newer origin/main, the stale baseline
+    diffs the CURRENT tree against a long-ago commit and picks up every
+    OTHER task's landed work as "new", misattributing it to this candidate.
+    On the real incident this produced a 168-file / +26093-line diff that
+    refused green_gate on symbols (OntologyStore.is_empty etc.) the task's
+    own 4-file change never touched.
+
+    Fix: `unreachable_entry_point_reason` now computes a fresh
+    `git merge-base HEAD origin/main` and prefers it over the stale stored
+    baseline. This fixture proves the MECHANISM, not just the outcome: the
+    stale baseline alone is shown to produce the false positive, and the
+    task-level entry point (which applies the fix) is shown to clear it."""
+    from prism_service.services import task_workspace
+    from prism_service.services.reachability_check import (
+        unreachable_entry_point_reason,
+        unreachable_entry_point_reason_for_diff)
+
+    origin = tmp_path / "origin.git"
+    _git(["init", "-q", "--bare", str(origin)], tmp_path)
+    # Force the bare repo's default branch deterministically -- git's
+    # built-in fallback (absent an explicit init.defaultBranch config,
+    # which this machine happens to set but a bare CI runner may not)
+    # is "master". Every push below uses an explicit "HEAD:main"
+    # refspec, so a later `clone` of this non-empty origin tries to
+    # check out the advertised default branch -- if that still says
+    # "master" (nonexistent), the clone silently leaves an unborn,
+    # UNRELATED "master" branch checked out instead of "main", so the
+    # next commit there has no shared history with origin/main and its
+    # push is rejected (non-fast-forward) without the fixture noticing.
+    _git(["symbolic-ref", "HEAD", "refs/heads/main"], origin)
+
+    work = tmp_path / "work"
+    _git(["clone", "-q", str(origin), str(work)], tmp_path)
+    _git(["config", "user.email", "t@example.com"], work)
+    _git(["config", "user.name", "t"], work)
+    _write(work / "README.md", "seed\n")
+    _git(["add", "README.md"], work)
+    _git(["commit", "-q", "-m", "seed"], work)
+    _git(["push", "-q", "origin", "HEAD:main"], work)
+    stale_baseline = _git(["rev-parse", "HEAD"], work).stdout.strip()
+
+    # A DIFFERENT task lands unrelated work on origin/main after this
+    # worktree's divergence point -- simulates concurrent tasks shipping
+    # while this one is still open.
+    other = tmp_path / "other"
+    _git(["clone", "-q", str(origin), str(other)], tmp_path)
+    _git(["config", "user.email", "t@example.com"], other)
+    _git(["config", "user.name", "t"], other)
+    _write(other / "pkg" / "unrelated.py",
+          "class Widget:\n"
+          "    def orphan_method(self):\n"
+          "        return 1\n")
+    _git(["add", "."], other)
+    _git(["commit", "-q", "-m", "other task lands unrelated work"], other)
+    _git(["push", "-q", "origin", "HEAD:main"], other)
+
+    # This worktree legitimately rebases/fast-forwards onto the new
+    # origin/main -- HEAD moves forward, but nothing ever updates the
+    # STORED baseline (that is the bug: task_workspace.py never does).
+    _git(["fetch", "-q", "origin"], work)
+    _git(["merge", "-q", "--ff-only", "origin/main"], work)
+
+    # The task's OWN candidate change: a clean, same-file-wired addition.
+    _write(work / "pkg" / "mine.py",
+          "class Thing:\n"
+          "    def existing(self):\n"
+          "        return 1\n"
+          "\n"
+          "\n"
+          "def _use_it():\n"
+          "    return Thing().existing()\n")
+    _git(["add", "."], work)
+    _git(["commit", "-q", "-m", "candidate change"], work)
+
+    # Sanity check: the stale baseline alone DOES produce the false
+    # positive this fix routes around -- else this fixture would not be
+    # exercising the real bug.
+    stale_reason = unreachable_entry_point_reason_for_diff(
+        work, stale_baseline)
+    assert "orphan_method" in stale_reason, (
+        f"fixture setup failed to reproduce the stale-baseline false "
+        f"positive: {stale_reason!r}")
+
+    class _Task:
+        id = "fake-task-id"
+
+    monkeypatch.setattr(
+        task_workspace, "workspace_for",
+        lambda task_id: {"path": str(work), "baseline": stale_baseline})
+
+    reason = unreachable_entry_point_reason(_Task())
+    assert reason == "", (
+        f"a fresh merge-base against origin/main must be preferred over "
+        f"the stale stored baseline, so this task's own clean diff is not "
+        f"false-refused on a symbol another task landed: {reason!r}")
+
+
+def test_fresh_merge_base_never_regresses_the_baseline_backward(
+        tmp_path, monkeypatch):
+    """Sibling defect to the fix above, found the same day (2026-08-26) in
+    control_plane.py's `_fresh_diff_base` (candidate_policy_edits) and
+    equally present here: origin/main can lag BEHIND the stored baseline
+    when a task workspace is created off local HEAD while this repo's
+    self-dev carve-out has just committed locally but not yet pushed.
+    Blindly preferring merge-base(HEAD, origin/main) in that case would
+    walk the diff base BACKWARD past a real, already-landed, unrelated
+    local commit and blame the candidate for it. The fix only adopts the
+    fresh point when the stored baseline is its ancestor -- forward motion
+    only, never backward."""
+    import subprocess
+    from prism_service.services import task_workspace
+    from prism_service.services.reachability_check import (
+        unreachable_entry_point_reason,
+        unreachable_entry_point_reason_for_diff)
+
+    origin = tmp_path / "origin.git"
+    _git(["init", "-q", "--bare", str(origin)], tmp_path)
+    # Force the bare repo's default branch deterministically -- git's
+    # built-in fallback (absent an explicit init.defaultBranch config,
+    # which this machine happens to set but a bare CI runner may not)
+    # is "master". Every push below uses an explicit "HEAD:main"
+    # refspec, so a later `clone` of this non-empty origin tries to
+    # check out the advertised default branch -- if that still says
+    # "master" (nonexistent), the clone silently leaves an unborn,
+    # UNRELATED "master" branch checked out instead of "main", so the
+    # next commit there has no shared history with origin/main and its
+    # push is rejected (non-fast-forward) without the fixture noticing.
+    _git(["symbolic-ref", "HEAD", "refs/heads/main"], origin)
+
+    work = tmp_path / "work"
+    _git(["clone", "-q", str(origin), str(work)], tmp_path)
+    _git(["config", "user.email", "t@example.com"], work)
+    _git(["config", "user.name", "t"], work)
+    _write(work / "README.md", "seed\n")
+    _git(["add", "README.md"], work)
+    _git(["commit", "-q", "-m", "seed"], work)
+    _git(["push", "-q", "origin", "HEAD:main"], work)
+    # origin/main stays at "seed" for the rest of the test (never pushed
+    # again) -- simulating the self-dev carve-out committing locally and
+    # pushing moments later, i.e. a real window where origin lags behind.
+
+    # An UNRELATED local commit lands on the task's own worktree base,
+    # still unpushed, introducing a new symbol with no caller.
+    _write(work / "pkg" / "unrelated.py",
+          "class Widget:\n"
+          "    def orphan_method(self):\n"
+          "        return 1\n")
+    _git(["add", "."], work)
+    _git(["commit", "-q", "-m", "unpushed local commit"], work)
+    stored_baseline = _git(["rev-parse", "HEAD"], work).stdout.strip()
+
+    # The task's OWN candidate change, on top of the unpushed commit: a
+    # clean, same-file-wired addition.
+    _write(work / "pkg" / "mine.py",
+          "class Thing:\n"
+          "    def existing(self):\n"
+          "        return 1\n"
+          "\n"
+          "\n"
+          "def _use_it():\n"
+          "    return Thing().existing()\n")
+    _git(["add", "."], work)
+    _git(["commit", "-q", "-m", "candidate change"], work)
+
+    # Sanity check: blindly using the fresh merge-base (origin/main, still
+    # at "seed") DOES walk backward and reproduce the false positive -- it
+    # includes the unrelated unpushed commit's orphan_method.
+    fresh_bad = subprocess.run(
+        ["git", "merge-base", "HEAD", "origin/main"], cwd=str(work),
+        capture_output=True, text=True).stdout.strip()
+    naive_reason = unreachable_entry_point_reason_for_diff(work, fresh_bad)
+    assert "orphan_method" in naive_reason, (
+        f"fixture setup failed to reproduce the backward-regression false "
+        f"positive: {naive_reason!r}")
+
+    class _Task:
+        id = "fake-task-id"
+
+    monkeypatch.setattr(
+        task_workspace, "workspace_for",
+        lambda task_id: {"path": str(work), "baseline": stored_baseline})
+
+    reason = unreachable_entry_point_reason(_Task())
+    assert reason == "", (
+        f"the stored baseline must be kept (never regressed backward to a "
+        f"lagging origin/main), so the candidate's own clean diff is not "
+        f"blamed for the unrelated unpushed commit's symbol: {reason!r}")
+
+
 def test_task_with_no_real_workspace_is_not_refused(tmp_path):
     """A synthetic task built straight from TaskService (no real conductor
     worktree ever created for it -- exactly the shape every existing

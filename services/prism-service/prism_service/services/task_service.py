@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 from prism_service.services import sqlite_db
 import threading
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from prism_service.models.task import (
     DEFAULT_WORKFLOW,
@@ -296,6 +297,13 @@ class TaskService:
         # downstream lookup is project-scoped, and a service that cannot say
         # which project it is cannot hand that on.
         self.project = project
+        # Late-bound ConductorService reference (real-time activity push):
+        # ProjectContext wires this AFTER building both services, mirroring
+        # ConductorService.attach_task_service's own late-binding (task_svc
+        # is always built first, so neither constructor can require the
+        # other). Optional: a bare TaskService (tests, scripts) simply never
+        # computes `activity` on publish — see update()'s try/except below.
+        self._conductor_svc: Any = None
         # THREAD-SAFE STORAGE (task 0584addb, PR #196 follow-up): one
         # sqlite connection PER THREAD via a thread-local factory — the
         # old single shared handle (check_same_thread=False) let
@@ -504,18 +512,129 @@ class TaskService:
     # STE normalisation (task 36283d72)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _is_protected_plan_line(line: str) -> bool:
+        """True when ``line`` must survive plan_doc alignment byte-
+        identical (task dc676e24): a markdown heading (services.
+        arc_governance._sections keys a rubric section by its exact
+        heading text), a table row (a line starting with '|'), a bullet
+        or numbered-list item (arc_governance._ac_lines / _claim_lines
+        fold an AC/oracle/citation line on '-'/'*'/'1.'/'1)'  bullets,
+        including a nested 'oracle:' or citation sub-bullet), a bare
+        'AC-<n>' line, or a bare 'oracle:'/'citation:' continuation
+        line. Fenced code (``` ... ```, including ```mermaid) is NOT
+        listed here — ste._protected_spans already masks it inside
+        whatever chunk this line lands in, so a fence line is safe to
+        leave in the alignable chunk."""
+        s = line.strip()
+        if not s:
+            return False
+        if s.startswith("#"):
+            return True
+        if s.startswith("|"):
+            return True
+        if re.match(r"^(?:[-*]|\d+[.)])\s+", s):
+            return True
+        if re.match(r"^AC-\d+\b", s):
+            return True
+        if s.lower().startswith("oracle:") or s.lower().startswith("citation:"):
+            return True
+        return False
+
+    def _align_plan_doc(
+        self, text: str
+    ) -> tuple[str, list[str], list[ste.Finding], list[dict]]:
+        """Align plan_doc prose at write (task dc676e24 — conductor-
+        authored plan text aligns at write, like the other flavored
+        fields) while leaving structural / rubric-critical lines byte-
+        identical.
+
+        The doc is split line-by-line into alignable runs and protected
+        lines (``_is_protected_plan_line``). Each alignable run is
+        normalised (ste.normalize) and lexicon-aligned (lexicon.align)
+        exactly like ``_process`` does for the other flavored fields —
+        those two functions already skip fenced code, inline code,
+        URLs, quotes, and ids inside a run via ste._protected_spans, so
+        a mermaid fence sitting inside an alignable run still comes out
+        byte-identical. A protected line is copied through untouched.
+        This lives here, not in services/ste.py, because it is a
+        plan_doc-specific policy (rubric line shapes), not a general
+        STE rule.
+
+        Returns (aligned_text, rules, findings, aligned) — the same
+        shape ``_process`` builds for its ``fields`` entries, computed
+        against the FINAL aligned text so findings reflect what is
+        actually stored.
+        """
+        if not text:
+            return text, [], [], []
+
+        lines = text.splitlines(keepends=True)
+        out_parts: list[str] = []
+        rules: list[str] = []
+        aligned: list[dict] = []
+        buffer: list[str] = []
+
+        def _flush() -> None:
+            if not buffer:
+                return
+            chunk = "".join(buffer)
+            buffer.clear()
+            fixed, chunk_rules = ste.normalize(chunk, mode="flavored")
+            fixed, chunk_aligned = lexicon.align(fixed)
+            for rule in chunk_rules:
+                if rule not in rules:
+                    rules.append(rule)
+            if chunk_aligned:
+                if "lexicon" not in rules:
+                    rules.append("lexicon")
+                aligned.extend(chunk_aligned)
+            out_parts.append(fixed)
+
+        for line in lines:
+            if self._is_protected_plan_line(line):
+                _flush()
+                out_parts.append(line)
+            else:
+                buffer.append(line)
+        _flush()
+
+        new_text = "".join(out_parts)
+        findings = ste.check(new_text, mode="flavored")
+        return new_text, rules, findings, aligned
+
     def _apply_ste(self, task: Task) -> list[str]:
         """Run the deterministic STE normaliser over every free-text
         field on ``task``, in place, before the caller persists it.
 
-        title, description, completion_proof, and premise_notes run in
-        flavored mode (they read as prose). oracle, likely_misfire, and
-        each stop_if entry run in strict mode (they are instructions a
-        machine or a person must follow exactly).
+        title, description, completion_proof, premise_notes,
+        blocked_reason, and gate_reason run in flavored mode (they read
+        as prose). blocked_reason and gate_reason join this set at task
+        938b0a2d: machine-written task text (a reachability refusal, a
+        gate decline) must read in the same Simplified Technical English
+        as human-written text, and must link to the ontology the same
+        way (owner: "something in the system generated this content but
+        did not respect the ontology"). A check against every known
+        gate_reason reader (decision_packet.packet_state's "rewound" /
+        "rewind" / "recover" / "waiv" / "override" substrings, the '⚠'
+        low-value marker, and api/conductor.py's `tree=<sha>` regex)
+        confirmed none of those literals sit in ste's contraction,
+        filler, nominalisation, phrasal-verb, or marketing-word tables,
+        and none are lexicon synonyms — so aligning gate_reason never
+        rewrites a token a reader depends on.
 
-        plan_doc and plan_diagram are only CHECKED, never rewritten — a
-        plan a human already approved at plan_gate must not shift under
-        them.
+        oracle, likely_misfire, and each stop_if entry run in strict
+        mode (they are instructions a machine or a person must follow
+        exactly).
+
+        plan_doc aligns too (task dc676e24), through ``_align_plan_doc``:
+        fenced code (incl. ```mermaid), markdown tables, headings, and
+        AC-<n>/oracle/citation bullet lines stay byte-identical so
+        services.arc_governance's story/plan rubric parsers still parse;
+        surrounding prose gets the same normalize + lexicon.align pass
+        as the other flavored fields. plan_diagram is only CHECKED,
+        never rewritten — a mermaid source a human already approved at
+        plan_gate must not shift under them.
 
         Sets ``self.last_style`` to the combined style_block for this
         call. Returns the distinct rule names that changed a field, so
@@ -555,6 +674,10 @@ class TaskService:
                 "completion_proof", task.completion_proof, "flavored")
             task.premise_notes = _process(
                 "premise_notes", task.premise_notes, "flavored")
+            task.blocked_reason = _process(
+                "blocked_reason", task.blocked_reason, "flavored")
+            task.gate_reason = _process(
+                "gate_reason", task.gate_reason, "flavored")
 
             if task.stop_if:
                 stop_rules: list[str] = []
@@ -576,8 +699,16 @@ class TaskService:
                 fields["stop_if"] = (stop_rules, stop_findings, stop_aligned)
                 _remember(stop_rules)
 
-            # Check-only fields (task 36283d72): never rewritten.
-            fields["plan_doc"] = ([], ste.check(task.plan_doc, mode="flavored"))
+            # plan_doc aligns at write (task dc676e24): normalize + lexicon
+            # align every non-protected run, fences/tables/headings/AC-
+            # oracle-citation lines held byte-identical by _align_plan_doc.
+            plan_fixed, plan_rules, plan_findings, plan_aligned = (
+                self._align_plan_doc(task.plan_doc))
+            task.plan_doc = plan_fixed
+            fields["plan_doc"] = (plan_rules, plan_findings, plan_aligned)
+            _remember(plan_rules)
+
+            # plan_diagram stays check-only (task 36283d72): never rewritten.
             fields["plan_diagram"] = (
                 [], ste.check(task.plan_diagram, mode="flavored"))
 
@@ -662,6 +793,9 @@ class TaskService:
             "likely_misfire": task.likely_misfire,
             "completion_proof": task.completion_proof,
             "premise_notes": task.premise_notes,
+            "blocked_reason": task.blocked_reason,
+            "gate_reason": task.gate_reason,
+            "plan_doc": task.plan_doc,
             "stop_if": list(task.stop_if),
         }
         ste_rules = self._apply_ste(task)
@@ -866,6 +1000,111 @@ class TaskService:
         ).fetchall()
         return [r["id"] for r in rows]
 
+    def attach_conductor_service(self, conductor_svc: Any) -> None:
+        """Late-bind the project's ConductorService so update()'s task.changed
+        publish (below) can compute a fresh `activity` block at the moment of
+        the write — mirrors ConductorService.attach_task_service's own late
+        binding for the same reason (build-order: task_svc always exists
+        first). Never required: update() degrades to publishing no activity
+        key when this is never called (bare TaskService in tests/scripts)."""
+        self._conductor_svc = conductor_svc
+
+    def _publish_task_changed(self, task: Task, fields: dict) -> None:
+        """Compute a fresh `activity` block and push a `task.changed` bus
+        event, then wake task_runner — extracted out of update() (task
+        1728c54b) so a caller that mutates task state WITHOUT going through
+        update() (e.g. conductor_flow.py's step-failure branch, which only
+        calls record_history) can still refresh a live-open browser tab via
+        publish_activity_changed() below. Safe to call with `fields={}` when
+        no task column actually changed — only `activity` is fresh. Never
+        raises: every side effect here is best-effort, exactly as before."""
+        # Real-time activity push (gap: `activity` — {state, task_motion_s,
+        # session_quiet_s, ...} — is computed ONLY inside GET /api/tasks/{id}
+        # (api/tasks.py, ConductorService.activity_for) and is NOT a stored
+        # task column, so it could never ride `changed_fields` above. A
+        # browser tab open on /tasks/{id} therefore never saw a fresh
+        # activity reading over /sse/tasks -- only a full refetch (poll or
+        # remount) picked it up, which read as a frozen "stalled" signal
+        # while a task was genuinely advancing underneath. Compute it here,
+        # at publish time, reusing the SAME method api/tasks.py already
+        # calls (never duplicated) via the late-bound ConductorService.
+        activity: Optional[dict] = None
+        if self._conductor_svc is not None:
+            try:
+                phase_progress = self._conductor_svc.phase_progress(task.id)
+                activity = self._conductor_svc.activity_for(task, phase_progress)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "activity_for failed for %s", task.id, exc_info=True)
+                activity = None
+        # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
+        # it — the write already committed above, so a publish failure
+        # (bus down, serialization) must never surface as a write failure.
+        try:
+            from prism_service.events import bus
+
+            bus.publish({
+                "project": self.project,
+                "type": "task.changed",
+                "task_id": task.id,
+                # gamify round6 item 2 (atomic card+wire): carry the task's
+                # REAL parent_id on every event, not just when parent_id
+                # itself was the field that changed -- the /live SPA can
+                # only ever derive a subtask's parent_of edge at the same
+                # instant its card is born if the very event that births
+                # it already names the parent (empty string = a real
+                # root, no edge expected).
+                "parent_id": task.parent_id or "",
+                "fields": fields,
+                # Fresh activity at this instant (see block above) — None
+                # when no ConductorService is attached (bare TaskService).
+                # The client only merges this key in when it is present.
+                "activity": activity,
+                "updated_at": task.updated_at,
+            })
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task.changed publish failed for %s", task.id, exc_info=True)
+        # Wake task_runner's background loop on the SAME event, so a task
+        # that just became eligible (status -> in_progress, or a step/gate
+        # transition) gets swept immediately instead of waiting out
+        # PRISM_TASK_RUNNER_INTERVAL -- observed live sitting idle ~16min
+        # as the ONLY eligible task in the project before this existed.
+        # wake() is a no-op-safe flag set; never raises, never blocks.
+        try:
+            from prism_service.services import task_runner
+
+            task_runner.wake()
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "task_runner.wake() failed for %s", task.id, exc_info=True)
+
+    def publish_activity_changed(self, task_id: str) -> None:
+        """Push a fresh `activity` reading for `task_id` with no column
+        change — for a caller that mutated task state via a raw write (e.g.
+        record_history) rather than update(), so a live-open browser tab
+        still sees the new activity over /sse/tasks (task 1728c54b: a
+        reported step failure recorded via record_history in
+        conductor_flow.py never called update(), so an open tab kept
+        showing pre-failure state — e.g. "driving" — until a manual
+        reload). Safe to call even when the task is missing, or when
+        _conductor_svc is unattached / activity_for raises: never raises."""
+        try:
+            task = self.get(task_id)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "publish_activity_changed: get() failed for %s", task_id,
+                exc_info=True)
+            return
+        if task is None:
+            return
+        try:
+            self._publish_task_changed(task, {})
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "publish_activity_changed failed for %s", task_id,
+                exc_info=True)
+
     def update(self, task_id: str, **kwargs: object) -> Optional[Task]:
         """Update arbitrary fields on a task. Records change history."""
         task = self.get(task_id)
@@ -917,6 +1156,9 @@ class TaskService:
             "likely_misfire": task.likely_misfire,
             "completion_proof": task.completion_proof,
             "premise_notes": task.premise_notes,
+            "blocked_reason": task.blocked_reason,
+            "gate_reason": task.gate_reason,
+            "plan_doc": task.plan_doc,
             "stop_if": list(task.stop_if),
         }
         ste_rules = self._apply_ste(task)
@@ -993,43 +1235,14 @@ class TaskService:
                 task.id, "ste_normalise",
                 "rules=" + ",".join(ste_rules)
                 + " before=" + json.dumps(changed_before))
-        # D-1/D-2: push a lean task.changed event so /sse/tasks can deliver
-        # it — the write already committed above, so a publish failure
-        # (bus down, serialization) must never surface as a write failure.
-        try:
-            from prism_service.events import bus
-
-            bus.publish({
-                "project": self.project,
-                "type": "task.changed",
-                "task_id": task.id,
-                # gamify round6 item 2 (atomic card+wire): carry the task's
-                # REAL parent_id on every event, not just when parent_id
-                # itself was the field that changed -- the /live SPA can
-                # only ever derive a subtask's parent_of edge at the same
-                # instant its card is born if the very event that births
-                # it already names the parent (empty string = a real
-                # root, no edge expected).
-                "parent_id": task.parent_id or "",
-                "fields": changed_fields,
-                "updated_at": task.updated_at,
-            })
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "task.changed publish failed for %s", task.id, exc_info=True)
-        # Wake task_runner's background loop on the SAME event, so a task
-        # that just became eligible (status -> in_progress, or a step/gate
-        # transition) gets swept immediately instead of waiting out
-        # PRISM_TASK_RUNNER_INTERVAL -- observed live sitting idle ~16min
-        # as the ONLY eligible task in the project before this existed.
-        # wake() is a no-op-safe flag set; never raises, never blocks.
-        try:
-            from prism_service.services import task_runner
-
-            task_runner.wake()
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "task_runner.wake() failed for %s", task.id, exc_info=True)
+        # Real-time activity push + bus event + task_runner wake, extracted
+        # into _publish_task_changed (task 1728c54b) so a step FAILURE that
+        # never touches this update() path (conductor_flow.py's `elif
+        # failed:` branch — a raw record_history insert, no update() call)
+        # can still push a fresh activity reading via
+        # publish_activity_changed() below, instead of leaving an
+        # already-open browser tab frozen on stale pre-failure state.
+        self._publish_task_changed(task, changed_fields)
         # LL-03: re-embed only when the title or description changed.
         # Priority / status / tag-only updates don't move the vector.
         if "title" in kwargs or "description" in kwargs:

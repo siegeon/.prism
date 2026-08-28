@@ -38,3 +38,31 @@ def test_no_client_clocks_in_workflow_scripts():
         "PRISM server-stamps run timestamps (mx-9945f2). Offenders:\n"
         + "\n".join(offenders)
     )
+
+
+_IMPLEMENT_JS = WORKFLOWS_DIR / "implement.js"
+
+
+def test_preflight_clock_check_exempts_comments_like_this_lint_does():
+    """Task 3a3f90da (2026-08-26): this file's OWN lint has always exempted
+    comments (see docstring/_is_comment above) - but the live pre-flight
+    step (implement.js's own bash-driven CLOCK-CLEAN check) had no such
+    exception, and a plainly-worded comment documenting the ban tripped
+    its own grep, halting a real drive twice ("even if in comment" was
+    the literal live failure text). The two checks must agree: a
+    comment-only hit must not fail the drive."""
+    src = _IMPLEMENT_JS.read_text(encoding="utf-8")
+    clock_at = src.index("CLOCK-CLEAN:")
+    daemon_at = src.index("DAEMON/CONDUCTOR REACHABLE:")
+    clock_block = src[clock_at:daemon_at]
+    assert "COMMENT" in clock_block, (
+        "the pre-flight instruction must explicitly exempt comment lines"
+    )
+    assert "REAL CODE" in clock_block or "real code" in clock_block, (
+        "the pre-flight instruction must say only a real-code hit fails "
+        "the drive, not merely 'any match'"
+    )
+    assert "test_workflow_scripts_no_datenow.py" in clock_block, (
+        "the pre-flight instruction should point at this pinned lint as "
+        "the scope authority, so the two never drift apart again"
+    )

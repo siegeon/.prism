@@ -72,6 +72,9 @@ export default function TokenTurns({
     : st === "adrift" ? "driver active · linked session burn"
     : st === "stalled" ? `no active driver${quietClock ? ` · quiet ${quietClock}` : ""}`
     : st === "awaiting_gate" ? "awaiting review · paused here"
+    // machine-only gate (red_gate) — see ConductorPage's actState override.
+    // No human reviewer is owed a decision here.
+    : st === "awaiting_gate_machine" ? "machine deciding · paused here"
     : approximate ? "project activity (approximate)"
     : "burn · tok/s by turn";
   // Only a task actively being WORKED gets the full-strength graph.
