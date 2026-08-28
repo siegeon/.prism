@@ -140,6 +140,16 @@ def test_stall_timeout_default_is_on():
 
 
 def test_no_product_code_changed():
+    # Scope guard for slice 39244a32 ONLY. It is branch-relative (merge-base vs
+    # HEAD), so on any other branch that legitimately touches product code
+    # (e.g. epic 95474ec7 AC-3 in memory_service.py) it fires by construction.
+    # Superseded for other branches on 2026-08-26.
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=ROOT, capture_output=True, text=True, timeout=20,
+    ).stdout.strip()
+    if "39244a32" not in branch:
+        pytest.skip(f"scope guard applies to the 39244a32 branch only, not {branch!r}")
     try:
         base = subprocess.run(
             ["git", "merge-base", "HEAD", "origin/main"],
