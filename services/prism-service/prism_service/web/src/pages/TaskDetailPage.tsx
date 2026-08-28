@@ -159,6 +159,12 @@ type GateReadiness = {
   // blocking a green_gate roll-up, named by id/title so the banner can link
   // them instead of only quoting "N child task(s) not done" prose.
   blocking_children?: { id: string; title: string }[];
+  // Epic-rollup adapter: recursive status counts across the WHOLE
+  // descendant subtree (owner, live, task 95474ec7: "impossobvle to see
+  // at this top level how much work is actualy done") — blocking_children
+  // above only names the direct unfinished child, this answers the
+  // aggregate question without drilling through several epic levels.
+  subtree_progress?: { total: number; done: number; in_progress: number; blocked: number; pending: number };
 };
 
 // GET /api/okf/task_concepts — the OKF concepts this task recalled (from the
@@ -2108,7 +2114,7 @@ export default function TaskDetailPage() {
                     ? "AWAITING YOUR REVIEW · no machine evidence at this tree"
                     : "READY · evidence passing")
                 : (gateReadiness?.receipt?.adapter === "epic-rollup" && (gateReadiness?.blocking_children?.length ?? 0) > 0)
-                ? `BLOCKED · waiting on ${gateReadiness!.blocking_children!.length} child task(s)`
+                ? `WAITING ON CHILDREN · ${gateReadiness!.blocking_children!.length} child task(s) not done`
                 : verifierRefusal ? "BLOCKED · verifier rejected current evidence"
                 // The legacy generic literal (mx-a31a3d precedent) survives,
                 // reachable ONLY behind the shared function's blocked verdict —
@@ -2123,6 +2129,20 @@ export default function TaskDetailPage() {
       </div>
 
             <div className="bg-[color:var(--surface-1)] divide-y divide-[color:var(--border-subtle)] border rounded-md" style={{ borderColor: "var(--border-subtle)" }}>
+              {/* SUBTREE PROGRESS (task 95474ec7): the aggregate "how much
+                  work is actually done" answer, across every descendant at
+                  any depth — not just the direct child(ren) named below. */}
+              {gateReadiness?.subtree_progress && gateReadiness.subtree_progress.total > 0 && (
+                <div className="p-4 space-y-1.5">
+                  <div className="text-2xs uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>subtree progress</div>
+                  <div className="text-[13px]" style={{ color: "var(--text-primary)" }}>
+                    {gateReadiness.subtree_progress.done} of {gateReadiness.subtree_progress.total} done
+                    {gateReadiness.subtree_progress.in_progress > 0 && ` · ${gateReadiness.subtree_progress.in_progress} in progress`}
+                    {gateReadiness.subtree_progress.blocked > 0 && ` · ${gateReadiness.subtree_progress.blocked} blocked`}
+                    {gateReadiness.subtree_progress.pending > 0 && ` · ${gateReadiness.subtree_progress.pending} not started`}
+                  </div>
+                </div>
+              )}
               {/* BLOCKED-ON CHILDREN (task a646cbd1): name + link the
                   specific unfinished child(ren), not just roll-up prose —
                   same EntityChip -> /tasks/${id} pattern as the Children
