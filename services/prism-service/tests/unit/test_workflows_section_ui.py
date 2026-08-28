@@ -333,7 +333,15 @@ def test_the_conductor_rail_consumes_the_hook():
         name = rel[-1]
         assert "WORKFLOW_STEPS_ORDERED" not in src, (
             f"{name} still reads the retired hardcoded list")
-        assert re.search(r'const\s+steps\s*=\s*useWorkflowSteps\(\)', src), (
+        # SUPERSEDED (task: a task's own workflow renders its own FSM steps,
+        # not always "implement"'s): useWorkflowSteps() now takes an
+        # optional `workflow` argument so the rail resolves the CALLING
+        # task's own workflow (e.g. "workflow" prop) instead of always the
+        # top-level implement/conductor steps — see
+        # test_step_rail_uses_task_own_workflow.py. The call-with-no-args
+        # form this test originally pinned still works (falls back to the
+        # default resolution) but is no longer the only valid call shape.
+        assert re.search(r'const\s+steps\s*=\s*useWorkflowSteps\([^)]*\)', src), (
             f"{name} must take its ordered steps from useWorkflowSteps()")
         assert re.search(r'useWorkflowSteps[^;]*from\s+"@/lib/useWorkflowDef"',
                          src, re.DOTALL), (

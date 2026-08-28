@@ -48,9 +48,10 @@ BASE_CATALOG = [
     {"id": "Agent", "cls": "Agent", "source": "workflows", "bucket": "agent"},
     {"id": "Provider", "cls": "Provider", "source": "integrations", "bucket": "provider"},
     {"id": "Task", "cls": "Task", "source": "tasks", "bucket": "task"},
-    # QueueItem <- SIGNALS (task 785bb4ce): instances are typed o:Signal, a
-    # subclass of o:QueueItem in model.ttl, so both class queries count them.
-    {"id": "QueueItem", "cls": "Signal", "source": "signals", "bucket": "signal"},
+    # Signal <- SIGNALS (task 785bb4ce, then collapsed from o:QueueItem's
+    # catalog id onto its own name by task cacfb628: o:QueueItem was a
+    # Refused Bequest, one class hiding behind two names).
+    {"id": "Signal", "cls": "Signal", "source": "signals", "bucket": "signal"},
     {"id": "Document", "cls": "Document", "source": "brain", "bucket": "document"},
     {"id": "Folder", "cls": "Folder", "source": "brain", "bucket": "folder"},
 ]
@@ -516,8 +517,9 @@ class OntologyGraph:
                        signal_arrived_at: dict[str, str],
                        signal_enrichment: dict[str, dict] | None = None,
                        signal_body: dict[str, str] | None = None) -> None:
-        """Signal rows -> o:Signal (rdfs:subClassOf o:QueueItem in model.ttl,
-        task 785bb4ce: the Queue holds SIGNALS, not tasks), with
+        """Signal rows -> o:Signal (task 785bb4ce: the Queue holds SIGNALS,
+        not tasks; task cacfb628 collapsed o:QueueItem into o:Signal, its
+        one child, so Signal carries no rdfs:subClassOf parent), with
         o:arrivedVia -> its o:Channel, o:state as a literal, o:arrivedAt
         (task 8eeb3e65's flagged-signal-is-placed rule) when known,
         rdfs:comment for its aligned body (task ed034701, mirrors
@@ -728,7 +730,18 @@ class OntologyGraph:
                     g.add((u, RDFS.comment, rdflib.Literal(name)))
                     g.add((u, RDFS.label, rdflib.Literal(name[:80])))
             else:
-                g.add((u, RDFS.label, rdflib.Literal(name)))
+                label = name
+                file_path = sym.get("file") or ""
+                if kind == "module" and file_path:
+                    # task 2bfe49db: a module's label is its package-relative
+                    # path ("models/x.py"), the SAME label law_check emits
+                    # over a diff, so a promoted rule's
+                    # FILTER(STRSTARTS(?fromPath, "models")) fires on the
+                    # full graph and at the gate alike. Lazy import: law_check
+                    # imports NS from this module.
+                    from prism_service.services.law_check import _label_for
+                    label = _label_for(file_path)
+                g.add((u, RDFS.label, rdflib.Literal(label)))
             file_path = sym.get("file") or ""
             if file_path:
                 g.add((u, CLS("inFile"), rdflib.Literal(file_path)))
@@ -799,8 +812,13 @@ class OntologyGraph:
                 g.add((u, CLS("inDomain"), du))
             for target_id in m.get("cites") or []:
                 g.add((u, CLS("cites"), U("memory", target_id)))
-            task_id = str(m.get("evidence_task") or "").strip()
-            if task_id:
+            # task 6e858c89: every task the evidence names, in every shape
+            # (task / task_id / tasks); "evidence_task" stays for old rows.
+            _tasks = list(m.get("evidence_tasks") or [])
+            _one = str(m.get("evidence_task") or "").strip()
+            if _one and _one not in _tasks:
+                _tasks.append(_one)
+            for task_id in _tasks:
                 g.add((u, CLS("evidencedBy"), U("task", task_id)))
             for path in m.get("evidence_files") or []:
                 g.add((u, CLS("evidencedBy"), U("document", path)))

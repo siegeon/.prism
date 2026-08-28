@@ -151,6 +151,7 @@ export default function SdlcProgress({
   reduced,
   showCaption = true,
   hideTokens = false,
+  workflow,
 }: {
   step?: string;
   phase?: PhaseProgress | null;
@@ -163,8 +164,12 @@ export default function SdlcProgress({
   // When the tile renders a dedicated TokenTurns graph, suppress the caption's
   // token readout + the amber token bar so token info isn't duplicated.
   hideTokens?: boolean;
+  // The task's own workflow (task.workflow) — resolves the minimap to THAT
+  // workflow's own FSM steps via useWorkflowSteps, same as StepRail. See
+  // StepRail.tsx's `workflow` prop doc for the full rationale.
+  workflow?: string;
 }) {
-  const steps = useWorkflowSteps();
+  const steps = useWorkflowSteps(workflow);
   const curIdx = steps.findIndex((s) => s.id === step);
   const tokens = phase?.tokens_since_step ?? 0;
   const basis = phase?.basis ?? "time";
@@ -369,7 +374,18 @@ export default function SdlcProgress({
               {counting ? (
                 <span>{fmtClock(liveInStep)}</span>
               ) : (
-                <span className="opacity-70">waiting {fmtClock(phase?.in_step_s ?? 0)}</span>
+                <span className="opacity-70">
+                  {/* "waiting" contradicts a "working" state label (task
+                      95474ec7, owner live: "still looks like you have now
+                      been waiting for 90+ mins" on an epic whose subtree was
+                      genuinely active) — an epic-rollup can be state=working
+                      via _subtree_active (deep descendant motion) while THIS
+                      task's own step never streams a token, so `counting`
+                      stays false. Say "elapsed" there instead; every other
+                      not-counting state (the true parked case) keeps
+                      "waiting", unchanged. */}
+                  {state === "working" ? "elapsed" : "waiting"} {fmtClock(phase?.in_step_s ?? 0)}
+                </span>
               )}
               {counting && (phase?.eta_s ?? 0) > 5 && (
                 <span

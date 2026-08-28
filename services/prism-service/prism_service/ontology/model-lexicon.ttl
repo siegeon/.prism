@@ -89,7 +89,9 @@ o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
 <urn:prism:onto:term/agent> a o:Term ;
     rdfs:label "Agent" ;
     rdfs:comment "A catalog entry for one person, team, or automated worker." ;
-    o:altLabel "bot", "assistant" ;
+    # "bot" is NOT a synonym of Agent (owner 2026-08-27, mx-0e5a88): a Bot
+    # is a tier-1 deterministic workflow; the agentic behaviours sit under it.
+    o:altLabel "assistant" ;
     o:denotes o:Agent .
 
 <urn:prism:onto:term/session> a o:Term ;
@@ -106,3 +108,34 @@ o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
     rdfs:label "Epic" ;
     rdfs:comment "A parent task that groups smaller child tasks." ;
     o:altLabel "parent task", "umbrella task" .
+
+# Bot and its FSM vocabulary (task 8bcd4cb3, owner 2026-08-27 mx-0e5a88).
+<urn:prism:onto:term/bot> a o:Term ;
+    rdfs:label "Bot" ;
+    rdfs:comment "A tier-1 deterministic workflow that runs one FSM." ;
+    o:altLabel "deterministic workflow" ;
+    o:denotes o:Bot .
+
+<urn:prism:onto:term/fsm> a o:Term ;
+    rdfs:label "FSM" ;
+    rdfs:comment "The finite state machine one Bot runs." ;
+    o:altLabel "finite state machine", "state machine" ;
+    o:denotes o:FSM .
+
+<urn:prism:onto:term/state> a o:Term ;
+    rdfs:label "State" ;
+    rdfs:comment "One named position in an FSM." ;
+    o:altLabel "fsm state" ;
+    o:denotes o:State .
+
+<urn:prism:onto:term/transition> a o:Term ;
+    rdfs:label "Transition" ;
+    rdfs:comment "One edge of an FSM, from one State to another." ;
+    o:altLabel "fsm transition" ;
+    o:denotes o:Transition .
+
+<urn:prism:onto:term/behavior> a o:Term ;
+    rdfs:label "Behavior" ;
+    rdfs:comment "A tier-2 agentic unit of work that is part of an FSM." ;
+    o:altLabel "behaviour" ;
+    o:denotes o:Behavior .

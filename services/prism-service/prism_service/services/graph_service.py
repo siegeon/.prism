@@ -890,6 +890,21 @@ class GraphService:
             if tgt:
                 in_degree[tgt] = in_degree.get(tgt, 0) + 1
 
+        # task 93ca4274: "method"/"contains" edge targets, by graphify id,
+        # so _derive_python_symbol_kind can tell a method (target of a
+        # "method" edge) from a top-level def/class (target of "contains")
+        # without re-querying the DB mid-import.
+        _method_target_ids = {
+            link.get("target") or link.get("_tgt")
+            for link in links
+            if str(link.get("relation") or "").strip().lower() == "method"
+        }
+        _contains_target_ids = {
+            link.get("target") or link.get("_tgt")
+            for link in links
+            if str(link.get("relation") or "").strip().lower() == "contains"
+        }
+
         conn = sqlite_db.connect(self._graph_db, timeout=5.0)
         conn.row_factory = sqlite3.Row
         try:
@@ -943,8 +958,19 @@ class GraphService:
                     node.get("norm_label")
                     or _derive_norm_label(label)
                 )
-                # Derive "kind" from file_type or label for legacy queries
+                # Derive "kind" from file_type or label for legacy queries.
+                # task 93ca4274: graphify's own file_type is always "code"
+                # for every Python def/class/module/method (it carries no
+                # type hint of its own) -- refine it structurally for
+                # Python nodes so Function/Class/Method/Module counts stop
+                # reading 0 on the Ontology page. Non-Python "code" nodes
+                # (js/ts/cs/...) and "rationale" rows are untouched.
                 kind = file_type or "node"
+                if file_type == "code":
+                    _py_kind = _derive_python_symbol_kind(
+                        node, _method_target_ids, _contains_target_ids)
+                    if _py_kind:
+                        kind = _py_kind
                 cur = conn.execute(
                     "INSERT INTO entities "
                     "(name, kind, file, line, graphify_id, label, file_type, "
@@ -1664,6 +1690,53 @@ def _extract_line(source_location: str) -> Optional[int]:
         return int(s)
     except (ValueError, AttributeError):
         return None
+
+
+def _derive_python_symbol_kind(
+    node: dict,
+    method_target_ids: set,
+    contains_target_ids: set,
+) -> Optional[str]:
+    """Structural kind for a Python graphify node (task 93ca4274, epic
+    61821448: "Python symbols in the code graph carry their kind").
+
+    graphify's generic tree-sitter extractor (graphify/extract.py,
+    ``_extract_generic``) emits every Python def/class/module with
+    ``file_type="code"`` -- it carries no separate type/kind hint -- but
+    its LABEL already encodes the real AST distinction the parser made,
+    deterministically, plus a same-graph.json relation edge for methods:
+      * the file's own self-node: label == the file's own basename
+        (``add_node(file_nid, path.name, 1)``)                -> module
+      * a method: the TARGET of a "method" edge from its class
+        (``add_edge(parent_class_nid, func_nid, "method", ...)``,
+        label ``.name()``)                                    -> method
+      * a top-level def/class: the TARGET of a "contains" edge from the
+        file (``add_edge(file_nid, ..., "contains", ...)``), distinguished
+        by the trailing "()" graphify's own function branch adds
+        (``add_node(func_nid, f"{func_name}()", line)``) vs. the bare
+        class name (``add_node(class_nid, class_name, line)``)
+        -> function / class
+
+    This reads structure graphify already committed at parse time (which
+    branch of the AST walk built the node), never a name-shape guess like
+    CamelCase -- a CamelCase top-level function still ends in "()" and is
+    never classified as a class. Returns None (caller keeps "code") for
+    anything that matches none of these, e.g. a cross-file base-class stub
+    graphify fabricates with no source_file/source_location of its own.
+    """
+    source_file = node.get("source_file") or ""
+    if not source_file.endswith(".py"):
+        return None
+    label = node.get("label") or ""
+    gid = node.get("id")
+
+    if label and label == Path(source_file).name:
+        return "module"
+    if gid in method_target_ids:
+        return "method"
+    if gid in contains_target_ids:
+        return "function" if label.endswith("()") else "class"
+    return None
 
 
 def _derive_norm_label(label: str) -> str:

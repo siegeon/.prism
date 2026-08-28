@@ -1681,6 +1681,40 @@ export default function WorkflowsPage() {
                         ))}
                       </div>
                     )}
+                    {/* Knowledge health (task b1971944, epic 61821448): only the
+                        knowledge_health catalog entry carries `metrics` — a
+                        small table, same posture as align_language's own
+                        "Ingestion paths" panel above, shown only while this
+                        entry is selected. */}
+                    {selected && workflow.metrics && (
+                      <div
+                        aria-label="Knowledge health metrics"
+                        className="mx-2 mb-2 mt-1 border border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-2 py-2"
+                      >
+                        <div className="px-1 pb-1 text-2xs uppercase tracking-wider text-[color:var(--nav-text)] opacity-70">
+                          Knowledge health
+                        </div>
+                        <table className="w-full text-2xs">
+                          <tbody>
+                            {([
+                              ["Search feedback rate", workflow.metrics.search_feedback_rate],
+                              ["Recall-to-use rate", workflow.metrics.recall_to_use_rate],
+                              ["Median memory chars", workflow.metrics.median_memory_chars],
+                              ["Evidence ratio", workflow.metrics.evidence_ratio],
+                              ["Concepts grounded in code", workflow.metrics.concepts_grounded_in_code],
+                              ["Modules with knowledge", workflow.metrics.modules_with_knowledge],
+                              ["Rules with provenance", workflow.metrics.rules_with_provenance],
+                              ["Open rule decisions", workflow.metrics.open_rule_decisions],
+                            ] as const).map(([label, value]) => (
+                              <tr key={label}>
+                                <td className="px-1 py-0.5 text-[color:var(--nav-text)]">{label}</td>
+                                <td className="px-1 py-0.5 text-right font-mono opacity-80">{value}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1806,6 +1840,7 @@ export default function WorkflowsPage() {
                 activity={conductorLiveActivity}
                 reduced={reduced}
                 hideTokens
+                workflow={selectedWorkflowId}
               />
             )}
             {replayEventIndex !== null && (

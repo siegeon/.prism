@@ -117,6 +117,29 @@ def test_link_finds_every_entity_with_the_right_cls_and_href(project):
 
 
 # ---------------------------------------------------------------------------
+# a memory's NAME links too, not just its raw mx-id (task 44c7e2d0 follow-up,
+# owner: "pet names like that can be used, but only if linked to reality").
+# Live symptom: task 44c7e2d0's title read "Promote ARC-PRISM-1 to law" --
+# "ARC-PRISM-1" is memory mx-6320ab's name/pet-name, opaque on its own, and
+# never became a link anywhere it appeared, because _build_index only ever
+# registered a memory by its raw id. Tasks already got both (id + label,
+# task 8a6f175b/2ec1e395) -- this mirrors that for memory.
+# ---------------------------------------------------------------------------
+
+def test_memory_name_links_the_same_as_its_raw_id(project):
+    from prism_service.services import entity_linker
+
+    text = f"See {MEMORY_ID} — also known as A great decision."
+    spans = entity_linker.link(project, text)
+    by_text = {s["text"]: s for s in spans}
+
+    id_span = by_text[MEMORY_ID]
+    name_span = by_text["A great decision"]
+    assert id_span["cls"] == name_span["cls"] == "Decision"
+    assert id_span["href"] == name_span["href"] == f"/understand?concept={MEMORY_ID}"
+
+
+# ---------------------------------------------------------------------------
 # longest match wins: inside the title occurrence, "Slack"/"triage" are NOT
 # separately spanned as Term hits -- only the whole title is
 # ---------------------------------------------------------------------------

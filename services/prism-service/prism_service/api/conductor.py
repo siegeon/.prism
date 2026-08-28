@@ -348,6 +348,9 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # status IS the live parked reason - self-diagnosable without a stale
     # gate_reason relay, mirroring the red_gate branch below.
     if getattr(task, "workflow_step", "") == "plan_gate":
+        # Owner 2026-08-27 (task 3c774abd): the design-packet approval IS the
+        # owner's plan stop on a root task (adapter design-packet, below); a
+        # child task never parks here because its autoclear skips the ledger.
         from prism_service.services import design_packet as dp
         _status = dp.approval_status(project, task_id, task)
         if _status.get("approved"):
@@ -478,7 +481,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     try:
         from prism_service.services.conductor_service import (
             epic_rollup_verdict, ui_artifact_gate_reason, has_captured_evidence,
-            _task_attr)
+            _task_attr, subtree_progress_counts)
         # parent_id-scoped (idx_tasks_parent) rather than a full-table read
         # filtered in Python — same rows, one indexed query.
         kids = list(s._task_svc.list(parent_id=task_id))
@@ -518,6 +521,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             return {"receipt_ok": ready, "manual_review": True,
                     "receipt_refusal": "" if ready else reason,
                     "blocking_children": blocking_children,
+                    "subtree_progress": subtree_progress_counts(s._task_svc, task_id),
                     "receipt": {"adapter": "epic-rollup", "passed": ready,
                                 "status": "rollup" if ready else "rollup_blocked",
                                 "ended_at": "", "reason": reason}}
@@ -541,12 +545,26 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             # Reflect the artifact tooth HONESTLY so the card never says READY
             # and then refuses the approve: READY only when the evidence is on
             # file, else an actionable 'attach a screenshot' (not a machine fail).
-            cp = getattr(task, "completion_proof", "")
-            art = (green_gate_artifact_reason(cp, "", pt)
-                   or ui_artifact_gate_reason(getattr(task, "tags", None),
-                                              pt, cp))
-            if art and has_captured_evidence(task_id):
-                art = ""  # a captured screenshot satisfies the requirement
+            #
+            # SCOPED TO green_gate ONLY (task 44c7e2d0, owner 2026-08-27): this
+            # tooth's own wording ("green_gate requires a captured full-suite-
+            # green artifact") names the implement workflow's green_gate step
+            # specifically — a code change's tested-and-working proof. It was
+            # firing for ANY demo/review-proof-type task regardless of which
+            # gate step it was actually at, so promote_to_law's review step
+            # (reviewing a drafted TTL rule, never a code/UI change) was
+            # blocked demanding a screenshot that step has no reason to have.
+            # A workflow with its own real artifact expectation at its own
+            # gate step should gain its own scoped check here, not reuse
+            # green_gate's.
+            art = ""
+            if getattr(task, "workflow_step", "") == "green_gate":
+                cp = getattr(task, "completion_proof", "")
+                art = (green_gate_artifact_reason(cp, "", pt)
+                       or ui_artifact_gate_reason(getattr(task, "tags", None),
+                                                  pt, cp))
+                if art and has_captured_evidence(task_id):
+                    art = ""  # a captured screenshot satisfies the requirement
             if art:
                 return {"receipt_ok": False, "manual_review": True,
                         "receipt_refusal": art,

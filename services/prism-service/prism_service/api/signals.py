@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from prism_service.models.signal import Signal
 from prism_service.models.task import validate_channel, validate_workflow
 from prism_service.project_context import get_project
+from prism_service.services import rule_decisions
 from prism_service.services.signal_store import SignalStore
 
 router = APIRouter()
@@ -156,3 +157,32 @@ def drop_signal(signal_id: str, body: SignalDrop, project: str = Query("default"
     store.update(signal_id, state="dropped", drop_reason=body.reason)
     updated = store.get(signal_id)
     return {"signal": updated.__dict__}
+
+
+# ── A firing rule becomes a decision on the Queue (task b1971944) ──────────
+# An ontology signal (channel="ontology", channel_ref="rule:<name>") gets one
+# of four answers instead of promote/drop -- rule_decisions.decide() owns
+# every branch's actual effect (decisions.json, GET /ontology/rules
+# exemptions, a "Fix: ..." task, or an Understand memory).
+
+class SignalDecide(BaseModel):
+    action: str = ""  # accept | exempt | fix | codify
+    reason: str = ""
+    focus: list[str] = []
+
+
+@router.post("/{signal_id}/decide")
+def decide_signal(signal_id: str, body: SignalDecide, project: str = Query("default")) -> dict:
+    store = SignalStore(project)
+    signal = store.get(signal_id)
+    if signal is None:
+        raise HTTPException(status_code=404, detail="signal not found")
+
+    try:
+        result = rule_decisions.decide(project, signal, body.action, body.reason, body.focus)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    updated = store.get(signal_id)
+    result["signal"] = updated.__dict__ if updated else None
+    return result

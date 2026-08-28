@@ -46,8 +46,9 @@ def project(tmp_path_factory):
     ctx.task_svc.create(title="mcp task", channel="mcp")
     ctx.task_svc.create(title="legacy task")  # blank channel
 
-    # QueueItem now projects from signals, not tasks (task 785bb4ce) --
-    # the tasks above still seed Channel/Task/the axiom evaluation.
+    # Signal now projects from signals, not tasks (task 785bb4ce; catalog
+    # id "QueueItem" collapsed into "Signal" by task cacfb628) -- the
+    # tasks above still seed Channel/Task/the axiom evaluation.
     from prism_service.models.signal import Signal
     from prism_service.services.signal_store import SignalStore
 
@@ -125,12 +126,14 @@ def test_projection_populates_from_real_rows(project):
     assert "ui" in channel_labels and "mcp" in channel_labels
 
     # Re-anchored by task 785bb4ce ("a signal is resolved against the
-    # ontology on arrival"): QueueItem now projects from SIGNALS, not tasks
+    # ontology on arrival"): Signal now projects from SIGNALS, not tasks
     # -- the Queue is where signals arrive. Task keeps the old tasks-based
     # projection as its own class (test_signal_resolves_against_ontology.py
-    # pins the fuller signals-vs-tasks contract).
-    assert classes["QueueItem"]["source"] == "signals"
-    qi_instances = store.list_instances("QueueItem", limit=50)
+    # pins the fuller signals-vs-tasks contract). Re-anchored again by task
+    # cacfb628: the catalog id was "QueueItem" (o:QueueItem collapsed into
+    # o:Signal, its one child) and is now "Signal".
+    assert classes["Signal"]["source"] == "signals"
+    qi_instances = store.list_instances("Signal", limit=50)
     assert {i["label"] for i in qi_instances} == {
         "first signal · open", "second signal · open",
     }
@@ -176,7 +179,8 @@ def test_projection_populates_from_real_rows(project):
 # services/ontology_graph.OntologyGraph (a pyoxigraph SPARQL store), not
 # OntologyStore's sqlite cache — so class_id is "Task" (the TBox class real
 # task rows are typed with, per model.ttl) rather than the old flat
-# "QueueItem" catalog id, and POST /rebuild returns the graph's own
+# "QueueItem" catalog id (task cacfb628 collapsed that id into
+# "Signal" too), and POST /rebuild returns the graph's own
 # triple-counts-per-class shape, not the old {classes,instances,...} counts.
 # ---------------------------------------------------------------------------
 
@@ -190,10 +194,11 @@ def test_api_serves_persisted_rows_and_rebuilds(project):
     assert out["properties"]
     assert out["axioms"]
 
-    # Re-anchored by task 785bb4ce: QueueItem instances come from the 2
+    # Re-anchored by task 785bb4ce: Signal instances come from the 2
     # seeded signals now, not the 3 seeded tasks (see the `project` fixture);
-    # Task is its own class (task 495d3a69's graph read path).
-    inst = okf.ontology_instances(project=project, class_id="QueueItem", limit=10)
+    # Task is its own class (task 495d3a69's graph read path). Re-anchored
+    # again by task cacfb628: class_id was "QueueItem", now "Signal".
+    inst = okf.ontology_instances(project=project, class_id="Signal", limit=10)
     assert len(inst["instances"]) == 2
     inst = okf.ontology_instances(project=project, class_id="Task", limit=10)
     assert len(inst["instances"]) == 3

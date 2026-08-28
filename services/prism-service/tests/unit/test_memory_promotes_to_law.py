@@ -301,6 +301,17 @@ def test_principle_promotion_walks_to_review_then_installs_after_approval(
     assert task.gate_state == "pending", \
         "the review gate must PARK for a distinct actor, never auto-clear"
     assert drafted["name"] in (task.plan_doc or "")
+    # An unset proof_type falls through conductor_service.py's demo-shaped
+    # evidence path, which wants a trusted-runner oracle receipt a
+    # promote_to_law task can never produce -- every run parked at
+    # "review" showed BLOCKED / "evidence not on file" in the live UI no
+    # matter how good the draft was (owner, 2026-08-27, live repro on
+    # task 44c7e2d0). review is a pure human sign-off; it must declare
+    # proof_type="review" so the readiness/approve path treats it as
+    # human-judgment, never as a missing machine receipt.
+    assert task.proof_type == "review", \
+        "a promote_to_law run task must declare proof_type='review' so its " \
+        "one owner gate is never blocked on a machine oracle receipt"
 
     # A distinct actor approves -- never the drafting seat's own session.
     # override=True: "review" carries no rubric validation kind (by
@@ -339,6 +350,131 @@ def test_principle_promotion_walks_to_review_then_installs_after_approval(
     again = law_promotion.install_pending(project, task_id=run_task_id)
     assert again["ok"] is False, \
         "a done task is no longer awaiting install -- must not re-run it"
+
+
+def test_plain_approve_with_no_override_passes_the_review_gate(
+    real_project, no_real_worktree,
+):
+    """Live repro (owner, 2026-08-27, task 44c7e2d0): a plain Approve click
+    (no override) on the review gate failed every time with "gate has no
+    validation kind" -- because review is a plain owner gate BY DESIGN
+    (models/workflow.py's PROMOTE_TO_LAW_STEPS, the same shape triage's
+    decide step uses), so it never had a rubric for the verifier to
+    consult. gate_decide treated that "nothing to check" None the same as
+    an explicit verifier REJECTION, and the live UI's Evidence tab has no
+    override control at all -- the error text said "recover manually with
+    override=True" while giving no way to do that, so the gate was
+    permanently stuck for a human clicking the only Approve button the
+    page has. Fixed in conductor_service.py's gate_decide: verified=None
+    is now distinguished from an explicit False specifically when
+    validation is also None (a step that never declared a rubric), and
+    that case passes on a plain approve, same as the human's review
+    already being the sign-off everywhere else this shape is used.
+    """
+    from prism_service.api import conductor_flow as flow
+    from prism_service.services import law_promotion
+
+    from prism_service.project_context import get_project as _get_project
+
+    memory = _principle_memory(real_project, name="ARC-PROMOTE-2")
+    task_svc = _get_project(real_project).task_svc
+
+    started = law_promotion.start_promotion(real_project, memory.id)
+    assert started["ok"], started
+    run_task_id = started["run_task_id"]
+
+    task = task_svc.get(run_task_id)
+    assert task.workflow_step == "review"
+    assert task.gate_state == "pending"
+
+    # THE ACTUAL FIX UNDER TEST: override is NOT passed (defaults False) --
+    # exactly what a plain Approve click on the live Evidence tab sends.
+    approved = flow.flow_report(flow.Ident(
+        task_id=run_task_id, session_id="owner-review-plain",
+        outcome="approved: matches ARC-PROMOTE-2",
+        expected_step="review"), project=real_project)
+    assert approved["ok"], \
+        f"a plain Approve on a by-design no-rubric gate must pass, not fail: {approved}"
+
+    task = task_svc.get(run_task_id)
+    assert task.workflow_step == "install"
+    assert task.gate_state == "none"
+
+
+def test_a_review_gate_stuck_failed_from_the_old_bug_recovers_on_a_plain_approve(
+    real_project, no_real_worktree,
+):
+    """A task that hit the ORIGINAL bug before this fix existed (like the
+    owner's own live task 44c7e2d0) is left with gate_state="failed" on
+    disk. The first-approve fix above only helps a FRESH pending gate --
+    a task already stuck in "failed" goes through gate_decide's SEPARATE
+    recovery branch, which needed the identical plain-owner-gate carve-out
+    or it would refuse forever, exactly like the live task did on this
+    session's own recovery attempts ("Approve (recover)" resubmitting the
+    same plain approve and hitting the same refusal).
+    """
+    from prism_service.api import conductor_flow as flow
+    from prism_service.services import law_promotion
+    from prism_service.project_context import get_project as _get_project
+
+    memory = _principle_memory(real_project, name="ARC-PROMOTE-3")
+    task_svc = _get_project(real_project).task_svc
+
+    started = law_promotion.start_promotion(real_project, memory.id)
+    assert started["ok"], started
+    run_task_id = started["run_task_id"]
+
+    # Simulate the pre-fix stuck state directly (the real task 44c7e2d0's
+    # own on-disk shape after this session's first Approve attempts,
+    # before either fix existed).
+    task_svc.update(run_task_id, gate_state="failed",
+                     gate_reason="gate has no validation kind")
+    task = task_svc.get(run_task_id)
+    assert task.gate_state == "failed"
+
+    recovered = flow.flow_report(flow.Ident(
+        task_id=run_task_id, session_id="owner-review-recover",
+        outcome="approved: matches ARC-PROMOTE-3",
+        expected_step="review"), project=real_project)
+    assert recovered["ok"], \
+        f"a stuck plain-owner gate must recover on a plain approve, not refuse forever: {recovered}"
+
+    task = task_svc.get(run_task_id)
+    assert task.workflow_step == "install"
+    assert task.gate_state == "none"
+
+
+def test_review_gate_readiness_is_the_human_judgment_path_not_a_missing_receipt(
+    real_project, no_real_worktree,
+):
+    """The exact live-UI bug (owner, 2026-08-27, task 44c7e2d0): the
+    Evidence tab's Approve control read "BLOCKED - evidence not on file"
+    for a review-step task with a genuinely good draft, because an unset
+    proof_type falls into api/conductor.py:gate_readiness's generic
+    trusted-runner EvidenceReceipt branch, which a promote_to_law task can
+    never satisfy (it has no pinned pytest oracle). Calls the SAME
+    gate_readiness function the live Approve button's card reads, not
+    just the stored task field, so a regression here reproduces the
+    actual UI symptom, not just a missing attribute.
+    """
+    from prism_service.api.conductor import gate_readiness
+    from prism_service.services import law_promotion
+
+    memory = _principle_memory(real_project)
+    started = law_promotion.start_promotion(real_project, memory.id)
+    assert started["ok"], started
+    run_task_id = started["run_task_id"]
+
+    readiness = gate_readiness(run_task_id, project=real_project)
+
+    assert readiness["receipt_ok"] is True, \
+        f"review must be READY to approve, not blocked on a missing machine receipt: {readiness}"
+    assert readiness.get("manual_review") is True
+    assert readiness["receipt"]["adapter"] == "human", \
+        f"review's evidence tooth must be the human-judgment path, not a trusted-runner receipt: {readiness}"
+    reason = str(readiness["receipt"].get("reason") or "")
+    assert "evidence not on file" not in reason.lower()
+    assert "missing" not in reason.lower()
 
 
 def test_installed_rule_fires_on_its_violating_fixture_and_stays_quiet_on_compliant(
@@ -384,6 +520,81 @@ def test_installed_rule_fires_on_its_violating_fixture_and_stays_quiet_on_compli
     assert drafted["name"] not in quiet, (
         drafted["name"], list(quiet),
         "the installed rule fired on its own compliant fixture")
+
+    # o:verifiedBy: the fixture proof above becomes a durable, committed
+    # regression test the moment it passes, linked from the rule's own
+    # URI (owner 2026-08-27: "the ontology should work with the code and
+    # the rules to ensure that rules are covered by unit/int tests...
+    # tied back to the code").
+    from prism_service.config import project_data_dir
+    from prism_service.services import task_workspace
+
+    slug = drafted["name"].replace("-", "_")
+    test_rel = f"services/prism-service/tests/unit/law/test_promoted_{slug}.py"
+    fn_name = f"test_{slug}_fires_on_violating_and_stays_quiet_on_compliant"
+    test_ref = f"{test_rel}::{fn_name}"
+
+    repo_root = task_workspace._prism_repo_root()
+    test_path = repo_root / test_rel
+    assert test_path.exists(), test_path
+    content = test_path.read_text(encoding="utf-8")
+    assert "RULE_TTL" in content, content
+    assert "VIOLATING_FIXTURE" in content, content
+    assert "COMPLIANT_FIXTURE" in content, content
+    assert f"def {fn_name}" in content, content
+
+    shapes_path = project_data_dir(project) / "ontology" / "promoted-shapes.ttl"
+    shapes_text = shapes_path.read_text(encoding="utf-8")
+    assert f'o:{drafted["name"]} o:verifiedBy "{test_ref}" .' in shapes_text, shapes_text
+
+    catalog = ontology_rules.rule_catalog(project)
+    row = next(r for r in catalog if r["name"] == drafted["name"])
+    assert row.get("verified_by") == test_ref, row
+
+
+def test_generated_verification_test_for_the_promoted_rule_actually_runs_green(
+    real_project, no_real_worktree,
+):
+    """The fixture proof _install_rule() turns into a test file is not
+    just well-formed-looking text -- run IT, standalone, via a fresh
+    pytest invocation, and require it to pass for real."""
+    import subprocess
+    import sys
+
+    project = real_project
+    from prism_service.api import conductor_flow as flow
+    from prism_service.project_context import get_project
+    from prism_service.services import law_promotion, task_workspace
+
+    memory = _principle_memory(project)
+    task_svc = get_project(project).task_svc
+    assert task_svc is not None  # keeps the import honest / used
+
+    started = law_promotion.start_promotion(project, memory.id)
+    drafted = started["draft"]
+    run_task_id = started["run_task_id"]
+
+    flow.flow_report(flow.Ident(
+        task_id=run_task_id, session_id="owner-review",
+        outcome="approved", expected_step="review", override=True),
+        project=project)
+    result = law_promotion.install_pending(project, task_id=run_task_id)
+    assert result["ok"], result
+
+    slug = drafted["name"].replace("-", "_")
+    repo_root = task_workspace._prism_repo_root()
+    test_path = (repo_root / "services" / "prism-service" / "tests" /
+                 "unit" / "law" / f"test_promoted_{slug}.py")
+    assert test_path.exists(), test_path
+
+    service_root = repo_root / "services" / "prism-service"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", str(test_path), "-q",
+         "-o", "faulthandler_timeout=120"],
+        cwd=str(service_root), capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "1 passed" in proc.stdout, proc.stdout
 
 
 def test_install_refuses_a_rule_skeleton_with_no_demonstrable_fixture(project):

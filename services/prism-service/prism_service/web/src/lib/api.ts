@@ -93,6 +93,36 @@ export async function getOntologyRules(
   );
 }
 
+// ── A firing rule becomes a decision on the Queue (task b1971944) ──────
+// An ontology signal on the Queue (channel="ontology") gets one of four
+// answers instead of promote/drop -- the server (rule_decisions.decide)
+// owns every branch's real effect (decisions.json, GET /ontology/rules
+// exemptions, a "Fix: ..." task, or an Understand memory).
+
+export type SignalDecideAction = "accept" | "exempt" | "fix" | "codify";
+
+export type SignalDecideResult = {
+  action: SignalDecideAction;
+  rule?: string;
+  exempted?: string[];
+  task?: Record<string, unknown>;
+  memory_id?: string;
+  signal: Record<string, unknown> | null;
+};
+
+export async function decideSignal(
+  project: string,
+  signalId: string,
+  action: SignalDecideAction,
+  reason: string,
+  focus: string[] = [],
+): Promise<SignalDecideResult> {
+  return api.post<SignalDecideResult>(
+    `/api/signals/${encodeURIComponent(signalId)}/decide?project=${encodeURIComponent(project)}`,
+    { action, reason, focus },
+  );
+}
+
 export type AlignLanguageResult = {
   run_task_id: string | null;
   report: { would_change?: number; changed?: number } & Record<string, unknown>;

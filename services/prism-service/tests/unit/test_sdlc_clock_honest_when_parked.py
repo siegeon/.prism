@@ -260,3 +260,37 @@ def test_hidden_when_parked_comment_is_corrected():
         "when parked is false once it renders a waiting label - correct "
         "the comment to describe the actual behavior"
     )
+
+
+# ---------------------------------------------------------------------------
+# AC-9 (task 95474ec7, owner live): "waiting" contradicts a "working" state
+# label. An epic-rollup can be state=working (real subtree motion, see
+# ConductorService._subtree_active) while THIS task's own step never streams
+# a token, so `counting` stays false and the OLD unconditional "waiting"
+# label read as a direct contradiction next to the state pill's "working" /
+# "in progress" text. Additive: every other not-counting state keeps
+# "waiting" (test_clock_renders_waiting_label_from_in_step_s_when_not_counting
+# above still passes unmodified).
+# ---------------------------------------------------------------------------
+
+def test_working_state_says_elapsed_not_waiting_when_not_counting():
+    src = _read(_PROGRESS)
+    block = _brace_block_starting(src, "counting")
+    assert 'state === "working" ? "elapsed" : "waiting"' in block, (
+        "the non-counting clock label must say 'elapsed' (not the "
+        'contradictory "waiting") specifically when state === "working" -- '
+        "an epic-rollup can be genuinely working via subtree motion while "
+        "its own step streams no tokens"
+    )
+
+
+def test_non_working_states_still_get_the_original_waiting_label():
+    """The fix must be additive, not a replacement -- a genuinely parked
+    task (state e.g. "adrift", "awaiting_gate", or the bare status fallback)
+    keeps the original honest "waiting" wording."""
+    src = _read(_PROGRESS)
+    block = _brace_block_starting(src, "counting")
+    assert '"waiting"' in block, (
+        "the ternary's non-working branch must still literally read "
+        '"waiting" for every other not-counting state'
+    )

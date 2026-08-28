@@ -1,0 +1,10 @@
+{
+  "id": "quickfix",
+  "name": "Quickfix",
+  "fsms": [
+    {
+      "fsmId": "pipeline",
+      "behaviorIds": []
+    }
+  ]
+}

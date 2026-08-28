@@ -91,14 +91,21 @@ def test_model_ttl_parses_and_declares_classes_with_subclass_edges():
     assert (NS["Task"], rdflib.RDFS.subClassOf, NS["Activity"]) in g
     assert (NS["Person"], rdflib.RDFS.subClassOf, NS["Party"]) in g
     assert (NS["Function"], rdflib.RDFS.subClassOf, NS["Code"]) in g
-    assert (NS["Signal"], rdflib.RDFS.subClassOf, NS["QueueItem"]) in g
+
+    # Re-anchored for task cacfb628: o:QueueItem collapsed into o:Signal,
+    # its one declared child (a Refused Bequest -- the parent added no
+    # shape/property of its own that Signal did not already have). The
+    # TBox no longer declares o:QueueItem at all, and o:Signal carries no
+    # rdfs:subClassOf triple.
+    assert NS["QueueItem"] not in classes
+    assert (NS["Signal"], rdflib.RDFS.subClassOf, None) not in g
 
 # ---------------------------------------------------------------------------
 # rebuild() writes real triples to the pyoxigraph store; a second rebuild
 # REPLACES the named graph rather than appending to it
 # ---------------------------------------------------------------------------
 
-def test_rebuild_writes_triples_and_second_rebuild_replaces(project):
+def test_rebuild_writes_triples_and_second_rebuild_replaces(project, monkeypatch):
     from prism_service.services.ontology_graph import OntologyGraph
 
     graph = OntologyGraph(project)
@@ -109,6 +116,18 @@ def test_rebuild_writes_triples_and_second_rebuild_replaces(project):
     assert not graph.is_empty()
 
     count_q = "SELECT (COUNT(*) AS ?n) WHERE { GRAPH ?g { ?s ?p ?o } }"
+
+    # task b1971944: validate() posts Queue signals that project as
+    # Signals on the next rebuild (task cacfb628 collapsed the o:QueueItem
+    # catalog id these used to project as into o:Signal); that convergence
+    # is pinned in
+    # test_firing_rules_become_decisions. This test pins REPLACE-not-append,
+    # so the listener stays silent here (the warm-up loop it replaced took
+    # >30 s under the full suite; waves 34/36/37).
+    from prism_service.services import ontology_rules
+    monkeypatch.setattr(ontology_rules, "_ON_VALIDATED", [])
+    graph.rebuild()
+
     first_total = int(next(iter(graph.query(count_q)["bindings"]))["n"])
 
     graph.rebuild()

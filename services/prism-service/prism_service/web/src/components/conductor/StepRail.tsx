@@ -74,27 +74,45 @@ function stageDurations(turns: StepTurn[]): Record<string, number> {
   }
   return out;
 }
-// Per-stage metric rendered as a RELATIVE bar (filled vs the heaviest stage)
-// with the numbers tucked underneath — fills the row's empty middle and lets
-// you eyeball where the tokens/time went across the run. The bar tracks tokens
-// when any stage spent tokens, else duration; the caption shows both. Replaces
-// the redundant passed-pill — the spine ✓ already says "done".
-function StepMeta({ durMs, tokens, maxTokens, maxDur, hasTurns, open }: {
-  durMs?: number; tokens: number; maxTokens: number; maxDur: number; hasTurns: boolean; open: boolean;
+// Per-stage metric rendered as a RELATIVE bar (filled vs the TOTAL across the
+// run) with the numbers tucked underneath — fills the row's empty middle and
+// lets you eyeball where the tokens/time went across the run. A bar at 100%
+// means "this step took ALL of the elapsed time/tokens so far", so every
+// bar's width is directly comparable to every other bar's. The bar tracks
+// tokens when any stage spent tokens, else duration; the caption shows both.
+// Replaces the redundant passed-pill — the spine ✓ already says "done".
+function StepMeta({ durMs, tokens, sumTokens, sumDur, hasTurns, open, isGate }: {
+  durMs?: number; tokens: number; sumTokens: number; sumDur: number; hasTurns: boolean; open: boolean; isGate?: boolean;
 }) {
-  const useTokens = maxTokens > 0;
+  const useTokens = sumTokens > 0;
   const val = useTokens ? tokens : (durMs ?? 0);
-  const max = useTokens ? maxTokens : maxDur;
+  const max = useTokens ? sumTokens : sumDur;
   const pct = max > 0 ? Math.max(2, Math.round((val / max) * 100)) : 0;
   const hasCaption = tokens > 0 || (durMs != null && durMs >= 1000);
+  // Owner 2026-08-27, 4th pass: "why is there STILL so much dark space, are
+  // you not using the remote browser to see all of the dead space on each
+  // of those lines?" -- a fixed w-[50%] slot, right-aligned via ml-auto,
+  // still left a large UNUSED gap between the step label and where the bar
+  // started, because the bar's own width was capped well short of the real
+  // remaining row space. flex-1 makes the bar's container GROW to fill
+  // every pixel left over after the label -- no gap, no fixed cap. Rows
+  // with a short label (more leftover room) get a wider bar than rows with
+  // a long label; that is correct, not a regression -- the earlier
+  // "uniform width" framing solved label-independence but reintroduced the
+  // dead-space bug in the process.
   return (
-    <div className="ml-auto flex items-center gap-2 flex-1 min-w-0 max-w-[420px] pl-6">
+    <div className="flex items-center gap-2 flex-1 min-w-[220px] pl-6">
       <div className="flex-1 min-w-0 flex flex-col gap-1">
         {/* Owner 2026-07-19: render the bar ONLY when this step actually spent
             something. A gate with no real tokens gets NO grey track (was a
             full-width 'massive grey line'); the bars that DO show are
-            proportional to the heaviest step. */}
-        {val > 0 && (
+            proportional to the heaviest step.
+            Task c5b70c27: a GATE's own duration is human wait time, not agent
+            work — it is excluded from sumDur/sumTokens (see StepRail) AND
+            never rendered as a proportional bar here (isGate skips the bar
+            entirely), so a resolved gate reads as plain duration/token text,
+            never a misleadingly-scaled fill. */}
+        {val > 0 && !isGate && (
           <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--surface-3)", boxShadow: "inset 0 0 0 1px var(--border-default)" }}>
             <div className="h-full rounded-full" style={{
               width: `${pct}%`,
@@ -167,10 +185,17 @@ function TurnList({ rows }: { rows: StepTurn[] }) {
 type GateInfo = { state: "passed" | "override" | "pending" | "future"; g?: GanttGate };
 
 export default function StepRail({
-  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion, gateReadiness,
+  step, gateState, phase, status, activity, gates, turns, stepTokens, reduced, proofType, completion, gateReadiness, workflow,
 }: {
   step?: string;
   gateState?: string;
+  // The task's own workflow (task.workflow — "implement", "triage",
+  // "align_language", "promote_to_law", "quickfix", ...). Resolves the rail
+  // to THAT workflow's own FSM steps via useWorkflowSteps below, instead of
+  // always rendering the "implement" conductor's 10-step SDLC regardless of
+  // which workflow the task is actually on. Undefined/blank falls back to
+  // the default (conductor) resolution, same as the backend's steps_for.
+  workflow?: string;
   // The SAME live readiness payload TaskDetailPage's banner reads (task
   // 8e5aa63b) — passed through so the current gate's pill quotes the shared
   // gateSeverity() label instead of a bare hardcoded "pending".
@@ -200,16 +225,22 @@ export default function StepRail({
   // Completion proof & risk — rendered in the completion gate's evidence area.
   completion?: GateCompletion;
 }) {
-  const steps = useWorkflowSteps();
+  const steps = useWorkflowSteps(workflow);
   const byStep = turnsByStep(turns ?? []);
   const durByStep = stageDurations(turns ?? []);
-  // Bar scale: the heaviest stage across the run (so bars are relative to it).
-  let maxTokens = 0, maxDur = 0;
+  // Bar scale: the TOTAL across every AGENT stage in the run (so each bar's
+  // width is that stage's share of the real work, and bars are directly
+  // comparable to each other — not each independently normalized against
+  // the single heaviest stage, which made bar lengths look arbitrary).
+  // Task c5b70c27: GATE steps are EXCLUDED here — a gate's duration is human
+  // approval wait time (observed: plan_gate sat 85h49m on one task while
+  // real agent steps ran 30s-3min), not commensurable agent work, so letting
+  // it into the sum crushed every real step's bar to the 2% floor.
+  let sumTokens = 0, sumDur = 0;
   for (const s of steps) {
-    const tk = stepTokens?.[s.id] ?? 0;
-    if (tk > maxTokens) maxTokens = tk;
-    const d = durByStep[s.id] ?? 0;
-    if (d > maxDur) maxDur = d;
+    if (s.type === "gate") continue;
+    sumTokens += stepTokens?.[s.id] ?? 0;
+    sumDur += durByStep[s.id] ?? 0;
   }
   const curIdx = steps.findIndex((s) => s.id === step);
   // Pulse ONLY when genuinely being driven now (a real recent conductor
@@ -315,7 +346,7 @@ export default function StepRail({
             />
             <div className="flex-1 min-w-0 py-1.5">
               {isGate && gi && gi.state !== "future" ? (
-                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} proofType={proofType} completion={completion} gateReadiness={cur ? gateReadiness : undefined} />
+                <GateRow s={s} gi={gi} open={rowOpen} onToggle={() => setOpen(rowOpen ? null : s.id)} turns={byStep[s.id] ?? []} durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} proofType={proofType} completion={completion} gateReadiness={cur ? gateReadiness : undefined} />
               ) : (
                 (() => {
                   const stepTurns = byStep[s.id] ?? [];
@@ -330,39 +361,54 @@ export default function StepRail({
                         <span className={"text-[13px] " + (future ? "text-[color:var(--text-disabled)]" : "text-[color:var(--text-primary)]")}>
                           {stepLabel(s.id)}
                         </span>
-                        <div className="ml-auto flex items-center gap-2 min-w-0">
-                          {cur && !isGate && verifierPersona && (
-                            <VerifiedBy persona={verifierPersona} decided={!!gateFor(nextGate?.id ?? "")} />
-                          )}
-                          {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
-                            <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
-                              title="ephemeral sub-agents dispatched vs returned for this step">
-                              <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
-                              <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
-                                <span className="block h-full rounded-full" style={{
-                                  width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
-                                  background: "var(--accent-teal-bg)",
-                                }} />
+                        {/* Owner 2026-08-27 (3rd pass): a percentage width on
+                            StepMeta's OWN div never resolved, because it sat
+                            NESTED inside this "ml-auto ... min-w-0" wrapper —
+                            an auto-sized flex item. A CSS percentage width on
+                            a descendant of an auto-sized flex item collapses
+                            to 0 (spec'd, not a bug in the browser), so it
+                            silently fell back to min-w-[220px] every time —
+                            same ~220px as before, despite the class saying
+                            50%. StepMeta must be a DIRECT child of THIS row
+                            (which has a real, definite width) for its own
+                            percentage width to mean anything. Gate rows never
+                            had this problem, which is why testing missed it. */}
+                        {cur ? (
+                          <div className="ml-auto flex items-center gap-2 min-w-0">
+                            {cur && !isGate && verifierPersona && (
+                              <VerifiedBy persona={verifierPersona} decided={!!gateFor(nextGate?.id ?? "")} />
+                            )}
+                            {cur && !isGate && (phase?.fanout_dispatched ?? 0) > 0 && (
+                              <span className="flex items-center gap-1 text-2xs font-mono tabular-nums flex-none" style={{ color: "var(--accent-teal-fg)" }}
+                                title="ephemeral sub-agents dispatched vs returned for this step">
+                                <span>{phase?.fanout_returned ?? 0}/{phase?.fanout_dispatched ?? 0} agents back</span>
+                                <span className="h-[3px] w-8 rounded-full overflow-hidden" style={{ background: "var(--surface-2)" }}>
+                                  <span className="block h-full rounded-full" style={{
+                                    width: `${Math.min(1, (phase?.fanout_returned ?? 0) / Math.max(1, phase?.fanout_dispatched ?? 1)) * 100}%`,
+                                    background: "var(--accent-teal-bg)",
+                                  }} />
+                                </span>
                               </span>
-                            </span>
-                          )}
-                          {cur && !isGate && signal.lost ? (
-                            <span className="text-2xs font-mono flex items-center gap-1.5 flex-none" style={{ color: "var(--text-muted)" }}>
-                              {signal.label}
-                            </span>
-                          ) : cur && !isGate && (
-                            <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
-                              <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
-                                animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
-                                transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
-                              {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
-                            </span>
-                          )}
-                          {!cur && <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} maxTokens={maxTokens} maxDur={maxDur} hasTurns={hasTurns} open={rowOpen} />}
-                          {cur && hasTurns && (
-                            <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
-                          )}
-                        </div>
+                            )}
+                            {cur && !isGate && signal.lost ? (
+                              <span className="text-2xs font-mono flex items-center gap-1.5 flex-none" style={{ color: "var(--text-muted)" }}>
+                                {signal.label}
+                              </span>
+                            ) : cur && !isGate && (
+                              <span className="text-2xs font-mono tabular-nums flex items-center gap-1.5 flex-none" style={{ color: "var(--accent-teal-fg)" }}>
+                                <motion.span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--accent-teal-fg)" }}
+                                  animate={!reduced ? { opacity: [1, 0.3, 1] } : { opacity: 1 }}
+                                  transition={!reduced ? { duration: 1.2, repeat: Infinity } : { duration: 0.2 }} />
+                                {phase?.pct != null ? `${((curIdx >= 0 ? (curIdx + Math.min(1, phase.pct)) / steps.length : 0) * 100).toFixed(0)}%` : "working"}
+                              </span>
+                            )}
+                            {cur && hasTurns && (
+                              <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform flex-none" style={{ transform: rowOpen ? "rotate(90deg)" : "none" }}>▸</span>
+                            )}
+                          </div>
+                        ) : (
+                          <StepMeta durMs={durByStep[s.id]} tokens={stepTokens?.[s.id] ?? 0} sumTokens={sumTokens} sumDur={sumDur} hasTurns={hasTurns} open={rowOpen} />
+                        )}
                       </div>
                       {rowOpen && hasTurns && <TurnList rows={stepTurns} />}
                     </div>
@@ -505,8 +551,8 @@ function GateCompletionBlock({ c }: { c: GateCompletion }) {
   );
 }
 
-function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDur, proofType, completion, gateReadiness }: {
-  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; tokens: number; maxTokens: number; maxDur: number; proofType?: string; completion?: GateCompletion;
+function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, sumTokens, sumDur, proofType, completion, gateReadiness }: {
+  s: { id: string; persona?: string }; gi: GateInfo; open: boolean; onToggle: () => void; turns?: StepTurn[]; durMs?: number; tokens: number; sumTokens: number; sumDur: number; proofType?: string; completion?: GateCompletion;
   gateReadiness?: GateSeveritySnapshot["readiness"];
 }) {
   const [receipt, setReceipt] = useState(false);
@@ -548,7 +594,7 @@ function GateRow({ s, gi, open, onToggle, turns, durMs, tokens, maxTokens, maxDu
             <span className="text-2xs font-mono text-[color:var(--text-muted)] inline-block transition-transform" style={{ transform: open ? "rotate(90deg)" : "none" }}>▸</span>
           </span>
         ) : (
-          <StepMeta durMs={durMs} tokens={tokens} maxTokens={maxTokens} maxDur={maxDur} hasTurns={(turns?.length ?? 0) > 0} open={open} />
+          <StepMeta durMs={durMs} tokens={tokens} sumTokens={sumTokens} sumDur={sumDur} hasTurns={(turns?.length ?? 0) > 0} open={open} isGate />
         )}
       </button>
       {open && g && (

@@ -83,6 +83,43 @@ PROMOTE_TO_LAW_STEPS = [
     {"id": "done", "agent": None, "type": "done", "validation": None},
 ]
 
+# Quickfix workflow (task 811fcce0, epic 3baadd19, owner rule mx-f49a5c: "an
+# agent-shaped behaviour is a top-level workflow the system controls, like
+# the conductor"). A sixth, deliberately SHORT named workflow -- for a task
+# the owner has ALREADY fully diagnosed and scoped up front: oracle,
+# likely_misfire, and a real pinned test all written before this workflow
+# ever starts, proof_type=test, and the fix itself small and bounded. It
+# skips the full 10-step conductor SDLC (story/plan/red/green, two gates)
+# because that ceremony buys nothing when the diagnosis and the review
+# already happened -- the owner's up-front oracle/likely_misfire IS the
+# review.
+#
+# Per the ontology's own Bot/Behavior split (model.ttl o:Bot / o:Behavior):
+# this workflow (a Bot) is the deterministic control-flow layer -- it runs
+# ONE fixed FSM (intake -> apply_fix -> verify_fix -> done) and delegates
+# the actual agentic work to a Behavior underneath one of its steps. Only
+# apply_fix (role dev) is agentic: an LLM makes the exact change the
+# oracle describes and runs the pinned test itself. verify_fix is
+# DETERMINISTIC, not agentic -- agent=None, same as intake/done -- because
+# an independent check that a fix is real must be a real subprocess run
+# (the FULL pinned suite, from workspace root, rc==0 or it fails), never
+# an LLM asked to "judge" the result; it then commits and pushes per this
+# repo's own self-dev direct-push carve-out (root CLAUDE.md Key
+# Conventions), since there is no separate human review step to route
+# through. No gate exists in this workflow at all: nobody approves
+# anything mid-flight, matching triage/align_language/promote_to_law's own
+# no-gate-or-single-gate shape -- this one has none, the same as
+# align_language. validation stays None on every step, matching
+# align_language's documented reason: conductor_service.py is a POLICY_FILE
+# (services/control_plane.py POLICY_FILES) this workflow must not edit, so
+# adding a real rubric would need a new _VERIFIER_RULES entry there.
+QUICKFIX_STEPS = [
+    {"id": "intake", "agent": None, "type": "intake", "validation": None},
+    {"id": "apply_fix", "agent": "dev", "type": "agent", "validation": None},
+    {"id": "verify_fix", "agent": None, "type": "agent", "validation": None},
+    {"id": "done", "agent": None, "type": "done", "validation": None},
+]
+
 # NAMED workflow registry (task b837bc98): every step list a task can be
 # driven by, keyed by the SAME worker-facing value models.task.Task.workflow
 # stores ("implement" is models.task.DEFAULT_WORKFLOW). WORKFLOW_STEPS above
@@ -95,6 +132,7 @@ WORKFLOWS: dict[str, list[dict]] = {
     "triage": TRIAGE_STEPS,
     "align_language": ALIGN_LANGUAGE_STEPS,
     "promote_to_law": PROMOTE_TO_LAW_STEPS,
+    "quickfix": QUICKFIX_STEPS,
 }
 
 
