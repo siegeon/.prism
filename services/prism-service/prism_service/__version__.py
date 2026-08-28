@@ -17,6 +17,11 @@ PRISM_VERSION = "7.13.139"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.139: implement step agents connect on tool_profile=drive "
+    "(.mcp.json), no ToolSearch preload of PRISM verbs in implement.js, "
+    "pre-flight identity check reads prism_guide (prism_status is admin-only), "
+    "and pre-flight halts with `expected drive` on any other profile "
+    "(task 9b0f7c4b). "
     "7.13.138: new MCP tool_profile=drive (DRIVE_TOOL_NAMES): the retrieval "
     "+ conductor verbs only, so a drive lane's tool list stays small and "
     "brain_* is never deferred behind a ToolSearch load. Every existing "
