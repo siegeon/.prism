@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.145"
+PRISM_VERSION = "7.13.146"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7569,4 +7569,24 @@ PRISM_VERSION_NOTES += (
     "\n7.13.143 (task 9b0f7c4b, PR #2366): test_implement_preflight_has_identity_match went stale the moment this same task deliberately dropped prism_status from the `drive` MCP tool profile (prism_status is admin-only; a driving agent must never pay a ToolSearch load for it, the whole point of 9b0f7c4b) -- the test still hardcoded the literal string \"prism_status\" as a requirement, so a correct, deliberate change failed its own regression suite in CI (run 33135801669) and stranded the PR at green_gate for hours with no other real problem. The identity invariant the test protects -- the preflight must prove its MCP tools point at the SAME daemon as the conductor HTTP endpoint -- still holds: implement.js's preflight now reads the live PRISM_VERSION off prism_guide's own version banner (_version_banner(), prefixed onto every prism_guide() response, confirmed by direct source read) instead of prism_status's structured field, since prism_guide IS on the drive profile. Test updated in place to require \"prism_guide\" instead of \"prism_status\", with a comment naming what superseded it -- test_prototype_has_identity_guard is untouched (prototype.js was not part of this task's tool-profile change and still legitimately calls prism_status). Full test_prism_status_identity.py suite (6 tests) green."
     "\n7.13.144: tests/unit/test_implement_brain_first_retrieval_live.py's AC-2..AC-5 permanently red-gated EVERY PR's CI, unrelated to what that PR actually changed -- these tests can only be satisfied by a real fresh `implement` drive's transcripts (task 3a3f90da NFR-3, by design), which GitHub Actions CI structurally cannot provide, so a bare `pytest tests/unit` always hit the missing-env-var path. Confirmed blocking TWO unrelated PRs simultaneously: #2350 (task 85f92e4b, run 33044282088) and #2366 (task 9b0f7c4b, run 33135801669), same 4 tests, same reason, neither PR's own change at fault. NFR-3 chose a loud AssertionError specifically to forbid a VACUOUS PASS -- that intent survives intact: `_locate_drive_transcripts()` now calls `pytest.skip(...)` with the IDENTICAL diagnostic text only when PRISM_BRAIN_FIRST_DRIVE_SESSION is unset (never run, not a false pass); a deliberate opt-in that is then misconfigured (bad transcript root, or no transcripts found for a real session) still raises AssertionError, unchanged -- a skip is not a pass, it is pytest's own honest \"this check cannot run here\", which NFR-3 never forbade. New tests/unit/test_brain_first_retrieval_live_skips_without_session.py (3 tests: missing-session skips with the exact NFR-3 text preserved; the two misconfiguration paths still fail loudly), red-confirmed against the pre-fix source. Full test_implement_brain_first_retrieval_live.py + test_implement_brain_first_retrieval.py sweep green (4 skipped, not failed)."
     "\n7.13.145: merge conflict resolution -- PR #2366 (task 9b0f7c4b, 7.13.143) and dev/main (7.13.144, brain-first live-suite skip fix) both bumped PRISM_VERSION independently; merged forward, single version number, both changelog entries kept."
+)
+PRISM_VERSION_NOTES += (
+    "\n7.13.146: A KILLED PRE-FLIGHT AGENT NOW HALTS HONESTLY TOO [task "
+    "bb388e9d]. Three earlier null guards (locate, graph, the step loop's "
+    "res) already turned a classifier-killed/skipped/errored agent() call "
+    "into an explicit kind='blocked' halt instead of a crash -- but "
+    "`preflight` is the EARLIEST agent() call in implement.js, dereferenced "
+    "as `preflight.ok` immediately after assignment with no guard of its "
+    "own. This task's own completion_proof named the exact gap: 'One "
+    "remaining bare site: preflight (:413) is dereferenced as "
+    "preflight.ok at :416 with no null guard.' Added a 4th guard, same "
+    "shape as the other three (kind: 'blocked', reason naming the "
+    "documented causes: permission/safety classifier block, user skip, "
+    "terminal API error after retries), so a killed pre-flight agent halts "
+    "before any of the other three guards ever get a chance to matter. "
+    "New test test_preflight_null_guard_precedes_ok_access red-confirmed "
+    "against pre-fix source, green after the fix; "
+    "test_blocked_halt_reason_is_non_empty_and_descriptive extended to "
+    "cover all four guard sites. Full neighbouring unit (97 passed, 6 "
+    "skipped) and integration (84 passed) suites clean."
 )

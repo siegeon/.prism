@@ -462,6 +462,23 @@ phase('Pre-flight')
 const preflight = await agent(
   `${PRISM_TOOLS}\n\nPRE-FLIGHT GUARD - run these READ-ONLY checks from E:/.prism and fail FAST. Use 127.0.0.1, NEVER localhost (gitbash resolves localhost->::1 while the daemon binds IPv4 - a silent-zero trap that has burned whole runs).\n\n1. SANE BRANCH: after \`git -C E:/.prism fetch -q origin main\`, read \`git -C E:/.prism rev-parse --abbrev-ref HEAD\` and \`git -C E:/.prism rev-list --count HEAD..origin/main\`. sane_branch=false if the current branch is BEHIND origin/main by >0 (the stale-branch trap - the drive would build on stale code). main or an even/ahead feature branch is fine.\n2. CLOCK-CLEAN: \`git -C E:/.prism grep -nE 'Date[.]now|new[[:space:]]*Date[(]' -- .claude/workflows/*.js\`. For EACH hit, open that line: if it is a COMMENT (the line, left-stripped of whitespace, starts with \`//\`, \`*\` or \`/*\`) it is ALLOWED - this ban documents itself in comments, and task 3a3f90da (2026-08-26) found a real drive halted twice by a comment plainly explaining the rule, tripping its own grep. datenow_clean=false ONLY on a hit that is REAL CODE, not a comment - this exact scope (comments exempt) is what services/prism-service/tests/unit/test_workflow_scripts_no_datenow.py already enforces; do not be stricter than the pinned test. PRISM is the time authority (it server-stamps run timestamps); a workflow script must never use a client clock in real code (unavailable in the sandbox; breaks resume/cache; PRISM memory mx-9945f2).\n3. DAEMON/CONDUCTOR REACHABLE: \`curl -s -m5 -o /dev/null -w '%{http_code}' ${API_BASE}/api/version\` must be 200 - the conductor cannot record transitions (or stamp time) against a dead daemon.${DRY ? ' (DRY-RUN: treat a dead daemon as non-fatal.)' : ''}\n4. DEPENDENCY PRESENCE: read this task's \`depends_on\` via task_list (the dependencies/depends_on field). For EACH depends_on dep that is DONE, confirm its substrate is present: its [conductor:<dep8>] commit (first 8 chars of the dep id) must be reachable from the chosen base OR carried by some branch - \`git -C E:/.prism log --all --grep "conductor:<dep8>" -n1\` must hit, and that commit must be an ancestor of origin/main OR of a branch returned by \`git -C E:/.prism branch -a --contains <sha>\`. deps_present=false ONLY when a DONE dep's commit is unreachable from the base AND no branch carries it. (No deps, or all dep commits reachable, => deps_present=true.)\n5. MCP-DAEMON IDENTITY MATCH: the reachability check (step 3) proves the CONDUCTOR daemon is up, but NOT that YOUR MCP tools point at that same daemon - a duplicate ~/.claude.json key can bind mcp__prism__* to a DIFFERENT daemon (a fork, or another port) while the conductor HTTP endpoint (${API_BASE}) is the store you think you're driving. Call \`prism_guide\` (MCP, a drive-profile member; the admin-only status verb is NOT on the drive profile, task 9b0f7c4b) and read the \`prism_version\` it reports (mcp_ver); \`curl -s -m5 ${API_BASE}/api/version\` and read that \`version\` (http_ver). identity_ok=false if mcp_ver !== http_ver - your MCP is bound to a different daemon than the conductor and the whole drive would mutate the WRONG store. Also compare \`the admin-only status verb.data_dir\` against the expected store when known.${DRY ? ' (DRY-RUN: a dead daemon can not answer either endpoint; treat identity as non-fatal.)' : ''}\n\n6. DRIVE TOOL PROFILE: \`grep -o 'tool_profile=[a-z_]*' E:/.prism/.mcp.json\` - report the value after \`=\` as tool_profile (empty string if no match). It MUST be \`drive\`: any other value means this lane's MCP surface is the big interactive/all list and the harness defers brain_* behind ToolSearch (task 9b0f7c4b). If tool_profile !== "drive", ok=false with halt_reason "MCP tool_profile=<value>, expected drive - set tool_profile=drive on the prism url in .mcp.json and reconnect".\n\nSet ok=true ONLY if sane_branch AND datenow_clean AND deps_present AND tool_profile === "drive"${DRY ? '' : ' AND daemon_ok AND identity_ok'}. If ok=false, halt_reason = ONE actionable line, e.g. "branch <b> is N behind origin/main - rebase or branch fresh off main", "client clock in <file>:<line> - PRISM server-stamps time, remove it (mx-9945f2)", "conductor daemon down at ${API_BASE} - start it before driving", "MCP daemon <mcp_ver> != conductor daemon <http_ver> - /mcp reconnect prism to the daemon serving ${API_BASE} (or restart the session) before driving", or "dep <id> done but not merged to main and no branch carries it - merge it first".`,
   { label: 'pre-flight', phase: 'Pre-flight', schema: PREFLIGHT_SCHEMA, model: modelFor('', 'pre-flight', false) })
+// NULL GUARD (task bb388e9d follow-up): a classifier-killed/skipped/dead
+// pre-flight agent resolves to null, and `!preflight.ok` on a null value
+// crashes with a TypeError - the same unhandled-crash bug this task fixed
+// for locate/graph/trace, at the one site its own completion_proof flagged
+// as still bare. This is the EARLIEST agent() call in the script, so an
+// unguarded crash here hides the real blocker before any later guard gets
+// a chance to matter. Halt with the real blocker instead.
+if (!preflight) {
+  return {
+    task_id: TASK_ID, dry_run: DRY, done: false, shipped: false,
+    halted: {
+      at: 'pre-flight', kind: 'blocked',
+      reason: 'step agent "pre-flight" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); the drive cannot verify its environment without it',
+      gate_state: 'unknown',
+    },
+  }
+}
 if (!preflight.ok) {
   // HALT VISIBILITY (task ea3f4a62): the Claim phase flipped the row to
   // in_progress, so a silent throw here would leave a driverless in_progress
@@ -509,6 +526,21 @@ const locate = await agent(
   `${preamble('analyst')}\n\nGOAL: locate the task and orient before the conductor drive.\n\n${pick}\n\nThen, IN THIS ORDER - visibility precedes reading:\n${claimFirstInstr}- Report current_step (workflow_step) and gate_state exactly as stored.\n- Build a brain-first context_summary of the subsystem this task touches (brain_search/brain_understand first; disk grep - the Grep tool OR Bash-shelled grep/rg/sed/find - only for gaps the Brain does not answer), with file:line refs.\n- Distill the task description + any acceptance criteria into a discrete \`requirements\` list - each item independently testable.\n- PUSH-INJECT CONVENTIONS (task 0c811636): call \`context_bundle(persona="dev")\` ONCE and return its \`conventions\` array verbatim as the \`conventions\` field - this is PRISM's importance-ranked, top-N-capped living feedback doctrine (the domain="feedback" conventions - render policy, gate enforcement, board hygiene, etc.) that the drive injects into EVERY subsequent step agent's preamble. If the tool result OVERFLOWS the harness cap ("exceeds maximum allowed tokens ... saved to <path>.txt" - observed at 1.5 MB on drive wf_c7bae879, task 3a3f90da AC-2), do NOT return \`[]\`: read the saved file and extract the \`conventions\` array from it (\`grep -o '"conventions": *\\[' -A 200 <path>\` or Read with offset). If the bundle truly has no \`conventions\` key or it is empty, return \`[]\` (the drive falls back to the static procedural spine + memory_recall self-heal).\n- CLAIM THE TASK WORKTREE (this REPLACES cutting a feature branch in the shared checkout). ${DRY ? 'Report the workspace path you WOULD claim (data_dir/task_workspaces/<task_id>) without calling conductor_work.' : 'Call `conductor_work(id="<the task id>")` with NO outcome - that is the idempotent START/PEEK: it enters the flow, runs task_workspace.ensure_workspace(), and returns `workspace` {path, branch, baseline, repo_root} together with the first self-describing `job`. Report workspace.path as `workspace`, workspace.branch as `branch`, the job\'s `step` as current_step, and its gate_state.'} EVERY later edit, test run and commit for this task happens with \`git -C <workspace.path>\` or cwd=<workspace.path> - the gate verifier reads exactly that path, and work left in the shared E:/.prism checkout is invisible to it. A conductor_work ok:false carrying a workspace error is a HARD stop (it fails closed on purpose so two tasks can never share a branch): put it in halt_reason and do not proceed.\n- BRANCH: BASE SAFETY. The server cuts the worktree for you, but \`ensure_workspace\` defaults its base_ref to the repo's CURRENT HEAD - NOT origin/main - so a stale shared checkout silently yields a stale worktree, and the slice would be built on code that is behind. Verify it rather than assume: \`git -C "<workspace.path>" fetch -q origin main && git -C "<workspace.path>" rev-list --count HEAD..origin/main\` MUST return 0. If the worktree base is BEHIND origin/main, STOP and say so in halt_reason (name the count) - do not drive a slice onto a stale base.${DRY ? ' In DRY-RUN, report the base you WOULD verify and the depends_on you WOULD check, without claiming a workspace.' : ''}\n- DEPENDENCY CHECK (do NOT pick a base - the server already cut the worktree): read this task's \`depends_on\`. For each dep that is DONE, confirm its \`[task:<dep8>]\` / \`[conductor:<dep8>]\` commit is reachable from the worktree baseline (\`git -C <workspace.path> log --grep "<dep8>" -n1\`, falling back to \`git -C E:/.prism log --all --grep "<dep8>" -n1\`). A dep that is NOT done means this task is BLOCKED: report that in halt_reason and do not drive.\n\nReturn the structured locate result.`,
   { label: 'locate', phase: 'Locate', schema: LOCATE_SCHEMA, model: TIER_MODEL.balanced })
 
+// NULL-AGENT GUARD (task bb388e9d): agent() resolves to null when the step
+// agent is killed before it returns - permission/safety classifier block,
+// user skip, or a terminal API error after retries. Seen twice on
+// 2026-08-17 as "null is not an object (evaluating 't.step')". Halt with the
+// real blocker instead of crashing on the dereference below.
+if (!locate) {
+  return {
+    task_id: TASK_ID, dry_run: DRY, done: false, shipped: false,
+    halted: {
+      at: 'locate', kind: 'blocked',
+      reason: 'step agent "locate" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); the drive cannot orient without it',
+      gate_state: 'unknown',
+    },
+  }
+}
 if (locate.halt_reason && String(locate.halt_reason).trim()) {
   throw new Error(`LOCATE HALT - ${locate.halt_reason}`)
 }
@@ -789,6 +821,16 @@ const graph = await agent(
   ].filter(Boolean).join('\n'),
   { label: 'graph-blast-radius', phase: 'Graph', schema: GRAPH_SCHEMA, model: TIER_MODEL.balanced })
 
+if (!graph) {
+  return {
+    task_id: locate.task_id, title: locate.title, workspace: WS, branch: locate.branch, dry_run: DRY, done: false, shipped: false,
+    halted: {
+      at: 'graph', kind: 'blocked',
+      reason: 'step agent "graph-blast-radius" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); no blast radius means nothing can be planned safely',
+      gate_state: locate.gate_state || 'none',
+    },
+  }
+}
 GRAPH_BRIEF = [
   '',
   'GRAPH BRIEF (call-graph derived - this is the slice\'s real blast radius, not a guess):',
@@ -951,6 +993,14 @@ for (let i = 0; i < MAX_JOBS; i++) {
     isGate ? gatePrompt(job) : workerPrompt(job),
     { label: job.step || 'peek', phase: phaseName, schema: JOB_RESULT_SCHEMA,
       model: modelFor(job.role, job.step, isGate) })
+  if (!res) {
+    halted = {
+      at: job.step, kind: 'blocked',
+      reason: `step agent "${job.step || 'peek'}" returned null - it was killed before producing a result (permission/safety classifier block, user skip, or terminal API error after retries); halting before the null reaches the trace`,
+      gate_state: job.gate_state,
+    }
+    break
+  }
   trace.push(res)
   await postAgentRun(res, { role: job.role || '', step: job.step })
 
