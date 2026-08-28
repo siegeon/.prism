@@ -173,12 +173,19 @@ def _locate_drive_transcripts() -> list[Path]:
         if parent_file.is_file() and not run:
             hits.append(parent_file)
     if not hits:
-        raise AssertionError(
-            f"No transcripts found for session {session!r} under {root} "
+        run = os.environ.get("PRISM_BRAIN_FIRST_DRIVE_RUN", "").strip()
+        where = (
+            f"PRISM_BRAIN_FIRST_DRIVE_RUN={run!r} has no *.jsonl under "
+            f"<project>/{session}/subagents/workflows/{run}/ in {root}"
+            if run
+            else f"No transcripts found for session {session!r} under {root} "
             "(looked for <project>/<session>/subagents/**/*.jsonl and "
-            "<project>/<session>.jsonl). AC-2..AC-5 cannot be measured "
-            "without a fresh drive's real transcripts on disk "
-            "(task 3a3f90da NFR-3)."
+            "<project>/<session>.jsonl)"
+        )
+        raise AssertionError(
+            f"{where}. AC-2..AC-5 cannot be measured without a fresh "
+            "drive's real transcripts on disk (task 3a3f90da NFR-3; "
+            "task 85f92e4b FR-1 makes this a failure, never a skip)."
         )
     return hits
 
@@ -246,7 +253,7 @@ def test_ac2_context_bundle_called_once_and_conventions_reach_a_later_preamble()
     try:
         transcripts = _locate_drive_transcripts()
     except AssertionError as exc:
-        pytest.skip(str(exc))
+        pytest.fail(str(exc))
     cb_calls = []
     result_by_id: dict[str, str] = {}
     for path in transcripts:
@@ -287,7 +294,7 @@ def test_ac3_brain_call_precedes_first_disk_retrieval_in_locate_and_plan():
     try:
         transcripts = _locate_drive_transcripts()
     except AssertionError as exc:
-        pytest.skip(str(exc))
+        pytest.fail(str(exc))
     locate_path = _find_transcript_by_marker(transcripts, LOCATE_MARKER)
     plan_path = _find_transcript_by_marker(transcripts, PLAN_MARKER)
     for label, path in (("locate", locate_path), ("plan", plan_path)):
@@ -317,7 +324,7 @@ def test_ac4_brain_call_chain_and_find_references_per_blast_radius_symbol():
         transcripts = _locate_drive_transcripts()
         symbols = _blast_radius_symbols()
     except AssertionError as exc:
-        pytest.skip(str(exc))
+        pytest.fail(str(exc))
     call_chain_args: set[str] = set()
     find_refs_args: set[str] = set()
     for path in transcripts:
@@ -342,7 +349,7 @@ def test_ac5_disk_to_brain_search_ratio_under_4_to_1():
     try:
         transcripts = _locate_drive_transcripts()
     except AssertionError as exc:
-        pytest.skip(str(exc))
+        pytest.fail(str(exc))
     disk = 0
     brain = 0
     for path in transcripts:
