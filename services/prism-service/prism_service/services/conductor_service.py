@@ -5817,6 +5817,23 @@ class ConductorService:
         except Exception:
             return []
 
+    def _subtree_active(self, task, _depth: int = 0) -> bool:
+        """True if TASK itself, or any descendant at any depth, is
+        in_progress with a step transition inside the last 120s or a live
+        drive heartbeat. Depth-bounded (6) against runaway/cyclic data, not
+        against real epic nesting — an epic-of-epics is typically 2-4 levels
+        deep in this repo (task 95474ec7)."""
+        if _depth > 6:
+            return False
+        if (getattr(task, "status", "") or "") == "in_progress":
+            motion = self._task_motion_s(task)
+            if motion is not None and motion <= 120:
+                return True
+            beat = drive_heartbeat.latest(self._scores_db, getattr(task, "id", ""))
+            if beat is not None and beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
+                return True
+        return any(self._subtree_active(k, _depth + 1) for k in self._children(task))
+
     def activity_for(self, task, phase_progress: dict) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
         means a REAL recent conductor transition on THIS task (<=120s); when
@@ -5850,9 +5867,11 @@ class ConductorService:
                 # An EPIC's activity is its slices': a slice actively moving =>
                 # working; some slices done but none active => paused (real
                 # progress, between bursts — NOT the alarming "stalled");
-                # nothing done and nothing active => stalled.
-                active = any((getattr(k, "status", "") or "") == "in_progress"
-                             and (self._task_motion_s(k) or 1e9) <= 120 for k in kids)
+                # nothing done and nothing active => stalled. RECURSIVE: an
+                # epic-of-epics' real work can sit several levels down (task
+                # 95474ec7, live, 3 hops to its actual driven leaf) — a direct
+                # child's OWN motion is not enough, the whole subtree counts.
+                active = any(self._subtree_active(k) for k in kids)
                 done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
                 if active:
                     state = "working"
