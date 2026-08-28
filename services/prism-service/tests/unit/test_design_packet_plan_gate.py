@@ -252,11 +252,11 @@ def test_approvals_are_append_only_not_overwritten(dp_env):
 
 
 def _real_task(tmp_path, plan_doc="AC-1 covered", plan_diagram="stateDiagram-v2\n[*]-->A",
-               tags=None, oracle="oracle text"):
+               tags=None, oracle="oracle text", parent_id=""):
     from prism_service.services.task_service import TaskService
     task_svc = TaskService(str(tmp_path / "tasks.db"))
     t = task_svc.create(title="design packet probe", oracle=oracle,
-                        proof_type="demo", tags=tags or [])
+                        proof_type="demo", tags=tags or [], parent_id=parent_id)
     task_svc.update(t.id, workflow_step="plan_gate", gate_state="pending",
                     plan_doc=plan_doc, plan_diagram=plan_diagram)
     return task_svc, task_svc.get(t.id)
@@ -294,10 +294,20 @@ def test_autoclear_parks_plan_gate_pending_without_approval(dp_env, tmp_path,
 def test_autoclear_clears_plan_gate_after_explicit_approval(dp_env, tmp_path,
                                                              monkeypatch):
     """AC-6: recording an explicit owner approval lets the SAME seat advance
-    the gate on its next run."""
+    the gate on its next run.
+
+    SUPERSEDED for ROOT tasks by task 3c774abd (owner rule 2026-08-27): a
+    root task's plan_gate no longer autoclears on packet approval alone —
+    it still parks for the owner's own gate_decide even once the packet is
+    approved (see tests/unit/test_root_plan_gate_waits_for_the_user.py).
+    This test now proves AC-6 on a CHILD task, where the claim still holds
+    exactly as written; the design-packet mechanism itself is unchanged."""
     from prism_service.api import conductor_flow as cf
     from prism_service.services import design_packet as dp
-    task_svc, task = _real_task(tmp_path, tags=["ui"])
+    from prism_service.services.task_service import TaskService
+    parent_svc = TaskService(str(tmp_path / "tasks.db"))
+    parent = parent_svc.create(title="epic", tags=[])
+    task_svc, task = _real_task(tmp_path, tags=["ui"], parent_id=parent.id)
     _write_prototype(task.id)
     dp.record_approval(dp_env, task.id, task, approver="owner",
                        method="owner_explicit")

@@ -100,9 +100,9 @@ def axiom_project():
     'project' fixture pattern) seeded with a REAL violation for each of the
     four axioms: a blank-channel task, a document loose in the project
     root, a dated folder that breaks the YYYY-MM-DD format among compliant
-    siblings, and no catalog entry describing WHEN to use it (true today
-    of every real WORKFLOW_STEPS/workflows-catalog entry — see arc_governance
-    module docstring)."""
+    siblings; the skill rule is seeded with its own violating agent in
+    the first test (every real catalog entry says when it runs since task
+    408138e8)."""
     from prism_service.project_context import get_project
 
     pid = f"axiom-test-{uuid.uuid4().hex[:8]}"
@@ -146,7 +146,10 @@ def test_projection_persists_evaluated_axiom_states(axiom_project):
     assert axioms["dated-folder-uses-one-format"]["state"] == "violated"
     assert "2026-Q1" in axioms["dated-folder-uses-one-format"]["detail"]
 
-    assert axioms["skill-description-says-when"]["state"] == "violated"
+    # quiet since task 408138e8: every real catalog / step description now
+    # says when it runs; the rule still fires on the seeded skill-x agent
+    # in test_axioms_violated_on_violation_seed_data_names_the_row.
+    assert axioms["skill-description-says-when"]["state"] == "quiet"
 
 
 # ---------------------------------------------------------------------------
@@ -165,4 +168,7 @@ def test_axiom_rows_served_on_get_ontology(axiom_project):
     assert axioms["task-names-its-channel"]["state"] == "violated"
     assert axioms["no-artifacts-in-the-root"]["state"] == "violated"
     assert axioms["dated-folder-uses-one-format"]["state"] == "violated"
-    assert axioms["skill-description-says-when"]["state"] == "violated"
+    # quiet since task 408138e8: every real catalog / step description now
+    # says when it runs; the rule still fires on the seeded skill-x agent
+    # in test_axioms_violated_on_violation_seed_data_names_the_row.
+    assert axioms["skill-description-says-when"]["state"] == "quiet"

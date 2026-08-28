@@ -66,8 +66,18 @@ def test_data_dir_distinguishes_two_stores(tmp_path):
 # --- AC-3: implement.js preflight does an MCP-vs-conductor identity match ----
 
 def test_implement_preflight_has_identity_match():
+    # SUPERSEDED (task 9b0f7c4b, 2026-08-27): prism_status is an admin-only
+    # verb, deliberately dropped from the `drive` tool profile so a driving
+    # agent never needs ToolSearch just to load it (that preload cost more
+    # than a Bash grep — the whole point of that task). The identity
+    # invariant this test protects — the preflight must prove its MCP tools
+    # point at the SAME daemon as the conductor HTTP endpoint — still holds;
+    # it now reads the live PRISM_VERSION off prism_guide's own version
+    # banner (_version_banner() in mcp/tools.py, prefixed onto every
+    # prism_guide() response) instead of prism_status's structured field,
+    # since prism_guide IS on the drive profile.
     src = (_WORKFLOWS / "implement.js").read_text(encoding="utf-8")
-    assert "prism_status" in src, "preflight must query prism_status (the MCP daemon)"
+    assert "prism_guide" in src, "preflight must query prism_guide (the MCP daemon's version banner)"
     assert "api/version" in src, "preflight must query /api/version (the conductor daemon)"
     assert "identity_ok" in src, "preflight must gate on an identity_ok flag"
     # the flag must actually be folded into the ok= decision, not dangling.

@@ -399,9 +399,13 @@ def test_reject_path_unchanged_by_verifier_hookup(tmp_path):
 
     result = cond.gate_decide(t.id, action="reject", reason="design flaw")
     assert result["ok"] is True
-    assert result["gate_state"] == "failed"
+    # Superseded by test_gate_reject_rewinds_to_producing_step.py: reject
+    # still never consults the verifier (this test's real intent), but now
+    # rewinds to the producing step instead of dead-ending at "failed".
+    assert result["gate_state"] == "none"
     assert verifier.calls == []
     refreshed = task_svc.get(t.id)
+    assert refreshed.workflow_step == "write_failing_tests"
     assert refreshed.gate_reason == "design flaw"
 
 

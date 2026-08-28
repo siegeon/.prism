@@ -300,6 +300,35 @@ def _is_failure(outcome: object) -> bool:
 _AUTOCLEAR_GATES = {"story_gate", "plan_gate"}
 
 
+# ROOT PLAN-GATE STOP (task 3c774abd, owner rule 2026-08-27): "the users
+# approve the plans for parent level tasks, the system can make and manage
+# as many sub agents as they want to manage subtasks that do not need user
+# approval." A ROOT task is one whose parent_id is empty. Only a ROOT task
+# on the real conductor/implement SDLC ever reaches a step literally named
+# "plan_gate" with a human decision at stake — a daemon run task (align_
+# language, promote_to_law, ...) uses its OWN workflow name and its own gate
+# ids, so this check also guards against a future workflow that reuses the
+# "plan_gate" id: only workflow == "implement" (models.task.DEFAULT_WORKFLOW
+# — the honest marker: normalize_workflow never applies WORKFLOW_ALIASES, so
+# a real conductor task's stored/normalized workflow value is the literal
+# string "implement", never the UI catalog id "conductor" that alias maps
+# to) counts as the owner's SDLC.
+ROOT_PLAN_GATE_REASON = ("Plan rubric passed (machine review). Your "
+                          "approval releases the plan.")
+
+
+def _is_root_conductor_task(task) -> bool:
+    """True for a ROOT task (parent_id empty) driven by the real conductor
+    workflow — the only shape whose plan_gate needs the owner's own click.
+    A child task, or a daemon run task on a different named workflow
+    (align_language/promote_to_law/triage/...), returns False and keeps
+    today's machine autoclear."""
+    from prism_service.models.task import normalize_workflow
+    parent_id = str(getattr(task, "parent_id", "") or "").strip()
+    workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+    return not parent_id and workflow == "implement"
+
+
 def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     """Approve a just-entered PENDING rubric gate iff its machine check says
     verified=True. Anything else (fail, None, non-rubric gate) is left
@@ -358,17 +387,22 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
             except Exception:
                 pass
         return None
-    if step["id"] == "plan_gate":
-        # FR-4/FR-5 (task c016667f): the rubric alone is no longer enough —
-        # a design-packet owner approval must be on file too, unconditionally
-        # (AC-10: no ui-tag narrowing). A missing/stale approval parks the
-        # gate pending with an actionable reason instead of clearing.
+    if step["id"] == "plan_gate" and _is_root_conductor_task(task):
+        # OWNER'S PLAN STOP (task c016667f FR-4/FR-5, scoped by task 3c774abd
+        # per owner 2026-08-27: "users approve the plans for parent level
+        # tasks ... subtasks do not need user approval"): a ROOT conductor
+        # task clears plan_gate only once the owner's design-packet approval
+        # is on file (the task page's Approve records it); the rubric pass is
+        # the machine's review, never the approval. A CHILD task skips this
+        # ledger and clears on the rubric alone - the system manages its own
+        # subtasks. A missing/stale approval parks the gate pending with an
+        # actionable reason instead of clearing.
         from prism_service.services import design_packet as dp
         project = svc._project_name or "default"
         status = dp.approval_status(project, task_id, task)
         if not status.get("approved"):
-            _r = str(status.get("reason", "") or "")
-            if _r and _r != (getattr(task, "gate_reason", "") or ""):
+            _r = str(status.get("reason", "") or "") or ROOT_PLAN_GATE_REASON
+            if _r != (getattr(task, "gate_reason", "") or ""):
                 try:
                     svc._task_svc.update(task_id, gate_reason=_r)
                 except Exception:
@@ -617,6 +651,16 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 body.task_id, action="flow_report_failure",
                 details=f"step={step['id']}; outcome={str(body.outcome)[:200]}",
                 actor=body.session_id)
+        except Exception:
+            pass
+        # record_history is a raw history-table insert — it does NOT compute
+        # a fresh `activity` block or publish the `task.changed` bus event
+        # that TaskDetailPage's /sse/tasks subscription relies on, so an
+        # already-open tab kept showing pre-failure state (e.g. "driving")
+        # forever, until a manual reload (task 1728c54b). Push one now; this
+        # must never break the failure-report response itself.
+        try:
+            svc._task_svc.publish_activity_changed(body.task_id)
         except Exception:
             pass
         return {"ok": False, "step": step["id"], "advanced": False,

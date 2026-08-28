@@ -50,7 +50,41 @@ def memory_rows(project: str) -> list[dict]:
                 "domain": domain,
                 "classification": entry.classification or "",
                 "cites": cites_by_id.get(entry.id, []),
-                "evidence_task": str(evidence.get("task") or ""),
-                "evidence_files": list(evidence.get("file_paths") or []),
+                "evidence_task": (_evidence_tasks(evidence) or [""])[0],
+                "evidence_tasks": _evidence_tasks(evidence),
+                "evidence_files": _evidence_files(evidence),
             })
     return rows
+
+
+def _as_list(value) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return []
+
+
+def _evidence_tasks(evidence: dict) -> list[str]:
+    """Every task id an evidence dict names, in every shape PRISM writes
+    (task 6e858c89): "task" (one id), "task_id", "tasks" (a list). Measured
+    on the prism project 2026-08-27: 74 of 82 decision-has-evidence
+    violations were memories whose evidence sat in a shape the projection
+    did not read."""
+    out: list[str] = []
+    for key in ("task", "task_id", "tasks"):
+        for v in _as_list(evidence.get(key)):
+            if v not in out:
+                out.append(v)
+    return out
+
+
+def _evidence_files(evidence: dict) -> list[str]:
+    """Every document path an evidence dict names: "file_paths", "files",
+    and "source_file" (one path; 65 live decisions carry only that)."""
+    out: list[str] = []
+    for key in ("file_paths", "files", "source_file"):
+        for v in _as_list(evidence.get(key)):
+            if v not in out:
+                out.append(v)
+    return out

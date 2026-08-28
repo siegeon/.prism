@@ -130,6 +130,37 @@ def test_a_normaliser_failure_never_drops_a_signal(project, monkeypatch):
     assert got.subject == "x" and got.body == "y"
 
 
+def test_update_re_aligns_when_subject_or_body_change(project):
+    """Task aa7fab99: SignalStore.update() must re-run the SAME
+    alignment create() runs whenever subject or body actually change --
+    a refreshed ontology signal (rule_decisions' dedup re-post) must
+    keep showing CURRENT aligned text, never what the first post
+    produced. Compares against the LITERAL expected text (never
+    normalize(input) compared with itself)."""
+    from prism_service.models.signal import Signal
+    from prism_service.services.signal_store import SignalStore
+
+    store = SignalStore(project)
+    signal = Signal(project=project, channel="slack", subject="ping",
+                     body="nothing to see here", sender="alice")
+    store.create(signal)
+    assert signal.aligned_body == "nothing to see here"
+
+    updated = store.update(signal.id, body=_RAW_BODY)
+    assert updated is not None
+    assert updated.body == _RAW_BODY
+    assert updated.aligned_body == _EXPECTED_ALIGNED_BODY
+    assert "lexicon" in updated.style["fixed"]["body"]
+
+    got = store.get(signal.id)
+    assert got.aligned_body == _EXPECTED_ALIGNED_BODY
+
+    # An update that touches neither subject nor body must not disturb
+    # the aligned fields it already has.
+    untouched = store.update(signal.id, state="dropped")
+    assert untouched.aligned_body == _EXPECTED_ALIGNED_BODY
+
+
 def test_get_and_list_carry_aligned_fields(project):
     from prism_service.models.signal import Signal
     from prism_service.services.signal_store import SignalStore

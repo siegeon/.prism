@@ -7,8 +7,10 @@ resolver -- never the sqlite ontology_store.py tables (a sibling epic is
 moving those onto an RDF graph). Called at the end of POST /api/signals
 create (best-effort) and re-runnable via POST /api/signals/{id}/resolve.
 
-QueueItem is re-pointed to SIGNALS (ontology_prototype_projection.py); Task
-stays its own class so nothing is lost.
+Signal is re-pointed to SIGNALS (ontology_prototype_projection.py); Task
+stays its own class so nothing is lost. Re-anchored by task cacfb628: the
+catalog id this projected as was "QueueItem" -- o:QueueItem collapsed into
+o:Signal, its one declared child, so the id is now "Signal" too.
 """
 
 from __future__ import annotations
@@ -242,7 +244,7 @@ def test_resolve_endpoint_404_for_unknown_signal(project):
     assert r.status_code == 404
 
 
-# ── ontology projection: QueueItem <- signals, Task stays its own class ───
+# ── ontology projection: Signal <- signals, Task stays its own class ───
 
 def test_queue_item_projects_from_signals_and_task_class_exists(project):
     from prism_service.services import ontology_prototype_projection as proj
@@ -257,12 +259,24 @@ def test_queue_item_projects_from_signals_and_task_class_exists(project):
     sig_store.create(_make_signal(project, subject="signal two"))
     sig_store.create(_make_signal(project, subject="signal three"))
 
+    # Re-anchored for task b1971944 ("a firing rule becomes a decision on
+    # the Queue"): rebuild()'s own OntologyGraph.rebuild() -> validate()
+    # pass may now post NEW "ontology"-channel signals for any rule this
+    # project's own tasks/docs happen to violate, AFTER this project's
+    # Signal projection already took its snapshot via gather() at the
+    # top of rebuild() -- so the count this pins is the one BEFORE
+    # rebuild runs, never a later sig_store.list() call, which could see
+    # those new signals too.
+    signal_count_before_rebuild = len(sig_store.list())
+
     proj.rebuild(project)
 
     store = OntologyStore(project)
     classes = {c["id"]: c for c in store.list_classes()}
-    assert classes["QueueItem"]["instance_count"] == len(sig_store.list())
-    assert classes["QueueItem"]["source"] == "signals"
+    # Re-anchored for task cacfb628: catalog id "QueueItem" collapsed into
+    # "Signal" (o:QueueItem had exactly one child, o:Signal).
+    assert classes["Signal"]["instance_count"] == signal_count_before_rebuild
+    assert classes["Signal"]["source"] == "signals"
 
     assert "Task" in classes
     assert classes["Task"]["instance_count"] == 2

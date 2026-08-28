@@ -53,6 +53,8 @@
   "workflow": [
     "align_language",
     "implement",
+    "promote_to_law",
+    "quickfix",
     "triage"
   ]
 }

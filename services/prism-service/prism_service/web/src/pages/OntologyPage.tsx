@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Button } from "@/components/ui";
@@ -56,6 +56,9 @@ type RuleFocus = { iri?: string; label?: string } | string;
 type Rule = {
   name: string; title?: string; description: string; looked_at: number;
   violations: number; focus: RuleFocus[];
+  // task c5650403: which memory (mx-...) this rule was promoted from.
+  // Empty for every built-in rule declared straight in shapes.ttl.
+  derived_from?: string;
 };
 type RulesPayload = { rules: Rule[]; need_decision: number; total: number };
 
@@ -68,6 +71,9 @@ type RecordsPayload = { things: number; connections: number; values: number; cla
 type Term = {
   value: string; in_use: boolean; count: number;
   comment?: string; synonyms?: string[]; denotes?: string;
+  // task c5650403: which memory (mx-...) this term was promoted from.
+  // Empty for every term declared straight in model-lexicon.ttl.
+  derived_from?: string;
 };
 type Vocabulary = { name: string; comment: string; terms: Term[] };
 type HeldBack = { vocabulary: string; value: string; count: number };
@@ -88,6 +94,20 @@ function notAvailableMessage(e: unknown): string {
 function focusLabel(f: RuleFocus): string {
   if (typeof f === "string") return f.split("/").pop() ?? f;
   return f.label ?? f.iri ?? "";
+}
+
+// task c5650403: "from mx-..." on a rule or a term promoted from a memory
+// in Understand, linking to that memory's own concept page.
+function DerivedFromLink({ derivedFrom }: { derivedFrom?: string }) {
+  if (!derivedFrom) return null;
+  return (
+    <Link
+      to={`/understand?concept=${encodeURIComponent(derivedFrom)}`}
+      className="text-2xs font-mono text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)] underline decoration-dotted"
+    >
+      from {derivedFrom}
+    </Link>
+  );
 }
 
 // A SectionLabel that also carries a colored dot + a right-aligned count —
@@ -385,7 +405,10 @@ function RuleRow({ rule, flagged }: { rule: Rule; flagged: boolean }) {
       />
       <div className="flex-1 min-w-0">
         <div className="text-[13px] font-semibold text-[color:var(--text-primary)]">{rule.title ?? rule.name}</div>
-        <div className="text-2xs font-mono text-[color:var(--text-muted)]">{rule.name}</div>
+        <div className="text-2xs font-mono text-[color:var(--text-muted)] flex items-center gap-2">
+          <span>{rule.name}</span>
+          <DerivedFromLink derivedFrom={rule.derived_from} />
+        </div>
         <div className="text-[12px] text-[color:var(--text-secondary)] mt-1">{rule.description}</div>
         {shown.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-2">
@@ -561,7 +584,10 @@ function TermsTab({ data, error }: { data: TermsPayload | null; error: string | 
                           ? { borderColor: "var(--social)", color: "var(--social)" }
                           : { borderColor: "var(--border-default)", color: "var(--text-muted)" }}
                       >
-                        <div className="font-mono">{t.value}</div>
+                        <div className="font-mono flex items-center gap-2">
+                          <span>{t.value}</span>
+                          <DerivedFromLink derivedFrom={t.derived_from} />
+                        </div>
                         {t.comment && (
                           <div className="text-[11px] text-[color:var(--text-secondary)] font-sans">{t.comment}</div>
                         )}

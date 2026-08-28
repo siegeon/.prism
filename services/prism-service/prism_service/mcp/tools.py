@@ -1170,6 +1170,30 @@ TOOLS: list[Tool] = [
         },
     ),
     Tool(
+        name="memory_promote",
+        description=(
+            "Promote a memory in Understand to a rule or a term the "
+            "ontology holds (task c5650403, epic 61821448). Drafts a "
+            "SHACL rule or a lexicon term from the memory, each with its "
+            "own compliant and violating fixture, then drives one visible "
+            "run task to an owner review gate. The owner approves or "
+            "rejects; an approve installs the draft into the project's "
+            "own law and proves the violating fixture fires before it "
+            "commits."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "memory_id": {
+                    "type": "string",
+                    "description": "The mx-... memory id to promote.",
+                },
+            },
+            "required": ["memory_id"],
+            "additionalProperties": False,
+        },
+    ),
+    Tool(
         name="workflow_fix_request",
         description=(
             "Queue a governed repair for an authoritative failed scripted workflow step. "
@@ -1899,6 +1923,10 @@ INTERACTIVE_TOOL_NAMES: set[str] = {
     "prism_onboard",
     "task_create",
     "task_align_language",
+    # task c5650403 (epic 61821448): memory_promote joined the interactive
+    # profile as the trigger for the Promote-to-law workflow, the same way
+    # task_align_language did for align-language above.
+    "memory_promote",
     "workflow_fix_request",
     "workflow_behavior_get",
     "workflow_behavior_provide",
@@ -2014,6 +2042,29 @@ AUTOMATION_TOOL_NAMES: set[str] = {
     "understand_status",
 }
 
+# Task 0e2c82f3 "Brain retrieval costs a tool load, Bash does not": a
+# conductor drive lane connects with tool_profile=drive so the MCP surface
+# is small enough that the harness does NOT defer brain_* behind ToolSearch.
+# Retrieval + conductor verbs only; no admin / hooks / learning / automation
+# tools (test_drive_retrieval_tool_cost.py pins the members).
+DRIVE_TOOL_NAMES: set[str] = {
+    "brain_search",
+    "brain_understand",
+    "brain_call_chain",
+    "brain_find_references",
+    "brain_find_symbol",
+    "brain_outline",
+    "context_bundle",
+    "conductor_work",
+    "task_list",
+    "task_update",
+    "task_link_session",
+    "task_create",
+    "memory_recall",
+    "memory_store",
+    "prism_guide",
+}
+
 TOOL_PROFILE_ALIASES: dict[str, str] = {
     "all": "all",
     "default": "interactive",
@@ -2026,6 +2077,7 @@ TOOL_PROFILE_ALIASES: dict[str, str] = {
     "learning": "learning",
     "automation": "automation",
     "hooks_api": "automation",
+    "drive": "drive",
 }
 
 
@@ -2046,6 +2098,8 @@ def tool_names_for_profile(profile: str | None) -> set[str]:
         return LEARNING_TOOL_NAMES & all_names
     if profile_key == "automation":
         return AUTOMATION_TOOL_NAMES & all_names
+    if profile_key == "drive":
+        return DRIVE_TOOL_NAMES & all_names
     return all_names
 
 
@@ -2603,17 +2657,43 @@ creep, not conductor work.
 
 ## Two things a human decides; nothing else
 
-The owner stops at exactly two gates: `plan_gate` (approve the direction)
-and `green_gate` (approve the final state). `red_gate` belongs to the
-machine seat and must never be routed to a human — a machine seat that
-abstains at red is a system defect to fix, never a click to request.
-`readiness` (`GET /api/conductor/gate/readiness`) describes the RECEIPT
-SHAPE a gate would accept, never the verdict; `task.gate_state` is the
-verdict. Read both before telling anyone a gate is or isn't waiting on
-them, and never quote a gate's state from a stored field
-(`task.gate_reason`, `task.workflow_step`) without re-deriving it live —
-those are snapshots that go stale the instant a drive rewrites the
+The owner stops at exactly two gates on a ROOT task (`parent_id` empty) —
+`plan_gate` (approve the direction) and `green_gate` (approve the final
+state). `red_gate` belongs to the machine seat and must never be routed to
+a human — a machine seat that abstains at red is a system defect to fix,
+never a click to request. `readiness` (`GET /api/conductor/gate/readiness`)
+describes the RECEIPT SHAPE a gate would accept, never the verdict;
+`task.gate_state` is the verdict. Read both before telling anyone a gate is
+or isn't waiting on them, and never quote a gate's state from a stored
+field (`task.gate_reason`, `task.workflow_step`) without re-deriving it
+live — those are snapshots that go stale the instant a drive rewrites the
 artifact they describe.
+
+**Root plan_gate waits for the owner; every child's is the machine's**
+(task 3c774abd, owner rule 2026-08-27: "the users approve the plans for
+parent level tasks, the system can make and manage as many sub agents as
+they want to manage subtasks that do not need user approval"). A ROOT task
+(`parent_id` empty) on the real conductor/implement SDLC — `normalize_
+workflow(task.workflow) == "implement"` (models.task.DEFAULT_WORKFLOW) is
+the honest marker; `normalize_workflow` never applies `WORKFLOW_ALIASES`,
+so the stored/normalized value is the literal string "implement", never
+the UI catalog id "conductor" that alias maps to — never auto-clears
+`plan_gate`: once the plan rubric passes, the gate parks pending with
+`gate_reason` "Plan rubric passed (machine review). Your approval releases
+the plan.", `readiness` answers `adapter=human`, and only a genuine,
+distinct-actor `gate_decide`
+call releases it — `conductor-autoclear` (session_id) must never be the
+actor on a root plan_gate's history row. A CHILD task's `plan_gate` keeps
+autoclearing on a passing rubric, exactly as before — it is beneath the
+owner's notice by the same rule that makes a subtask mine to finish in
+its entirety (see the `## A stuck step` doctrine below). `story_gate`
+autoclears on every task, root or child — the owner's two stops are
+`plan_gate` and `green_gate` only. A daemon-created RUN task (the
+`language_alignment_worker.py` / `law_promotion.py` workers' own
+`align_language` / `promote_to_law` workflows) is root by construction
+(`parent_id=""`) but is NOT on the conductor workflow, so it never counts
+as a root SDLC task under this rule and keeps whatever autoclear its own
+named workflow already gives it. The owner's approval is the design-packet Approve on the task page (task c016667f); a child task clears plan_gate on the rubric alone.
 
 ## Report audit — before any step's final report
 
@@ -4685,6 +4765,12 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json(
                 {"run_task_id": None, "report": _result}))]
 
+        if name == "memory_promote":
+            from prism_service.services import law_promotion
+            _memory_id = arguments.get("memory_id", "")
+            _result = law_promotion.start_promotion(project_id, _memory_id)
+            return [TextContent(type="text", text=_json(_result))]
+
         if name == "task_list":
             _status = arguments.get("status")
             _scoped = any(
@@ -5127,7 +5213,7 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # (on the FINAL step AND that gate passed) — advance past green_gate
             # is a no-op, so next_job is never null at terminal.
             from prism_service.api import conductor_flow as _flow
-            from prism_service.models.workflow import WORKFLOW_STEPS as _STEPS
+            from prism_service.models.workflow import steps_for as _steps_for
             _sid = str(arguments.get("session_id") or "").strip() \
                 or _resolve_link_session_id()
             _task_id = str(arguments.get("id") or "").strip()
@@ -5137,13 +5223,27 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 _proof and str(_proof).strip())
 
             def _terminal(t) -> bool:
+                # Task 811fcce0 follow-on defect (found alongside the
+                # _step_by_id workflow-arg bug above, same root cause): this
+                # hardcoded the DEFAULT "implement" workflow's last step id
+                # (green_gate) regardless of the task's own workflow, so a
+                # triage/align_language/promote_to_law/quickfix task could
+                # never be recognized as terminal here — reaching its OWN
+                # last step ("done", never a gate) always read as "not
+                # done", so this tool never flipped its status to "done"
+                # and never returned done=true. Resolve the task's own
+                # workflow's last step instead, the same pattern the
+                # _step_by_id fix above uses.
                 if t is None:
                     return False
                 if str(getattr(t, "status", "") or "") in ("done", "cancelled"):
                     return True
-                _last = _STEPS[-1]["id"]
-                return (getattr(t, "workflow_step", "") == _last
-                        and getattr(t, "gate_state", "") == "passed")
+                _last = _steps_for(_flow._task_workflow(t))[-1]
+                if getattr(t, "workflow_step", "") != _last["id"]:
+                    return False
+                if _last["type"] == "gate":
+                    return getattr(t, "gate_state", "") == "passed"
+                return True
 
             # Kickoff: no id -> pull the next task. Can't report without an id.
             if not _task_id:
@@ -5185,8 +5285,17 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                 return [TextContent(type="text", text=_json({
                     "ok": False, "error": "unknown task",
                     "task_id": _task_id}))]
+            # Task 811fcce0 follow-on defect (found driving the "quickfix"
+            # workflow through this exact tool): _step_by_id defaults its
+            # `workflow` arg to "implement", so a REPORT for any OTHER
+            # workflow's step id (intake/classify/collect/draft/apply_fix/
+            # ...) never matches implement's own 10 step ids -- _cur was
+            # always None, so every report silently fell into the "not
+            # entered yet, restart" branch below instead of advancing.
+            # Resolve the task's OWN workflow the same way conductor_flow's
+            # _job/_task_workflow already do.
             _cur = conductor_svc._step_by_id(
-                getattr(_t, "workflow_step", "") or "")
+                getattr(_t, "workflow_step", "") or "", _flow._task_workflow(_t))
             if _cur is None:
                 # Not entered yet — a report with no current step: START it.
                 _body = _flow.Ident(task_id=_task_id, session_id=_sid,

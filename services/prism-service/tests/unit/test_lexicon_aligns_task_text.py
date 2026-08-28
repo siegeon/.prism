@@ -285,7 +285,9 @@ def test_ontology_page_renders_lexicon_synonyms_in_its_own_jsx_branch():
 # ----------------------------------------------------------------------
 
 _SINGLE_WORD_SYNONYMS_ALLOWED = {
-    "ticket", "PR", "MR", "ADR", "doc", "bot", "assistant",
+    "ticket", "PR", "MR", "ADR", "doc", "assistant", "behaviour",
+    # "bot" left this list on 2026-08-27 (mx-0e5a88): a Bot is a tier-1
+    # deterministic workflow, not an Agent; see test_bot_is_never_a_synonym.
 }
 
 
@@ -303,3 +305,18 @@ def test_common_words_never_align():
                  "Keep it in memory.", "Run the CI pipeline.", "Add a checkpoint.", "Get sign-off."):
         aligned, applied = lexicon.align(text)
         assert aligned == text and applied == [], (text, aligned, applied)
+
+
+def test_bot_is_never_a_synonym():
+    """Owner 2026-08-27 (mx-0e5a88): "the top level are bots (tier 1
+    workflows) that have deterministic flows"; a Bot is not an Agent, so the
+    lexicon must leave the word alone. Before this the aligner rewrote a
+    ticket titled "Bot is its own term, not a synonym of Agent" into "Agent
+    is its own term, not a synonym of Agent" (task 8bcd4cb3)."""
+    from prism_service.services.lexicon import load_lexicon, align
+
+    for term in load_lexicon():
+        assert "bot" not in [a.lower() for a in term.alt_labels], term.label
+    text = "The Bot runs a deterministic flow. A bot is not an agent."
+    aligned, _changes = align(text)
+    assert aligned == text

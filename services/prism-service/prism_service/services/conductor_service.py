@@ -114,6 +114,43 @@ def full_outcome_verdict(slice_green: bool, completion_proof: object,
     return True, ""
 
 
+def subtree_progress_counts(task_svc, root_id: str, max_depth: int = 6) -> dict:
+    """Recursive status counts across the WHOLE descendant subtree of
+    root_id (root itself excluded), not just direct children -- so a UI can
+    answer "how much work is actually done" without drilling through several
+    epic-rollup levels by hand. Owner, live, task 95474ec7: "impossobvle to
+    see at this top level how much work is actualy done" -- the real answer
+    was 3 of 7 descendants done and 2 more at their own green_gate pending
+    only a merge, none of which was visible from blocking_children (direct
+    children only). Cancelled/deleted descendants are excluded, matching
+    epic_rollup_verdict's own filtering. Depth-bounded (6, same bound as
+    ConductorService._subtree_active) against runaway/cyclic data.
+    """
+    counts = {"total": 0, "done": 0, "in_progress": 0, "blocked": 0, "pending": 0}
+
+    def walk(tid: str, depth: int, seen: set) -> None:
+        if depth > max_depth or tid in seen:
+            return
+        seen.add(tid)
+        try:
+            kids = task_svc.list(parent_id=tid)
+        except Exception:
+            return
+        for k in kids:
+            status = str(_task_attr(k, "status", "") or "")
+            if status in ("cancelled", "deleted"):
+                continue
+            counts["total"] += 1
+            if status in counts:
+                counts[status] += 1
+            else:
+                counts["pending"] += 1
+            walk(str(_task_attr(k, "id", "")), depth + 1, seen)
+
+    walk(root_id, 0, set())
+    return counts
+
+
 def epic_rollup_verdict(children: list) -> tuple[bool, str]:
     """Issue #171 — an EPIC/parent green_gate is satisfiable by ROLLING UP
     its children. When every non-cancelled child task is status=done AND
@@ -2306,7 +2343,9 @@ class ConductorService:
             return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, "green_gate", _pr)
                 return None
         except Exception:
             return None
@@ -2325,6 +2364,21 @@ class ConductorService:
             _reach_reason = ""
         if _reach_reason:
             self._park_green_refusal(task_id, _reach_reason)
+            return None
+        # PROMOTED-LAW TOOTH (task 2bfe49db, epic 61821448): a memory
+        # promoted to a SHACL rule (services/law_promotion.py, task
+        # c5650403) used to run only on a full ontology rebuild. This runs
+        # the SAME promoted rule over the task's own diff, cheaply. Reads
+        # ONLY the project's own promoted-shapes.ttl (services/law_check.py
+        # docstring). Pre-flight, abstain-only like the tooth above.
+        try:
+            from prism_service.services import law_check
+            _law_reason = law_check.law_violation_reason(
+                task, self._project_name or "default")
+        except Exception:
+            _law_reason = ""
+        if _law_reason:
+            self._park_green_refusal(task_id, _law_reason)
             return None
         # SCREEN-CLAIM + SHIPPED-NESS PRE-FLIGHT (task 8a737f2f). Two
         # ABSTAIN-ONLY teeth, computed together so a single refusal names
@@ -2484,23 +2538,26 @@ class ConductorService:
         return False
 
     def _consecutive_auto_rewinds(self, task_id) -> int:
-        """Auto rewinds since the last forward/human row. Parking rows and
-        machine refusals do not reset the count (or the budget would never
-        bind)."""
+        """Auto rewinds since the last forward/human row. Parking rows,
+        machine refusals, and TaskService's own "updated" audit rows do
+        not reset the count (or the budget would never bind)."""
         n = 0
         for r in reversed(list(self._task_svc.history(task_id) or [])):
             act = getattr(r, "action", "")
+            details = str(getattr(r, "details", ""))
             if act == "auto_rewind":
                 n += 1
-            elif act == "auto_rewind_exhausted" or (
+            elif act == "updated" or act == "auto_rewind_exhausted" or (
                     act == "gate_decide"
-                    and "machine=refused" in str(getattr(r, "details", ""))):
+                    and ("machine=refused" in details
+                         or "action=reject" in details)):
                 continue
             else:
                 break
         return n
 
-    def _auto_rewind(self, task_id, target_step, reason, evidence_ref):
+    def _auto_rewind(self, task_id, target_step, reason, evidence_ref,
+                     from_step="green_gate"):
         """AC-6: move the task back with the seat and evidence on the row;
         the refusal text becomes the next step's work order."""
         self._task_svc.update(task_id, workflow_step=target_step,
@@ -2508,8 +2565,45 @@ class ConductorService:
                               blocked_reason="")
         self._record_seat_row(
             task_id, "auto_rewind",
-            f"green_gate -> {target_step}; {evidence_ref}; reason={reason}")
+            f"{from_step} -> {target_step}; {evidence_ref}; reason={reason}")
         return {"ok": True, "rewound_to": target_step}
+
+    def _reject_gate(self, task_id, gate_step_id, task_workflow, reason,
+                     session_id, model, decided_by, override=False) -> dict:
+        """Shared body for gate_decide's action='reject' -- both a fresh
+        pending gate and, with override=True, recovery from an already-
+        failed one (see the "failed" branch above and
+        test_gate_reject_rewinds_to_producing_step.py /
+        test_failed_gate_reject_override_recovers_via_rewind). Rewinds to
+        the producing step when the auto-rewind budget allows, else parks
+        'failed' exactly like the pre-rewind contract. override=True is an
+        explicit human recovery decision, not an unsupervised loop, so it
+        is never bound by MAX_AUTO_REWINDS."""
+        self._task_svc.update(task_id, gate_state="failed", gate_reason=reason)
+        self._task_svc.record_history(
+            task_id, action="gate_decide",
+            details=f"gate={gate_step_id}; action=reject; reason={reason}",
+            actor=decided_by("conductor"))
+        self._record_agent_run(
+            task_id, gate_step_id, session_id, model=model,
+            gate_state="failed", ok=False,
+            verdict_summary=("reject: " + (reason or ""))[:200])
+        rewound_to = None
+        if override or self._consecutive_auto_rewinds(task_id) < MAX_AUTO_REWINDS:
+            idx = self._step_index(gate_step_id, task_workflow)
+            if idx > 0:
+                producing = self._workflow_steps(task_workflow)[idx - 1]
+                if producing["type"] != "gate":
+                    self._auto_rewind(task_id, producing["id"], reason,
+                                      "manual reject", from_step=gate_step_id)
+                    rewound_to = producing["id"]
+        return {
+            "ok": True,
+            "task_id": task_id,
+            "gate_step": gate_step_id,
+            "gate_state": "none" if rewound_to else "failed",
+            "rewound_to": rewound_to,
+        }
 
     def _evaluate_green_gate_rewind(self, task, tree_sha, tried, refusal,
                                     remint_attempted):
@@ -2593,6 +2687,28 @@ class ConductorService:
                 f"contain this task's pinned test(s) {', '.join(missing)} — "
                 "it cannot have exercised this change; a distinct actor "
                 "must decide")
+
+    def _park_policy_abstention(self, task_id: str, gate: str,
+                                reason: str) -> None:
+        """RECORD a policy-judge abstention at the seat that decides (task
+        dd2b87c8): pending (never failed) + gate_reason + blocked_reason, plus
+        ONE gate_decide audit row per unresolved condition (de-duped across
+        re-sweeps) — a bare `return None` threw the reason away so no driver
+        could self-diagnose (same defect as e0149f1f, four seats over)."""
+        if self._task_svc is None:
+            return
+        try:
+            task = self._task_svc.get(task_id)
+            prior = str(_task_attr(task, "gate_reason", "") or "")
+            self._task_svc.update(task_id, gate_state="pending",
+                                  gate_reason=reason, blocked_reason=reason)
+            if prior.strip() != reason.strip():
+                self._task_svc.record_history(
+                    task_id, action="gate_decide",
+                    details=(f"gate={gate}; action=approve; "
+                             f"machine=abstained; reason={reason}"))
+        except Exception:
+            return
 
     def _park_green_refusal(self, task_id: str, reason: str) -> None:
         """RECORD a machine refusal instead of discarding it (task e0149f1f).
@@ -2862,7 +2978,9 @@ class ConductorService:
             return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, "red_gate", _pr)
                 return None
         except Exception:
             return None
@@ -2971,7 +3089,9 @@ class ConductorService:
             return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, "red_gate", _pr)
                 return None
         except Exception:
             return None
@@ -3076,24 +3196,41 @@ class ConductorService:
         if check.get("verified") is not True:
             return None
         if step == "plan_gate":
-            # FR-4/FR-5 (task c016667f): the re-sweep seat withholds too — the
-            # rubric alone no longer clears plan_gate, unconditionally (AC-10:
-            # no ui-tag narrowing). Mirrors the entry-time autoclear check in
-            # api/conductor_flow.py so every seat consults the same ledger.
-            from prism_service.services import design_packet as dp
-            project = self._project_name or "default"
-            status = dp.approval_status(project, task_id, task)
-            if not status.get("approved"):
-                _r = str(status.get("reason", "") or "")
-                if _r and _r != (getattr(task, "gate_reason", "") or ""):
-                    try:
-                        self._task_svc.update(task_id, gate_reason=_r)
-                    except Exception:
-                        pass
-                return None
+            # ROOT PLAN-GATE STOP (task 3c774abd, owner rule 2026-08-27): the
+            # re-sweep seat withholds too — a ROOT task on the real
+            # conductor SDLC with a passing rubric stays parked for the
+            # owner's own gate_decide; the rubric pass is the machine's
+            # review, never the approval. Mirrors api/conductor_flow.py's
+            # entry-time check (ROOT_PLAN_GATE_REASON / same test there) so
+            # every seat agrees — duplicated as a plain check here rather
+            # than imported, so services never depends on the api layer.
+            # "implement" (not the UI catalog id "conductor") is the honest
+            # marker — task_workflow is normalize_workflow's own output,
+            # which never applies WORKFLOW_ALIASES.
+            # Owner 2026-08-27 (task 3c774abd): only a ROOT conductor task
+            # needs the owner's design-packet approval on file; a CHILD clears
+            # on the rubric alone. Mirrors api/conductor_flow.py so every seat
+            # consults the same ledger.
+            if not str(getattr(task, "parent_id", "") or "").strip() \
+                    and task_workflow == "implement":
+                from prism_service.services import design_packet as dp
+                project = self._project_name or "default"
+                status = dp.approval_status(project, task_id, task)
+                if not status.get("approved"):
+                    _r = str(status.get("reason", "") or "") or (
+                        "Plan rubric passed (machine review). Your "
+                        "approval releases the plan.")
+                    if _r != (getattr(task, "gate_reason", "") or ""):
+                        try:
+                            self._task_svc.update(task_id, gate_reason=_r)
+                        except Exception:
+                            pass
+                    return None
         try:
             from prism_service.services import control_plane as _cp
-            if _cp.candidate_controls_judge_reason(task):
+            _pr = _cp.candidate_controls_judge_reason(task)
+            if _pr:
+                self._park_policy_abstention(task_id, step, _pr)
                 return None
         except Exception:
             return None
@@ -3886,7 +4023,19 @@ class ConductorService:
                     recheck = self._verify_gate(
                         task, task.workflow_step,
                         getattr(task, "proof_type", None))
-                if recheck.get("verified") is not True:
+                # Same PLAIN OWNER GATE carve-out as the first-time approve
+                # path below (task 44c7e2d0): a step that never declared a
+                # rubric (validation=None, by design -- triage's decide,
+                # promote_to_law's review) recovers on a plain approve too.
+                # Without this, a gate that failed ONCE on the bug this
+                # task fixes could never recover EXCEPT via override=True,
+                # which the live Evidence tab has no control for at all --
+                # a task could be permanently stuck even after the
+                # first-approve bug above was fixed.
+                recheck_plain_owner_gate = (recheck.get("verified") is None
+                                             and recheck.get("validation") is None)
+                if (recheck.get("verified") is not True
+                        and not recheck_plain_owner_gate):
                     return {
                         "ok": False,
                         "task_id": task_id,
@@ -3902,6 +4051,16 @@ class ConductorService:
                         "verifier": recheck.get("verifier"),
                     }
                 # verified recheck: fall through to the normal approve path.
+            elif action == "reject" and override:
+                # A gate stuck 'failed' from BEFORE this rewind mechanism
+                # existed (or any standing reject) has no forward recovery
+                # worth taking when the underlying work still needs a redo
+                # -- override=True says so explicitly and reuses the same
+                # producing-step rewind a fresh reject gets (task 12029f92).
+                return self._reject_gate(
+                    task_id, task.workflow_step, task_workflow, reason,
+                    session_id, model, lambda fb: actor or session_id or fb,
+                    override=True)
             elif not (action == "approve" and override):
                 return {
                     "ok": False,
@@ -3938,28 +4097,8 @@ class ConductorService:
             return actor or session_id or fallback
 
         if action == "reject":
-            self._task_svc.update(
-                task_id,
-                gate_state="failed",
-                gate_reason=reason,
-            )
-            self._task_svc.record_history(
-                task_id,
-                action="gate_decide",
-                details=f"gate={gate_step_id}; action=reject; reason={reason}",
-                actor=_decided_by("conductor"),
-            )
-            self._record_agent_run(
-                task_id, gate_step_id, session_id, model=model,
-                gate_state="failed", ok=False,
-                verdict_summary=("reject: " + (reason or ""))[:200],
-            )
-            return {
-                "ok": True,
-                "task_id": task_id,
-                "gate_step": gate_step_id,
-                "gate_state": "failed",
-            }
+            return self._reject_gate(task_id, gate_step_id, task_workflow,
+                                     reason, session_id, model, _decided_by)
 
         # action == 'approve' - validation evidence is REQUIRED.
         # Every approve must describe what was used to satisfy the gate
@@ -4504,7 +4643,27 @@ class ConductorService:
             verifier_payload = outcome.get("verifier")
             verifier_validation = outcome.get("validation")
             verifier_reason = outcome.get("reason", "")
-            if outcome["verified"] is not True:
+            # PLAIN OWNER GATE, NO RUBRIC BY DESIGN (task 44c7e2d0, live
+            # repro on promote_to_law's review gate — same shape as
+            # triage's decide gate): _verify_gate returns verified=None,
+            # validation=None specifically when the STEP ITSELF declares
+            # no validation kind at all (models/workflow.py's
+            # TRIAGE_STEPS/PROMOTE_TO_LAW_STEPS, "a plain owner gate, the
+            # same shape triage's decide step uses" — there was never a
+            # rubric to consult). Treating that None the same as an
+            # explicit verifier REJECTION failed the gate on the very
+            # first plain Approve click, with the error text itself saying
+            # "recover manually with override=True" — but no UI control
+            # exists to send that, so the gate was permanently stuck for
+            # a human clicking the only Approve button the page has.
+            # verified=None with a REAL declared validation kind (a
+            # genuinely wired-but-missing rubric — validation is non-None
+            # in that case, see _verify_gate) is UNCHANGED below: that is
+            # a real configuration gap, not a by-design no-rubric step,
+            # and still requires override=True.
+            plain_owner_gate = (outcome["verified"] is None
+                                 and outcome.get("validation") is None)
+            if outcome["verified"] is not True and not plain_owner_gate:
                 self._task_svc.update(
                     task_id,
                     gate_state="failed",
@@ -4539,7 +4698,8 @@ class ConductorService:
             detail_bits = [
                 f"gate={gate_step_id}",
                 "action=approve",
-                f"verifier=pass; validation={verifier_validation}",
+                ("no-rubric-gate=pass" if plain_owner_gate
+                 else f"verifier=pass; validation={verifier_validation}"),
             ]
             if reason:
                 detail_bits.append(f"reason={reason}")
@@ -5694,6 +5854,23 @@ class ConductorService:
         except Exception:
             return []
 
+    def _subtree_active(self, task, _depth: int = 0) -> bool:
+        """True if TASK itself, or any descendant at any depth, is
+        in_progress with a step transition inside the last 120s or a live
+        drive heartbeat. Depth-bounded (6) against runaway/cyclic data, not
+        against real epic nesting — an epic-of-epics is typically 2-4 levels
+        deep in this repo (task 95474ec7)."""
+        if _depth > 6:
+            return False
+        if (getattr(task, "status", "") or "") == "in_progress":
+            motion = self._task_motion_s(task)
+            if motion is not None and motion <= 120:
+                return True
+            beat = drive_heartbeat.latest(self._scores_db, getattr(task, "id", ""))
+            if beat is not None and beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
+                return True
+        return any(self._subtree_active(k, _depth + 1) for k in self._children(task))
+
     def activity_for(self, task, phase_progress: dict) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
         means a REAL recent conductor transition on THIS task (<=120s); when
@@ -5727,9 +5904,11 @@ class ConductorService:
                 # An EPIC's activity is its slices': a slice actively moving =>
                 # working; some slices done but none active => paused (real
                 # progress, between bursts — NOT the alarming "stalled");
-                # nothing done and nothing active => stalled.
-                active = any((getattr(k, "status", "") or "") == "in_progress"
-                             and (self._task_motion_s(k) or 1e9) <= 120 for k in kids)
+                # nothing done and nothing active => stalled. RECURSIVE: an
+                # epic-of-epics' real work can sit several levels down (task
+                # 95474ec7, live, 3 hops to its actual driven leaf) — a direct
+                # child's OWN motion is not enough, the whole subtree counts.
+                active = any(self._subtree_active(k) for k in kids)
                 done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
                 if active:
                     state = "working"

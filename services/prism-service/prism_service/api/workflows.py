@@ -73,17 +73,23 @@ router = APIRouter()
 # hat worth drawing, so it is listed explicitly rather than derived.
 BOT_IDS = ("sm", "qa", "dev", "architect")
 
+# task 408138e8 (epic 61821448): every step's `action` text names the
+# trigger that starts it -- the skill-description-says-when SHACL rule
+# (ontology/shapes.ttl) reads this text (via _catalog_entries' network-
+# free fallback, ontology_prototype_projection.py) when the live /api/
+# workflows catalog is unreachable, so the trigger clause must live HERE,
+# not only in the live catalog's own description strings below.
 STEP_ACTIONS = {
-    "review_previous_notes": ("Existing project memory and source", "Review prior decisions and ground every premise in evidence", "A cited premise report"),
-    "draft_story": ("Grounded premises and the requested outcome", "Author requirements and acceptance criteria with observable oracles", "A reviewable story"),
-    "story_gate": ("The authored story", "An independent Steward adjudicates story completeness", "Approved story or a concrete refusal reason"),
-    "verify_plan": ("The approved story", "Check that the implementation plan covers every acceptance criterion", "A coverage-backed plan"),
-    "plan_gate": ("The verified plan", "An independent Steward adjudicates plan coverage", "Approved plan or a concrete refusal reason"),
-    "write_failing_tests": ("Acceptance criteria and plan", "Write traced tests that fail for the missing behavior", "Reproducible red evidence"),
-    "red_gate": ("Failing test evidence", "An independent Steward confirms the failure is relevant and honest", "Approved red state or a refusal reason"),
-    "implement_tasks": ("Approved plan and failing tests", "Make the smallest source change that turns the tests green", "Implemented source changes"),
-    "verify_green_state": ("Implementation and its verification commands", "Run the real verification suite and inspect the resulting evidence", "Full green evidence"),
-    "green_gate": ("Green evidence and acceptance oracles", "An independent Steward decides whether the requested outcome is actually complete", "Accepted outcome or follow-up work"),
+    "review_previous_notes": ("Existing project memory and source", "Review prior decisions and ground every premise in evidence. Runs first, when a task starts the implement workflow.", "A cited premise report"),
+    "draft_story": ("Grounded premises and the requested outcome", "Author requirements and acceptance criteria with observable oracles. Runs when a task enters draft_story, right after review_previous_notes.", "A reviewable story"),
+    "story_gate": ("The authored story", "An independent Steward adjudicates story completeness. Runs when a task's draft_story step finishes.", "Approved story or a concrete refusal reason"),
+    "verify_plan": ("The approved story", "Check that the implementation plan covers every acceptance criterion. Runs when a task enters verify_plan, right after story_gate.", "A coverage-backed plan"),
+    "plan_gate": ("The verified plan", "An independent Steward adjudicates plan coverage. Runs when a task's verify_plan step finishes.", "Approved plan or a concrete refusal reason"),
+    "write_failing_tests": ("Acceptance criteria and plan", "Write traced tests that fail for the missing behavior. Runs when a task enters write_failing_tests, right after plan_gate.", "Reproducible red evidence"),
+    "red_gate": ("Failing test evidence", "An independent Steward confirms the failure is relevant and honest. Runs when a task's write_failing_tests step finishes.", "Approved red state or a refusal reason"),
+    "implement_tasks": ("Approved plan and failing tests", "Make the smallest source change that turns the tests green. Runs when a task enters implement_tasks, right after red_gate.", "Implemented source changes"),
+    "verify_green_state": ("Implementation and its verification commands", "Run the real verification suite and inspect the resulting evidence. Runs when a task enters verify_green_state, right after implement_tasks.", "Full green evidence"),
+    "green_gate": ("Green evidence and acceptance oracles", "An independent Steward decides whether the requested outcome is actually complete. Runs when a task's verify_green_state step finishes.", "Accepted outcome or follow-up work"),
 }
 
 # "Who may decide this gate, and how to recover from a wrong decision" —
@@ -152,6 +158,79 @@ DEFAULT_ALIGN_LANGUAGE_BEHAVIOR: dict = {
     ],
     "batch_size": 50,
     "include_imported": True,
+}
+
+# Promote-to-law workflow (task c5650403): step content for the catalog
+# entry, same role STEP_ACTIONS plays for the implement/conductor steps
+# above -- kept separate since this workflow's step ids (draft/review/
+# install/done) aren't in models.roles.STEP_ROLES.
+PROMOTE_TO_LAW_STEP_CONTENT = {
+    "draft": (
+        "A memory worth promoting",
+        "Draft a rule or a term from the memory, with its own fixtures",
+        "A draft TTL, ready for the owner to review",
+    ),
+    "review": (
+        "The drafted TTL and its fixtures",
+        "The owner reviews the draft against the memory it came from",
+        "An approved or a rejected draft",
+    ),
+    "install": (
+        "An approved draft",
+        "Write the TTL into the project's own law and prove the "
+        "violating fixture fires",
+        "An installed rule or term, or a clear refusal reason",
+    ),
+    "done": (
+        "An installed rule or term",
+        "Close out this promotion",
+        "A promoted memory",
+    ),
+}
+
+# Default promote-to-law behaviour (task c5650403): every project starts
+# here until it calls provide_workflow_behavior("promote_to_law", ...) to
+# override a field. require_fixture keeps install() honest -- a draft
+# with no demonstrable violating fixture is refused, never installed
+# quiet. target is always "project": a promoted rule or term is scoped to
+# the project it was drafted in, never the shared package ontology.
+DEFAULT_PROMOTE_TO_LAW_BEHAVIOR: dict = {
+    "enabled": True,
+    "require_fixture": True,
+    "target": "project",
+}
+
+# Quickfix workflow (task 811fcce0): step content for the catalog entry,
+# same role PROMOTE_TO_LAW_STEP_CONTENT plays above -- kept separate since
+# this workflow's step ids (intake/apply_fix/verify_fix/done) aren't in
+# models.roles.STEP_ROLES. verify_fix's own text names the check as a real
+# subprocess run, not an LLM judgment call -- see the doc comment on
+# models.workflow.QUICKFIX_STEPS for the Bot/Behavior reasoning.
+QUICKFIX_STEP_CONTENT = {
+    "intake": (
+        "A task the owner already fully diagnosed -- oracle, "
+        "likely_misfire, and a pinned test all written up front",
+        "Register the task and enter the quickfix flow",
+        "A quickfix task ready for its fix",
+    ),
+    "apply_fix": (
+        "The task's own oracle and pinned test",
+        "Make the exact change the oracle describes and run the pinned "
+        "test",
+        "The fix, committed, with its pinned test passing",
+    ),
+    "verify_fix": (
+        "The applied fix",
+        "Re-run the full pinned suite from workspace root as an "
+        "independent, deterministic check -- a real pytest run, never a "
+        "judgment call -- then commit and push",
+        "A green suite, pushed to dev and main",
+    ),
+    "done": (
+        "A verified quickfix",
+        "Close out this quickfix",
+        "A shipped, deterministic fix",
+    ),
 }
 
 GATE_AUTHORITY = {
@@ -323,10 +402,17 @@ def _project_validation_workflow(project: str) -> dict:
             "average_duration_seconds": scripted.average_duration_seconds,
             "duration_sample_count": scripted.duration_sample_count,
         })
+    # task 408138e8 (epic 61821448): the AosWorkflows engine owns
+    # definition.description's own text -- append the real trigger
+    # (verify_green_state links here, see get_workflows' linked_workflow_id
+    # map) so the skill-description-says-when SHACL rule reads a true
+    # "when" clause no matter what the engine's own text says.
+    trigger = "Runs when a task's verify_green_state step needs to build and test the project."
+    description = f"{definition.description.rstrip()} {trigger}".strip()
     return {
         "id": definition.id,
         "name": definition.name,
-        "description": definition.description,
+        "description": description,
         "project_type": definition.project_type,
         "steps": steps,
         "bots": [],
@@ -369,6 +455,31 @@ def align_language_behavior_document(project: str) -> dict:
     return document
 
 
+def promote_to_law_behavior_document(project: str) -> dict:
+    """The promote_to_law workflow's current versioned behaviour for
+    `project`: DEFAULT_PROMOTE_TO_LAW_BEHAVIOR merged under whatever
+    .prism/behaviors/promote_to_law.json (this project's own override
+    file, via _behavior_file) carries, plus its own behaviorVersion. A
+    missing or unreadable file reads as version 1 with every default
+    untouched -- never raises."""
+    path = _behavior_file(project, "promote_to_law")
+    data: dict = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+    document = dict(DEFAULT_PROMOTE_TO_LAW_BEHAVIOR)
+    for key in DEFAULT_PROMOTE_TO_LAW_BEHAVIOR:
+        if key in data:
+            document[key] = data[key]
+    try:
+        document["behaviorVersion"] = int(data.get("behaviorVersion") or 1)
+    except (TypeError, ValueError):
+        document["behaviorVersion"] = 1
+    return document
+
+
 def get_workflow_behavior(project: str, behavior_path: str = "validation") -> dict:
     workflow_id, _, step_id = behavior_path.strip("/").partition("/")
     if workflow_id == "align_language":
@@ -378,6 +489,12 @@ def get_workflow_behavior(project: str, behavior_path: str = "validation") -> di
                 404, "the align_language behaviour has no child steps")
         return {"path": workflow_id,
                 "behavior": align_language_behavior_document(project)}
+    if workflow_id == "promote_to_law":
+        if step_id:
+            raise HTTPException(
+                404, "the promote_to_law behaviour has no child steps")
+        return {"path": workflow_id,
+                "behavior": promote_to_law_behavior_document(project)}
     if workflow_id != "validation":
         raise HTTPException(404, "unknown workflow behavior")
     definition = ProjectWorkflow.model_validate(
@@ -420,6 +537,30 @@ def provide_workflow_behavior(
         temporary.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
         os.replace(temporary, destination)
         return {"ok": True, "path": "align_language",
+                "version": merged["behaviorVersion"]}
+    if workflow_id == "promote_to_law":
+        if separator or step_id:
+            raise HTTPException(
+                400, "the promote_to_law behaviour has no child steps")
+        current = promote_to_law_behavior_document(project)
+        if current["behaviorVersion"] != expected_version:
+            raise HTTPException(
+                409, f"behavior revision changed: expected "
+                     f"{expected_version}, current {current['behaviorVersion']}")
+        allowed = set(DEFAULT_PROMOTE_TO_LAW_BEHAVIOR)
+        unknown = set(behavior) - allowed
+        if unknown:
+            raise HTTPException(
+                422, f"unsupported behavior fields: {', '.join(sorted(unknown))}")
+        merged = dict(current)
+        merged.update({k: v for k, v in behavior.items() if k in allowed})
+        merged["behaviorVersion"] = current["behaviorVersion"] + 1
+        destination = _behavior_file(project, "promote_to_law")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, destination)
+        return {"ok": True, "path": "promote_to_law",
                 "version": merged["behaviorVersion"]}
     if workflow_id != "validation" or not separator or not step_id:
         raise HTTPException(400, "provide a child path such as validation/test")
@@ -685,6 +826,29 @@ def _task_count_by_workflow(project: str, catalog_ids: list[str], svc=None) -> d
     return counts
 
 
+# task 408138e8 (epic 61821448): the real trigger for each conductor
+# behavior, keyed by its AosWorkflows behavior_id -- matches
+# get_workflows' own linked_workflow_id map (a conductor FSM state calls
+# most of these) plus land (green_gate's ship step) and ci-local-dev (no
+# FSM state calls it; a person runs it by hand). Read by
+# _conductor_behavior_workflows below so every behavior's description
+# names a real "when", never the generic fallback text only.
+_BEHAVIOR_TRIGGER = {
+    "draft-story-loop": "Runs when a task starts the implement workflow.",
+    "story-gate-check": "Runs when a task's draft_story step finishes and story_gate needs a decision.",
+    "verify-plan-loop": "Runs when a task's story_gate is approved and verify_plan starts.",
+    "plan-gate-check": "Runs when a task's verify_plan step finishes and plan_gate needs a decision.",
+    "write-failing-tests-loop": "Runs when a task's plan_gate is approved and write_failing_tests starts.",
+    "red-gate-status": "Runs when a task's write_failing_tests step finishes and red_gate needs a decision.",
+    "implement-tasks-loop": "Runs when a task's red_gate is approved and implement_tasks starts.",
+    "green-gate-status": "Runs when a task's verify_green_state step finishes and green_gate needs a decision.",
+    "review-previous-notes-loop": "Runs first, when a task starts the implement workflow.",
+    "land": "Runs when a task's green_gate is approved and the branch is ready to ship.",
+    "ci-local-dev": "Run this when a developer wants local CI results before pushing.",
+}
+_DEFAULT_BEHAVIOR_TRIGGER = "Runs when the conductor bot's own FSM calls this behavior."
+
+
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
@@ -775,10 +939,11 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                     "timeout_seconds": step.get("timeoutSeconds") or step.get("TimeoutSeconds") or 300,
                     "depends_on": [raw_steps[i - 1].get("id") or raw_steps[i - 1].get("Id")] if i else [],
                 })
+            trigger = _BEHAVIOR_TRIGGER.get(behavior_id, _DEFAULT_BEHAVIOR_TRIGGER)
             entries.append({
                 "id": behavior_id,
                 "name": behavior.get("name") or behavior.get("Name") or behavior_id.replace("-", " ").title(),
-                "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows",
+                "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows. {trigger}",
                 "steps": steps,
                 "bots": [],
                 "occupancy": {step["id"]: 0 for step in steps},
@@ -825,7 +990,10 @@ def _triage_workflow(project: str, svc=None) -> dict:
     return {
         "id": "triage",
         "name": "Triage",
-        "description": "Bucket an item and stop once for the owner's decision",
+        "description": (
+            "Bucket an item and stop once for the owner's decision. "
+            "Runs when a new signal or task needs a decision."
+        ),
         "steps": steps,
         "bots": [],
         "occupancy": occupancy,
@@ -878,12 +1046,135 @@ def _align_language_workflow(project: str, svc=None) -> dict:
         "name": "Align language",
         "description": (
             "Bring loose task text into plain Simplified Technical "
-            "English — a fully machine-run pass, no owner stop"
+            "English — a fully machine-run pass, no owner stop. Runs "
+            "when its own timer fires, sweeping every task's text for "
+            "loose language."
         ),
         "steps": steps,
         "bots": [],
         "occupancy": occupancy,
         "coverage": coverage,
+    }
+
+
+def _promote_to_law_workflow(project: str, svc=None) -> dict:
+    """The promote-to-law workflow's own catalog entry (task c5650403,
+    epic 61821448: "Understand writes the law, the ontology holds it, the
+    code obeys it"): a fifth first-class root workflow, built from
+    models.workflow.WORKFLOWS["promote_to_law"] the same way
+    _align_language_workflow builds align_language's. review is the ONE
+    owner stop -- persona resolves off each step's own `agent` (falling
+    back to "sm"), same as triage/align_language above."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    steps = []
+    for step in WORKFLOWS["promote_to_law"]:
+        persona = step["agent"] or "sm"
+        content = PROMOTE_TO_LAW_STEP_CONTENT[step["id"]]
+        steps.append({
+            "id": step["id"],
+            "agent": step["agent"],
+            "type": step["type"],
+            "validation": step["validation"],
+            "persona": persona,
+            "persona_label": _persona_label(persona),
+            "purpose": step["id"].replace("_", " ").capitalize(),
+            "input": content[0],
+            "action": content[1],
+            "output": content[2],
+            "authority": (
+                "Decided by the owner — the single human stop in this "
+                "promotion." if step["id"] == "review" else ""
+            ),
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
+    return {
+        "id": "promote_to_law",
+        "name": "Promote to law",
+        "description": (
+            "Turn a memory into a rule or a term the ontology holds, "
+            "with one owner review. Runs when a memory is ready to "
+            "promote to law."
+        ),
+        "steps": steps,
+        "bots": [],
+        "occupancy": occupancy,
+    }
+
+
+def _quickfix_workflow(project: str, svc=None) -> dict:
+    """The quickfix workflow's own catalog entry (task 811fcce0, epic
+    3baadd19): a sixth first-class root workflow, built from
+    models.workflow.WORKFLOWS["quickfix"] the same way
+    _align_language_workflow builds align_language's -- persona resolves
+    off each step's own `agent` (falling back to "sm"), and no step
+    carries an `authority` string, because this workflow has no gate at
+    all. See models.workflow.QUICKFIX_STEPS's own doc comment for why
+    verify_fix's `agent` is None (a deterministic subprocess check, not
+    an LLM judgment call) even though its `type` stays "agent"."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    steps = []
+    for step in WORKFLOWS["quickfix"]:
+        persona = step["agent"] or "sm"
+        content = QUICKFIX_STEP_CONTENT[step["id"]]
+        steps.append({
+            "id": step["id"],
+            "agent": step["agent"],
+            "type": step["type"],
+            "validation": step["validation"],
+            "persona": persona,
+            "persona_label": _persona_label(persona),
+            "purpose": step["id"].replace("_", " ").capitalize(),
+            "input": content[0],
+            "action": content[1],
+            "output": content[2],
+            "authority": "",
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    occupancy = _occupancy(project, [s["id"] for s in steps], svc=svc)
+    return {
+        "id": "quickfix",
+        "name": "Quickfix",
+        "description": (
+            "A small, already-diagnosed fix with its own oracle and "
+            "pinned test -- one agentic step, one deterministic check, "
+            "no gate. Runs when a task is fully scoped and small enough "
+            "to skip the full conductor SDLC."
+        ),
+        "steps": steps,
+        "bots": [],
+        "occupancy": occupancy,
+    }
+
+
+def _knowledge_health_workflow(project: str) -> dict:
+    """The Knowledge health scoreboard's own catalog entry (task
+    b1971944, epic 61821448): a seventh root workflow, same posture as
+    triage/align_language/promote_to_law above -- no parent_id. It has no
+    steps of its own (the metrics are a live read, never a run a person
+    starts), so it carries "metrics" (services/knowledge_health.py)
+    instead of the step/occupancy pair every other entry above builds."""
+    try:
+        from prism_service.services import knowledge_health
+        metrics = knowledge_health.metrics(project)
+    except Exception:
+        metrics = {}
+    return {
+        "id": "knowledge_health",
+        "name": "Knowledge health",
+        "description": (
+            "Is Understand actually helping? Search feedback, recall-to-use, "
+            "evidence, and how many rules and modules carry real "
+            "provenance. Runs when a person opens the Knowledge health tab."
+        ),
+        "steps": [],
+        "bots": [],
+        "occupancy": {},
+        "metrics": metrics,
     }
 
 
@@ -938,7 +1229,10 @@ def get_workflows(project: str = Query("default")) -> dict:
     conductor = {
         "id": "conductor",
         "name": "Conductor",
-        "description": "PRISM delivery workflow",
+        "description": (
+            "PRISM delivery workflow. Runs when a task moves through "
+            "story, plan, red, and green steps to a shipped change."
+        ),
         "steps": steps,
         "bots": bots,
         "occupancy": occupancy,
@@ -980,7 +1274,18 @@ def get_workflows(project: str = Query("default")) -> dict:
     # as triage above -- no parent_id, since it is not one of conductor's
     # own nested capabilities.
     align_language = _align_language_workflow(project, svc=_svc)
-    catalog = [conductor, validation, triage, align_language, *conductor_behaviors]
+    # quickfix (task 811fcce0): a sixth root workflow, same posture as
+    # triage/align_language above -- no parent_id, since it is not one of
+    # conductor's own nested capabilities.
+    quickfix = _quickfix_workflow(project, svc=_svc)
+    # promote_to_law (task c5650403): a seventh root workflow, same posture
+    # as triage/align_language above -- no parent_id.
+    promote_to_law = _promote_to_law_workflow(project, svc=_svc)
+    # knowledge_health (task b1971944): an eighth root workflow, same
+    # posture -- no parent_id.
+    knowledge_health = _knowledge_health_workflow(project)
+    catalog = [conductor, validation, triage, align_language, quickfix,
+              promote_to_law, knowledge_health, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)

@@ -79,11 +79,12 @@ def _provider_instances() -> list[str]:
 
 
 def _signal_rows(project: str) -> list[dict]:
-    """QueueItem <- SIGNALS (task 785bb4ce, owner: the Queue is where
+    """Signal <- SIGNALS (task 785bb4ce, owner: the Queue is where
     signals arrive, not tasks): one row per signal, consumed by BOTH
     projections through gather() (task 495d3a69) -- the sqlite cache below
     and OntologyGraph._emit_signals. Task is its own class (rows["tasks"])
-    so nothing that used to live under QueueItem is lost."""
+    so nothing that used to live under o:QueueItem is lost -- and task
+    cacfb628 collapsed o:QueueItem itself into o:Signal, its one child."""
     from prism_service.services.signal_store import SignalStore
 
     store = SignalStore(project)
@@ -171,29 +172,106 @@ def axiom_names(project: str) -> list[str]:
     return names or [p["id"] for p in PRISM_PRINCIPLES]
 
 
-def _code_graph_kinds(project: str) -> list[tuple[str, int, list[str]]]:
-    """Code-graph entity KINDS as classes (mx-2d14b0): (kind, real total
-    count, [capped sample entity names]) from graph.db's entities table --
-    module/class/function/... The UI's rail click gets a bounded sample; the
-    class's instance_count is the true COUNT(*), never len(sample)."""
+# The real code kinds graph.db's entities table carries (task f9e0745e).
+# "unknown" is deliberately excluded -- it is what a build bundle or any
+# other non-source blob lands as, never a class a human wrote.
+_CODE_GRAPH_KINDS = frozenset({
+    "function", "method", "class", "module", "file",
+    "interface", "variable", "code", "rationale",
+})
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    """Column names graph.db's `table` actually has. A test fixture's
+    hand-rolled CREATE TABLE often carries only a few columns (id, name,
+    kind) -- read the schema rather than assume the production shape."""
+    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _code_graph_rows(project: str) -> list[dict]:
+    """Every code-graph entity (task f9e0745e) whose kind is a real code
+    kind (_CODE_GRAPH_KINDS) and whose file is not under a skipped
+    directory (source_service.is_ingest_excluded -- a path SEGMENT
+    match, never a substring): full rows, never a sample, so the
+    ontology's RDF projection can type every symbol and draw the edges
+    between them, not just the first 50 names per kind."""
+    from prism_service.services.source_service import is_ingest_excluded
+
     conn = _connect(project_data_dir(project) / "graph.db")
     if conn is None:
         return []
     try:
-        kinds = conn.execute(
-            "SELECT kind, COUNT(*) n FROM entities "
-            "WHERE kind IS NOT NULL AND kind != '' GROUP BY kind"
+        cols = _table_columns(conn, "entities")
+        file_col = "file" if "file" in cols else "NULL"
+        line_col = "line" if "line" in cols else "NULL"
+        placeholders = ",".join("?" * len(_CODE_GRAPH_KINDS))
+        rows = conn.execute(
+            f"SELECT id, name, kind, {file_col} AS file, {line_col} AS line "
+            f"FROM entities WHERE kind IN ({placeholders})",
+            tuple(_CODE_GRAPH_KINDS),
         ).fetchall()
         out = []
-        for kind, n in kinds:
-            names = conn.execute(
-                "SELECT name FROM entities WHERE kind=? ORDER BY name LIMIT 50",
-                (kind,),
-            ).fetchall()
-            out.append((kind, n, [x[0] for x in names if x[0]]))
+        for r in rows:
+            file_path = r["file"] or ""
+            if file_path and is_ingest_excluded(file_path):
+                continue
+            out.append({"id": r["id"], "name": r["name"], "kind": r["kind"],
+                        "file": file_path, "line": r["line"]})
         return out
     finally:
         conn.close()
+
+
+def _code_graph_edges(project: str, ids: set) -> list[dict]:
+    """Relationship rows among the given code-graph entity ids (task
+    f9e0745e) -- real source/target/relation rows, never fabricated,
+    never a sample. Needs BOTH endpoints inside `ids` (already filtered
+    to real code kinds under a real path) so an edge never points at a
+    bundle/unknown-kind node that never became an ontology instance."""
+    if not ids:
+        return []
+    conn = _connect(project_data_dir(project) / "graph.db")
+    if conn is None:
+        return []
+    try:
+        cols = _table_columns(conn, "relationships")
+        if not {"source_id", "target_id", "relation"} <= cols:
+            return []  # legacy/test fixture with a relation-only table
+        id_list = list(ids)
+        out: list[dict] = []
+        for i in range(0, len(id_list), 400):
+            batch = id_list[i:i + 400]
+            ph = ",".join("?" * len(batch))
+            rows = conn.execute(
+                f"SELECT source_id, target_id, relation FROM relationships "
+                f"WHERE source_id IN ({ph}) AND target_id IN ({ph})",
+                batch + batch,
+            ).fetchall()
+            out.extend({"source": r["source_id"], "target": r["target_id"],
+                        "relation": r["relation"]} for r in rows)
+        return out
+    finally:
+        conn.close()
+
+
+def _code_graph_kinds(project: str) -> list[tuple[str, int, list[str]]]:
+    """Code-graph entity KINDS as classes (mx-2d14b0): (kind, real total
+    count, [capped sample entity names]), scoped to real code kinds under
+    a real (non-bundled) path (task f9e0745e). The UI's rail click gets a
+    bounded sample; the class's instance_count is the true COUNT(*), never
+    len(sample)."""
+    return _kinds_from_rows(_code_graph_rows(project))
+
+
+def _kinds_from_rows(rows: list[dict]) -> list[tuple[str, int, list[str]]]:
+    by_kind: dict[str, list[str]] = {}
+    for r in rows:
+        by_kind.setdefault(r["kind"], []).append(r["name"])
+    out = []
+    for kind, names in by_kind.items():
+        sample = sorted({n for n in names if n})[:50]
+        out.append((kind, len(names), sample))
+    return out
 
 
 def _memory_rows(project: str) -> list[dict]:
@@ -220,7 +298,15 @@ def gather(project: str) -> dict:
     """The real rows for BOTH representations of the ontology (task
     495d3a69): rebuild()'s sqlite cache below, and OntologyGraph.rebuild()'s
     RDF triples. One gather pass, two projections — never two independent
-    reads of the same underlying rows that can silently disagree."""
+    reads of the same underlying rows that can silently disagree.
+
+    code_symbols/code_edges (task f9e0745e): the FULL code-graph -- every
+    real symbol under a real path, plus every relationship among them --
+    computed once here so both the sqlite cache's per-kind counts
+    (code_kinds, derived from the same rows) and OntologyGraph._emit_code_
+    graph's typed nodes + edges read the identical set."""
+    code_rows = _code_graph_rows(project)
+    code_ids = {r["id"] for r in code_rows}
     return {
         "channels": _channel_instances(project),
         "agents": _agent_instances(project),
@@ -228,7 +314,9 @@ def gather(project: str) -> dict:
         "tasks": _task_rows(project),
         "signals": _signal_rows(project),
         "documents": _document_paths(project),
-        "code_kinds": _code_graph_kinds(project),
+        "code_kinds": _kinds_from_rows(code_rows),
+        "code_symbols": code_rows,
+        "code_edges": _code_graph_edges(project, code_ids),
         "memories": _memory_rows(project),
     }
 
@@ -270,11 +358,12 @@ def rebuild(project: str) -> dict:
     _add_class(classes, instances, "Provider", "class", "integrations",
                rows["providers"])
 
-    # QueueItem <- signals (task 785bb4ce); the sqlite cache has no `state`
+    # Signal <- signals (task 785bb4ce; catalog id "QueueItem" collapsed
+    # into "Signal" by task cacfb628); the sqlite cache has no `state`
     # column, so state rides inline in the label here -- the RDF graph
     # carries it as a real property (OntologyGraph._emit_signals).
     sig = rows["signals"]
-    _add_class(classes, instances, "QueueItem", "class", "signals",
+    _add_class(classes, instances, "Signal", "class", "signals",
                [f"{s['label']} · {s['state']}" for s in sig],
                refs=[s["id"] for s in sig])
 

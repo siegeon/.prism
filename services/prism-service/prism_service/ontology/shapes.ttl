@@ -15,9 +15,13 @@
 # what actually validates ("the failure mode to watch for").
 #
 # pyshacl runs this in advanced=True mode (sh:sparql / sh:SPARQLConstraint
-# require it) against a scratch rdflib.Graph that already has owlrl RDFS
-# entailment applied, so o:Signal instances also carry o:QueueItem (its
-# rdfs:subClassOf parent in model.ttl) before any shape is checked.
+# require it) against a scratch rdflib.Graph that already has a targeted
+# rdfs:subClassOf type expansion applied (task 6503d7f8 —
+# services/ontology_rules._expand_subclass_types, which replaced a full
+# owlrl RDFS closure), so e.g. o:JiraIssue instances also carry o:Work (its
+# rdfs:subClassOf parent in model.ttl) before any shape is checked. (task
+# cacfb628: o:Signal no longer expands to a parent — o:QueueItem, its
+# only child, collapsed into it.)
 
 @prefix o: <urn:prism:onto:> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -205,7 +209,28 @@ o:agent-delegates-one-tier-down a sh:SPARQLConstraint ;
 
 # ---------------------------------------------------------------------
 # twin-classes — two o: classes with identical non-empty instance sets:
-# one concept, two representations. SPARQL constraint over rdfs:Class.
+# one concept, two representations.
+#
+# task 6503d7f8: the pairwise instance-set scan this rule needs is
+# PRECOMPUTED in Python (services/ontology_rules._mark_twin_classes,
+# called right before pyshacl runs) rather than expressed as nested
+# SPARQL FILTER EXISTS — measured cost on a 60k-triple seeded graph
+# stayed dominant (~27s of a 35s validate() run) even after scoping the
+# SPARQL's own $this/?other candidates away from o:Code, because
+# rdflib's SPARQL engine re-walks graph-sized structures inside each
+# nested EXISTS rather than doing an index lookup, so the cost tracks
+# overall graph size, not how many classes are left as candidates.
+# _mark_twin_classes excludes o:Code and its subclasses (Function,
+# Class, Method, Module, Interface, Variable, Rationale) from the
+# comparison, UNLESS some rule (built-in or a project's own promoted
+# rule — see services/ontology_rules._targeted_classes) actually targets
+# one of them: no code-graph class is a genuine candidate for being a
+# "twin" of another o: class in the ordinary case (each one is a
+# distinct code-graph kind by construction, never two names for the
+# same thing), but the exclusion must never be unconditional, because a
+# promoted rule CAN legitimately target o:Code. This select now just
+# reads the marker triple _mark_twin_classes leaves on every twin it
+# finds.
 # ---------------------------------------------------------------------
 
 o:twin-classes.target a sh:NodeShape ;
@@ -218,15 +243,9 @@ o:twin-classes a sh:SPARQLConstraint ;
     sh:description "Two classes sharing an identical instance set are one concept, twice." ;
     sh:message "shares an identical non-empty instance set with another class" ;
     sh:select """
-        PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT $this WHERE {
-            $this a rdfs:Class .
-            FILTER EXISTS { ?i a $this }
-            FILTER EXISTS {
-                ?other a rdfs:Class . FILTER(?other != $this)
-                FILTER NOT EXISTS { ?i2 a $this . FILTER NOT EXISTS { ?i2 a ?other } }
-                FILTER NOT EXISTS { ?i3 a ?other . FILTER NOT EXISTS { ?i3 a $this } }
-            }
+            $this a <http://www.w3.org/2000/01/rdf-schema#Class> ;
+                  <urn:prism:onto:internal/isTwinClass> true .
         }
     """ .
 

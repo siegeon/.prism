@@ -53,7 +53,9 @@ def test_interactive_profile_exposes_core_agent_tools_only():
     # signal over MCP is the primary path, unlike documents_place).
     # 34 since task f07c9cea (epic df0eed4a): task_align_language joined the
     # interactive profile as the trigger for the Align language workflow.
-    assert len(names) == 34
+    # 35 since task c5650403 (epic 61821448): memory_promote joined the
+    # interactive profile as the trigger for the Promote-to-law workflow.
+    assert len(names) == 35
     # Pin the INTENT, not just the number: the loop verb is served and the
     # legacy drivers stay off the default surface (tool-surface reduction).
     assert "conductor_work" in names

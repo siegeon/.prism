@@ -197,6 +197,9 @@ def _build_index(project: str) -> tuple[dict, dict, dict, int]:
         if cls_local in _MEMORY_CLASSES:
             key = _ref_of("memory", iri)
             add(key, _Entry(cls_local, _memory_href(key), label or key, iri))
+            # Mirrors the Task branch below (task 44c7e2d0 follow-up).
+            if label:
+                add(label, _Entry(cls_local, _memory_href(key), label, iri))
             continue
         target = _INSTANCE_TARGETS.get(cls_local)
         if target is None:
