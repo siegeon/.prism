@@ -68,6 +68,33 @@ export const STALE_AFTER_MS = 15_000;
 // this fetch and the server-side recompute serializes under the storm.
 export const MIN_REFRESH_MS = 3_000;
 
+// Cross-instance in-flight coalescer (loading-perf round 2, 2026-08-28):
+// MIN_REFRESH_MS above throttles each MOUNTED CONSUMER to one fetch per
+// window, but does nothing ACROSS consumers -- Sidebar.tsx (mounted on
+// every page) plus whichever page-level consumer is also mounted each run
+// their OWN doLoad(), so an SSE push still fires N near-simultaneous
+// requests for the identical URL. Confirmed live: navigating to /workflows
+// captured 13 concurrent GET /api/conductor/state calls in one burst,
+// while the page's OWN one-time GET /api/workflows fetch never completed
+// in time to populate the directory -- starved for a connection-pool slot
+// by the duplicate traffic (task 04359d5b). Module-scope (not component
+// state) so it is genuinely shared by every hook instance in this tab; a
+// second consumer that calls in while a fetch is in flight gets the SAME
+// promise instead of starting its own. Deliberately NOT a Context/store
+// (mx-d412e0 already rejected that as heavier than this seam needs) --
+// this is the same burst-coalescing idea the per-instance MIN_REFRESH_MS
+// already uses, just shared instead of private to one instance.
+const _inFlight = new Map<string, Promise<ConductorState>>();
+
+function fetchConductorState(project: string): Promise<ConductorState> {
+  const existing = _inFlight.get(project);
+  if (existing) return existing;
+  const request = api.get<ConductorState>(`/api/conductor/state?project=${project}`)
+    .finally(() => { _inFlight.delete(project); });
+  _inFlight.set(project, request);
+  return request;
+}
+
 export function useConductorState(project: string) {
   const [data, setData] = useState<ConductorState | null>(null);
   // Seeds false so a consumer can tell "no resolved fetch yet" apart from
@@ -88,7 +115,7 @@ export function useConductorState(project: string) {
   const trailingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const doLoad = useCallback(() => {
-    api.get<ConductorState>(`/api/conductor/state?project=${project}`)
+    fetchConductorState(project)
       .then((d) => {
         setData(d);
         setError(false);
