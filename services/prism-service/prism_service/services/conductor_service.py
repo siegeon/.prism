@@ -3484,6 +3484,11 @@ class ConductorService:
                 # green-proof content; the dedicated field removes that
                 # collision so the check below can be unconditional).
                 "notes_md": getattr(task, "premise_notes", "") or "",
+                # premise_grounded's oracle-engagement tooth (task
+                # 8956d6e4): premises must engage task.oracle, not just
+                # cite something true. Harmless for story_complete/
+                # plan_coverage, which ignore unknown evidence keys.
+                "oracle": getattr(task, "oracle", "") or "",
             }
             if validation == "story_complete":
                 res = gov.score_story_complete(evidence, rubric)

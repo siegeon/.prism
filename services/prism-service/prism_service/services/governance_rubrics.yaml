@@ -48,6 +48,21 @@ premise_grounded:
   # a downstream gate — draft_story's story_complete already shadows any
   # validation placed on review_previous_notes through gate inheritance.
   claims_section: Premises
+  # (task 8956d6e4) Citations alone don't prove the premises engage what
+  # the ticket actually asks. Every clause of task.oracle (split on "(1)
+  # (2) (3)"-style markers, else on sentence boundaries, else the oracle
+  # is one clause) must share oracle_min_shared_words words of at least
+  # oracle_word_min_len chars with the Premises section — OR the section
+  # marks that clause UNRESOLVED by number ("clause 2: UNRESOLVED, ...")
+  # so a driver can name a real gap instead of being blocked forever. A
+  # blank task.oracle never engages this check (nothing to trace against).
+  require_oracle_engagement: true
+  oracle_min_shared_words: 2
+  # 4, not 5 — a real domain word this rubric exists to catch ("tier",
+  # "gate", "role") can be exactly 4 characters; the stopword list in
+  # arc_governance._ORACLE_STOPWORDS carries the generic 4-letter noise
+  # ("that", "with", "each", ...) that a lower floor would otherwise let in.
+  oracle_word_min_len: 4
 
 green_outcome:
   # (task 3eb67fb3) the terminal green_gate ORACLE tooth. A green close must

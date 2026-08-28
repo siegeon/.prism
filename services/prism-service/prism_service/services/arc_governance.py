@@ -305,7 +305,7 @@ _CLAIM_RUNID_RE = re.compile(
 # inside the backticks (a real output/command snippet has multiple
 # tokens: 'pytest -q -> 2 passed').
 _CLAIM_OUTPUT_RE = re.compile(r'`[^`\n]*\s[^`\n]*`')
-_CLAIM_MARKER_RE = re.compile(r'\b(REFUTED|UNVERIFIED)\b', re.IGNORECASE)
+_CLAIM_MARKER_RE = re.compile(r'\b(REFUTED|UNVERIFIED|UNRESOLVED)\b', re.IGNORECASE)
 
 
 def _claim_is_grounded(line: str) -> bool:
@@ -315,16 +315,148 @@ def _claim_is_grounded(line: str) -> bool:
                 or _CLAIM_MARKER_RE.search(line))
 
 
+def _claim_has_evidentiary_citation(line: str) -> bool:
+    """True for a REAL citation (file:line, run/PR/commit/issue id, command
+    output) — never for a bare REFUTED/UNVERIFIED/UNRESOLVED marker. The
+    oracle-engagement tooth (task 8956d6e4) only holds a section
+    accountable when it makes an evidence-backed claim that COULD be
+    confidently off-target; a section that only marks its claims as
+    unverified/unresolved carries nothing that would falsely reassure a
+    reviewer, so there is nothing to check for engagement."""
+    return bool(_CLAIM_FILELINE_RE.search(line)
+                or _CLAIM_RUNID_RE.search(line)
+                or _CLAIM_OUTPUT_RE.search(line))
+
+
+# ----------------------------------------------------------------------
+# premise_grounded's oracle-engagement tooth (task 8956d6e4)
+# ----------------------------------------------------------------------
+# Owner, 2026-08-28, on task 0b5dd37c's premises: "i do not see any links
+# in the premisi that go back to the orcal, its like you skilled that
+# part entierly is that a missing step in theworkflow?" Confirmed: a
+# citation proves a claim is TRUE, never that it ENGAGES what the oracle
+# asks — a premise set can ground every claim and still ignore the task's
+# actual target (0b5dd37c's daemon-authored premises did exactly this: a
+# clean citation trail that never checked the oracle's own word "tier"
+# against the ontology-established meaning a sibling task already gave
+# it). This tooth checks premises against task.oracle directly.
+
+_ORACLE_CLAUSE_MARKER_RE = re.compile(r'\(\d+\)')
+_ORACLE_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.;])\s+')
+_ORACLE_CLAUSE_WORD_RE_TMPL = r'\b[a-z]{{{min_len},}}\b'
+_ORACLE_UNRESOLVED_RE = re.compile(
+    r'clause\s*(\d+)\s*[:.\-]?\s*.*?\bUNRESOLVED\b', re.IGNORECASE)
+
+# Generic scaffolding words that recur across nearly every oracle
+# ("a design is proposed and approved naming...") — excluded so a shared
+# hit has to land on the oracle's actual SUBJECT, not its boilerplate.
+_ORACLE_STOPWORDS = frozenset({
+    # 4-letter function/connector words (real at oracle_word_min_len=4).
+    "that", "with", "from", "this", "each", "when", "must", "name",
+    "open", "show", "onto", "into", "were", "have", "also", "only",
+    "more", "than", "then", "some", "such", "many", "over", "both",
+    "here", "what", "will", "does", "make", "made", "used", "uses",
+    "gives", "give",
+    # 5+ letter scaffolding words that recur in nearly every oracle
+    # ("a design is proposed and approved naming...").
+    "about", "after", "approved", "approves", "before", "design", "every",
+    "final", "first", "match", "matching", "named", "names", "naming",
+    "owner", "plan", "planned", "proposed", "shall", "should", "shows",
+    "state", "states", "their", "there", "these", "third", "those",
+    "which", "while", "would",
+})
+
+
+def oracle_clauses(oracle: str) -> list[str]:
+    """Split a task.oracle into its distinct claims (pure). Prefers
+    explicit "(1) ... (2) ... (3) ..." numbering (the shape task_create's
+    own convention encourages); falls back to sentence boundaries; a
+    short/unstructured oracle is treated as ONE clause rather than
+    exempted from the check."""
+    text = (oracle or "").strip()
+    if not text:
+        return []
+    markers = list(_ORACLE_CLAUSE_MARKER_RE.finditer(text))
+    if len(markers) >= 2:
+        clauses = []
+        for i, m in enumerate(markers):
+            start = m.end()
+            end = markers[i + 1].start() if i + 1 < len(markers) else len(text)
+            clause = text[start:end].strip(" ,;.\n")
+            if clause:
+                clauses.append(clause)
+        if clauses:
+            return clauses
+    parts = [p.strip() for p in _ORACLE_SENTENCE_SPLIT_RE.split(text) if p.strip()]
+    return parts if len(parts) > 1 else [text]
+
+
+def _clause_words(clause: str, min_len: int) -> set[str]:
+    pattern = re.compile(_ORACLE_CLAUSE_WORD_RE_TMPL.format(min_len=min_len))
+    return {w for w in pattern.findall(clause.lower())
+            if w not in _ORACLE_STOPWORDS}
+
+
+def _unresolved_clause_numbers(notes: str) -> set[int]:
+    return {int(m.group(1)) for m in _ORACLE_UNRESOLVED_RE.finditer(notes or "")}
+
+
+def score_oracle_engagement(oracle: str, notes: str, rubric: dict) -> dict:
+    """PURE check: does `notes` (the Premises section body) actually
+    engage every clause of `oracle`, not just cite something true?
+
+    A clause is satisfied when its Premises text shares
+    oracle_min_shared_words words (>= oracle_word_min_len chars, minus
+    generic scaffolding) with `notes`, OR when `notes` marks that clause
+    number UNRESOLVED (e.g. "clause 2: UNRESOLVED, needs live evidence") —
+    a real, named gap, not silence. Returns {"ok": bool, "reason": str}."""
+    if not rubric.get("require_oracle_engagement", True):
+        return {"ok": True, "reason": "oracle_engagement: check disabled"}
+    if not (oracle or "").strip():
+        return {"ok": True, "reason": "oracle_engagement: task carries no oracle"}
+    min_len = int(rubric.get("oracle_word_min_len", 5))
+    min_shared = int(rubric.get("oracle_min_shared_words", 2))
+    clauses = oracle_clauses(oracle)
+    notes_words = _clause_words(notes or "", min_len)
+    unresolved = _unresolved_clause_numbers(notes or "")
+    unaddressed = []
+    for idx, clause in enumerate(clauses, start=1):
+        if idx in unresolved:
+            continue
+        clause_words = _clause_words(clause, min_len)
+        if not clause_words:
+            continue
+        shared = clause_words & notes_words
+        needed = min(min_shared, len(clause_words))
+        if len(shared) < needed:
+            unaddressed.append((idx, clause))
+    if unaddressed:
+        idx, clause = unaddressed[0]
+        return {"ok": False,
+                "reason": ("premise_grounded: premises never engage oracle "
+                           f"clause {idx} (\"{clause[:100]}\") — ground it "
+                           "with shared, specific evidence, or mark it "
+                           f"'clause {idx}: UNRESOLVED, <why>' if it is a "
+                           "real gap")}
+    return {"ok": True,
+            "reason": (f"premise_grounded: premises engage all "
+                       f"{len(clauses)} oracle clause(s)")}
+
+
 def score_premise_grounded(evidence: dict, rubric: dict) -> dict:
     """PURE rubric verdict for review_previous_notes.
 
-    evidence: {"notes_md": <review_previous_notes report text>}; rubric:
-    the premise_grounded entry from governance_rubrics.yaml. Returns
-    {"ok": bool, "reason": str}. Every claim bullet under the rubric's
-    claims_section heading must carry a citation (file:line with a real
-    line number, a run/PR/commit/issue id, or backtick command output) or
-    an explicit REFUTED/UNVERIFIED marker; a refusal names the offending
-    claim so the driver can self-diagnose.
+    evidence: {"notes_md": <review_previous_notes report text>, "oracle":
+    <task.oracle>}; rubric: the premise_grounded entry from
+    governance_rubrics.yaml. Returns {"ok": bool, "reason": str}. Every
+    claim bullet under the rubric's claims_section heading must carry a
+    citation (file:line with a real line number, a run/PR/commit/issue
+    id, or backtick command output) or an explicit REFUTED/UNVERIFIED/UNRESOLVED
+    marker; a refusal names the offending claim so the driver can
+    self-diagnose. Once every claim is grounded, score_oracle_engagement
+    (task 8956d6e4) checks the SAME section against task.oracle — a
+    citation proves a claim true, never that the premises engage what the
+    ticket actually asks.
 
     UNCONDITIONAL (task 3928b7ac, issue #222 continued): task 3a63190b
     originally scoped this rubric to engage ONLY once the report opened a
@@ -369,11 +501,22 @@ def score_premise_grounded(evidence: dict, rubric: dict) -> dict:
         shown = "; ".join(c[:100] for c in ungrounded)
         return {"ok": False,
                 "reason": ("premise_grounded: claim(s) without a citation "
-                           "or REFUTED/UNVERIFIED marker: " + shown)}
+                           "or REFUTED/UNVERIFIED/UNRESOLVED marker: " + shown)}
+    if any(_claim_has_evidentiary_citation(c) for c in claims):
+        engagement = score_oracle_engagement(
+            str(evidence.get("oracle") or ""), section_body, rubric)
+        if not engagement.get("ok"):
+            return engagement
+        tail = engagement["reason"]
+    else:
+        # Every claim is marker-only (REFUTED/UNVERIFIED/UNRESOLVED) — a
+        # section with nothing evidence-backed cannot falsely reassure a
+        # reviewer, so oracle engagement is not scored (task 8956d6e4).
+        tail = "oracle_engagement: skipped, no evidentiary claim to hold accountable"
     return {"ok": True,
             "reason": (f"premise_grounded: {len(claims)} claim(s) all "
-                       "carry a citation or an explicit REFUTED/UNVERIFIED "
-                       "marker")}
+                       "carry a citation or an explicit REFUTED/UNVERIFIED/UNRESOLVED "
+                       "marker, and " + tail)}
 
 
 # ----------------------------------------------------------------------
