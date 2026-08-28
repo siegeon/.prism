@@ -114,6 +114,43 @@ def full_outcome_verdict(slice_green: bool, completion_proof: object,
     return True, ""
 
 
+def subtree_progress_counts(task_svc, root_id: str, max_depth: int = 6) -> dict:
+    """Recursive status counts across the WHOLE descendant subtree of
+    root_id (root itself excluded), not just direct children -- so a UI can
+    answer "how much work is actually done" without drilling through several
+    epic-rollup levels by hand. Owner, live, task 95474ec7: "impossobvle to
+    see at this top level how much work is actualy done" -- the real answer
+    was 3 of 7 descendants done and 2 more at their own green_gate pending
+    only a merge, none of which was visible from blocking_children (direct
+    children only). Cancelled/deleted descendants are excluded, matching
+    epic_rollup_verdict's own filtering. Depth-bounded (6, same bound as
+    ConductorService._subtree_active) against runaway/cyclic data.
+    """
+    counts = {"total": 0, "done": 0, "in_progress": 0, "blocked": 0, "pending": 0}
+
+    def walk(tid: str, depth: int, seen: set) -> None:
+        if depth > max_depth or tid in seen:
+            return
+        seen.add(tid)
+        try:
+            kids = task_svc.list(parent_id=tid)
+        except Exception:
+            return
+        for k in kids:
+            status = str(_task_attr(k, "status", "") or "")
+            if status in ("cancelled", "deleted"):
+                continue
+            counts["total"] += 1
+            if status in counts:
+                counts[status] += 1
+            else:
+                counts["pending"] += 1
+            walk(str(_task_attr(k, "id", "")), depth + 1, seen)
+
+    walk(root_id, 0, set())
+    return counts
+
+
 def epic_rollup_verdict(children: list) -> tuple[bool, str]:
     """Issue #171 — an EPIC/parent green_gate is satisfiable by ROLLING UP
     its children. When every non-cancelled child task is status=done AND

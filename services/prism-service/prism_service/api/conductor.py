@@ -481,7 +481,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     try:
         from prism_service.services.conductor_service import (
             epic_rollup_verdict, ui_artifact_gate_reason, has_captured_evidence,
-            _task_attr)
+            _task_attr, subtree_progress_counts)
         # parent_id-scoped (idx_tasks_parent) rather than a full-table read
         # filtered in Python — same rows, one indexed query.
         kids = list(s._task_svc.list(parent_id=task_id))
@@ -521,6 +521,7 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
             return {"receipt_ok": ready, "manual_review": True,
                     "receipt_refusal": "" if ready else reason,
                     "blocking_children": blocking_children,
+                    "subtree_progress": subtree_progress_counts(s._task_svc, task_id),
                     "receipt": {"adapter": "epic-rollup", "passed": ready,
                                 "status": "rollup" if ready else "rollup_blocked",
                                 "ended_at": "", "reason": reason}}
