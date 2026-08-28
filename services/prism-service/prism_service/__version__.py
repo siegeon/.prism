@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.137"
+PRISM_VERSION = "7.13.138"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.138: new MCP tool_profile=drive (DRIVE_TOOL_NAMES): the retrieval "
+    "+ conductor verbs only, so a drive lane's tool list stays small and "
+    "brain_* is never deferred behind a ToolSearch load. Every existing "
+    "profile alias is unchanged (task 0e2c82f3). "
     "7.13.126: fix: a second, related substrate defect in conductor_work's "
     "REPORT branch (mcp/tools.py), found immediately after 7.13.125's "
     "_step_by_id fix while actually driving task 811fcce0 to done: "
