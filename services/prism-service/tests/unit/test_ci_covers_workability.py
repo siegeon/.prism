@@ -51,10 +51,30 @@ def _uncovered_workability(workflow: dict) -> list[str]:
     """One reason string per WORKABILITY_TESTS entry CI would not gate on.
     Returns [] when every workability file is run, un-excluded, by a step
     that fails the job when it fails."""
-    raise NotImplementedError(
-        "trace AC-3/AC-4/AC-5: red step of task 7af6ab28 - helper not yet "
-        "written; must derive its set from prism_cli.WORKABILITY_TESTS"
-    )
+    steps = _pytest_steps(workflow)
+    uncovered: list[str] = []
+    for entry in prism_cli.WORKABILITY_TESTS:
+        tree = entry.split("/", 1)[0]
+        rel = f"tests/{entry}"
+        step = steps.get(tree)
+        if step is None:
+            uncovered.append(f"{entry}: no pytest step runs tests/{tree}")
+            continue
+        if step.get("continue-on-error"):
+            uncovered.append(f"{entry}: its step is continue-on-error, so a "
+                             "failure never fails the job")
+            continue
+        tokens = " ".join(str(step.get("run", "")).split()).replace('"', "").split()
+        excluded = []
+        for i, tok in enumerate(tokens):
+            if tok.startswith(("--ignore=", "--deselect=")):
+                excluded.append(tok.split("=", 1)[1])
+            elif tok in ("--ignore", "--deselect") and i + 1 < len(tokens):
+                excluded.append(tokens[i + 1])
+        hits = [x for x in excluded if rel in x]
+        if hits:
+            uncovered.append(f"{entry}: excluded by {' '.join(hits)}")
+    return uncovered
 
 
 def test_ci_runs_every_workability_test():
