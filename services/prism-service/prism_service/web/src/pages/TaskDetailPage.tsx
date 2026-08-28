@@ -17,7 +17,7 @@ import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcPr
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
 // "2.9B" / "476.9k" / "512" — compact token count (shared k/M/B formatter).
-import { fmtTokens } from "@/lib/format";
+import { fmtTokens, fmtUsd } from "@/lib/format";
 import { relativeTime } from "@/lib/relativeTime";
 import SpendPanel, { type SpendData } from "@/components/SpendPanel";
 import { gateSeverity } from "../lib/gateSeverity";
@@ -228,6 +228,10 @@ type TraceStep = {
   role?: string | null;
   model?: string | null;
   tokens: number;
+  // Authoritative per-run dollar cost, straight off the payload
+  // (agent_runs_data.py:489). Never derived here — recomputing cost
+  // client-side is this ticket's stop_if.
+  cost_usd?: number | null;
   gate_state?: string | null;
   // Provenance of a PASSING gate_state, derived server-side: "machine" (the
   // conductor's own seat, server-clock stamped) vs "unattributed" (written
@@ -238,11 +242,12 @@ type TraceStep = {
 type TraceSession = {
   session_id: string;
   tokens_total: number;
+  cost_total?: number | null;
   steps: TraceStep[];
 };
 type TaskTrace = {
   sessions: TraceSession[];
-  totals: { tokens: number; steps: number; sessions: number };
+  totals: { tokens: number; cost_usd?: number | null; steps: number; sessions: number };
 };
 
 // Staggered Card-stack wrapper: each card fades + rises into place with a
@@ -714,6 +719,13 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
           {tokens > 0 ? fmtTokens(tokens) : "—"}
         </span>
       </span>
+      {/* Dollars are READ, never derived — the payload's own per-run figure.
+          A falsy cost means "not attributed" (runs predating cost capture
+          report 0.0), so it dashes: an absent measurement must not read as a
+          measured zero. */}
+      <span className="font-mono text-2xs tabular-nums text-[color:var(--accent-sage-fg)] w-[64px] text-right shrink-0" title="cost for this step, from the trace payload">
+        {step.cost_usd ? fmtUsd(step.cost_usd) : "—"}
+      </span>
     </div>
   );
 }
@@ -880,8 +892,9 @@ function TraceView({ trace, loading, spend }: { trace: TaskTrace | null; loading
   return (
     <div className="space-y-4">
       <SpendPanel spend={spend} />
-      <div className="grid grid-cols-2 min-[560px]:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 min-[560px]:grid-cols-5 gap-3">
         <TraceKpi label="Total tokens" value={fmtTokens(t.tokens)} hint="across this task's drives" />
+        <TraceKpi label="Total cost" value={t.cost_usd ? fmtUsd(t.cost_usd) : "—"} hint="sum of per-step cost on the trace payload" />
         <TraceKpi label="Steps" value={String(t.steps)} />
         <TraceKpi label="Sessions" value={String(t.sessions)} />
         <TraceKpi label="Tokens / step" value={fmtTokens(perStep)} />
