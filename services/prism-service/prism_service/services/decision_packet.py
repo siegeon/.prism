@@ -15,7 +15,7 @@ from __future__ import annotations
 import subprocess
 from typing import Optional
 
-from prism_service.services import task_workspace, oracle_spec
+from prism_service.services import task_workspace, oracle_spec, control_plane
 from prism_service.data_dir import evidence_dir
 
 _IMG = (".png", ".jpg", ".jpeg", ".gif", ".webp")
@@ -173,7 +173,16 @@ def assemble_packet(project: str, task_id: str, task=None) -> dict:
     raises."""
     ws = task_workspace.workspace_for(task_id)
     path = (ws or {}).get("path", "")
-    baseline = (ws or {}).get("baseline", "")
+    stale_baseline = (ws or {}).get("baseline", "")
+    # The stored baseline is set ONCE at workspace creation and never
+    # updated (task_workspace.ensure_workspace) — diffing against it
+    # verbatim shows a human "changed since baseline" numbers that include
+    # every OTHER task's work merged to main since that stale point (live:
+    # this exact packet showed 292 files / 413 commits for a candidate whose
+    # real diff vs a fresh merge-base was 3 files). Resolve forward the same
+    # way the gate-policy tooth already does (control_plane._fresh_diff_base)
+    # so the Evidence tab never shows a diff nobody can act on.
+    baseline = control_plane.resolve_fresh_baseline(path, stale_baseline)
     workflow_step = getattr(task, "workflow_step", "")
     return {
         "state": packet_state(workflow_step,
