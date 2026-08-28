@@ -723,7 +723,7 @@ function TraceStepRow({ step, max }: { step: TraceStep; max: number }) {
           A falsy cost means "not attributed" (runs predating cost capture
           report 0.0), so it dashes: an absent measurement must not read as a
           measured zero. */}
-      <span className="font-mono text-2xs tabular-nums text-[color:var(--accent-green-fg)] w-[64px] text-right shrink-0" title="cost for this step, from the trace payload">
+      <span className="font-mono text-2xs tabular-nums text-[color:var(--accent-sage-fg)] w-[64px] text-right shrink-0" title="cost for this step, from the trace payload">
         {step.cost_usd ? fmtUsd(step.cost_usd) : "—"}
       </span>
     </div>
