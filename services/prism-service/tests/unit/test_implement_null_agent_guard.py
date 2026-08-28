@@ -100,6 +100,31 @@ def test_step_loop_guards_null_res_before_trace_push():
     )
 
 
+def test_preflight_null_guard_precedes_ok_access():
+    """FOLLOW-UP (self-reported gap in this task's own completion_proof):
+    `preflight` is the EARLIEST agent() call in the script - a classifier
+    kill here crashed on `!preflight.ok` before any of the three guards
+    above ever got a chance to matter."""
+    src = _source()
+
+    agent_at = src.index("const preflight = await agent(")
+    guard_at = src.index("if (!preflight)")
+    deref_at = src.index("if (!preflight.ok)")
+
+    assert agent_at < guard_at < deref_at, (
+        "a null/falsy guard on `preflight` itself must run after the "
+        "agent() call and before `preflight.ok` is ever dereferenced - "
+        "otherwise a classifier-killed pre-flight agent crashes here, "
+        "before locate/graph/trace's own guards are ever reached"
+    )
+
+    block = _reason_snippet(src, guard_at)
+    assert "kind: 'blocked'" in block or 'kind: "blocked"' in block, (
+        "a null `preflight` must halt with kind='blocked', not silently "
+        "fall through or rethrow an unhandled exception"
+    )
+
+
 def test_blocked_halt_reason_is_non_empty_and_descriptive():
     src = _source()
 
@@ -107,6 +132,7 @@ def test_blocked_halt_reason_is_non_empty_and_descriptive():
         src.index("if (!locate)"),
         src.index("if (!graph)"),
         src.index("if (!res)"),
+        src.index("if (!preflight)"),
     ]
 
     for guard_at in guard_sites:
