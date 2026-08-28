@@ -1959,7 +1959,7 @@ export default function TaskDetailPage() {
         </div>
       </div>
 
-      {task.blocked_reason && (
+      {task.status === "blocked" && task.blocked_reason && (
         <Card>
           <SectionLabel>Blocked because</SectionLabel>
           <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1"><LinkedText text={task.blocked_reason} /></div>
