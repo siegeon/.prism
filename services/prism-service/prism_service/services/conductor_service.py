@@ -114,6 +114,43 @@ def full_outcome_verdict(slice_green: bool, completion_proof: object,
     return True, ""
 
 
+def subtree_progress_counts(task_svc, root_id: str, max_depth: int = 6) -> dict:
+    """Recursive status counts across the WHOLE descendant subtree of
+    root_id (root itself excluded), not just direct children -- so a UI can
+    answer "how much work is actually done" without drilling through several
+    epic-rollup levels by hand. Owner, live, task 95474ec7: "impossobvle to
+    see at this top level how much work is actualy done" -- the real answer
+    was 3 of 7 descendants done and 2 more at their own green_gate pending
+    only a merge, none of which was visible from blocking_children (direct
+    children only). Cancelled/deleted descendants are excluded, matching
+    epic_rollup_verdict's own filtering. Depth-bounded (6, same bound as
+    ConductorService._subtree_active) against runaway/cyclic data.
+    """
+    counts = {"total": 0, "done": 0, "in_progress": 0, "blocked": 0, "pending": 0}
+
+    def walk(tid: str, depth: int, seen: set) -> None:
+        if depth > max_depth or tid in seen:
+            return
+        seen.add(tid)
+        try:
+            kids = task_svc.list(parent_id=tid)
+        except Exception:
+            return
+        for k in kids:
+            status = str(_task_attr(k, "status", "") or "")
+            if status in ("cancelled", "deleted"):
+                continue
+            counts["total"] += 1
+            if status in counts:
+                counts[status] += 1
+            else:
+                counts["pending"] += 1
+            walk(str(_task_attr(k, "id", "")), depth + 1, seen)
+
+    walk(root_id, 0, set())
+    return counts
+
+
 def epic_rollup_verdict(children: list) -> tuple[bool, str]:
     """Issue #171 — an EPIC/parent green_gate is satisfiable by ROLLING UP
     its children. When every non-cancelled child task is status=done AND
@@ -5817,6 +5854,23 @@ class ConductorService:
         except Exception:
             return []
 
+    def _subtree_active(self, task, _depth: int = 0) -> bool:
+        """True if TASK itself, or any descendant at any depth, is
+        in_progress with a step transition inside the last 120s or a live
+        drive heartbeat. Depth-bounded (6) against runaway/cyclic data, not
+        against real epic nesting — an epic-of-epics is typically 2-4 levels
+        deep in this repo (task 95474ec7)."""
+        if _depth > 6:
+            return False
+        if (getattr(task, "status", "") or "") == "in_progress":
+            motion = self._task_motion_s(task)
+            if motion is not None and motion <= 120:
+                return True
+            beat = drive_heartbeat.latest(self._scores_db, getattr(task, "id", ""))
+            if beat is not None and beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
+                return True
+        return any(self._subtree_active(k, _depth + 1) for k in self._children(task))
+
     def activity_for(self, task, phase_progress: dict) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
         means a REAL recent conductor transition on THIS task (<=120s); when
@@ -5850,9 +5904,11 @@ class ConductorService:
                 # An EPIC's activity is its slices': a slice actively moving =>
                 # working; some slices done but none active => paused (real
                 # progress, between bursts — NOT the alarming "stalled");
-                # nothing done and nothing active => stalled.
-                active = any((getattr(k, "status", "") or "") == "in_progress"
-                             and (self._task_motion_s(k) or 1e9) <= 120 for k in kids)
+                # nothing done and nothing active => stalled. RECURSIVE: an
+                # epic-of-epics' real work can sit several levels down (task
+                # 95474ec7, live, 3 hops to its actual driven leaf) — a direct
+                # child's OWN motion is not enough, the whole subtree counts.
+                active = any(self._subtree_active(k) for k in kids)
                 done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
                 if active:
                     state = "working"

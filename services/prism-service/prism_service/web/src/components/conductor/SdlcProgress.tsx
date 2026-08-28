@@ -374,7 +374,18 @@ export default function SdlcProgress({
               {counting ? (
                 <span>{fmtClock(liveInStep)}</span>
               ) : (
-                <span className="opacity-70">waiting {fmtClock(phase?.in_step_s ?? 0)}</span>
+                <span className="opacity-70">
+                  {/* "waiting" contradicts a "working" state label (task
+                      95474ec7, owner live: "still looks like you have now
+                      been waiting for 90+ mins" on an epic whose subtree was
+                      genuinely active) — an epic-rollup can be state=working
+                      via _subtree_active (deep descendant motion) while THIS
+                      task's own step never streams a token, so `counting`
+                      stays false. Say "elapsed" there instead; every other
+                      not-counting state (the true parked case) keeps
+                      "waiting", unchanged. */}
+                  {state === "working" ? "elapsed" : "waiting"} {fmtClock(phase?.in_step_s ?? 0)}
+                </span>
               )}
               {counting && (phase?.eta_s ?? 0) > 5 && (
                 <span
