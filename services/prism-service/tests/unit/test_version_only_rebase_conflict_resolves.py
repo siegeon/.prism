@@ -102,7 +102,9 @@ def test_a_version_only_conflict_is_resolved(repo, monkeypatch):
         "prism_service.services.ship_worker._run",
         lambda run, cmd, path: _as_tuple(cmd, path), raising=False)
     out = _rebase(root)
-    assert out.get("ok") is True, out
+    assert out.get("ok") is True, (
+        f"{out}\nstatus:\n{_git(root, 'status', '--short', check=False).stdout}"
+        f"\ngit: {_git(root, '--version', check=False).stdout}")
     # The flag proves the RESOLVER ran. Without it this test could pass on a
     # rebase that never conflicted, which would assert nothing.
     assert out.get("version_conflict_resolved") is True, out
@@ -182,7 +184,9 @@ def test_every_version_conflict_in_the_replay_is_resolved(tmp_path):
 
     out = _rebase(root)
     assert out.get("ok") is True, (
-        f"two version-touching commits must both resolve, not just the first: {out}")
+        f"two version-touching commits must both resolve, not just the first: "
+        f"{out}\nstatus:\n{_git(root, 'status', '--short', check=False).stdout}"
+        f"\ngit: {_git(root, '--version', check=False).stdout}")
     assert out.get("version_conflict_resolved") is True, out
     text = (root / _VERSION_REL).read_text()
     assert 'PRISM_VERSION = "7.13.141"' in text, text[:140]

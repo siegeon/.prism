@@ -343,8 +343,26 @@ def _resolve_version_only_conflict(run: Runner, path: str,
     rc, _o, _e = _run(run, ["git", "add", _VERSION_REL], path)
     if rc != 0:
         return False
-    env_rc, _o2, _e2 = _run(
-        run, ["git", "-c", "core.editor=true", "rebase", "--continue"], path)
+    # COMPLETING THE STEP ACROSS GIT VERSIONS. git 2.34 (this dev box) and
+    # git 2.43 on ubuntu-24.04 (CI) disagree about which editor knob a
+    # `rebase --continue` consults: the older apply backend honours
+    # core.editor, the newer merge backend reaches for the commit-message
+    # editor and can stop waiting for input that never comes. Set BOTH
+    # knobs, and if the continue still refuses, commit the staged
+    # resolution explicitly with --no-edit and then continue. Measured:
+    # these two tests passed on 2.34 locally and failed on CI's newer git
+    # for four runs, which is the same local-vs-CI git split already
+    # recorded against task 3f46342a.
+    cont = ["git", "-c", "core.editor=true", "-c", "sequence.editor=true",
+            "rebase", "--continue"]
+    env_rc, _o2, _e2 = _run(run, cont, path)
+    if env_rc != 0:
+        # The staged file IS the resolution; make the commit without an
+        # editor, then let the rebase carry on.
+        c_rc, _o3, _e3 = _run(
+            run, ["git", "-c", "core.editor=true", "commit", "--no-edit"], path)
+        if c_rc == 0:
+            env_rc, _o2, _e2 = _run(run, cont, path)
     if env_rc == 0:
         return True
     # A branch with SEVERAL commits touching the version file hits a fresh
