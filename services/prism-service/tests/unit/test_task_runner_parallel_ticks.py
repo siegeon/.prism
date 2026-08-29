@@ -196,7 +196,11 @@ def test_gate_parked_task_is_not_selected_for_a_slot(make_project, monkeypatch):
     started = _started_ids(calls)
     assert parked[0][:8] not in started
     assert started == {t[:8] for t in ids}
-    assert tr.eligible_tasks(project, 3) == [], "all agent-step tasks consumed"
+    # After the tick the driven tasks sit at draft_story (an agent step, so
+    # they are eligible again); the gate-parked task is STILL never offered.
+    again = tr.eligible_tasks(project, 3)
+    assert parked[0] not in again
+    assert set(again) == set(ids)
 
 
 # AC-7 ----------------------------------------------------------------------
