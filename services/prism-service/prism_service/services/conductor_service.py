@@ -245,6 +245,9 @@ MACHINE_SEATS = frozenset(
 # Task 8582921d: how many CONSECUTIVE machine rewinds (green_gate -> back
 # to implement/verify) may happen before the seat parks loudly for a human.
 MAX_AUTO_REWINDS = 3
+# task 7c7f0f1b: gate -> step a MANUAL reject rewinds to when it differs
+# from steps[idx - 1]. Gates absent here keep the producing-step default.
+_MANUAL_REJECT_TARGET = {"green_gate": "implement_tasks"}
 
 
 # DELIVERY AUTO-MERGE (task cb1dc6f4, owner 2026-07-29: "i approved the green
@@ -2592,7 +2595,15 @@ class ConductorService:
         if override or self._consecutive_auto_rewinds(task_id) < MAX_AUTO_REWINDS:
             idx = self._step_index(gate_step_id, task_workflow)
             if idx > 0:
-                producing = self._workflow_steps(task_workflow)[idx - 1]
+                steps = self._workflow_steps(task_workflow)
+                producing = steps[idx - 1]
+                # task 7c7f0f1b: a green_gate reject is a verdict on the
+                # BUILD, so rework restarts at implement_tasks, not at
+                # verify_green_state (which only verifies and reports and
+                # resubmitted the same tree four times on 4bb20592).
+                target = _MANUAL_REJECT_TARGET.get(gate_step_id)
+                if target and any(st["id"] == target for st in steps):
+                    producing = self._step_by_id(target, task_workflow)
                 if producing["type"] != "gate":
                     self._auto_rewind(task_id, producing["id"], reason,
                                       "manual reject", from_step=gate_step_id)
