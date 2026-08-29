@@ -1486,7 +1486,16 @@ def test_every_bot_family_canvas_auto_attaches_its_own_live_task():
     # history, and clicking into history stays an explicit rail action
     # (mirrors validation, which never auto-replays a finished run either).
     assert 'task.status !== "done"' in attach
-    assert '"pending"' in attach and '"working"' in attach and '"driving"' in attach
+    # SUPERSEDED 2026-08-28 by task a928f3d5: this used to also require
+    # '"pending"', treating a task parked at a gate as "in flight". It is
+    # not -- it is waiting for a PERSON -- and attaching to one sets
+    # viewingInstanceRef, which stops the definition poll from re-applying
+    # live occupancy, freezing the whole board on a task doing nothing
+    # (measured: a task awaiting review for 32 hours pinned the canvas while
+    # 8 tasks drove through implement_tasks unseen). In flight now means
+    # exactly activity working/driving.
+    assert '"working"' in attach and '"driving"' in attach
+    assert "gate_state" not in attach
     assert "openConductorInstance(live)" in attach
     # Most-recently-updated live task wins, not the oldest -- conductorRailTasks
     # is sorted ascending, so this must walk it in reverse.

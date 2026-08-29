@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.150"
+PRISM_VERSION = "7.13.151"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7624,4 +7624,5 @@ PRISM_VERSION_NOTES += (
     "\n7.13.123: a fresh FAILED green receipt rewinds the drive to "
     "implement_tasks with the failing test ids; rewind_budget (default 3) "
     "parks it (task ad92c0e9)."
+    "\n7.13.151: /workflows opened on a PARKED task instead of the work happening now. Measured live by the remote-assist player on 7.13.150: the board showed a WorkflowCore run from 32 hours earlier and the label LOADING RUN, while 31 tasks were in progress with 8 in implement_tasks and 9 in verify_plan, none of them visible. Cause: the auto-attach effect in WorkflowsPage.tsx matched a task whose gate_state was pending or failed. A task parked at a gate is waiting for a PERSON, not working, and openConductorInstance then sets viewingInstanceRef, which stops the definition poll from re-applying live occupancy to the whole canvas -- so one task awaiting review for 32 hours froze the entire board. The selector now matches only activity working or driving; with nothing working the board keeps live occupancy, which is the honest whole-board view. New tests/unit/test_workflows_opens_on_live_work.py (3 tests, red-confirmed against the pre-fix source). The neighbouring assertion in test_workflows_section_ui.py that required \"pending\" was retired in place with a note naming this task. 227 workflow tests green, real npm run build clean."
 )

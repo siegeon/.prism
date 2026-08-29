@@ -1053,10 +1053,17 @@ export default function WorkflowsPage() {
   // never race onto different pills for the same canvas.
   useEffect(() => {
     if (!isStateMachineWorkflow || workflowRun || searchParams.get("task")) return;
+    // A task parked at a gate is waiting for a PERSON, not working -- and
+    // attaching to one sets viewingInstanceRef, which stops the definition
+    // poll from re-applying live occupancy to the whole board. Measured on
+    // 7.13.150 (task a928f3d5): opening /workflows pinned the canvas to a
+    // task that had been awaiting review for 32 hours while 8 tasks were
+    // driving through implement_tasks, none of them visible. Attach only to
+    // work that is actually moving; with nothing moving, the board keeps
+    // live occupancy, which is the honest whole-board view.
     const live = [...conductorRailTasks].reverse().find((task) =>
       task.status !== "done"
-      && (task.gate_state === "pending" || task.gate_state === "failed"
-        || task.activity?.state === "working" || task.activity?.state === "driving"));
+      && (task.activity?.state === "working" || task.activity?.state === "driving"));
     if (live) openConductorInstance(live);
   }, [isStateMachineWorkflow, workflowRun, searchParams, conductorRailTasks, openConductorInstance]);
 
