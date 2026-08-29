@@ -38,6 +38,8 @@ def test_a_mint_does_not_modify_the_task_worktree(tmp_path, monkeypatch):
     ws_root = tmp_path / "task_workspaces"
     fake_worktree = ws_root / "72ccaf94-0000-0000-0000-000000000000"
     (fake_worktree / lp._LAW_TESTS_RELDIR).mkdir(parents=True)
+    # A linked worktree's .git is a FILE, not a directory.
+    (fake_worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/x\n")
 
     monkeypatch.setattr(task_workspace, "_root", lambda: ws_root)
     monkeypatch.setattr(task_workspace, "_prism_repo_root",
@@ -59,6 +61,7 @@ def test_a_normal_checkout_still_gets_the_generated_test(tmp_path, monkeypatch):
     ws_root.mkdir(parents=True)
     checkout = tmp_path / "prism"
     (checkout / lp._LAW_TESTS_RELDIR).mkdir(parents=True)
+    (checkout / ".git").mkdir()          # a primary checkout: .git is a DIR
 
     monkeypatch.setattr(task_workspace, "_root", lambda: ws_root)
     monkeypatch.setattr(task_workspace, "_prism_repo_root", lambda: checkout)
@@ -75,6 +78,7 @@ def test_the_promoted_law_test_is_written_only_when_its_content_changes(
     ws_root.mkdir(parents=True)
     checkout = tmp_path / "prism"
     (checkout / lp._LAW_TESTS_RELDIR).mkdir(parents=True)
+    (checkout / ".git").mkdir()
     monkeypatch.setattr(task_workspace, "_root", lambda: ws_root)
     monkeypatch.setattr(task_workspace, "_prism_repo_root", lambda: checkout)
 
@@ -96,3 +100,25 @@ def test_the_promoted_law_test_is_written_only_when_its_content_changes(
     lp._write_verification_test("a-rule", _TTL + "# changed\n", "v", "c")
     assert dest.stat().st_mtime_ns != 0, (
         "a CHANGED law test must still be written")
+
+
+def test_a_linked_worktree_is_refused_even_outside_the_workspaces_dir(
+        tmp_path, monkeypatch):
+    """The FIRST version of this guard compared against
+    task_workspace._root() and did not fire in production, because
+    resolve_data_dir() answers differently inside the oracle's own
+    subprocess so the computed workspaces path never matched the real one.
+    A linked worktree's .git being a FILE is a filesystem fact that no
+    config can disagree with."""
+    ws_root = tmp_path / "unrelated_workspaces"
+    ws_root.mkdir()
+    stray = tmp_path / "somewhere_else"
+    (stray / lp._LAW_TESTS_RELDIR).mkdir(parents=True)
+    (stray / ".git").write_text("gitdir: /elsewhere/.git/worktrees/y\n")
+
+    monkeypatch.setattr(task_workspace, "_root", lambda: ws_root)
+    monkeypatch.setattr(task_workspace, "_prism_repo_root", lambda: stray)
+
+    lp._write_verification_test("a-rule", _TTL, "v", "c")
+    assert list((stray / lp._LAW_TESTS_RELDIR).glob("*.py")) == [], (
+        "a linked worktree must be refused wherever it lives")

@@ -477,9 +477,23 @@ def _write_verification_test(name: str, ttl: str, violating: str,
     # remain in the task's own workspace -- the implementation was never
     # committed". Two tasks that were green, rebased and already merged to
     # origin/main could not close on it.
+    # A LINKED GIT WORKTREE HAS `.git` AS A FILE; a primary checkout has it
+    # as a DIRECTORY. That is a filesystem fact, independent of any config,
+    # which is why the guard keys on it: the first attempt compared against
+    # task_workspace._root() and did NOT fire, because resolve_data_dir()
+    # answers differently inside the oracle's own subprocess, so the
+    # workspaces path it computed never matched the real one.
+    try:
+        if (repo_root / ".git").is_file():
+            return ref
+    except OSError:
+        pass
+    # Belt and braces: an explicit task-workspaces match, for the case where
+    # the root is reached some other way.
     try:
         ws_root = task_workspace._root().resolve()
-        if repo_root.resolve() == ws_root or ws_root in repo_root.resolve().parents:
+        rr = repo_root.resolve()
+        if rr == ws_root or ws_root in rr.parents:
             return ref
     except Exception:
         pass
