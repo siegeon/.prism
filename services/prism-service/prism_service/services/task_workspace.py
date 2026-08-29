@@ -41,6 +41,46 @@ def _root() -> Path:
     return p
 
 
+def workspace_path(task_id: str) -> str:
+    """This task's existing workspace checkout, or "" when it has none.
+
+    RESOLVE ONLY -- never create. Callers are gate checks and receipt
+    freshness reads (green_rewind._workspace_path, and through it every
+    green_gate decision), so materialising a checkout here would hand a
+    workspace to tasks that never had one.
+
+    Task 4cbac65a: this function's ABSENCE was a silent production defect.
+    `green_rewind._workspace_path` did a `getattr(task_workspace,
+    "workspace_path", None)` fallback for any task row whose own
+    `workspace` field was empty -- which is most of them. getattr returned
+    None, the helper returned "", and `oracle_spec.current_tree_sha("")`
+    returns "". Measured live across ten tasks parked at green_gate: every
+    one reported an empty tree while its directory sat on disk. A PASSING
+    receipt therefore could never be confirmed fresh (the gate refused it
+    as unshipped), and `maybe_rewind` bailed at its `if not tree` guard, so
+    the red-receipt rewind shipped as task ad92c0e9 never fired once.
+
+    The index is consulted first because a workspace may live outside the
+    default root (an explicit repo_root at creation); the conventional
+    path is the fallback, and both must EXIST to be returned.
+    """
+    tid = str(task_id or "").strip()
+    if not tid:
+        return ""
+    try:
+        rec = _load_index().get(tid) or {}
+        recorded = str(rec.get("path") or "")
+        if recorded and Path(recorded).is_dir():
+            return recorded
+    except Exception:  # noqa: BLE001 - the conventional path below still answers
+        pass
+    try:
+        p = _root() / tid
+        return str(p) if p.is_dir() else ""
+    except Exception:  # noqa: BLE001 - a resolver never raises into a gate
+        return ""
+
+
 def _index_path() -> Path:
     return _root() / "index.json"
 
