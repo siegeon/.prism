@@ -37,6 +37,14 @@ plan_coverage:
   # (b3-ii / c1) plan_diagram edges are diffed against Brain-stored
   # principles BEFORE code; zero seeded principles never pass.
   require_principles: true
+  # (task 777fbec2) the plan must be ABOUT the task it sits on. The FIRST
+  # non-empty line of plan_doc must not name a task id that is not the
+  # task under review (8-hex prefix compare; skipped when the caller
+  # passes no evidence["task_id"]), and must not describe itself as a
+  # replacement for a contaminated plan. Body lines are never scanned —
+  # a sibling cited in the body is a dependency, not a subject.
+  plan_subject:
+    enabled: true
 
 premise_grounded:
   # (task 3a63190b / github issue #222) review_previous_notes: the ticket's
