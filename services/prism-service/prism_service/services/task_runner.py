@@ -336,7 +336,58 @@ def red_test_ids(proof: str) -> list[str]:
     return seen
 
 
+def _shipped_sha_for_stall(task_id: str) -> str:
+    """The origin/main commit carrying this task's own trailer, or "".
+
+    Delegates to the SAME squash-safe reader the gate's unshipped tooth
+    uses (api/tasks._shipped_sha_on_main), so the stall path and the gate
+    can never disagree about whether a task landed.
+    """
+    from prism_service.api.tasks import _shipped_sha_on_main
+    from prism_service.services.task_workspace import _prism_repo_root
+    return _shipped_sha_on_main(str(_prism_repo_root()), task_id) or ""
+
+
+def _stall_work_is_shipped(task_id: str) -> bool:
+    """True when this task's work is already on origin/main.
+
+    FAILS CLOSED: any error answers False, so a git or repo problem leaves
+    the original split behaviour untouched rather than closing a task on an
+    exception.
+    """
+    try:
+        return bool(_shipped_sha_for_stall(task_id))
+    except Exception:  # noqa: BLE001 - a stall handler never raises
+        return False
+
+
 def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
+    """Fourth tick on a stalled step: close if shipped, else decompose or
+    block, never invoke.
+
+    THE SHIPPED CASE FIRST (live waste, 2026-08-29): task 4cbac65a's fix
+    landed on origin/main as b2f8d88f, out of band. The runner kept driving
+    its verify_green_state step, stalled, and split it into SIX children --
+    one per pinned test -- every one of those tests already green on main.
+    Six pieces of work that could only ever be waste, in a queue that
+    drives one step per tick. A task whose own trailer is reachable from
+    origin/main is finished; the honest move is to close it.
+    """
+    if _stall_work_is_shipped(task_id):
+        sha = _shipped_sha_for_stall(task_id)
+        reason = (f"step {step_id} did not advance after {STALL_ATTEMPTS} "
+                  f"attempts, but this task's work is already on "
+                  f"origin/main ({sha[:12]}) -- closing instead of "
+                  f"splitting it into children that cannot change anything.")
+        task_svc.update(task_id, status="done", full_outcome_complete=True,
+                        blocked_reason="")
+        task_svc.record_history(task_id, action="runner_stall",
+                                details=reason, actor=SEAT_ID)
+        return {"ok": True, "task_id": task_id, "step": step_id, "run_id": "",
+                "tokens": 0, "cost_usd": 0.0, "report": None,
+                "stalled": {"action": "shipped", "children": [],
+                            "reason": reason}}
+
     """Fourth tick on a stalled step: decompose or block, never invoke."""
     parent = task_svc.get(task_id)
     ids = red_test_ids(getattr(parent, "completion_proof", "") or "")
