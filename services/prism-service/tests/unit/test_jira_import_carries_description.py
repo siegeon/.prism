@@ -71,7 +71,7 @@ def _sync(store, tasks, adapter):
 
 def _import_single_issue(tmp_path, fixture_name):
     """Pulls one fixture through the full adapter + sync stack and returns
-    the resulting local task's description."""
+    the resulting local task."""
     client = _FakeJiraClient(_fixture(fixture_name))
     store = _store(tmp_path)
     tasks = _task_svc(tmp_path)
@@ -81,12 +81,12 @@ def _import_single_issue(tmp_path, fixture_name):
 
     entity = store.list_entities(WS_A)[0]
     link = store.list_links(WS_A, entity_id=entity.id)[0]
-    task = tasks.get(link.task_id)
-    return task.description
+    return tasks.get(link.task_id)
 
 
 def test_description_leads_with_provenance_trailing(tmp_path):
-    description = _import_single_issue(tmp_path, "search_jql_with_description.json")
+    task = _import_single_issue(tmp_path, "search_jql_with_description.json")
+    description = task.description
 
     # site_url is not wired in this harness, so the adapter's default
     # site_url_provider yields "" and the browse-URL line of provenance is
@@ -103,17 +103,22 @@ def test_description_leads_with_provenance_trailing(tmp_path):
         "- Open the search page and run any query.\n"
         "- Click next until page 4."
     ) in description
-    assert description.endswith("Mirrored from jira PROJ PRIS-9."), description
-    # body leads, provenance trails — never the other way around, and never
-    # raw ADF JSON (no braces, no "type": markers) anywhere in the output.
-    assert description.index("Paging past page 3") < description.index("Mirrored from jira")
+    # SUPERSEDED by task fb7edc46 (already on origin/main), which retired the
+    # "Mirrored from ..." description trailer: an import's provenance now
+    # lives in channel/channel_ref (work_item_sync.py:265-292), and the body
+    # alone IS the description. The real invariant — provenance is still
+    # recorded, and the body is never buried by it — moves to those fields.
+    assert "Mirrored from jira" not in description, description
+    assert task.channel == "jira", task.channel
+    # never raw ADF JSON (no braces, no "type": markers) anywhere in the output.
     assert "{" not in description
     assert '"type"' not in description
     assert '"content"' not in description
 
 
 def test_unrecognized_adf_node_degrades_to_its_text(tmp_path):
-    description = _import_single_issue(tmp_path, "search_jql_unknown_adf_node.json")
+    description = _import_single_issue(
+        tmp_path, "search_jql_unknown_adf_node.json").description
 
     assert "This panel node type is not explicitly handled by the walker." in description
     assert "{" not in description
@@ -121,10 +126,11 @@ def test_unrecognized_adf_node_degrades_to_its_text(tmp_path):
 
 
 def test_missing_description_keeps_todays_stub(tmp_path):
-    description = _import_single_issue(tmp_path, "search_jql_no_description.json")
+    task = _import_single_issue(tmp_path, "search_jql_no_description.json")
+    description = task.description
 
-    assert description == "Mirrored from jira PROJ PRIS-11.", description
-    assert "\n\n" not in description, (
-        "a missing description must produce the bare provenance stub, "
-        "never a leading blank body separator"
-    )
+    # SUPERSEDED by task fb7edc46 (see above): with the trailer retired, an
+    # issue carrying no description imports as an EMPTY body, and the
+    # provenance the old stub carried is read off channel/channel_ref.
+    assert description == "", description
+    assert task.channel == "jira", task.channel
