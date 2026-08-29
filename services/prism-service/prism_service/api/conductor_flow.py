@@ -208,6 +208,17 @@ def _job(task) -> Optional[dict]:
     rewind_reason = getattr(task, "gate_reason", "") or ""
     if step["id"] == "implement_tasks" and rewind_reason.startswith("Rewind"):
         instructions += "\n\nREWOUND FROM green_gate: " + rewind_reason
+    # task 7c7f0f1b (AC-2): after a gate reject the stored gate_reason IS
+    # the work order for this step, so it rides in the instructions the
+    # driver reads, not only in the top-level field it may never look at.
+    # A receipt rewind (above) already carried its reason, so skip it here.
+    reject_reason = rewind_reason.strip()
+    if kind != "gate" and reject_reason and (
+            not reject_reason.startswith("Rewind")) and (
+            getattr(task, "gate_state", "") or "none") == "none":
+        instructions += ("\n\nGate decision that sent this task back to "
+                         "this step (address it before you report):\n"
+                         + reject_reason)
     return {
         "task_id": task.id,
         "step": step["id"],
