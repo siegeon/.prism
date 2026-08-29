@@ -459,14 +459,44 @@ def _write_verification_test(name: str, ttl: str, violating: str,
     (repo-root-relative) the o:verifiedBy triple should carry."""
     slug = _test_slug(name)
     repo_root = task_workspace._prism_repo_root()
-    test_dir = repo_root / Path(_LAW_TESTS_RELDIR)
-    test_dir.mkdir(parents=True, exist_ok=True)
+    ref = (f"{_LAW_TESTS_RELDIR}/test_promoted_{slug}.py"
+           f"::test_{slug}_fires_on_violating_and_stays_quiet_on_compliant")
     content = _VERIFICATION_TEST_TEMPLATE.format(
         name=name, ttl=ttl, violating=violating, compliant=compliant,
         slug=slug,
     )
-    (test_dir / f"test_promoted_{slug}.py").write_text(content, encoding="utf-8")
-    return f"{_LAW_TESTS_RELDIR}/test_promoted_{slug}.py::test_{slug}_fires_on_violating_and_stays_quiet_on_compliant"
+
+    # NEVER WRITE INTO A GRADED CANDIDATE'S WORKTREE (task 84a91b0b).
+    # _prism_repo_root() ascends from THIS MODULE, so when the oracle runs
+    # inside a task worktree and imports that worktree's own copy of
+    # prism_service, the root resolves to the WORKTREE -- and this write
+    # then dirtied the very tree the green_gate cleanliness tooth was about
+    # to judge. Reproduced deterministically on task f61617c1: clear the
+    # worktree (git status --porcelain = 0), POST /api/conductor/gate/mint,
+    # read it again (= 1), and readiness answers "1 uncommitted change(s)
+    # remain in the task's own workspace -- the implementation was never
+    # committed". Two tasks that were green, rebased and already merged to
+    # origin/main could not close on it.
+    try:
+        ws_root = task_workspace._root().resolve()
+        if repo_root.resolve() == ws_root or ws_root in repo_root.resolve().parents:
+            return ref
+    except Exception:
+        pass
+
+    test_dir = repo_root / Path(_LAW_TESTS_RELDIR)
+    test_dir.mkdir(parents=True, exist_ok=True)
+    dest = test_dir / f"test_promoted_{slug}.py"
+    # Compare before writing: an identical rewrite still bumps mtime, and a
+    # generated file that rewrites itself every pass is churn no reader
+    # wants.
+    try:
+        if dest.exists() and dest.read_text(encoding="utf-8") == content:
+            return ref
+    except OSError:
+        pass
+    dest.write_text(content, encoding="utf-8")
+    return ref
 
 
 def _append_verified_by_triple(path: Path, name: str, test_ref: str) -> None:
