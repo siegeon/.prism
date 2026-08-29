@@ -292,19 +292,29 @@ def _resolve_version_only_conflict(run: Runner, path: str,
         return False
     import re
     full = os.path.join(path, _VERSION_REL)
-    rc_t, theirs, _e = _run(run, ["git", "show", f":3:{_VERSION_REL}"], path)
-    rc_o, ours, _e2 = _run(run, ["git", "show", f":2:{_VERSION_REL}"], path)
-    if rc_t != 0 or rc_o != 0 or not theirs.strip() or not ours.strip():
+    # STAGE ORDER, and it is inverted from the intuition: during a REBASE
+    # git replays each commit ONTO the upstream, so stage 2 ("ours") is
+    # origin/main -- the branch we are landing onto -- and stage 3
+    # ("theirs") is the task's own commit being replayed. Reading them the
+    # other way round takes the BRANCH's version literal as the base and
+    # drops every changelog entry main has gained since the branch was cut.
+    # That is not hypothetical: the first version of this resolver had them
+    # swapped, and it rewrote two task branches to PRISM_VERSION 7.13.125
+    # while main was at 7.13.156, deleting 115 changelog lines. Neither
+    # shipped, but only because both were blocked for other reasons.
+    rc_base, base, _e = _run(run, ["git", "show", f":2:{_VERSION_REL}"], path)
+    rc_br, branch, _e2 = _run(run, ["git", "show", f":3:{_VERSION_REL}"], path)
+    if rc_base != 0 or rc_br != 0 or not base.strip() or not branch.strip():
         return False
-    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', theirs)
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', base)
     if not m:
         return False
     maj, mi, pa = m.groups()
-    merged = theirs.replace(m.group(0),
-                            f'PRISM_VERSION = "{maj}.{mi}.{int(pa) + 1}"', 1)
-    # Append every changelog line this branch added that main does not have.
-    added = [ln for ln in ours.splitlines()
-             if ln.strip().startswith('"\\n') and ln not in theirs.splitlines()]
+    merged = base.replace(m.group(0),
+                          f'PRISM_VERSION = "{maj}.{mi}.{int(pa) + 1}"', 1)
+    # Append every changelog line the BRANCH added that main does not have.
+    added = [ln for ln in branch.splitlines()
+             if ln.strip().startswith('"\\n') and ln not in base.splitlines()]
     if added:
         idx = merged.rstrip().rfind(")")
         if idx == -1:

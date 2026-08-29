@@ -61,7 +61,7 @@ def repo(tmp_path):
 
         # main moves on: a different task shipped 7.13.101.
         _git(root, "branch", "-M", "main")
-        vp.write_text(_v("7.13.101", "7.13.100: base.", "7.13.101: someone else."))
+        vp.write_text(_v("7.13.140", "7.13.100: base.", "7.13.140: someone else."))
         _git(root, "add", "-A")
         _git(root, "-c", "user.email=t@t", "-c", "user.name=t",
              "commit", "-q", "-m", "other task")
@@ -105,10 +105,14 @@ def test_a_version_only_conflict_is_resolved(repo, monkeypatch):
     # rebase that never conflicted, which would assert nothing.
     assert out.get("version_conflict_resolved") is True, out
     text = (root / _VERSION_REL).read_text()
-    assert 'PRISM_VERSION = "7.13.102"' in text, (
-        f"main's literal must win and advance by exactly one: {text[:120]}")
+    assert 'PRISM_VERSION = "7.13.141"' in text, (
+        "main is 7.13.140 and the branch is 7.13.101 -- MAIN's literal must win "
+        f"and advance by exactly one, or shipping walks main backwards: {text[:160]}")
     assert "OUR ENTRY." in text, "the branch's changelog entry was lost"
     assert "someone else." in text, "main's changelog entry was lost"
+    assert "7.13.100: base." in text, "the shared history was truncated"
+    assert text.count('"\\n') >= 3, (
+        f"entries were dropped; only {text.count(chr(34)+chr(92)+chr(92)+chr(110))} remain")
     import ast
     ast.parse(text)
 
