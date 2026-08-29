@@ -117,6 +117,56 @@ def _write_pending_reason(ctx, task, reason) -> None:
         pass
 
 
+# BACKOFF ON AN UNCHANGED REFUSAL (2026-08-29).
+#
+# The sweep re-attempted every pending gate every interval, forever, and on
+# each refusal wrote a gate_decide row plus an updated row. Some of those
+# gates the machine seat can NEVER decide: a demo/review proof_type is
+# human-only by owner rule eaafdf75 and adjudicate_green_gate returns None
+# for it BY DESIGN, so three tasks were each being re-attempted 1,440 times
+# a day for a verdict that cannot exist. Measured on prism/tasks.db: ten
+# parked tasks, ~19,000 history rows and ~10 MB a DAY, 110 MB total.
+#
+# A refusal that has not changed will not change on the next tick either, so
+# the delay doubles per unchanged pass up to _BACKOFF_CAP_S. Anything that
+# ACTUALLY changes about the task (a freshly minted receipt, a push, a human
+# edit) moves its updated_at, which resets the backoff to the next sweep --
+# so this delays only repetition, never a real decision.
+#
+# In-memory and per-process: a daemon restart re-attempts everything once,
+# which is the correct bias.
+_BACKOFF_CAP_S = 1800.0
+_BACKOFF: dict[str, tuple[str, float, float]] = {}
+
+
+def _task_updated_at(t: object) -> str:
+    if isinstance(t, dict):
+        return str(t.get("updated_at") or "")
+    return str(getattr(t, "updated_at", "") or "")
+
+
+def _backoff_should_skip(tid: str, t: object) -> bool:
+    """True when this task refused recently and nothing about it changed."""
+    st = _BACKOFF.get(tid)
+    if st is None:
+        return False
+    prev_updated, next_at, _delay = st
+    if _task_updated_at(t) != prev_updated:
+        _BACKOFF.pop(tid, None)      # something moved -- re-attempt now
+        return False
+    return time.monotonic() < next_at
+
+
+def _backoff_note_refused(tid: str, t: object) -> None:
+    prev = _BACKOFF.get(tid)
+    delay = min((prev[2] * 2.0) if prev else 60.0, _BACKOFF_CAP_S)
+    _BACKOFF[tid] = (_task_updated_at(t), time.monotonic() + delay, delay)
+
+
+def _backoff_clear(tid: str) -> None:
+    _BACKOFF.pop(tid, None)
+
+
 def sweep_once() -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
     Returns the list of approvals made (empty when nothing was decidable)."""
@@ -148,6 +198,8 @@ def sweep_once() -> list[dict]:
                     continue
             elif gate != "pending":
                 continue
+            if _backoff_should_skip(tid, t):
+                continue
             try:
                 if step == "green_gate":
                     res = svc.adjudicate_green_gate(tid)
@@ -175,6 +227,7 @@ def sweep_once() -> list[dict]:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
                 continue
             if res and res.get("ok"):
+                _backoff_clear(tid)
                 approved.append({"project": pid, "task_id": tid, **res})
                 _log(f"{pid}/{tid[:8]}: {step} approved on machine "
                      f"evidence -> {res.get('to_step', 'advanced')}")
@@ -200,6 +253,10 @@ def sweep_once() -> list[dict]:
                         _write_pending_reason(
                             ctx, task,
                             _pending_decline_reason(svc, task, step, pid))
+                    # Record the refusal AFTER the write: _write_pending_reason
+                    # may move updated_at, and the backoff compares against the
+                    # value this pass leaves behind.
+                    _backoff_note_refused(tid, ctx.task_svc.get(tid) or task)
                 except Exception as exc:
                     _log(f"{pid}/{tid[:8]}: reason-surface skipped ({exc})")
     return approved
