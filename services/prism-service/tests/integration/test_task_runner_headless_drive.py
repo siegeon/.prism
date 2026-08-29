@@ -185,7 +185,15 @@ def test_sweep_once_rotates_starting_project_so_none_can_starve(monkeypatch):
     monkeypatch.setattr(project_context, "get_all_projects",
                         lambda: ["p-alpha", "p-beta", "p-gamma"])
     # Every project is ALWAYS eligible -- the worst case for starvation.
-    monkeypatch.setattr(tr, "eligible_task", lambda pid: f"{pid}-task")
+    # SUPERSEDED 2026-08-29 by task 5c255196: sweep_once now asks
+    # `eligible_tasks(project, limit)` so a tick can fill more than one
+    # slot. Stubbing the singular `eligible_task` no longer reaches
+    # sweep_once (the singular delegates TO the plural, not the reverse),
+    # so this patched the wrong seam and the sweep drove nothing. The
+    # invariant under test is unchanged: the starting project rotates so
+    # none can starve.
+    monkeypatch.setattr(tr, "eligible_tasks",
+                        lambda pid, limit: [f"{pid}-task"] if limit > 0 else [])
 
     driven = []
     monkeypatch.setattr(tr, "run_one_step",
@@ -208,9 +216,12 @@ def test_a_starved_project_gets_its_turn_once_the_busy_one_clears(
                         lambda: ["p-busy", "p-starved"])
     # p-busy is eligible forever; p-starved is eligible from the start too
     # -- with NO rotation, p-busy would win on every single tick.
+    # SUPERSEDED 2026-08-29 by task 5c255196 -- see the note above.
     monkeypatch.setattr(
-        tr, "eligible_task",
-        lambda pid: f"{pid}-task" if pid in ("p-busy", "p-starved") else None)
+        tr, "eligible_tasks",
+        lambda pid, limit: ([f"{pid}-task"]
+                            if limit > 0 and pid in ("p-busy", "p-starved")
+                            else []))
 
     driven = []
     monkeypatch.setattr(tr, "run_one_step",
