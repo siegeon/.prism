@@ -32,6 +32,7 @@ its own work. Its own history rows are ship-stage audit rows only.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -263,6 +264,66 @@ def _audit(task_svc, task_id: str, stage: str, detail: str = "") -> None:
         pass
 
 
+_VERSION_REL = "services/prism-service/prism_service/__version__.py"
+
+
+def _resolve_version_only_conflict(run: Runner, path: str,
+                                   conflicts: list[str]) -> bool:
+    """Resolve a rebase conflict whose ONLY casualty is __version__.py.
+
+    SUPERSEDES this module's original refusal (task 229954e4) to touch any
+    conflict, "not even the common case of two branches both bumping
+    PRISM_VERSION". That reasoning holds for real content -- a silent guess
+    is worse than parking -- and it does NOT hold here, because this
+    resolution is mechanical rather than a guess: every task bumps the same
+    literal and appends its own changelog entry at the same place, so the
+    two sides never disagree about meaning. Measured 2026-08-29: three
+    tasks blocked at the ship rebase, __version__.py a casualty in two.
+
+    The merge is: take THEIR file (origin/main, which already carries every
+    entry that shipped), bump its patch by exactly one, and append this
+    branch's own new entries. Nothing is invented, nothing is discarded,
+    and two tasks can never claim the same version.
+
+    Returns True only when it actually resolved; any doubt returns False
+    and the caller parks exactly as before.
+    """
+    if [c.strip() for c in conflicts] != [_VERSION_REL]:
+        return False
+    import re
+    full = os.path.join(path, _VERSION_REL)
+    rc_t, theirs, _e = _run(run, ["git", "show", f":3:{_VERSION_REL}"], path)
+    rc_o, ours, _e2 = _run(run, ["git", "show", f":2:{_VERSION_REL}"], path)
+    if rc_t != 0 or rc_o != 0 or not theirs.strip() or not ours.strip():
+        return False
+    m = re.search(r'PRISM_VERSION = "(\d+)\.(\d+)\.(\d+)"', theirs)
+    if not m:
+        return False
+    maj, mi, pa = m.groups()
+    merged = theirs.replace(m.group(0),
+                            f'PRISM_VERSION = "{maj}.{mi}.{int(pa) + 1}"', 1)
+    # Append every changelog line this branch added that main does not have.
+    added = [ln for ln in ours.splitlines()
+             if ln.strip().startswith('"\\n') and ln not in theirs.splitlines()]
+    if added:
+        idx = merged.rstrip().rfind(")")
+        if idx == -1:
+            return False
+        merged = merged[:idx] + "\n".join(added) + "\n" + merged[idx:]
+    try:
+        ast.parse(merged)
+    except SyntaxError:
+        return False  # never hand a broken module to the next stage
+    with open(full, "w", encoding="utf-8") as fh:
+        fh.write(merged)
+    rc, _o, _e = _run(run, ["git", "add", _VERSION_REL], path)
+    if rc != 0:
+        return False
+    env_rc, _o2, _e2 = _run(
+        run, ["git", "-c", "core.editor=true", "rebase", "--continue"], path)
+    return env_rc == 0
+
+
 def _rebase_onto_main(run: Runner, path: str) -> dict:
     """Fetch origin/main and rebase (or fast-forward) the task's own branch
     onto its current tip BEFORE push (task 229954e4). A branch cut hours
@@ -303,6 +364,11 @@ def _rebase_onto_main(run: Runner, path: str) -> dict:
     _rc, conflicts_out, _err = _run(
         run, ["git", "diff", "--name-only", "--diff-filter=U"], path)
     files = [f for f in conflicts_out.splitlines() if f.strip()]
+    # Task 3161c0d5: a conflict whose ONLY casualty is the version file is
+    # mechanical, not a judgement call -- resolve it and carry on. Every
+    # other conflict set still parks, unchanged, per task 229954e4.
+    if _resolve_version_only_conflict(run, path, files):
+        return {"ok": True, "rebased": True, "version_conflict_resolved": True}
     _run(run, ["git", "rebase", "--abort"], path)
     detail = (f"conflicts in {', '.join(files)}" if files
              else (err or out or f"git rebase exited {rc}"))

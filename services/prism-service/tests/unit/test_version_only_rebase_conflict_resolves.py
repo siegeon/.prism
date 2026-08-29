@@ -77,6 +77,13 @@ def repo(tmp_path):
         _git(root, "add", "-A")
         _git(root, "-c", "user.email=t@t", "-c", "user.name=t",
              "commit", "-q", "-m", "our task")
+        # A REAL origin: _rebase_onto_main fetches before it rebases, so a
+        # fixture without a remote never reaches the conflict path at all.
+        bare = root.parent / (root.name + "_origin.git")
+        _git(root.parent, "init", "-q", "--bare", str(bare))
+        _git(root, "remote", "add", "origin", str(bare))
+        _git(root, "push", "-q", "origin", "main")
+        _git(root, "fetch", "-q", "origin")
         return root, main_sha
     return _build
 
@@ -89,13 +96,14 @@ def _rebase(root):
 def test_a_version_only_conflict_is_resolved(repo, monkeypatch):
     root, _ = repo()
     # No remote in the fixture: 'origin/main' resolves to local main.
-    _git(root, "update-ref", "refs/remotes/origin/main",
-         _git(root, "rev-parse", "main").stdout.strip())
     monkeypatch.setattr(
         "prism_service.services.ship_worker._run",
         lambda run, cmd, path: _as_tuple(cmd, path), raising=False)
     out = _rebase(root)
     assert out.get("ok") is True, out
+    # The flag proves the RESOLVER ran. Without it this test could pass on a
+    # rebase that never conflicted, which would assert nothing.
+    assert out.get("version_conflict_resolved") is True, out
     text = (root / _VERSION_REL).read_text()
     assert 'PRISM_VERSION = "7.13.102"' in text, (
         f"main's literal must win and advance by exactly one: {text[:120]}")
@@ -107,8 +115,6 @@ def test_a_version_only_conflict_is_resolved(repo, monkeypatch):
 
 def test_a_conflict_touching_another_file_still_parks(repo, monkeypatch):
     root, _ = repo(also_touch="services/prism-service/prism_service/other.py")
-    _git(root, "update-ref", "refs/remotes/origin/main",
-         _git(root, "rev-parse", "main").stdout.strip())
     monkeypatch.setattr(
         "prism_service.services.ship_worker._run",
         lambda run, cmd, path: _as_tuple(cmd, path), raising=False)
