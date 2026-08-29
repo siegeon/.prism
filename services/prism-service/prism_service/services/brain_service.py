@@ -384,7 +384,11 @@ class BrainService:
         ``path::main`` (legacy id format preserved for backward-compat).
 
         Replaces any prior chunks for the same source_file so re-indexing
-        leaves no stale rows. Returns the first chunk's doc_id.
+        leaves no stale rows. Always returns a real doc_id -- the first
+        chunk's, or the existing first chunk's when the content hash and
+        chunk count match what is already indexed and the document rewrite
+        was skipped. Caller-supplied ``entities`` and graph staging run on
+        BOTH paths; only the document rewrite is skipped.
         """
         from datetime import datetime, timezone
         import hashlib as _hashlib
@@ -397,106 +401,155 @@ class BrainService:
         now = datetime.now(timezone.utc).isoformat()
         vector_on = getattr(self._brain, "vector_enabled", False)
 
-        # Purge any prior rows for this source file (by source_file column,
-        # plus the legacy path::main and path-only ids) so a re-index leaves
-        # no stale chunks behind.
-        stale = brain_conn.execute(
-            "SELECT id FROM docs WHERE source_file = ? OR id = ? OR id = ?",
-            (path, path, f"{path}::main"),
-        ).fetchall()
-        stale_ids = [r[0] for r in stale]
-        if stale_ids:
-            ph = ",".join("?" * len(stale_ids))
-            if vector_on:
-                try:
-                    brain_conn.execute(
-                        f"DELETE FROM docs_vec WHERE doc_id IN ({ph})",
-                        stale_ids,
-                    )
-                except Exception:
-                    pass
-            brain_conn.execute(
-                f"DELETE FROM docs WHERE id IN ({ph})", stale_ids,
-            )
-
-        # Chunk via Brain's native chunker (tree-sitter for .py, regex
-        # fallback for .ts/.tsx/.js/.jsx/.cs, whole-file for everything else).
-        chunks = self._brain._chunk_source_file(path, content)
+        # Content-hash short-circuit. Without it the drift loop DELETEs
+        # and re-INSERTs every chunk of every file on every pass, even a
+        # byte-identical one -- new rowids, recomputed embeddings and a
+        # fresh WAL page for a tree that never changed.
+        #
+        # The marker stores "<sha256>|<chunk_count>" and a skip requires
+        # EVERY chunk to still be present. The earlier guard asked only
+        # whether SOME row survived (... ORDER BY rowid LIMIT 1), so a
+        # partial prune -- one chunk of two deleted -- kept the marker and
+        # the missing chunk never came back.
+        #
+        # A skip suppresses the DOCUMENT REWRITE ONLY. Caller-supplied
+        # entities and graph staging still run below, because a content
+        # hash answers whether the CONTENT changed and can never answer
+        # whether the CALLER asked for something the store does not hold
+        # yet (source_service indexes without entities; a later
+        # brain_index_doc WITH entities used to be a silent no-op).
+        file_key = f"file_hash::{path}"
+        file_hash = _hashlib.sha256(content.encode("utf-8")).hexdigest()
+        prior = brain_conn.execute(
+            "SELECT value FROM index_meta WHERE key = ?", (file_key,),
+        ).fetchone()
+        skipped_doc_id = ""
+        if prior is not None:
+            prior_hash, _sep, prior_count = str(prior[0]).partition("|")
+            # A marker written before the count was added carries no "|"
+            # and is never trusted for a skip; the re-index below rewrites
+            # it in the current form.
+            if prior_hash == file_hash and prior_count.isdigit():
+                kept = brain_conn.execute(
+                    "SELECT id FROM docs WHERE source_file = ? OR id = ? "
+                    "ORDER BY rowid", (path, f"{path}::main"),
+                ).fetchall()
+                if kept and len(kept) == int(prior_count):
+                    skipped_doc_id = kept[0][0]
 
         first_doc_id = ""
-        seen_doc_ids: dict[str, int] = {}
-        for chunk in chunks:
-            doc_id = chunk["doc_id"]
-            # Non-code files come back with doc_id == filepath (no "::").
-            # Normalise to the legacy path::main form for prose compat.
-            if "::" not in doc_id:
-                doc_id = f"{path}::main"
-            seen_count = seen_doc_ids.get(doc_id, 0)
-            seen_doc_ids[doc_id] = seen_count + 1
-            if seen_count:
-                doc_id = f"{doc_id}#dup_{seen_count + 1}"
-            if not first_doc_id:
-                first_doc_id = doc_id
-
-            chunk_content = chunk["content"]
-            # Contextual prefix (PRISM_CONTEXT_PREFIX=on default): prepend a
-            # short header with file path + entity scope so the embedder and
-            # BM25 see chunks anchored in their parent document. Hash and the
-            # chunker's raw content are unchanged so drift detection still
-            # aligns with on-disk sha256.
-            if _os.environ.get(
-                "PRISM_CONTEXT_PREFIX", "on"
-            ).strip().lower() != "off":
-                header = _build_context_header(
-                    path,
-                    chunk.get("entity_name"),
-                    chunk.get("entity_kind"),
-                    chunk.get("line_start"),
-                    chunk.get("line_end"),
-                )
-                indexed_content = (
-                    f"{header}\n\n{chunk_content}" if header else chunk_content
-                )
-            else:
-                indexed_content = chunk_content
-            # Hash RAW chunk content so prism_status drift detection still
-            # lines up with on-disk sha256 when the file is single-chunk.
-            chash = _hashlib.sha256(chunk_content.encode("utf-8")).hexdigest()
-
-            # docs.content stores the RAW chunk (with optional contextual
-            # header). Identifier expansion happens in the FTS5 trigger
-            # via expand_identifiers() — see brain_engine._init_brain_schema.
-            # Fix for resolve-io/.prism#34: previously this wrote the
-            # pre-expanded form, corrupting any consumer of docs.content
-            # (notably graph_service.backfill_from_brain).
-            brain_conn.execute(
-                "INSERT OR REPLACE INTO docs "
-                "(id, source_file, content, domain, indexed_at, "
-                " entity_name, entity_kind, content_hash, "
-                " line_start, line_end) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (doc_id, path, indexed_content, domain, now,
-                 chunk["entity_name"], chunk["entity_kind"], chash,
-                 chunk["line_start"], chunk["line_end"]),
-            )
-
-            if vector_on:
-                vec = self._brain._embed(indexed_content)
-                if vec is not None:
-                    blob = struct.pack(f"{len(vec)}f", *vec)
+        if not skipped_doc_id:
+            # Purge any prior rows for this source file (by source_file column,
+            # plus the legacy path::main and path-only ids) so a re-index leaves
+            # no stale chunks behind.
+            stale = brain_conn.execute(
+                "SELECT id FROM docs WHERE source_file = ? OR id = ? OR id = ?",
+                (path, path, f"{path}::main"),
+            ).fetchall()
+            stale_ids = [r[0] for r in stale]
+            if stale_ids:
+                ph = ",".join("?" * len(stale_ids))
+                if vector_on:
                     try:
                         brain_conn.execute(
-                            "INSERT INTO docs_vec (doc_id, embedding) "
-                            "VALUES (?, ?)",
-                            (doc_id, blob),
+                            f"DELETE FROM docs_vec WHERE doc_id IN ({ph})",
+                            stale_ids,
                         )
-                    except Exception as e:
-                        print(f"index_doc vec insert failed: {e!r}",
-                              file=sys.stderr, flush=True)
+                    except Exception:
+                        pass
+                brain_conn.execute(
+                    f"DELETE FROM docs WHERE id IN ({ph})", stale_ids,
+                )
 
-        brain_conn.commit()
+            # Chunk via Brain's native chunker (tree-sitter for .py, regex
+            # fallback for .ts/.tsx/.js/.jsx/.cs, whole-file for everything else).
+            chunks = self._brain._chunk_source_file(path, content)
 
-        # Index caller-supplied entities into graph.db (unchanged).
+            seen_doc_ids: dict[str, int] = {}
+            for chunk in chunks:
+                doc_id = chunk["doc_id"]
+                # Non-code files come back with doc_id == filepath (no "::").
+                # Normalise to the legacy path::main form for prose compat.
+                if "::" not in doc_id:
+                    doc_id = f"{path}::main"
+                seen_count = seen_doc_ids.get(doc_id, 0)
+                seen_doc_ids[doc_id] = seen_count + 1
+                if seen_count:
+                    doc_id = f"{doc_id}#dup_{seen_count + 1}"
+                if not first_doc_id:
+                    first_doc_id = doc_id
+
+                chunk_content = chunk["content"]
+                # Contextual prefix (PRISM_CONTEXT_PREFIX=on default): prepend a
+                # short header with file path + entity scope so the embedder and
+                # BM25 see chunks anchored in their parent document. Hash and the
+                # chunker's raw content are unchanged so drift detection still
+                # aligns with on-disk sha256.
+                if _os.environ.get(
+                    "PRISM_CONTEXT_PREFIX", "on"
+                ).strip().lower() != "off":
+                    header = _build_context_header(
+                        path,
+                        chunk.get("entity_name"),
+                        chunk.get("entity_kind"),
+                        chunk.get("line_start"),
+                        chunk.get("line_end"),
+                    )
+                    indexed_content = (
+                        f"{header}\n\n{chunk_content}" if header else chunk_content
+                    )
+                else:
+                    indexed_content = chunk_content
+                # Hash RAW chunk content so prism_status drift detection still
+                # lines up with on-disk sha256 when the file is single-chunk.
+                chash = _hashlib.sha256(chunk_content.encode("utf-8")).hexdigest()
+
+                # docs.content stores the RAW chunk (with optional contextual
+                # header). Identifier expansion happens in the FTS5 trigger
+                # via expand_identifiers() — see brain_engine._init_brain_schema.
+                # Fix for resolve-io/.prism#34: previously this wrote the
+                # pre-expanded form, corrupting any consumer of docs.content
+                # (notably graph_service.backfill_from_brain).
+                brain_conn.execute(
+                    "INSERT OR REPLACE INTO docs "
+                    "(id, source_file, content, domain, indexed_at, "
+                    " entity_name, entity_kind, content_hash, "
+                    " line_start, line_end) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (doc_id, path, indexed_content, domain, now,
+                     chunk["entity_name"], chunk["entity_kind"], chash,
+                     chunk["line_start"], chunk["line_end"]),
+                )
+
+                if vector_on:
+                    vec = self._brain._embed(indexed_content)
+                    if vec is not None:
+                        blob = struct.pack(f"{len(vec)}f", *vec)
+                        try:
+                            brain_conn.execute(
+                                "INSERT INTO docs_vec (doc_id, embedding) "
+                                "VALUES (?, ?)",
+                                (doc_id, blob),
+                            )
+                        except Exception as e:
+                            print(f"index_doc vec insert failed: {e!r}",
+                                  file=sys.stderr, flush=True)
+
+            # Record the chunk count alongside the hash, read back from
+            # the table so it counts exactly what the skip guard counts.
+            n_written = int(brain_conn.execute(
+                "SELECT count(*) FROM docs WHERE source_file = ? OR id = ?",
+                (path, f"{path}::main"),
+            ).fetchone()[0])
+            brain_conn.execute(
+                "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+                (file_key, f"{file_hash}|{n_written}"),
+            )
+            brain_conn.commit()
+
+        # Index caller-supplied entities into graph.db. Runs on the
+        # SKIP path too: the content hash says the file is unchanged,
+        # not that the caller's entities are already recorded.
         if entities:
             graph_conn = self._brain._graph
             for ent in entities:
@@ -510,7 +563,9 @@ class BrainService:
                     )
             graph_conn.commit()
 
-        # Stage source for graphify's code-graph pass (unchanged).
+        # Stage source for graphify's code-graph pass. Runs on the SKIP
+        # path too -- bulk graph ingest depends on this staging, and a
+        # skipped re-index used to leave it unstaged forever.
         graph_svc = getattr(self, "graph_svc", None)
         if graph_svc is not None:
             try:
@@ -519,7 +574,12 @@ class BrainService:
                 print(f"index_doc: graph staging failed: {e!r}",
                       file=sys.stderr, flush=True)
 
-        return first_doc_id or f"{path}::main"
+        # A valid doc id on BOTH paths. This used to return
+        # "skipped:<id>", which is not a doc id at all: brain_index_doc
+        # handed that string back as doc_id, and brain_search_feedback
+        # consumes it. The skip is an internal write optimisation, not a
+        # caller-facing identity.
+        return skipped_doc_id or first_doc_id or f"{path}::main"
 
     def prune_orphaned_code_docs(self, live_source_files: set) -> int:
         """Delete doc chunks whose source_file no longer exists on disk
