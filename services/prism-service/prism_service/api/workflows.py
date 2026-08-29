@@ -1443,6 +1443,17 @@ def workflow_step_story_gate_check(
         )
 
 
+# ONE shape for every named gate tooth -- green_gate's registry
+# (_green_gate_check_registry) and plan_gate's deterministic teeth
+# (services/plan_gate_checks.py) both report through it, so the Workflows
+# page renders a real node per check for either gate.
+class GateCheckStatus(BaseModel):
+    id: str
+    label: str
+    ok: bool
+    reason: str
+
+
 class PlanGateCheckRequest(BaseModel):
     plan_doc: str
     plan_diagram: str = ""
@@ -1452,6 +1463,7 @@ class PlanGateCheckRequest(BaseModel):
 class PlanGateCheckResponse(BaseModel):
     ok: bool
     reason: str
+    checks: list[GateCheckStatus] = []
 
 
 @router.post("/steps/plan-gate-check")
@@ -1484,10 +1496,25 @@ def workflow_step_plan_gate_check(
         ctx = get_project(project)
         principles = gov.load_principles(ctx.memory_svc) if ctx.memory_svc is not None else []
         result = gov.score_plan_coverage(evidence, rubric, principles)
-        return PlanGateCheckResponse(
-            ok=result.get("ok", False),
-            reason=result.get("reason", ""),
-        )
+        # The rubric scores FORM. `checks` adds the three DETERMINISTIC
+        # teeth the same machine seats now consult (task 72ccaf94: five
+        # rounds at plan_gate, every defect caught by a human's own eyes).
+        # Reported here so the aggregate answer is the whole picture, the
+        # way green-gate-status already reports its own registry.
+        checks: list[GateCheckStatus] = []
+        task_svc = getattr(ctx, "task_svc", None)
+        if body.task_id and task_svc is not None:
+            from prism_service.services import plan_gate_checks as pgc
+            task = task_svc.get(body.task_id)
+            if task is not None:
+                checks = [GateCheckStatus(**e)
+                          for e in pgc.run_all(task, project)]
+        ok = bool(result.get("ok", False)) and all(c.ok for c in checks)
+        reason = str(result.get("reason", "") or "")
+        failed = " | ".join(c.reason for c in checks if not c.ok)
+        if failed:
+            reason = f"{reason} | {failed}" if reason else failed
+        return PlanGateCheckResponse(ok=ok, reason=reason, checks=checks)
 
 
 def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
@@ -1677,13 +1704,6 @@ class GreenGateStatusRequest(BaseModel):
     task_id: str = Field(min_length=1)
 
 
-class GateCheckStatus(BaseModel):
-    id: str
-    label: str
-    ok: bool
-    reason: str
-
-
 class GreenGateStatusResponse(BaseModel):
     has_fresh_passing_receipt: bool
     reason: str
@@ -1865,3 +1885,40 @@ def workflow_step_green_gate_check(
             return GateCheckStatus(id=body.check, label=body.check,
                                    ok=False, reason=f"no such task: {body.task_id}")
         return _run_one_check(ctx, task, project, body.check)
+
+
+class PlanGateCheckOneRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    check: str = Field(min_length=1)
+
+
+@router.post("/steps/plan-gate-check-one")
+def workflow_step_plan_gate_check_one(
+    body: PlanGateCheckOneRequest, project: str = Query(...),
+) -> GateCheckStatus:
+    """ONE named deterministic plan tooth from services/plan_gate_checks,
+    read-only -- exactly the /steps/green-gate-check contract, for the other
+    gate. Exists so plan-gate-check.json can chain a real node per check and
+    the Workflows page shows what plan_gate actually asks, instead of one
+    opaque rubric callback.
+
+    Always HTTP 200 regardless of ok=true/false (same as
+    /steps/green-gate-check): a refused tooth is a REPORTED fact, not a
+    callback FAILURE, so the chain reaches every later check and Complete.
+
+    Never decides plan_gate. The seats that act on the same verdict are
+    api/conductor_flow.py's entry-time autoclear and gate_adjudicator's
+    re-sweep; a human's Approve click is never blocked by it."""
+    with _tracer.start_as_current_span("workflow.step.plan_gate_check") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        span.set_attribute("workflow.check", body.check)
+
+        from prism_service.services import plan_gate_checks as pgc
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return GateCheckStatus(
+                id=body.check, label=body.check, ok=False,
+                reason=f"no such task: {body.task_id}")
+        return GateCheckStatus(**pgc.run_check(body.check, task, project))

@@ -404,6 +404,25 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
             except Exception:
                 pass
         return None
+    if step["id"] == "plan_gate":
+        # DETERMINISTIC PLAN TEETH (2026-08-29): task 72ccaf94 needed five
+        # rounds at plan_gate and a human caught every defect by hand -- a
+        # false "does not exist" claim, a stop_if test absent from verify,
+        # and (three rounds running) an AC that already passes at the base
+        # commit offered as an oracle observation. The rubric scores FORM;
+        # these three are mechanically checkable, so this seat asks them
+        # before it approves. Non-policy by construction: the module returns
+        # a refusal STRING and this seat parks pending with it. The owner's
+        # own Approve goes through gate_decide and is never blocked here.
+        from prism_service.services import plan_gate_checks as _pgc
+        _cr = _pgc.refusal(task, svc._project_name or "default")
+        if _cr:
+            if _cr != (getattr(task, "gate_reason", "") or ""):
+                try:
+                    svc._task_svc.update(task_id, gate_reason=_cr)
+                except Exception:
+                    pass
+            return None
     if step["id"] == "plan_gate" and _is_root_conductor_task(task):
         # OWNER'S PLAN STOP (task c016667f FR-4/FR-5, scoped by task 3c774abd
         # per owner 2026-08-27: "users approve the plans for parent level

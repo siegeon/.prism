@@ -3,14 +3,35 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Check plan coverage",
-  "version": 1,
+  "version": 2,
   "steps": [
     {
-      "id": "evaluate",
+      "id": "rubric",
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check?project=${project}",
       "body": "{\"plan_doc\": ${planDoc}, \"plan_diagram\": ${planDiagram}, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 30
+    },
+    {
+      "id": "absent_file_claim",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"absent_file_claim\"}",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "stop_if_pinned",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"stop_if_pinned\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "already_green_ac",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"already_green_ac\"}",
+      "timeoutSeconds": 300
     }
   ]
 }

@@ -67,6 +67,15 @@ def _pending_decline_reason(svc, task, step, project) -> str:
             if check.get("verified") is not True:
                 return str(check.get("reason") or "")
             if step == "plan_gate":
+                # Deterministic plan teeth first (task 72ccaf94, five rounds
+                # of hand-caught defects) -- same module, same verdict, as
+                # api/conductor_flow.py's entry-time seat, so both seats
+                # agree about why a plan_gate did not clear.
+                from prism_service.services import plan_gate_checks as _pgc
+                _cr = _pgc.refusal(task, project)
+                if _cr:
+                    return _cr
+            if step == "plan_gate":
                 # task c016667f, AC-5 third seat: a rubric-verified plan is
                 # not enough — this used to `return ""` here (the exact
                 # empty-reason class of failure e0149f1f closed), leaving a
@@ -152,7 +161,16 @@ def sweep_once() -> list[dict]:
                     # story/plan rubric RE-SWEEP (task a5e8d877 gap 2,
                     # strand mx-2812f9): the entry-time autoclear ran
                     # once; re-score now-compliant PENDING gates.
-                    res = svc.adjudicate_rubric_gate(tid)
+                    # A plan_gate with a deterministic-tooth refusal is
+                    # withheld here rather than approved on the rubric
+                    # alone; _pending_decline_reason then stamps the same
+                    # refusal onto gate_reason for the driver to act on.
+                    _hold = ""
+                    if step == "plan_gate":
+                        from prism_service.services import plan_gate_checks as _pgc
+                        _pt = ctx.task_svc.get(tid)
+                        _hold = _pgc.refusal(_pt, pid) if _pt is not None else ""
+                    res = None if _hold else svc.adjudicate_rubric_gate(tid)
             except Exception as exc:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
                 continue
