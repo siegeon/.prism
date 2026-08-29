@@ -19,7 +19,7 @@ if str(_SERVICE_ROOT) not in sys.path:
 from prism_service.services import sqlite_maint as sm  # noqa: E402
 
 
-def _make_wal_db(path: Path) -> Path:
+def _make_wal_db(path: Path) -> tuple[Path, sqlite3.Connection]:
     conn = sqlite3.connect(str(path), timeout=5.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE t (x INTEGER)")
@@ -28,16 +28,26 @@ def _make_wal_db(path: Path) -> Path:
     # Keep the connection OPEN so the WAL is not auto-checkpointed on
     # close — mirroring the long-lived daemon readers that stranded a
     # week of tasks.db writes in the -wal live.
-    return path
+    #
+    # The connection is RETURNED so the caller holds that reference. This
+    # used to return the path alone, which dropped the last reference the
+    # moment the helper returned: CPython closed the connection on GC and
+    # the close folded the -wal away, so the setup assertion below failed
+    # and this guard sat red rather than testing checkpoint_db at all.
+    return path, conn
 
 
 def test_checkpoint_db_truncates_wal(tmp_path):
-    db = _make_wal_db(tmp_path / "store.db")
-    wal = Path(str(db) + "-wal")
-    assert wal.exists() and wal.stat().st_size > 0, "setup: WAL not populated"
-    assert sm.checkpoint_db(db) is True
-    assert wal.stat().st_size == 0, (
-        "wal_checkpoint(TRUNCATE) must fold the -wal back into the db")
+    db, conn = _make_wal_db(tmp_path / "store.db")
+    try:
+        wal = Path(str(db) + "-wal")
+        assert wal.exists() and wal.stat().st_size > 0, (
+            "setup: WAL not populated")
+        assert sm.checkpoint_db(db) is True
+        assert wal.stat().st_size == 0, (
+            "wal_checkpoint(TRUNCATE) must fold the -wal back into the db")
+    finally:
+        conn.close()
 
 
 def test_checkpoint_db_missing_file_is_false_not_raise(tmp_path):
