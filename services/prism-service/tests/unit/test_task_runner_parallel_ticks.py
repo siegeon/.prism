@@ -60,6 +60,13 @@ class _FakeResult:
         self.exit_code = 0
         self.run_id = "run-parallel"
 
+    # The runner reads these on the real ClaudeCliResult (task_runner.py:442).
+    def final_text(self) -> str:
+        return self.text
+
+    def graceful_budget_stop(self) -> bool:
+        return False
+
 
 class _Call:
     def __init__(self, purpose: str) -> None:
