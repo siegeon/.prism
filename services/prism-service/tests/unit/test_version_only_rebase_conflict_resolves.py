@@ -90,7 +90,9 @@ def repo(tmp_path):
 
 def _rebase(root):
     from prism_service.services import ship_worker
-    return ship_worker._rebase_onto_main(None, str(root))
+    # The REAL runner: the other tests monkeypatch _run, this one does not,
+    # so pass the module's own default rather than None.
+    return ship_worker._rebase_onto_main(ship_worker._default_runner, str(root))
 
 
 def test_a_version_only_conflict_is_resolved(repo, monkeypatch):
@@ -139,3 +141,54 @@ def test_the_resolver_is_named_and_narrow():
            / "ship_worker.py").read_text(encoding="utf-8")
     assert "_resolve_version_only_conflict" in src
     assert "__version__.py" in src
+
+
+def test_every_version_conflict_in_the_replay_is_resolved(tmp_path):
+    """A branch with MORE THAN ONE commit touching the version file hits a
+    fresh conflict on each replayed commit. Resolving only the first leaves
+    the rebase stopped at the second, so the caller aborts and the task
+    parks -- which is exactly what happened live on task afb47c33: the
+    first conflict resolved, `rebase --continue` walked 3/5, 4/5, 5/5 and
+    stopped on another version conflict, and the single-pass resolver
+    returned False. The resolution must loop while the conflict set stays
+    exactly the version file.
+    """
+    root = tmp_path / "multi"
+    vp = root / _VERSION_REL
+    vp.parent.mkdir(parents=True)
+    _git(tmp_path, "init", "-q", str(root))
+    vp.write_text(_v("7.13.100", "7.13.100: base."))
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-q", "-m", "base")
+    _git(root, "branch", "-M", "main")
+    vp.write_text(_v("7.13.140", "7.13.100: base.", "7.13.140: main moved."))
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit", "-q", "-m", "main moves")
+
+    _git(root, "checkout", "-q", "-b", "task", "HEAD~1")
+    for n, note in ((101, "FIRST"), (102, "SECOND")):
+        vp.write_text(_v(f"7.13.{n}", "7.13.100: base.", f"7.13.{n}: {note}."))
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "-m", f"task step {n}")
+
+    bare = tmp_path / "multi_origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(bare))
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "push", "-q", "origin", "main")
+    _git(root, "fetch", "-q", "origin")
+
+    out = _rebase(root)
+    assert out.get("ok") is True, (
+        f"two version-touching commits must both resolve, not just the first: {out}")
+    assert out.get("version_conflict_resolved") is True, out
+    text = (root / _VERSION_REL).read_text()
+    assert 'PRISM_VERSION = "7.13.141"' in text, text[:140]
+    assert "main moved." in text, "main's entry was lost"
+    import ast
+    ast.parse(text)
+    # The rebase must be FINISHED, never left mid-flight for the next sweep.
+    assert not (root / ".git" / "rebase-merge").exists()
+    assert not (root / ".git" / "rebase-apply").exists()
