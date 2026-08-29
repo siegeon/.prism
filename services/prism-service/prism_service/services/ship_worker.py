@@ -362,14 +362,27 @@ def _resolve_version_only_conflict(run: Runner, path: str,
     # every version honours, and it outranks the config one, so set both:
     # `env` carries it without changing `_run`'s (runner, argv, cwd) shape.
     _ED = ["env", "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true"]
-    cont = _ED + ["git", "-c", "core.editor=true", "-c", "sequence.editor=true",
-                  "rebase", "--continue"]
+    # COMMITTER IDENTITY. Both `rebase --continue` and the explicit commit
+    # below WRITE a commit, and a CI runner or a fresh container often has
+    # no identity configured at all. Measured on CI 2026-08-29 (run
+    # 33275400720), after the git 2.55 editor fix landed: "Committer
+    # identity unknown ... fatal: empty ident name", which took both
+    # portability tests red on main a second time. Supplied ONLY when git
+    # has no identity of its own, so a real ship keeps its real committer
+    # rather than being relabelled by the resolver.
+    _id_rc, _id_out, _ = _run(run, ["git", "config", "user.email"], path)
+    _ID = [] if (_id_rc == 0 and (_id_out or "").strip()) else [
+        "-c", "user.email=ship-worker@prism.local",
+        "-c", "user.name=prism-ship-worker"]
+    cont = _ED + ["git"] + _ID + [
+        "-c", "core.editor=true", "-c", "sequence.editor=true",
+        "rebase", "--continue"]
     env_rc, _o2, _e2 = _run(run, cont, path)
     if env_rc != 0:
         # The staged file IS the resolution; make the commit without an
         # editor, then let the rebase carry on.
         c_rc, _o3, _e3 = _run(
-            run, _ED + ["git", "commit", "--no-edit"], path)
+            run, _ED + ["git"] + _ID + ["commit", "--no-edit"], path)
         if c_rc == 0:
             env_rc, _o2, _e2 = _run(run, cont, path)
     if env_rc == 0:
