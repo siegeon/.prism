@@ -265,6 +265,9 @@ def _audit(task_svc, task_id: str, stage: str, detail: str = "") -> None:
 
 
 _VERSION_REL = "services/prism-service/prism_service/__version__.py"
+# Last reason the version-conflict resolver gave up, surfaced into the
+# park message so a CI-only failure names itself instead of being guessed at.
+_LAST_RESOLVE_ERROR: list = []
 
 
 _MAX_VERSION_CONFLICT_PASSES = 20
@@ -353,18 +356,29 @@ def _resolve_version_only_conflict(run: Runner, path: str,
     # these two tests passed on 2.34 locally and failed on CI's newer git
     # for four runs, which is the same local-vs-CI git split already
     # recorded against task 3f46342a.
-    cont = ["git", "-c", "core.editor=true", "-c", "sequence.editor=true",
-            "rebase", "--continue"]
+    # git 2.55 (CI) ignored the `-c core.editor` form that satisfied 2.34 and
+    # 2.43, so the continue stalled and both portability tests went red on
+    # main. GIT_EDITOR/GIT_SEQUENCE_EDITOR in the ENVIRONMENT is the knob
+    # every version honours, and it outranks the config one, so set both:
+    # `env` carries it without changing `_run`'s (runner, argv, cwd) shape.
+    _ED = ["env", "GIT_EDITOR=true", "GIT_SEQUENCE_EDITOR=true"]
+    cont = _ED + ["git", "-c", "core.editor=true", "-c", "sequence.editor=true",
+                  "rebase", "--continue"]
     env_rc, _o2, _e2 = _run(run, cont, path)
     if env_rc != 0:
         # The staged file IS the resolution; make the commit without an
         # editor, then let the rebase carry on.
         c_rc, _o3, _e3 = _run(
-            run, ["git", "-c", "core.editor=true", "commit", "--no-edit"], path)
+            run, _ED + ["git", "commit", "--no-edit"], path)
         if c_rc == 0:
             env_rc, _o2, _e2 = _run(run, cont, path)
     if env_rc == 0:
         return True
+    # Could not reproduce locally (git 2.34) what CI's git fails on, so carry
+    # git's OWN words out to the caller rather than guess a third time.
+    _LAST_RESOLVE_ERROR.clear()
+    _LAST_RESOLVE_ERROR.append(
+        f"rebase --continue rc={env_rc}: {(_e2 or _o2 or '').strip()[:400]}")
     # A branch with SEVERAL commits touching the version file hits a fresh
     # conflict on each replayed commit. Resolving only the first leaves the
     # rebase stopped on the second, the caller aborts, and the task parks --
@@ -430,6 +444,8 @@ def _rebase_onto_main(run: Runner, path: str) -> dict:
     _run(run, ["git", "rebase", "--abort"], path)
     detail = (f"conflicts in {', '.join(files)}" if files
              else (err or out or f"git rebase exited {rc}"))
+    if _LAST_RESOLVE_ERROR:
+        detail += f" [resolver: {_LAST_RESOLVE_ERROR[-1]}]"
     return {"ok": False, "stage": "rebase",
             "error": f"rebase onto origin/main {detail} -- needs manual "
                      "resolution"}
