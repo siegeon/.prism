@@ -194,6 +194,31 @@ def mermaid_edges(source: str) -> list[dict]:
     return edges
 
 
+_SUBJECT_ID_RE = re.compile(r"\b[0-9a-f]{8}\b")
+
+
+def _plan_subject_problems(plan: str, task_id: str) -> list[str]:
+    """plan_subject tooth (task 777fbec2): only the FIRST non-empty line
+    of plan_doc is read. It must not name a task id other than task_id
+    (8-hex prefix compare; skipped when task_id is empty) and must not
+    call the plan a replacement for a contaminated plan."""
+    first = next((ln.strip() for ln in plan.splitlines() if ln.strip()), "")
+    if not first:
+        return []
+    out: list[str] = []
+    own = task_id.lower()[:8]
+    if own:
+        foreign = [m for m in _SUBJECT_ID_RE.findall(first.lower())
+                   if m != own]
+        if foreign:
+            out.append("plan_subject: subject line names task "
+                       f"{', '.join(foreign)}, not {own}")
+    if re.search(r"\bcontaminated\b", first, re.IGNORECASE):
+        out.append("plan_subject: subject line describes the plan as a "
+                   "replacement for a contaminated plan")
+    return out
+
+
 def score_plan_coverage(evidence: dict, rubric: dict,
                         principles: list[dict]) -> dict:
     """PURE rubric verdict for the plan gate.
@@ -228,6 +253,11 @@ def score_plan_coverage(evidence: dict, rubric: dict,
         problems.append("plan does not cover AC id(s): " + ", ".join(missing))
     elif not story_acs:
         problems.append("story carries no AC-<n> ids to diff coverage against")
+
+    subject_cfg = rubric.get("plan_subject")
+    if isinstance(subject_cfg, dict) and subject_cfg.get("enabled", True):
+        problems.extend(_plan_subject_problems(
+            plan, str(evidence.get("task_id") or "")))
 
     if not principles:
         problems.append("no architecture principles seeded — conformance "

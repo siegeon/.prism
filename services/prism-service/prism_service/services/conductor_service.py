@@ -3489,6 +3489,9 @@ class ConductorService:
                 # cite something true. Harmless for story_complete/
                 # plan_coverage, which ignore unknown evidence keys.
                 "oracle": getattr(task, "oracle", "") or "",
+                # plan_subject tooth (task 777fbec2): the scorer compares
+                # the plan's subject line against the task's OWN id.
+                "task_id": str(getattr(task, "id", "") or ""),
             }
             if validation == "story_complete":
                 res = gov.score_story_complete(evidence, rubric)
