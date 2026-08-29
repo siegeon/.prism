@@ -175,7 +175,10 @@ def _task_workflow(task) -> str:
     return normalize_workflow(getattr(task, "workflow", "") or "")
 
 
-def _job(task) -> Optional[dict]:
+_LIVE_STATE_STEPS = {"draft_story", "verify_plan"}
+
+
+def _job(task, project: str = "default") -> Optional[dict]:
     """Build the self-describing job for a task's CURRENT step, or None
     when the task hasn't entered the flow yet."""
     step = ConductorService._step_by_id(task.workflow_step, _task_workflow(task))
@@ -202,7 +205,7 @@ def _job(task) -> Optional[dict]:
     # above too), since they're never driven by claude_cli at all.
     if kind != "gate":
         instructions = _FINAL_MESSAGE_CAVEAT + "\n\n" + instructions
-    return {
+    job = {
         "task_id": task.id,
         "step": step["id"],
         "kind": kind,
@@ -230,6 +233,20 @@ def _job(task) -> Optional[dict]:
             "stop_if": list(getattr(task, "stop_if", None) or []),
         },
     }
+    # task 70d14f84: the plan steps read LIVE state (fetched origin/main,
+    # worktree head, children across all statuses with live readiness) so a
+    # story/plan never cites a stale worktree HEAD or a stored gate_reason.
+    if step["id"] in _LIVE_STATE_STEPS:
+        from prism_service.api import conductor as _capi
+        from prism_service.services import plan_live_state
+        ws = task_workspace.workspace_for(task.id) or {}
+        ls = plan_live_state.compute(
+            task, get_project(project).task_svc,
+            lambda tid: _capi.gate_readiness(tid, project=project),
+            plan_live_state.main_checkout(), ws.get("path"))
+        job["live_state"] = ls
+        job["instructions"] = instructions + "\n\n" + plan_live_state.render(ls)
+    return job
 
 
 class Ident(BaseModel):
@@ -421,7 +438,7 @@ def flow_next(task_id: str, project: str = Query("default")) -> dict:
     task = svc._task_svc.get(task_id)
     if task is None:
         return {"job": None, "error": "unknown task"}
-    return {"job": _job(task)}
+    return {"job": _job(task, project)}
 
 
 @router.post("/start")
@@ -445,7 +462,7 @@ def flow_start(body: Ident, project: str = Query("default")) -> dict:
         svc.advance_task(body.task_id, session_id=body.session_id,
                          model=body.model)
         task = svc._task_svc.get(body.task_id)
-    return {"ok": True, "job": _job(task), "workspace": ws}
+    return {"ok": True, "job": _job(task, project), "workspace": ws}
 
 
 @router.get("/workspace")
@@ -524,7 +541,7 @@ def _contract_violations(paths: list[str], allowed: list[str]) -> list[str]:
     return offenders
 
 
-def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
+def _contract_refusal(svc, task, body: "Ident", project: str = "default") -> Optional[dict]:
     """implement_tasks PASS-report guard. Returns a refusal dict to hand
     straight back to the caller, or None to let the report proceed
     (recording an audited acknowledgment first when one covers every
@@ -540,7 +557,7 @@ def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
                 "reason": "worker-contract check could not resolve this "
                           "task's workspace root server-side — refusing "
                           "rather than falling back to the daemon cwd",
-                "next_job": _job(task)}
+                "next_job": _job(task, project)}
     changed = [
         p for p in _contract_changed_paths(root)
         if not task_workspace.is_injected_node_modules_link(p)
@@ -568,7 +585,7 @@ def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
                          "acknowledged_out_of_contract=[...] naming these "
                          "paths for an audited exception."),
             "offending_files": sorted(offenders),
-            "next_job": _job(task)}
+            "next_job": _job(task, project)}
 
 
 @router.post("/report")
@@ -606,7 +623,7 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 "expected_step": body.expected_step,
                 "reason": "stale/duplicate report: expected_step does not "
                 "match the task's current step; not advancing",
-                "next_job": _job(task)}
+                "next_job": _job(task, project)}
 
     failed = _is_failure(body.outcome)
 
@@ -666,13 +683,13 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
         return {"ok": False, "step": step["id"], "advanced": False,
                 "reason": "reported failure: step not advanced (a reported "
                 "outcome is not step completion)",
-                "next_job": _job(task)}
+                "next_job": _job(task, project)}
     else:
         # WORKER-CONTRACT ENFORCEMENT (fb2846dc): the implement_tasks PASS
         # report only — never another agent step, never a gate — is checked
         # against the task's own allowed_files (empty = unconstrained).
         if step["id"] == "implement_tasks":
-            refusal = _contract_refusal(svc, task, body)
+            refusal = _contract_refusal(svc, task, body, project)
             if refusal is not None:
                 return refusal
         # MINT GREEN EVIDENCE at verify_green (inverted-flow #5): a SUCCESS
@@ -711,4 +728,4 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
 
     nxt = svc._task_svc.get(body.task_id)
     return {"ok": res.get("ok", False), "advanced": res,
-            "next_job": _job(nxt)}
+            "next_job": _job(nxt, project)}

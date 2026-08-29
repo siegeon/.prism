@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.149"
+PRISM_VERSION = "7.13.150"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.150: plan steps (draft_story/verify_plan) read LIVE state: fetched origin/main sha, worktree head, children across all statuses with live gate readiness; _job attaches live_state and appends plan_live_state.render() (task 70d14f84). "
     "7.13.139: implement step agents connect on tool_profile=drive "
     "(.mcp.json), no ToolSearch preload of PRISM verbs in implement.js, "
     "pre-flight identity check reads prism_guide (prism_status is admin-only), "
