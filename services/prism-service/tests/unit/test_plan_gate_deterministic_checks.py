@@ -235,3 +235,31 @@ def test_the_adjudicator_seat_reports_the_same_refusal():
     task = svc._task_svc.get(task_id)
     reason = ga._pending_decline_reason(svc, task, "plan_gate", project)
     assert "stop_if names" in reason, reason
+
+
+def test_a_stop_if_function_pinned_by_the_file_that_defines_it_passes():
+    """FALSE POSITIVE found live on 7.13.165 against task 72ccaf94.
+
+    Its stop_if named the test FUNCTION test_checkpoint_db_truncates_wal
+    while task.verify pinned the FILE that defines it,
+    services/prism-service/tests/unit/test_sqlite_maint.py. The check
+    compared a function name against a file stem, so a correctly-pinned
+    slice was refused -- the tooth would have blocked the very plan whose
+    defects it was built from.
+    """
+    reason = pgc.stop_if_pinned(
+        ["test_checkpoint_db_truncates_wal goes red."],
+        ["services/prism-service/tests/unit/test_brain_wal_bounded.py",
+         "services/prism-service/tests/unit/test_sqlite_maint.py"],
+        _REPO_ROOT)
+    assert reason == "", reason
+
+
+def test_a_stop_if_function_defined_nowhere_in_verify_is_still_refused():
+    """Resolution may only ADD a way to pass. A function that no pinned
+    file defines is still a refusal, root or no root."""
+    reason = pgc.stop_if_pinned(
+        ["test_a_function_that_does_not_exist_anywhere goes red."],
+        ["services/prism-service/tests/unit/test_sqlite_maint.py"],
+        _REPO_ROOT)
+    assert "test_a_function_that_does_not_exist_anywhere" in reason, reason

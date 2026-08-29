@@ -195,17 +195,63 @@ def _test_tokens(text: str) -> list[str]:
     return uniq
 
 
-def stop_if_pinned(stop_if: Any, verify: Any) -> str:
+def _pinned_files(verify: Any, root: Optional[Path]) -> list[Path]:
+    """The .py files task.verify actually pins, resolved under ``root``."""
+    if root is None:
+        return []
+    out: list[Path] = []
+    for v in (verify or []):
+        for tok in re.split(r"\s+", str(v)):
+            t = tok.strip().replace("\\", "/").lstrip("./")
+            if not t.endswith(".py"):
+                continue
+            try:
+                cand = root / t
+                if cand.is_file():
+                    out.append(cand)
+            except OSError:
+                continue
+    return out
+
+
+def _func_defined_in(func: str, files: list[Path]) -> bool:
+    """Whether ``func`` is DEFINED in any of ``files``."""
+    pat = re.compile(r"^\s*(?:async\s+)?def\s+" + re.escape(func) + r"\s*\(",
+                     re.MULTILINE)
+    for f in files:
+        try:
+            if pat.search(f.read_text(encoding="utf-8", errors="replace")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def stop_if_pinned(stop_if: Any, verify: Any,
+                   root: Optional[Path] = None) -> str:
     """Refusal string when task.stop_if names a test that task.verify does
     not pin. Accepts a stop_if clause that names no test."""
     clauses = [str(c) for c in (stop_if or []) if str(c).strip()]
     blob = " ".join(str(v) for v in (verify or [])).lower()
+    files = _pinned_files(verify, root)
     missing: list[str] = []
     for clause in clauses:
         for tok in _test_tokens(clause):
             low = tok.lower()
-            if low not in blob and low not in missing:
-                missing.append(low)
+            if low in blob or low in missing:
+                continue
+            # A stop_if may name a test FUNCTION while verify pins the FILE
+            # that DEFINES it. Task 72ccaf94 named
+            # test_checkpoint_db_truncates_wal and verify pinned
+            # tests/unit/test_sqlite_maint.py, which holds it at line 34 --
+            # correctly pinned, and comparing a function name against a
+            # file stem refused it anyway. Measured live on 7.13.165.
+            # Resolution can only ever ADD a way to pass: with no root, or
+            # a verify naming no .py file, `files` is empty and the textual
+            # verdict stands unchanged.
+            if tok.startswith("test_") and _func_defined_in(tok, files):
+                continue
+            missing.append(low)
     if not missing:
         return ""
     return ("plan_checks: stop_if names test(s) that task.verify does not "
@@ -453,7 +499,7 @@ def run_all(task, project: str = "default", *,
                 reason = absent_file_claim(plan, root)
             elif check_id == "stop_if_pinned":
                 reason = stop_if_pinned(getattr(task, "stop_if", None),
-                                        getattr(task, "verify", None))
+                                        getattr(task, "verify", None), root)
             else:
                 reason = already_green_ac(plan, root, base, measure=measure,
                                           runner=runner)
