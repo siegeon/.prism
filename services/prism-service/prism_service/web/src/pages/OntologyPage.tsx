@@ -56,11 +56,13 @@ type RuleFocus = { iri?: string; label?: string } | string;
 type Rule = {
   name: string; title?: string; description: string; looked_at: number;
   violations: number; focus: RuleFocus[];
+  // task 18f85c50: when the daemon last validated this rule (ISO time).
+  validated_at: string;
   // task c5650403: which memory (mx-...) this rule was promoted from.
   // Empty for every built-in rule declared straight in shapes.ttl.
   derived_from?: string;
 };
-type RulesPayload = { rules: Rule[]; need_decision: number; total: number };
+type RulesPayload = { rules: Rule[]; need_decision: number; total: number; validated_at: string };
 
 type RecordsClass = { id: string; name: string; count: number; sample: string[] };
 type RecordsPayload = { things: number; connections: number; values: number; classes: RecordsClass[] };
@@ -89,6 +91,12 @@ const DEFAULT_QUERY =
 function notAvailableMessage(e: unknown): string {
   if (e instanceof ApiError && e.status === 404) return "Not available yet.";
   return e instanceof ApiError ? e.message : String(e);
+}
+
+function formatAt(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
 function focusLabel(f: RuleFocus): string {
@@ -159,6 +167,23 @@ export default function OntologyPage() {
   const [sparqlError, setSparqlError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
+  // task 18f85c50: the rules fetch is its own callback so focus and rebuild
+  // can refetch ONLY the report; resolves to the report's validated_at.
+  const fetchRules = useCallback((): Promise<string> => {
+    const qp = `project=${encodeURIComponent(project)}`;
+    return api.get<{ rules: Rule[]; need_decision?: number; total?: number; validated_at?: string }>(`/api/okf/ontology/rules?${qp}`)
+      .then((raw) => {
+        const list = raw.rules ?? [];
+        const total = raw.total ?? list.length;
+        const need = raw.need_decision ?? list.filter((r) => r.violations > 0).length;
+        const at = raw.validated_at ?? "";
+        setRules({ rules: list, total, need_decision: need, validated_at: at });
+        setRulesErr(null);
+        return at;
+      })
+      .catch((e) => { setRules(null); setRulesErr(notAvailableMessage(e)); return ""; });
+  }, [project]);
+
   const fetchAll = useCallback(() => {
     const qp = `project=${encodeURIComponent(project)}`;
 
@@ -169,15 +194,7 @@ export default function OntologyPage() {
       .then((d) => { setStructure(d); setStructureErr(null); })
       .catch((e) => { setStructure(null); setStructureErr(notAvailableMessage(e)); });
 
-    api.get<{ rules: Rule[]; need_decision?: number; total?: number }>(`/api/okf/ontology/rules?${qp}`)
-      .then((raw) => {
-        const list = raw.rules ?? [];
-        const total = raw.total ?? list.length;
-        const need = raw.need_decision ?? list.filter((r) => r.violations > 0).length;
-        setRules({ rules: list, total, need_decision: need });
-        setRulesErr(null);
-      })
-      .catch((e) => { setRules(null); setRulesErr(notAvailableMessage(e)); });
+    fetchRules();
 
     api.get<RecordsPayload>(`/api/okf/ontology/records?${qp}`)
       .then((d) => { setRecords(d); setRecordsErr(null); })
@@ -186,9 +203,17 @@ export default function OntologyPage() {
     api.get<TermsPayload>(`/api/okf/ontology/terms?${qp}`)
       .then((d) => { setTerms(d); setTermsErr(null); })
       .catch((e) => { setTerms(null); setTermsErr(notAvailableMessage(e)); });
-  }, [project]);
+  }, [project, fetchRules]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  // task 18f85c50: refetch the rules when the tab regains focus, so the
+  // CHECKED count is the daemon's current report, not one it replaced.
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === "visible") fetchRules(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [fetchRules]);
 
   useEffect(() => {
     try { localStorage.setItem(TAB_STORAGE_KEY, tab); } catch { /* private mode / storage disabled */ }
@@ -202,9 +227,22 @@ export default function OntologyPage() {
 
   const rebuild = () => {
     setRebuilding(true);
+    const before = rules?.validated_at ?? "";
     api.post(`/api/okf/ontology/rebuild?project=${encodeURIComponent(project)}`, {})
       .catch(() => { /* rebuild failed — fetchAll below still shows current state */ })
-      .finally(() => { fetchAll(); setRebuilding(false); });
+      .finally(() => {
+        fetchAll();
+        // task 18f85c50: the daemon validates after a rebuild; repoll the
+        // rules until the report's validated_at moves (max 10 x 2 s).
+        let tries = 0;
+        const poll = () => {
+          fetchRules().then((at) => {
+            if ((at && at !== before) || ++tries >= 10) { setRebuilding(false); return; }
+            setTimeout(poll, 2000);
+          });
+        };
+        poll();
+      });
   };
 
   const toggleInstances = (classId: string) => {
@@ -426,7 +464,7 @@ function RuleRow({ rule, flagged }: { rule: Rule; flagged: boolean }) {
         )}
       </div>
       <div className="text-2xs text-[color:var(--text-muted)] whitespace-nowrap shrink-0">
-        {rule.looked_at} CHECKED · {rule.violations} FAILED
+        {rule.looked_at} CHECKED · {rule.violations} FAILED · {formatAt(rule.validated_at)}
       </div>
     </div>
   );
