@@ -83,6 +83,23 @@ def is_open_gate_step(workflow_step: str, gate_state: str) -> bool:
 _HISTORY_VALUE_PREVIEW_CHARS = 200
 
 
+# How far back _record_history looks for an identical row. One sweep
+# writes a three-row cycle per parked task, so the window must span a
+# whole cycle with margin; small enough that genuinely recurring
+# distinct states still each keep a row.
+_HISTORY_REPEAT_WINDOW = 8
+
+# ONLY these actions may be collapsed. `advance_task` and `gate_decide` are
+# NOT audit -- the conductor reconstructs workflow and gate state by reading
+# those rows back (note the _advance_rows_cache invalidation below), so
+# dropping one rewrites history the state machine depends on. Measured:
+# collapsing them turned test_gate_decide_refuses_when_state_not_pending from
+# "failed" into "task is not currently on a gate step". These two carry the
+# bulk of the storm (55.6 MB of `updated` and 13.5 MB of `ste_normalise` out
+# of 83 MB) and neither is read as state.
+_HISTORY_COLLAPSIBLE_ACTIONS = frozenset({"updated", "ste_normalise"})
+
+
 def _history_value_repr(value: object, limit: int = _HISTORY_VALUE_PREVIEW_CHARS) -> str:
     """Bounded repr for a history diff entry — full repr for short values,
     a capped preview plus an elided-character count for long ones."""
@@ -506,24 +523,49 @@ class TaskService:
         live work look dead.
         """
         now = datetime.now(timezone.utc).isoformat()
-        prev = self._db.execute(
-            "SELECT id, actor, action, details FROM task_history "
-            "WHERE task_id = ? ORDER BY id DESC LIMIT 1",
-            (task_id,),
-        ).fetchone()
-        if (prev is not None and prev["actor"] == actor
-                and prev["action"] == action and prev["details"] == details):
-            self._db.execute(
-                "UPDATE task_history SET timestamp = ? WHERE id = ?",
-                (now, prev["id"]),
-            )
-        else:
+        # The repeat is not always CONSECUTIVE. Measured on the live board
+        # 2026-08-29: each sweep writes a three-row CYCLE per parked task --
+        # updated(gate_reason -> "receipt is STALE"), gate_decide(refused),
+        # updated(gate_reason -> "trailer not reachable") -- so the values
+        # alternate A, B, A and no two adjacent rows ever match. Collapsing
+        # only the adjacent pair cut the rate from ~42 to ~26 rows/min and
+        # left the growth unbounded. The window covers a full cycle.
+        if action not in _HISTORY_COLLAPSIBLE_ACTIONS:
             self._db.execute(
                 "INSERT INTO task_history "
                 "(task_id, actor, action, details, timestamp) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (task_id, actor, action, details, now),
             )
+            self._db.commit()
+            if action == "advance_task":
+                self._advance_rows_cache = None
+            return
+        window = self._db.execute(
+            "SELECT id, actor, action, details FROM task_history "
+            "WHERE task_id = ? ORDER BY id DESC LIMIT ?",
+            (task_id, _HISTORY_REPEAT_WINDOW),
+        ).fetchall()
+        dup_id = next(
+            (r["id"] for r in window
+             if r["actor"] == actor and r["action"] == action
+             and r["details"] == details),
+            None,
+        )
+        if dup_id is not None:
+            # Move the row to the END rather than updating it in place:
+            # consumers read this table ORDER BY id and expect the
+            # timestamps to ascend with it, so touching an older row's
+            # timestamp would make history read out of order. Delete plus
+            # append keeps the row count flat AND the ordering monotonic.
+            self._db.execute("DELETE FROM task_history WHERE id = ?",
+                             (dup_id,))
+        self._db.execute(
+            "INSERT INTO task_history "
+            "(task_id, actor, action, details, timestamp) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (task_id, actor, action, details, now),
+        )
         self._db.commit()
         if action == "advance_task":
             # New advance row → the cached advance_rows_all snapshot is stale.
