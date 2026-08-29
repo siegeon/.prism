@@ -229,9 +229,19 @@ def test_index_doc_skips_unchanged_content(tmp_path):
         "DELETE at brain_service.py:412 ran and every doc got a new rowid"
     )
     assert _vec_rows() == before_vecs, "embeddings were recomputed"
-    assert "skip" in str(status).lower(), (
-        "index_doc did not report the skip to its caller; it returned "
-        f"{status!r}"
+    # The skip must hand back a REAL doc id. It used to return
+    # "skipped:<id>", and brain_index_doc passed that straight out as
+    # doc_id (mcp/tools.py builds {"indexed": True, "doc_id": ...}), so a
+    # caller -- brain_search_feedback among them -- received an id that
+    # matches no row. The skip is an internal write optimisation.
+    assert not str(status).startswith("skipped:"), (
+        f"index_doc returned a malformed doc id: {status!r}"
+    )
+    resolved = conn.execute(
+        "SELECT count(*) FROM docs WHERE id = ?", (status,)
+    ).fetchone()[0]
+    assert resolved == 1, (
+        f"index_doc returned {status!r}, which resolves to no docs row"
     )
 
 
@@ -385,7 +395,17 @@ def test_self_heal_clears_the_orphan_once(tmp_path, monkeypatch):
 # 25 re-indexes of ONE changing document: at 20 lines HEAD is already
 # 1.71x and inside the bound, at 100 lines HEAD is 4.29x and the fixed
 # build 1.71x, at 400 lines HEAD is 6.69x. 100 lines is the fixture.
-_GROWTH_FIXTURE_LINES = 100
+# MEASURED, 2026-08-29. The earlier shape (100 lines, 25 revisions) could
+# not go red: the store's fixed cost is ~540 pages, so 25 orphan copies of a
+# 100-line document moved it 548 -> 561 pages, 1.02x against a 2.00x bound,
+# and the AC passed at the tests-only base commit 927d35c5 -- which this
+# task's own stop_if forbids. Orphan mass has to clear the fixed cost, so
+# the document and the revision count both grow. Measured on this fixture,
+# three trials each, deterministic:
+#   base commit 927d35c5 (unfixed): 717 -> 2901 pages, 4.05x  RED
+#   this branch    (fixed)        : 717 ->  890 pages, 1.24x  GREEN
+_GROWTH_FIXTURE_LINES = 8000
+_GROWTH_FIXTURE_REVISIONS = 80
 
 
 def _fixture_content(n: int) -> str:
@@ -419,7 +439,7 @@ def test_bounded_growth_over_repeated_reindex(tmp_path):
 
     brain = _make_brain(d)
     try:
-        for n in range(1, 26):
+        for n in range(1, _GROWTH_FIXTURE_REVISIONS + 1):
             brain._ingest_single("doc::one", _fixture_content(n))
         brain._brain.commit()
     finally:
@@ -429,9 +449,10 @@ def test_bounded_growth_over_repeated_reindex(tmp_path):
     grown = _page_count(db_path)
     assert grown <= 2 * baseline, (
         f"the store grew to {grown} pages from a {baseline}-page baseline "
-        f"({grown / max(baseline, 1):.2f}x) over 25 re-indexes of one "
+        f"({grown / max(baseline, 1):.2f}x) over "
+        f"{_GROWTH_FIXTURE_REVISIONS} re-indexes of one "
         f"{_GROWTH_FIXTURE_LINES}-line document -- every re-index leaves "
-        "an orphan behind and no short-circuit fires"
+        "an orphan behind and no short-circuit fires (unfixed: 4.05x)"
     )
     wal = Path(db_path + "-wal")
     wal_size = wal.stat().st_size if wal.exists() else 0
@@ -597,3 +618,154 @@ if __name__ == "__main__":
         target = sys.argv[i + 1] if len(sys.argv) > i + 1 else "~/.prism/projects"
         raise SystemExit(_live_scan(target))
     raise SystemExit("usage: python <this file> --live-scan <projects dir>")
+
+
+# ---------------------------------------------------------------------
+# green_gate round 1, finding F2 -- the skip suppresses the DOCUMENT
+# REWRITE and nothing else. A content hash answers whether the CONTENT
+# changed; it can never answer whether the CALLER asked for something the
+# store does not hold yet.
+# ---------------------------------------------------------------------
+
+def _svc(tmp_path):
+    from prism_service.services.brain_service import BrainService
+    d = tmp_path / "proj"
+    d.mkdir(parents=True, exist_ok=True)
+    svc = BrainService(
+        brain_db=str(d / "brain.db"),
+        graph_db=str(d / "graph.db"),
+        scores_db=str(d / "scores.db"),
+    )
+    if not getattr(svc, "_available", False) or svc._brain is None:
+        pytest.skip("Brain engine unavailable in this environment")
+    return svc
+
+
+def test_a_skipped_reindex_still_records_caller_supplied_entities():
+    """Reproduced live in the task workspace: index a.py, then re-index
+    IDENTICAL content WITH entities. The second call took the skip and the
+    graph entities table for a.py stayed empty, so an MCP brain_index_doc
+    carrying entities after source_service had indexed the same bytes was
+    a silent no-op."""
+    import tempfile
+    svc = _svc(Path(tempfile.mkdtemp()))
+    content = "def handler():\n    return 1\n"
+
+    svc.index_doc("a.py", content)
+    ents = svc._brain._graph.execute(
+        "SELECT count(*) FROM entities WHERE file = ?", ("a.py",),
+    ).fetchone()[0]
+    assert ents == 0, "no entities were supplied on the first call"
+
+    doc_id = svc.index_doc(
+        "a.py", content, entities=[{"name": "Foo", "kind": "class"}])
+
+    ents = svc._brain._graph.execute(
+        "SELECT name FROM entities WHERE file = ?", ("a.py",),
+    ).fetchall()
+    assert [r[0] for r in ents] == ["Foo"], (
+        "the content-hash skip swallowed the caller's entities: index_doc "
+        f"returned {doc_id!r} and the graph holds {ents!r}"
+    )
+
+
+def test_a_skipped_reindex_still_stages_the_graph():
+    """Bulk graph ingest reads the staging dir. A skipped re-index used to
+    leave the file unstaged forever."""
+    import tempfile
+    svc = _svc(Path(tempfile.mkdtemp()))
+    content = "def handler():\n    return 1\n"
+
+    staged: list[str] = []
+
+    class _Graph:
+        def stage_doc(self, path, body):
+            staged.append(path)
+            return True
+
+    svc.graph_svc = _Graph()
+    svc.index_doc("b.py", content)
+    assert staged == ["b.py"], "first index did not stage"
+
+    svc.index_doc("b.py", content)
+    assert staged == ["b.py", "b.py"], (
+        "the content-hash skip suppressed graph staging as well as the "
+        f"document rewrite; staged={staged!r}"
+    )
+
+
+def test_a_partial_prune_does_not_keep_the_skip_marker():
+    """The guard used to ask only whether SOME row survived (ORDER BY
+    rowid LIMIT 1), so a prune that removed one chunk of two left the
+    marker standing and the missing chunk never came back."""
+    import tempfile
+    svc = _svc(Path(tempfile.mkdtemp()))
+    conn = svc._brain._brain
+    content = (
+        "def alpha():\n    return 'a'\n\n\n"
+        "def beta():\n    return 'b'\n"
+    )
+    svc.index_doc("c.py", content)
+    ids = [r[0] for r in conn.execute(
+        "SELECT id FROM docs WHERE source_file = ? ORDER BY rowid", ("c.py",),
+    ).fetchall()]
+    if len(ids) < 2:
+        pytest.skip("chunker produced a single chunk for this fixture")
+
+    conn.execute("DELETE FROM docs WHERE id = ?", (ids[-1],))
+    conn.commit()
+
+    svc.index_doc("c.py", content)
+
+    after = [r[0] for r in conn.execute(
+        "SELECT id FROM docs WHERE source_file = ? ORDER BY rowid", ("c.py",),
+    ).fetchall()]
+    assert len(after) == len(ids), (
+        "a chunk pruned out from under the marker never came back: had "
+        f"{ids!r}, pruned {ids[-1]!r}, re-index left {after!r}"
+    )
+
+
+def test_a_failed_heal_leaves_no_open_transaction():
+    """delete-all empties the index and only the re-insert puts it back. A
+    failure between the two must roll back, never sit open on the shared
+    connection for a later commit to make permanent -- that would persist
+    an EMPTIED search index."""
+    import tempfile
+    svc = _svc(Path(tempfile.mkdtemp()))
+    brain = svc._brain
+    conn = brain._brain
+    svc.index_doc("d.py", "def gamma():\n    return 'zebracorn'\n")
+    before = _hits(conn, "zebracorn")
+    assert before >= 1, "fixture term is not in the index"
+
+    conn.execute(
+        "DELETE FROM index_meta WHERE key = ?", (brain._FTS_HEAL_KEY,))
+    conn.commit()
+
+    # The failure is injected into the SQL function the re-insert calls,
+    # which fails that statement exactly where a real fault would: after
+    # delete-all has emptied the index and before anything is put back.
+    # (Connection.execute is read-only and Brain._brain is a property, so
+    # neither can be patched.)
+    from prism_service.engines.brain_engine import _expand_identifiers
+    calls = {"n": 0}
+
+    def _boom(text):
+        calls["n"] += 1
+        raise sqlite3.OperationalError("injected failure mid-heal")
+
+    conn.create_function("expand_identifiers", 1, _boom)
+    try:
+        brain._heal_fts_orphans()
+    finally:
+        conn.create_function("expand_identifiers", 1, _expand_identifiers)
+
+    assert calls["n"] == 1, "the injected failure never fired"
+    assert not conn.in_transaction, (
+        "the heal left a transaction OPEN after failing between delete-all "
+        "and the re-insert; a later commit would persist an emptied index"
+    )
+    assert _hits(conn, "zebracorn") == before, (
+        "the failed heal was not rolled back -- index entries were lost"
+    )

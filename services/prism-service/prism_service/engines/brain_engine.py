@@ -942,17 +942,32 @@ class Brain:
                 "SELECT count(*) FROM docs").fetchone()[0]
             if not n_docs:
                 return
-            self._brain.execute(
-                "INSERT INTO docs_fts(docs_fts) VALUES('delete-all')")
-            self._brain.execute(
-                "INSERT INTO docs_fts(rowid, id, content, domain) "
-                "SELECT rowid, id, expand_identifiers(content), domain "
-                "FROM docs")
-            self._brain.execute(
-                "INSERT OR REPLACE INTO index_meta (key, value) "
-                "VALUES (?, datetime('now'))", (self._FTS_HEAL_KEY,))
+            # ONE transaction. delete-all empties the index; only the
+            # re-insert puts it back. A failure between the two must not
+            # be left open on this shared connection for some later
+            # commit to make permanent -- that would persist an EMPTIED
+            # search index. isolation_level is "" on this connection, so
+            # the transaction is opened explicitly here.
+            self._brain.execute("BEGIN IMMEDIATE")
+            try:
+                self._brain.execute(
+                    "INSERT INTO docs_fts(docs_fts) VALUES('delete-all')")
+                self._brain.execute(
+                    "INSERT INTO docs_fts(rowid, id, content, domain) "
+                    "SELECT rowid, id, expand_identifiers(content), domain "
+                    "FROM docs")
+                self._brain.execute(
+                    "INSERT OR REPLACE INTO index_meta (key, value) "
+                    "VALUES (?, datetime('now'))", (self._FTS_HEAL_KEY,))
+            except Exception:
+                self._brain.rollback()
+                raise
             self._brain.commit()
         except Exception as exc:  # noqa: BLE001 — never block the open
+            try:
+                self._brain.rollback()
+            except Exception:
+                pass
             print(f"Brain: FTS orphan heal skipped: {exc!r}",
                   file=sys.stderr, flush=True)
 
