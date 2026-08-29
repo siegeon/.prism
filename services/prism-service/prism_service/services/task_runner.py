@@ -425,7 +425,42 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
 
     """Fourth tick on a stalled step: decompose or block, never invoke."""
     parent = task_svc.get(task_id)
-    ids = red_test_ids(getattr(parent, "completion_proof", "") or "")
+    # ONLY THIS TASK'S OWN RED TESTS. `completion_proof` is a task-level
+    # field holding whatever the last report wrote, INCLUDING a verify step's
+    # note about unrelated suites that were already failing. Live on task
+    # 72ccaf94 (2026-08-29) its proof named ten node ids from test_auto_updater,
+    # test_lifespan_lock_recovery, test_pidfile_lifecycle and
+    # test_task_page_bundle -- none of them this slice's work, none of them in
+    # its `verify` -- and the splitter made a child for every one, then made
+    # them AGAIN on the next stall: 30 children, 3 duplicate sets, all junk.
+    # Intersect with the task's own pinned suite so a child can only ever be
+    # created for a test this task is actually responsible for.
+    pinned = [str(v) for v in (getattr(parent, "verify", []) or [])]
+
+    def _is_ours(test_id: str) -> bool:
+        # A task that pins NOTHING keeps the original behaviour: there is no
+        # ownership signal to filter on, and refusing to split there would
+        # retire a contract this change has no quarrel with.
+        if not pinned:
+            return True
+        f = test_id.split("::", 1)[0].split("/")[-1]
+        return any(f == p.split("/")[-1] for p in pinned)
+
+    ids = [i for i in red_test_ids(getattr(parent, "completion_proof", "") or "")
+           if _is_ours(i)]
+    # IDEMPOTENT. A stall that fires twice must not double the board: skip any
+    # test id an OPEN child already covers. 72ccaf94 reached 30 children as
+    # three identical sets of ten before this existed.
+    existing: set = set()
+    try:
+        for c in (task_svc.list(parent_id=task_id) or []):
+            if getattr(c, "status", "") in ("cancelled", "done"):
+                continue
+            for v in (getattr(c, "verify", []) or []):
+                existing.add(str(v))
+    except Exception:
+        pass
+    ids = [i for i in ids if i not in existing]
     children: list[str] = []
     for test_id in ids:
         child = task_svc.create(
