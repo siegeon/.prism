@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.149"
+PRISM_VERSION = "7.13.150"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    "7.13.150: a manual reject at green_gate rewinds to implement_tasks, and the reject reason is in the next job's instructions (task 7c7f0f1b). "
     "7.13.139: implement step agents connect on tool_profile=drive "
     "(.mcp.json), no ToolSearch preload of PRISM verbs in implement.js, "
     "pre-flight identity check reads prism_guide (prism_status is admin-only), "
