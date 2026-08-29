@@ -487,13 +487,43 @@ class TaskService:
     def _record_history(
         self, task_id: str, action: str, details: str = "", actor: str = "",
     ) -> None:
-        """Insert an audit row into task_history."""
+        """Append an audit row, COLLAPSING an identical consecutive repeat.
+
+        A row saying exactly what the row before it said, for the same task,
+        carries no audit information and this table had no de-duplication at
+        all. Measured 2026-08-29 on prism/tasks.db: 155,659 rows for 841
+        tasks, 110 MB, growing ~19,000 rows and ~10 MB per DAY -- 86% of it
+        exact duplicates. The driver is the 60 s gate-adjudicator sweep: for
+        each task parked at green_gate it re-attempts the approve, is refused
+        for an unchanged reason, and wrote a `gate_decide` row plus an
+        `updated` row EVERY sweep, forever. Ten parked tasks produced ~12
+        rows a minute between them.
+
+        An identical repeat now advances the EXISTING row's timestamp instead
+        of adding one. Row count stays flat while the state persists, and the
+        timestamp still moves -- which matters because task motion is read
+        from these rows' timestamps, so suppressing them outright would make
+        live work look dead.
+        """
         now = datetime.now(timezone.utc).isoformat()
-        self._db.execute(
-            "INSERT INTO task_history (task_id, actor, action, details, timestamp) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (task_id, actor, action, details, now),
-        )
+        prev = self._db.execute(
+            "SELECT id, actor, action, details FROM task_history "
+            "WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        if (prev is not None and prev["actor"] == actor
+                and prev["action"] == action and prev["details"] == details):
+            self._db.execute(
+                "UPDATE task_history SET timestamp = ? WHERE id = ?",
+                (now, prev["id"]),
+            )
+        else:
+            self._db.execute(
+                "INSERT INTO task_history "
+                "(task_id, actor, action, details, timestamp) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (task_id, actor, action, details, now),
+            )
         self._db.commit()
         if action == "advance_task":
             # New advance row → the cached advance_rows_all snapshot is stale.
