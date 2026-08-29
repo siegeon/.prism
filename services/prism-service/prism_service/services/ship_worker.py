@@ -538,6 +538,12 @@ def _awaiting_ship(project: str) -> list:
     return out
 
 
+_UNSHIPPED_BLOCK_MARKER = "commit trailer is not yet reachable from origin/main"
+# The invariant half of the shipped-ness objection (conductor_service.py:2913)
+# -- no task id, no em dash, no trailing advice, so a reworded tail does not
+# silently empty the machine ship queue again. It is specific enough that no
+# other blocked_reason writer produces it.
+
 MAX_SHIP_ATTEMPTS_PER_SWEEP = 3
 # Bounds blast radius per tick, mirroring task_runner's own per-tick caps
 # (_max_turns, _max_load_per_core, etc.): a pass with several simultaneously
@@ -628,8 +634,22 @@ def _awaiting_ship_machine(project: str) -> list:
     cond = getattr(ctx, "conductor_svc", None)
     if cond is None:
         return []
+    # A task the shipped-ness tooth itself parked (the objection built at
+    # conductor_service.py:2913, written into blocked_reason by
+    # _park_green_refusal) is DEADLOCKED: the gate cannot pass until the
+    # branch lands, and the branch cannot land while this scan reads only
+    # in_progress. That objection is bookkeeping, not a defect in the work,
+    # so it must not remove the task from the ship queue. Admission is a
+    # POSITIVE match on that one objection -- never on status == "blocked",
+    # which would put genuinely broken work (a rebase conflict, a red CI
+    # check) back in the queue to fail again and starve healthy tasks.
+    candidates = list(ctx.task_svc.list(status="in_progress"))
+    for task in ctx.task_svc.list(status="blocked"):
+        reason = str(getattr(task, "blocked_reason", "") or "")
+        if _UNSHIPPED_BLOCK_MARKER in reason:
+            candidates.append(task)
     out = []
-    for task in ctx.task_svc.list(status="in_progress"):
+    for task in candidates:
         tid = str(getattr(task, "id", "") or "")
         if str(getattr(task, "workflow_step", "")) != "green_gate":
             continue
