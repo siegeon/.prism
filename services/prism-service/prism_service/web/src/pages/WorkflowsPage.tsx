@@ -736,6 +736,39 @@ export default function WorkflowsPage() {
     const id = window.setInterval(load, 10_000);
     return () => { cancelled = true; window.clearInterval(id); };
   }, [project, isStateMachineWorkflow, conductorStepIds]);
+  // BELT: one unit per real step advance. `sendTransition` has always been
+  // able to put a visible item on an FSM edge, and nothing ever called it
+  // from real work -- so the board could show WHERE tasks were standing
+  // (occupancy counts) but never that anything MOVED. Owner 2026-08-28:
+  // "tokens and processing feeding the workflow ... Factorio". This is the
+  // seam: watch each managed task's own workflow_step and, when one
+  // changes, send exactly one unit down that transition. Motion therefore
+  // MEANS a task advanced -- a still board is honestly still, which is the
+  // same contract the ambient occupancy motion already keeps.
+  const prevStepsRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    if (!isStateMachineWorkflow) return;
+    // While an instance overlay is open the canvas is replaying THAT task,
+    // so board-wide traffic would mix two stories on one screen.
+    if (viewingInstanceRef.current) return;
+    const seen = prevStepsRef.current;
+    for (const task of conductorManaged) {
+      const step = task.workflow_step ?? "";
+      if (!step) continue;
+      const prev = seen.get(task.id);
+      seen.set(task.id, step);
+      // First sighting: record only. Every task looks "new" on first paint
+      // and firing here would spray units for work that never moved.
+      if (prev === undefined || prev === step) continue;
+      // A rewind (green_gate -> implement_tasks) has no forward token wire;
+      // sendTransition returns false and nothing is drawn, which is correct.
+      graphRef.current.sendTransition(prev, step);
+    }
+    // Forget tasks that left the board so the map cannot grow forever.
+    const liveIds = new Set(conductorManaged.map((t) => t.id));
+    for (const id of [...seen.keys()]) if (!liveIds.has(id)) seen.delete(id);
+  }, [isStateMachineWorkflow, conductorManaged]);
+
   const conductorRailTasks = isStateMachineWorkflow
     ? [...doneConductorTasks, ...conductorManaged.filter(
         (task) => conductorStepIds.has(task.workflow_step ?? ""))]
