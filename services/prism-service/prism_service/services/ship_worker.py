@@ -267,8 +267,12 @@ def _audit(task_svc, task_id: str, stage: str, detail: str = "") -> None:
 _VERSION_REL = "services/prism-service/prism_service/__version__.py"
 
 
+_MAX_VERSION_CONFLICT_PASSES = 20
+
+
 def _resolve_version_only_conflict(run: Runner, path: str,
-                                   conflicts: list[str]) -> bool:
+                                   conflicts: list[str],
+                                   _depth: int = 0) -> bool:
     """Resolve a rebase conflict whose ONLY casualty is __version__.py.
 
     SUPERSEDES this module's original refusal (task 229954e4) to touch any
@@ -288,6 +292,8 @@ def _resolve_version_only_conflict(run: Runner, path: str,
     Returns True only when it actually resolved; any doubt returns False
     and the caller parks exactly as before.
     """
+    if _depth >= _MAX_VERSION_CONFLICT_PASSES:
+        return False
     if [c.strip() for c in conflicts] != [_VERSION_REL]:
         return False
     import re
@@ -310,8 +316,16 @@ def _resolve_version_only_conflict(run: Runner, path: str,
     if not m:
         return False
     maj, mi, pa = m.groups()
-    merged = base.replace(m.group(0),
-                          f'PRISM_VERSION = "{maj}.{mi}.{int(pa) + 1}"', 1)
+    # ONE BRANCH CLAIMS ONE VERSION. Only the first pass bumps; a branch
+    # with several version-touching commits conflicts once per replayed
+    # commit, and bumping on each would march the number forward by the
+    # number of commits rather than by one, which is arbitrary and makes
+    # the version say something about a branch's shape instead of about
+    # release order. Later passes keep the number the first pass settled on
+    # (it is already this file's literal by then).
+    bumped = (f'PRISM_VERSION = "{maj}.{mi}.{int(pa) + 1}"' if _depth == 0
+              else m.group(0))
+    merged = base.replace(m.group(0), bumped, 1)
     # Append every changelog line the BRANCH added that main does not have.
     added = [ln for ln in branch.splitlines()
              if ln.strip().startswith('"\\n') and ln not in base.splitlines()]
@@ -331,7 +345,23 @@ def _resolve_version_only_conflict(run: Runner, path: str,
         return False
     env_rc, _o2, _e2 = _run(
         run, ["git", "-c", "core.editor=true", "rebase", "--continue"], path)
-    return env_rc == 0
+    if env_rc == 0:
+        return True
+    # A branch with SEVERAL commits touching the version file hits a fresh
+    # conflict on each replayed commit. Resolving only the first leaves the
+    # rebase stopped on the second, the caller aborts, and the task parks --
+    # observed live on task afb47c33, where --continue walked 3/5, 4/5, 5/5
+    # and stopped on another version conflict. Keep resolving while the
+    # conflict set stays EXACTLY the version file; the moment anything else
+    # appears, hand back False and let the caller park as before. The bound
+    # is a safety net against a loop that never converges, not an expected
+    # limit -- a branch with 20 version-touching commits is already odd.
+    _rc, again, _e3 = _run(
+        run, ["git", "diff", "--name-only", "--diff-filter=U"], path)
+    remaining = [f for f in again.splitlines() if f.strip()]
+    if not remaining:
+        return False  # stopped for a reason we did not cause; caller parks
+    return _resolve_version_only_conflict(run, path, remaining, _depth + 1)
 
 
 def _rebase_onto_main(run: Runner, path: str) -> dict:
