@@ -15,6 +15,16 @@ Canonical settings (do not diverge — change them HERE):
 - ``PRAGMA journal_mode=WAL``   — readers never block the writer
 - ``PRAGMA busy_timeout=5000``  — cap the writer-lock wait so a stuck txn
   surfaces as SQLITE_BUSY instead of stalling the uvicorn loop (issue #38)
+- ``PRAGMA recursive_triggers=ON`` — SQLite defaults this OFF, and with it
+  OFF an ``INSERT OR REPLACE`` conflict deletes the old row WITHOUT firing
+  the AFTER DELETE trigger. Brain's ``docs_fts_ad`` is such a trigger, so
+  every re-index of a changed document left its superseded FTS5 entry
+  behind at a rowid no ``docs`` row occupies (task 72ccaf94: 306,959
+  segment rows for 1,419 live documents)
+- ``PRAGMA journal_size_limit`` — cap the ``-wal`` file, read from
+  ``PRISM_SQLITE_JOURNAL_SIZE_LIMIT`` (bytes, default 64 MB). Without it a
+  WAL that a long-lived reader keeps pinned only ever grows; the limit is
+  what lets a PASSIVE checkpoint hand the space back
 - ``PRAGMA synchronous=NORMAL`` — the standard WAL pairing: fsync at the
   checkpoint boundary instead of every commit. Corruption-safe under WAL;
   the only exposure is the last few commits on a full OS crash, and the
@@ -24,8 +34,20 @@ Canonical settings (do not diverge — change them HERE):
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
+
+DEFAULT_JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
+
+
+def journal_size_limit() -> int:
+    """Read PRISM_SQLITE_JOURNAL_SIZE_LIMIT (bytes); fall back to 64 MB."""
+    raw = os.environ.get("PRISM_SQLITE_JOURNAL_SIZE_LIMIT", "")
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return DEFAULT_JOURNAL_SIZE_LIMIT
 
 
 def connect(path: "str | Path", *, timeout: float = 5.0, **kwargs) -> sqlite3.Connection:
@@ -41,4 +63,7 @@ def connect(path: "str | Path", *, timeout: float = 5.0, **kwargs) -> sqlite3.Co
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA recursive_triggers=ON")
+    # Must follow journal_mode=WAL: the limit applies to the WAL file.
+    conn.execute(f"PRAGMA journal_size_limit={journal_size_limit()}")
     return conn

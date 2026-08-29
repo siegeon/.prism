@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_S = 900  # 15 min
 
+# Pages of FTS5 segment data merged per pass. 16 is SQLite's own
+# documented incremental value: enough to keep up with a drift loop,
+# small enough that one pass never stalls the maintenance thread.
+_FTS_MERGE_PAGES = 16
+
 
 def maint_interval_s() -> float:
     """Read PRISM_SQLITE_MAINT_INTERVAL_S (seconds; 0 or negative = off)."""
@@ -63,9 +68,34 @@ def checkpoint_db(path: str | Path) -> bool:
             # gets undone by optimize's own write (measured: a 0-byte
             # -wal after TRUNCATE grew back to 12392 bytes post-optimize).
             conn.execute("PRAGMA optimize")
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            # Bounded FTS5 segment merge, for the same reason and in the
+            # same position as PRAGMA optimize: it WRITES, so it has to
+            # run before the checkpoint or its own write undoes the fold.
+            # Without it docs_fts segments accumulate forever (measured:
+            # 306,959 segment rows and a 1.7 GB freelist for 3.5 MB of
+            # text). The bounded VALUES('merge', N) form on purpose --
+            # VALUES('optimize') rewrites the entire index every pass.
+            try:
+                conn.execute(
+                    "INSERT INTO docs_fts(docs_fts, rank) "
+                    "VALUES('merge', ?)", (_FTS_MERGE_PAGES,))
+                conn.commit()
+            except sqlite3.Error:
+                # Most per-project stores carry no FTS index at all.
+                pass
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
         finally:
             conn.close()
+        # (busy, log_pages, checkpointed_pages). busy=1 means a reader
+        # held a snapshot, the TRUNCATE was downgraded, and the -wal kept
+        # its size -- reporting that as success is how a store grows a
+        # 750 MB -wal while every maintenance pass logs a clean run.
+        if row is not None and row[0]:
+            logger.warning(
+                "sqlite maintenance: checkpoint of %s was blocked by a live "
+                "reader (busy=%s, wal=%s pages, folded=%s pages); the -wal "
+                "was not truncated", p, row[0], row[1], row[2])
+            return False
         return True
     except Exception as exc:  # noqa: BLE001 — maintenance must never raise
         logger.warning("sqlite maintenance failed for %s: %s", p, exc)

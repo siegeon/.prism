@@ -829,6 +829,7 @@ class Brain:
         self.vector_enabled = _try_enable_vector(self._brain)
 
         self._init_brain_schema()
+        self._heal_fts_orphans()
         self._init_graph_schema()
         self._init_scores_schema()
 
@@ -908,6 +909,52 @@ class Brain:
             # Older Python sqlite3 without deterministic kwarg.
             conn.create_function("expand_identifiers", 1, _expand_identifiers)
         return conn
+
+    _FTS_HEAL_KEY = "fts_orphan_heal_v1"
+
+    def _heal_fts_orphans(self) -> None:
+        """Rebuild docs_fts once on a store indexed before the pragma fix.
+
+        Until recursive_triggers was turned ON (services/sqlite_db.py) an
+        INSERT OR REPLACE conflict deleted the docs row without firing
+        docs_fts_ad, so every changed document left its superseded index
+        entry behind at a rowid no docs row occupies. Nothing else can
+        reach such an entry, so the store only ever grows.
+
+        Deliberately NOT docs_fts(docs_fts) VALUES('rebuild'): rebuild
+        reads the RAW docs.content column, which throws away every token
+        expand_identifiers() split out (measured: hits for 'Gamma' fall
+        from 2 to 0). 'delete-all' plus a re-insert through the same
+        expression the triggers use is the only form that preserves it.
+
+        Runs at most once per store: an empty store cannot hold an
+        orphan, and the index_meta marker stops a second pass. Failures
+        are swallowed -- a store that will not heal must still open.
+        """
+        try:
+            done = self._brain.execute(
+                "SELECT value FROM index_meta WHERE key = ?",
+                (self._FTS_HEAL_KEY,),
+            ).fetchone()
+            if done is not None:
+                return
+            n_docs = self._brain.execute(
+                "SELECT count(*) FROM docs").fetchone()[0]
+            if not n_docs:
+                return
+            self._brain.execute(
+                "INSERT INTO docs_fts(docs_fts) VALUES('delete-all')")
+            self._brain.execute(
+                "INSERT INTO docs_fts(rowid, id, content, domain) "
+                "SELECT rowid, id, expand_identifiers(content), domain "
+                "FROM docs")
+            self._brain.execute(
+                "INSERT OR REPLACE INTO index_meta (key, value) "
+                "VALUES (?, datetime('now'))", (self._FTS_HEAL_KEY,))
+            self._brain.commit()
+        except Exception as exc:  # noqa: BLE001 — never block the open
+            print(f"Brain: FTS orphan heal skipped: {exc!r}",
+                  file=sys.stderr, flush=True)
 
     def _check_db_integrity(self) -> None:
         """Run PRAGMA integrity_check on each DB. Raise BrainCorruptError if any fails."""

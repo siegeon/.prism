@@ -384,7 +384,9 @@ class BrainService:
         ``path::main`` (legacy id format preserved for backward-compat).
 
         Replaces any prior chunks for the same source_file so re-indexing
-        leaves no stale rows. Returns the first chunk's doc_id.
+        leaves no stale rows. Returns the first chunk's doc_id, or
+        ``skipped:<doc_id>`` when the content hash matches what is already
+        indexed and no write work was done.
         """
         from datetime import datetime, timezone
         import hashlib as _hashlib
@@ -396,6 +398,25 @@ class BrainService:
         brain_conn = self._brain._brain
         now = datetime.now(timezone.utc).isoformat()
         vector_on = getattr(self._brain, "vector_enabled", False)
+
+        # Content-hash short-circuit. Without it the drift loop DELETEs
+        # and re-INSERTs every chunk of every file on every pass, even a
+        # byte-identical one -- new rowids, recomputed embeddings and a
+        # fresh WAL page for a tree that never changed. Guarded on the
+        # rows still being present so a prune cannot leave the marker
+        # claiming an index that is no longer there.
+        file_key = f"file_hash::{path}"
+        file_hash = _hashlib.sha256(content.encode("utf-8")).hexdigest()
+        prior = brain_conn.execute(
+            "SELECT value FROM index_meta WHERE key = ?", (file_key,),
+        ).fetchone()
+        if prior is not None and prior[0] == file_hash:
+            kept = brain_conn.execute(
+                "SELECT id FROM docs WHERE source_file = ? OR id = ? "
+                "ORDER BY rowid LIMIT 1", (path, f"{path}::main"),
+            ).fetchone()
+            if kept is not None:
+                return f"skipped:{kept[0]}"
 
         # Purge any prior rows for this source file (by source_file column,
         # plus the legacy path::main and path-only ids) so a re-index leaves
@@ -494,6 +515,10 @@ class BrainService:
                         print(f"index_doc vec insert failed: {e!r}",
                               file=sys.stderr, flush=True)
 
+        brain_conn.execute(
+            "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+            (file_key, file_hash),
+        )
         brain_conn.commit()
 
         # Index caller-supplied entities into graph.db (unchanged).
