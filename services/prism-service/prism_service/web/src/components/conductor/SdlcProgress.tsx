@@ -134,12 +134,18 @@ export const ACTIVITY_META: Record<string, { label: string; tone: string }> = {
   pending: { label: "pending", tone: "slate" },
 };
 
-function liveFraction(p: PhaseProgress, elapsedS: number): number {
+function liveFraction(
+  p: PhaseProgress, elapsedS: number, secondsOverride?: number,
+): number {
   if ((p.basis ?? "time") === "children" && (p.children_total ?? 0) > 0) {
     return Math.min(1, (p.children_done ?? 0) / (p.children_total ?? 1));
   }
   const typical = Math.max(1, p.typical_s ?? 30);
-  const liveSeconds = (p.in_step_s ?? 0) + Math.max(0, elapsedS);
+  // secondsOverride lets a PARKED step fill from the same frozen figure the
+  // execution clock prints, instead of the raw server in_step_s that keeps
+  // growing while the ball is in someone else's court.
+  const liveSeconds = secondsOverride ?? (
+    (p.in_step_s ?? 0) + Math.max(0, elapsedS));
   return Math.min(0.97, 1 - Math.exp(-liveSeconds / typical));
 }
 
@@ -275,7 +281,17 @@ export default function SdlcProgress({
     // Parked (not working): the execution clock and the segment fill hold
     // at the last conductor motion — never creep on wall time.
     if (!counting) {
-      const wf = liveFraction(phase, 0);
+      // PARKED: fill from the SAME frozen seconds the clock prints, never
+      // the raw server in_step_s. Measured on task 54585a5f while it sat at
+      // story_gate awaiting review: in_step_s ran 245.5s -> 321.9s in 75
+      // wall seconds and the segment filled 0.900 -> 0.951, climbing toward
+      // the 0.97 asymptote it can never pass -- "it just fills and fills and
+      // fills, but it never actually finishes" (owner 2026-08-29). Meanwhile
+      // task_motion_s tracked in_step_s almost exactly, so frozenInStep was
+      // ~0 and the clock beside the bar correctly read no execution time at
+      // all: one step, one second, two numbers contradicting each other.
+      // This is the same fault the clocks themselves already had fixed.
+      const wf = liveFraction(phase, 0, frozenInStep);
       segFill.set(wf);
       if (t - lastClockAt.current > 500) {
         lastClockAt.current = t;
