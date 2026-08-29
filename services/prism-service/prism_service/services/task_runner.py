@@ -98,16 +98,29 @@ def _max_budget_usd() -> float:
         return 2.0
 
 
-def _step_timeout_s() -> float:
+# Steps that RUN THINGS rather than write about them. verify_green_state
+# executes the whole suite, and implement_tasks builds and re-runs it, so
+# the wall clock a paragraph needs is not the wall clock they need. The
+# implement workflow already knew this ("known-slow steps get a multiple of
+# it"); the task runner did not, and epic 9f60a849 stalled three times at
+# verify_green_state with exit=-9 -- SIGKILL at the 900 s bound, on a host
+# with 85 GB free and no OOM kills, so it was the clock and nothing else.
+_SLOW_STEPS = {"verify_green_state": 3.0, "implement_tasks": 2.0}
+
+
+def _step_timeout_s(step_id: str = "") -> float:
     """Wall-clock bound on a single claude_cli.invoke() call (epic
     3baadd19 AC-1): without this, a wedged `claude -p` child hangs the
     whole drive worker forever -- invoke() has supported timeout_s since
     af8ec904, but nothing called it with one until this wiring."""
     try:
-        return max(1.0, float(
+        base = max(1.0, float(
             os.environ.get("PRISM_TASK_RUNNER_STEP_TIMEOUT_S", "900")))
     except ValueError:
-        return 900.0
+        base = 900.0
+    # The operator's variable still governs the base; the multiplier only
+    # says which steps need more of whatever budget they chose.
+    return base * _SLOW_STEPS.get(str(step_id or ""), 1.0)
 
 
 def _max_total_usd() -> Optional[float]:
@@ -361,6 +374,28 @@ def _stall_work_is_shipped(task_id: str) -> bool:
         return False
 
 
+def _last_outcome_was_a_kill(task_svc, task_id: str, step_id: str) -> bool:
+    """True when this step's most recent recorded outcome was a SIGKILL.
+
+    Reads the durable history rather than in-memory state, so a restart
+    between the kill and the stall still tells the truth. Any error answers
+    False, which keeps the original message: a stall handler never raises,
+    and a wrong "killed" claim would be its own dishonesty.
+    """
+    try:
+        marker = f"step={step_id}"
+        for row in reversed(list(task_svc.history(task_id))):
+            details = str(getattr(row, "details", "") or "")
+            if getattr(row, "action", "") != "flow_report_failure":
+                continue
+            if marker not in details:
+                continue
+            return "exit=-9" in details
+    except Exception:  # noqa: BLE001 - honesty is best-effort, never fatal
+        return False
+    return False
+
+
 def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
     """Fourth tick on a stalled step: close if shipped, else decompose or
     block, never invoke.
@@ -405,8 +440,22 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
     action = "decomposed" if children else "blocked"
     reason = (f"step {step_id} did not advance after {STALL_ATTEMPTS} "
               f"attempts; ")
-    reason += (f"split into children: {', '.join(children)}" if children
-               else "no red test id was named in the last proof")
+    if children:
+        reason += f"split into children: {', '.join(children)}"
+    elif _last_outcome_was_a_kill(task_svc, task_id, step_id):
+        # HONESTY. exit=-9 is SIGKILL: the step ran out of wall clock (or
+        # the host killed it), it did not fail to name a test. Epic
+        # 9f60a849 reported "no red test id was named in the last proof"
+        # three times for a step that was being killed at the 900 s bound,
+        # which sends whoever reads it hunting for a test problem that does
+        # not exist. Name the real thing, and name the knob that changes it.
+        reason += (f"the step was KILLED before it reported (exit=-9, "
+                   f"SIGKILL) -- it ran past its "
+                   f"{int(_step_timeout_s(step_id))}s budget. Raise "
+                   f"PRISM_TASK_RUNNER_STEP_TIMEOUT_S, or narrow what this "
+                   f"step has to run")
+    else:
+        reason += "no red test id was named in the last proof"
     task_svc.update(task_id, status="blocked", blocked_reason=reason)
     task_svc.record_history(task_id, action="runner_stall",
                             details=reason, actor=SEAT_ID)
@@ -468,7 +517,7 @@ def _run_one_step(project: str, task_id: str) -> dict:
         result = claude_cli.invoke(
             job["instructions"], work_dir=work_dir, plugin_dir=work_dir,
             max_turns=_max_turns(), max_budget_usd=_max_budget_usd(),
-            timeout_s=_step_timeout_s(),
+            timeout_s=_step_timeout_s(job['step']),
             allowed_tools=BUILD_TOOLS, project=project,
             purpose=f"task-runner@{job['step']}#{task_id[:8]}",
             session_id=str(uuid.uuid4()))
