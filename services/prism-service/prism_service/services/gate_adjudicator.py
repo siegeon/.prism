@@ -168,6 +168,16 @@ def sweep_once() -> list[dict]:
                 # human. Never advances gate_state (stays pending).
                 try:
                     task = ctx.task_svc.get(tid)
+                    # task ad92c0e9: a FRESH FAILED green receipt rewinds
+                    # the drive to implement_tasks (or parks on a spent
+                    # budget) instead of stamping a pending reason.
+                    if task is not None and step == "green_gate":
+                        from prism_service.services import green_rewind
+                        rw = green_rewind.maybe_rewind(ctx, task, pid)
+                        if rw:
+                            _log(f"{pid}/{tid[:8]}: green_gate rewind "
+                                 f"-> {rw.get('to_step') or 'parked'}")
+                            continue
                     if task is not None:
                         _write_pending_reason(
                             ctx, task,
