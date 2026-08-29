@@ -166,6 +166,14 @@ def _is_agent_bridge_session_path(path: str) -> bool:
         return True
     if path == "/api/agent-bridge/sessions":
         return False
+    # `.../commands` is the AGENT side, not the browser side: it drives the
+    # tab and authenticates on the caller's real principal
+    # (session_owned_by), exactly as POST /sessions and the
+    # agent_bridge_command MCP tool do. It must therefore stay INSIDE the
+    # general gate -- the token carve-out exists only for calls the BROWSER
+    # makes, where an Authorization header cannot be attached.
+    if path.endswith("/commands"):
+        return False
     return _under(path, "/api/agent-bridge/sessions")
 
 

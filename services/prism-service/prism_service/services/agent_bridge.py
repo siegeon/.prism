@@ -82,6 +82,17 @@ SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 # it indefinitely.
 COMMAND_TIMEOUT_SECONDS = 20.0
 
+# The actions a bridge client understands. Lives HERE, on the service both
+# callers already import, so the MCP tool and the REST route cannot drift
+# apart about what is drivable. (mcp/tools.py still carries its own literal
+# copy for its arg-shaping; unifying that is follow-up, not this seam.)
+KNOWN_ACTIONS: frozenset = frozenset({
+    "navigate", "click", "fill", "read", "screenshot",
+    "console", "network", "hover", "drag", "select_option",
+    "file_upload", "press_key", "handle_dialog", "wait_for",
+    "tabs", "navigate_back", "find",
+})
+
 
 @dataclass
 class BridgeSession:

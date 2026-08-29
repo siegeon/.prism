@@ -28,7 +28,8 @@ from pydantic import BaseModel
 from prism_service.api.auth import coerce_principal, current_principal
 from prism_service.data_dir import agent_bridge_dump_dir, agent_bridge_screenshot_dir
 from prism_service.models.workspace import Principal
-from prism_service.services.agent_bridge import get_agent_bridge_service
+from prism_service.services.agent_bridge import (
+    KNOWN_ACTIONS, get_agent_bridge_service)
 
 router = APIRouter()
 
@@ -187,3 +188,61 @@ def delete_session(session_id: str, token: str = Query("")) -> dict:
         raise HTTPException(404, "no active bridge session with that id/token")
     service.revoke(session_id)
     return {"ok": True}
+
+
+class CommandBody(BaseModel):
+    action: str
+    fields: dict = {}
+    timeout_s: float | None = None
+
+
+@router.post("/sessions/{session_id}/commands")
+def publish_command(
+    session_id: str,
+    body: CommandBody,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Caller -> browser: drive one command on the user's own live tab and
+    return its result.
+
+    This is the REST twin of the `agent_bridge_command` MCP tool, and it
+    authenticates EXACTLY the way that tool does -- the caller's real
+    principal must already own the session (`session_owned_by`), which is
+    the existing "holding the key = acting as them" model. It deliberately
+    does NOT accept the session's own bearer token the way `/results` and
+    the SSE route do: those are the BROWSER talking back, where a header
+    cannot be attached; this is the agent side, which always has a
+    principal. `GET /sessions` never hands the token out anyway.
+
+    It exists because the bridge was reachable ONLY over MCP: a session
+    connected on a tool profile without `agent_bridge_command` (the
+    interactive set) could see a live session in `GET /sessions` and still
+    have no way to drive it, with no route to fall back to.
+
+    One undifferentiated refusal for unknown/expired/revoked/not-yours,
+    matching the MCP tool -- it must not leak which of those is true.
+    """
+    action = str(body.action or "").strip()
+    if action not in KNOWN_ACTIONS:
+        raise HTTPException(
+            400, f"unknown action; expected one of {'|'.join(sorted(KNOWN_ACTIONS))}")
+
+    service = get_agent_bridge_service()
+    session = service.session_owned_by(session_id, principal.user_id)
+    if session is None:
+        raise HTTPException(
+            404, "no active bridge session with that id owned by this caller")
+
+    fields = {k: v for k, v in (body.fields or {}).items()
+              if isinstance(k, str) and k not in ("session_id", "command_id",
+                                                  "action", "project", "type")}
+    command_id = service.publish_command(session, action, fields)
+    result = (service.wait_for_result(command_id, body.timeout_s)
+              if body.timeout_s else service.wait_for_result(command_id))
+
+    data = result.get("data")
+    if isinstance(data, dict):
+        data = _persist_screenshot_if_present(session_id, data)
+        data = _persist_large_dump_if_present(session_id, data)
+        result = {**result, "data": data}
+    return result
