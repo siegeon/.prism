@@ -47,10 +47,22 @@ def test_review_previous_notes_plan_carries_its_declared_budget():
 
 
 def test_review_previous_notes_plan_names_its_codified_substeps():
-    """gather and check are codified; only the middle judge calls a model."""
+    """gather and check are codified; only the middle judge calls a model.
+
+    SUPERSEDED 2026-08-30 by task d7947eb6, which appended a codified
+    `text-challenge` step to this behaviour. The old assertion pinned the
+    exact list ["premise-gather", "premise-citation-check"], i.e. a fixed
+    step COUNT — so adding a further codified step broke it even though
+    that is the outcome this node exists to encourage. The real invariant
+    is the split itself: the two premise steps are codified, and exactly
+    one step in the behaviour reaches a model.
+    """
     plan = task_runner._node_plan("prism", "review_previous_notes")
 
-    assert plan["codified"] == ["premise-gather", "premise-citation-check"]
+    assert "premise-gather" in plan["codified"]
+    assert "premise-citation-check" in plan["codified"]
+    # every codified route is one the runner knows costs no tokens
+    assert "premise-judge" not in plan["codified"]
 
 
 @pytest.mark.parametrize("step", ["implement_tasks", "verify_green_state",
@@ -225,8 +237,15 @@ def test_behavior_json_on_disk_still_declares_the_premise_split():
     routes = [s.get("url", "").split("/steps/")[-1].split("?")[0]
               for s in doc["steps"]]
 
-    assert routes == ["premise-gather", "premise-judge",
-                      "premise-citation-check"]
+    # SUPERSEDED 2026-08-30 by task d7947eb6 (a codified `text-challenge`
+    # step now follows). The invariant is not the exact list -- it is that
+    # the gather runs BEFORE the judge (so the model is handed resolved
+    # citations rather than grepping cold), and that exactly one step
+    # reaches a model.
+    assert routes[0] == "premise-gather"
+    assert routes.index("premise-judge") > routes.index("premise-gather")
+    assert "premise-citation-check" in routes
+    assert sum(1 for r in routes if r in ("reason-loop", "premise-judge")) == 1
 
 
 # ----------------------------------------------------------------------

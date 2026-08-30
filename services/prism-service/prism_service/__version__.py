@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.210"
+PRISM_VERSION = "7.13.211"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7942,4 +7942,23 @@ PRISM_VERSION_NOTES += (
     "merge-base is-ancestor, which is not. One neighbour fixture moved: it pinned "
     "the real invariant that a bare task-id substring is no trailer, but observed "
     "it through a 0-commit row, so it now commits a local-only follow-up. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.211 - a text node is challenged before its artifact lands, and a finished "
+    "task gets reaped. Two owner asks. First: every node that writes text must run the "
+    "ontology rules, through separate nodes that challenge and correct, so violations "
+    "stop recurring. services/text_challenge.py derives its rule set FROM shapes.ttl "
+    "rather than restating it, so a new rule is enforced with no code change, and it "
+    "makes no model call. api/conductor_flow.flow_report calls it before advance_task, "
+    "the one point every driver passes through after writing. The real hole it closes: "
+    "_align_plan_doc holds every bullet byte-identical, and a story is almost all "
+    "bullets, so draft_story output received no cleanup at all. That is why the counts "
+    "climbed. A repair that changes any hedge count is refused and the original stands. "
+    "A synonym is reported, never substituted, per the owner rule that prose keeps the "
+    "words the author wrote. Second: the conductor gains a terminal reap node after "
+    "land. Nothing cleaned up before, so every drive leaked a worktree and a branch: "
+    "256 worktrees and 474 branches by 2026-08-30. The reap proves shippedness by the "
+    "task trailer on main, never by merge-base is-ancestor, which misreads a squash "
+    "merge. It refuses a dirty worktree, a live drive and an unfinished task. "
 )
