@@ -233,6 +233,41 @@ def test_every_text_generating_step_has_a_challenge_node_after_it():
         assert step_id in step["body"]
 
 
+def test_the_catalog_renders_the_challenge_node_after_the_text_node(monkeypatch):
+    """The Workflows page reads each behaviour's own steps through
+    api/workflows._conductor_behavior_workflows, so drive that real
+    builder against the REAL behaviour files on disk (only the external
+    AosWorkflows HTTP seam is stubbed) and check the challenge node is
+    the last node of each text behaviour's entry."""
+    from prism_service.api import workflows as wf
+    from prism_service.services import claude_transcripts
+
+    monkeypatch.setattr(claude_transcripts, "_project_source_path",
+                        lambda project: str(_REPO_ROOT))
+
+    def _engine(path: str) -> dict:
+        route = path.split("?", 1)[0]
+        if route.endswith("/bots/conductor"):
+            return json.loads(
+                (_BEHAVIORS / "bot.json").read_text(encoding="utf-8"))
+        behavior_id = route.rsplit("/", 1)[-1]
+        return json.loads(
+            (_BEHAVIORS / f"{behavior_id}.json").read_text(encoding="utf-8"))
+
+    monkeypatch.setattr(wf, "_workflow_engine_json", _engine)
+
+    entries = {e["id"]: e for e in wf._conductor_behavior_workflows("prism")}
+    for behavior_id in ("review-previous-notes-loop", "draft-story-loop",
+                        "verify-plan-loop", "implement-tasks-loop",
+                        "verify-green-state-loop"):
+        nodes = entries[behavior_id]["steps"]
+        assert nodes[-1]["id"] == "text-challenge", (
+            f"{behavior_id} renders {[n['id'] for n in nodes]}")
+        assert nodes[-1]["depends_on"] == [nodes[-2]["id"]], (
+            "the challenge node must depend on the node that wrote the text")
+        assert "/api/workflows/steps/text-challenge" in nodes[-1]["action"]
+
+
 def test_the_field_map_covers_every_text_generating_step():
     """Each writing step declares which artifact fields it writes, so
     the challenge reads exactly what the node just produced."""
