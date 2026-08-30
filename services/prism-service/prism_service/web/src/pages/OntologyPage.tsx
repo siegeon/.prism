@@ -463,8 +463,18 @@ function RuleRow({ rule, flagged }: { rule: Rule; flagged: boolean }) {
           </div>
         )}
       </div>
-      <div className="text-2xs text-[color:var(--text-muted)] whitespace-nowrap shrink-0">
-        {rule.looked_at} CHECKED · {rule.violations} FAILED · {formatAt(rule.validated_at)}
+      <div className="text-2xs text-[color:var(--text-muted)] whitespace-nowrap shrink-0 flex flex-col items-end gap-1">
+        <span>{rule.looked_at} CHECKED · {rule.violations} FAILED · {formatAt(rule.validated_at)}</span>
+        {flagged && (
+          <Link
+            data-rule-decide
+            to={`/queue?rule=${encodeURIComponent(rule.name)}`}
+            className="hover:underline decoration-dotted underline-offset-2"
+            style={{ color: "var(--accent-teal-fg)" }}
+          >
+            Decide
+          </Link>
+        )}
       </div>
     </div>
   );

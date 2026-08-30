@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, decideSignal, type SignalDecideAction } from "@/lib/api";
 import { useProject } from "@/lib/project";
 import { Page, Card, SectionLabel, Empty, Button } from "@/components/ui";
@@ -53,6 +53,13 @@ function relTime(iso?: string): string {
   return `${Math.floor(s / 604800)}w`;
 }
 
+// A rule that needs a decision links to its Queue decision (task 07c2f746):
+// an "ontology" signal's channel_ref is `rule:<name>` (rule_decisions.py),
+// so the rule name is read off it here and never carried a second way.
+function ruleOf(signal: Signal): string {
+  return signal.channel === "ontology" ? signal.channel_ref.replace(/^rule:/, "") : "";
+}
+
 function groupByChannel(signals: Signal[]): [string, Signal[]][] {
   const groups = new Map<string, Signal[]>();
   for (const s of signals) {
@@ -67,6 +74,9 @@ export default function QueuePage() {
   const [project] = useProject();
   const [open, setOpen] = useState<Signal[]>([]);
   const [became, setBecame] = useState<Signal[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [searchParams] = useSearchParams();
+  const ruleParam = searchParams.get("rule") ?? "";
 
   const load = useCallback(() => {
     api
@@ -74,7 +84,8 @@ export default function QueuePage() {
         `/api/signals?project=${encodeURIComponent(project)}&state=open`,
       )
       .then((d) => setOpen(d.signals))
-      .catch(() => setOpen([]));
+      .catch(() => setOpen([]))
+      .finally(() => setLoaded(true));
     api
       .get<{ signals: Signal[] }>(
         `/api/signals?project=${encodeURIComponent(project)}&state=became_task&limit=20`,
@@ -117,6 +128,15 @@ export default function QueuePage() {
   }, [project, load]);
 
   const groups = groupByChannel(open);
+  const ruleSignal = ruleParam ? open.find((s) => ruleOf(s) === ruleParam) : undefined;
+  const ruleMissing = Boolean(ruleParam) && loaded && !ruleSignal;
+
+  // ?rule=<name> (task 07c2f746): scroll the open decision for that rule
+  // into view once the list has it.
+  useEffect(() => {
+    if (!ruleSignal) return;
+    document.getElementById(`signal-${ruleSignal.id}`)?.scrollIntoView({ block: "center" });
+  }, [ruleSignal?.id]);
 
   return (
     <Page>
@@ -127,6 +147,19 @@ export default function QueuePage() {
           until you type what should happen and click.
         </div>
       </div>
+
+      {ruleMissing && (
+        <div
+          data-rule-missing
+          className="rounded-md border border-[color:var(--border-default)] px-3 py-2 text-xs"
+          style={{ color: "var(--text-secondary)" }}
+        >
+          No open decision for rule <code>{ruleParam}</code>.{" "}
+          <Link to="/ontology?tab=rules" className="hover:underline decoration-dotted underline-offset-2" style={{ color: "var(--accent-teal-fg)" }}>
+            Back to Rules
+          </Link>
+        </div>
+      )}
 
       <Card raised>
         <SectionLabel>Open</SectionLabel>
@@ -190,7 +223,11 @@ function SignalRow({ signal, onPromote, onDrop, onDecide }: {
   const isRuleDecision = signal.channel === "ontology";
 
   return (
-    <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-3">
+    <div
+      id={`signal-${signal.id}`}
+      data-signal-rule={ruleOf(signal) || undefined}
+      className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-1)] p-3"
+    >
       <div className="flex items-center gap-2">
         <span className="font-medium text-sm" style={{ color: "var(--text-primary)" }}>
           <LinkedText text={displaySubject} />
