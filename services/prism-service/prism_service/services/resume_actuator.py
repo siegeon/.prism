@@ -137,6 +137,19 @@ def _park(project: str, task_id: str, attempts: int, max_retries: int) -> dict:
     return {"ok": False, "task_id": task_id, "parked": True, "reason": reason}
 
 
+def _dispatch_count(task_svc, task_id: str) -> int:
+    """How many times this seat has dispatched THIS task, from durable
+    history. Strictly non-decreasing and restart-safe, which is what
+    drive_heartbeat's monotonic work_units guard needs to keep accepting
+    this seat's beats as real progress."""
+    try:
+        rows = task_svc.history(task_id) or []
+    except Exception:  # noqa: BLE001 - liveness is best-effort, never fatal
+        return 1
+    return sum(1 for r in rows
+               if getattr(r, "action", "") == DISPATCH_ACTION) + 1
+
+
 def dispatch_once(project: str, task_id: str) -> dict:
     """Dispatch one driver tick for `task_id`: an attributable history row
     and a heartbeat fire FIRST (AC-2/AC-4 -- the tile moves off 'stalled'
@@ -163,9 +176,21 @@ def dispatch_once(project: str, task_id: str) -> dict:
     task_svc.record_history(task_id, action=DISPATCH_ACTION,
                             details=f"seat={SEAT}; step={step_id}",
                             actor=SEAT)
+    # work_units MUST STRICTLY INCREASE ACROSS DISPATCHES. record_heartbeat
+    # is monotonic: a beat repeating the previously stored counter does NOT
+    # advance last_progress_at, so a hardcoded 1 refreshed this seat's own
+    # liveness exactly once, on the very first dispatch, and never again.
+    # This docstring promises "the tile moves off 'stalled' the instant
+    # dispatch fires" -- with a constant it moved off once and the task read
+    # stalled again 180s later, every time, no matter how often the seat
+    # rescued it. The dispatch count from this task's own history always
+    # increases and survives a daemon restart.
+    _beats = _dispatch_count(task_svc, task_id)
     drive_heartbeat.record_heartbeat(scores_db, {
         "task_id": task_id, "step": step_id or "unknown", "elapsed_s": 0,
-        "last_tool": "resume_actuator_dispatch", "work_units": 1,
+        "last_tool": "resume_actuator_dispatch",
+        "work_units": max(1, _beats),
+        "driver": SEAT,
     })
 
     def _no_advance(reason: str, **extra) -> dict:

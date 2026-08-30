@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.190"
+PRISM_VERSION = "7.13.191"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7718,4 +7718,17 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.190 - an inconclusive oracle receipt is no longer read as a failure, and a rewind no longer leaves an open gate on an agent step. green_rewind tested only receipt.passed, which is False for EVERY non-pass including manual_evidence_required and error - states that mean the runner could not judge, never that the work is wrong. Observed live on task 8fbd5cf0: a demo oracle reading Open /workflows and watch has no literal URL for the browser adapter, so it answered manual_evidence_required and this path rewound the green_gate off a task whose work was already on origin/main. Below the confidence bar the seat now escalates with a named reason instead of rejecting. Second fix: the rewind wrote gate_state=pending onto implement_tasks, an AGENT step with no gate. That incoherent row is invisible to is_open_gate_step, which is how the stall handler closed the task over an undecided gate. It now writes none. A genuinely FAILED receipt still rewinds. '
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.191 - the resume actuator liveness beat now advances. "
+    "dispatch_once wrote work_units=1, a constant, while record_heartbeat is "
+    "deliberately monotonic: a beat repeating the stored counter does not move "
+    "last_progress_at. So the seat refreshed its liveness exactly once, on the "
+    "first dispatch ever, and every later rescue left the task reading stalled "
+    "180s on, however many times the seat had just picked it up. The docstring "
+    "promised the tile moves off stalled the instant dispatch fires. It now "
+    "feeds the dispatch count from durable history, which strictly increases "
+    "and survives a restart, and stamps driver=SEAT so the runner can tell its "
+    "own beats from a foreign one. "
 )
