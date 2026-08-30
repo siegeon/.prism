@@ -102,7 +102,9 @@ _RICH_DIAGRAM = "\n".join([
 _RICH_ORACLE = (
     "A root task at plan_gate with a complete design packet reaches an "
     "adjudicator decision with no human action, and the history row names "
-    "the seat, the method and the certainty.")
+    "the seat, the method and the certainty. Pinned by "
+    "services/prism-service/tests/unit/"
+    "test_adjudicator_minds_the_root_plan_gate.py.")
 
 _RICH_MISFIRE = (
     "The seat approves every packet because the certainty is a constant, so "
@@ -208,11 +210,113 @@ def test_certainty_computes_each_signal_independently(dp_env, tmp_path):
     signals = out["signals"]
     assert set(signals) == {"plan_completeness", "oracle_quality",
                             "diagram_quality", "scope_alignment"}, signals
+    # SUPERSEDED as the sole proof of independence by
+    # test_all_four_signals_discriminate_a_rich_packet_from_a_thin_one below
+    # (owner audit, 2026-08-30): this line alone can pass with only TWO of
+    # four signals actually moving — a live-DB scoring pass found exactly
+    # that (oracle_quality and scope_alignment read as a constant 1.0 on
+    # every real task tried). Kept as a fast smoke check; the exhaustive
+    # per-signal proof is the one that matters now.
     assert len(set(signals.values())) > 1, (
         "four signals that always share one value are one constant wearing "
         "four names")
     assert signals["plan_completeness"] < signals["oracle_quality"], signals
     assert isinstance(out["reasons"], list)
+
+
+def test_all_four_signals_discriminate_a_rich_packet_from_a_thin_one(
+        dp_env, tmp_path):
+    """Owner audit, 2026-08-30: scoring REAL tasks from the live DB (not
+    fixtures) found oracle_quality and scope_alignment reading as a
+    constant 1.0 across the board — a rich packet with a real plan and
+    diagram but a WORTHLESS oracle, or a plan that claims scope outside its
+    own contract, would have cleared the gate on the strength of the other
+    two signals alone. This isolates each signal one at a time: starting
+    from an all-rich baseline, degrade exactly ONE dimension per variant
+    and assert THAT signal drops while the rest hold — the len(set(...))>1
+    check above is satisfied by any two signals moving; this cannot be."""
+    from prism_service.services import design_packet as dp
+    task_svc, _ = _services(tmp_path, dp_env)
+
+    baseline = _rich_task(task_svc)
+    base = dp.plan_gate_certainty(dp_env, baseline.id, baseline)["signals"]
+    assert base == {"plan_completeness": 1.0, "oracle_quality": 1.0,
+                    "diagram_quality": 1.0, "scope_alignment": 1.0}, base
+
+    thin_plan = _task(task_svc, "AC-1: covered.", _RICH_DIAGRAM,
+                      _RICH_ORACLE, _RICH_MISFIRE)
+    s = dp.plan_gate_certainty(dp_env, thin_plan.id, thin_plan)["signals"]
+    assert s["plan_completeness"] < base["plan_completeness"], s
+    assert s["oracle_quality"] == base["oracle_quality"], s
+    assert s["diagram_quality"] == base["diagram_quality"], s
+    assert s["scope_alignment"] == base["scope_alignment"], s
+
+    vague_oracle = (
+        "This change will work correctly in every case and produce the "
+        "right result for the user every single time without any problems "
+        "at all, because it has been tested thoroughly end to end.")
+    vague_misfire = (
+        "Something could in theory go wrong somewhere but it has been "
+        "carefully checked and reviewed already and should be fine in "
+        "every situation that comes up during normal operation.")
+    assert len(vague_oracle) >= 40 and len(vague_misfire) >= 40
+    thin_oracle = _task(task_svc, _RICH_PLAN, _RICH_DIAGRAM, vague_oracle,
+                        vague_misfire)
+    s = dp.plan_gate_certainty(dp_env, thin_oracle.id, thin_oracle)["signals"]
+    assert s["oracle_quality"] < base["oracle_quality"], s
+    assert s["plan_completeness"] == base["plan_completeness"], s
+    assert s["diagram_quality"] == base["diagram_quality"], s
+    assert s["scope_alignment"] == base["scope_alignment"], s
+
+    thin_diagram = _task(task_svc, _RICH_PLAN, "", _RICH_ORACLE,
+                         _RICH_MISFIRE)
+    s = dp.plan_gate_certainty(dp_env, thin_diagram.id,
+                               thin_diagram)["signals"]
+    assert s["diagram_quality"] < base["diagram_quality"], s
+    assert s["plan_completeness"] == base["plan_completeness"], s
+    assert s["oracle_quality"] == base["oracle_quality"], s
+    assert s["scope_alignment"] == base["scope_alignment"], s
+
+    scoped_task = task_svc.create(title="scope probe", oracle=_RICH_ORACLE,
+                                  proof_type="test", parent_id="",
+                                  workflow="implement")
+    task_svc.update(
+        scoped_task.id, workflow_step="plan_gate", gate_state="pending",
+        plan_doc=_RICH_PLAN + "\n\nAlso touches "
+                 "services/prism-service/prism_service/services/"
+                 "conductor_service.py directly.",
+        plan_diagram=_RICH_DIAGRAM, likely_misfire=_RICH_MISFIRE,
+        allowed_files=["services/prism-service/prism_service/services/"
+                      "design_packet.py"])
+    scoped_task = task_svc.get(scoped_task.id)
+    s = dp.plan_gate_certainty(dp_env, scoped_task.id,
+                               scoped_task)["signals"]
+    assert s["scope_alignment"] < base["scope_alignment"], s
+    assert s["plan_completeness"] == base["plan_completeness"], s
+    assert s["oracle_quality"] == base["oracle_quality"], s
+    assert s["diagram_quality"] == base["diagram_quality"], s
+
+
+def test_scope_alignment_catches_a_stop_if_test_missing_from_verify(
+        dp_env, tmp_path):
+    """The exact defect class task 4bef38c4's own oracle names as real and
+    observed: 'a test named in stop_if AND ABSENT FROM verify, so the
+    slice's own named risk was not pinned by its gate.'"""
+    from prism_service.services import design_packet as dp
+    task_svc, _ = _services(tmp_path, dp_env)
+    t = task_svc.create(title="stop_if probe", oracle=_RICH_ORACLE,
+                        proof_type="test", parent_id="", workflow="implement")
+    task_svc.update(
+        t.id, workflow_step="plan_gate", gate_state="pending",
+        plan_doc=_RICH_PLAN, plan_diagram=_RICH_DIAGRAM,
+        likely_misfire=_RICH_MISFIRE,
+        stop_if=["tests/unit/test_must_not_regress.py fails"],
+        verify=["tests/unit/test_adjudicator_minds_the_root_plan_gate.py"])
+    task = task_svc.get(t.id)
+    out = dp.plan_gate_certainty(dp_env, task.id, task)
+    assert out["signals"]["scope_alignment"] < 1.0, out["signals"]
+    assert any("test_must_not_regress.py" in r for r in out["reasons"]), (
+        out["reasons"])
 
 
 def test_certainty_reports_a_reason_for_every_missing_signal(dp_env, tmp_path):

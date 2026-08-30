@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -243,6 +244,69 @@ DEFAULT_CERTAINTY_THRESHOLD = 0.90
 _PLAN_WORD_FLOOR = 150
 _ORACLE_CHAR_FLOOR = 40
 
+# Owner audit, 2026-08-30, on a live DB scoring pass (task 594f9a58 follow-up):
+# oracle_quality and scope_alignment both read as a CONSTANT 1.0 across every
+# real task tried except the two dimensions plan_completeness/diagram_quality
+# already covered — "one constant wearing four names" wearing two different
+# faces. Both are grounded below in something the repo already treats as real
+# evidence, never invented: oracle_spec.py's own reason for preferring a URL
+# or a pytest id over prose (a CHECKABLE citation, not merely non-empty text)
+# for oracle_quality, and the worker contract (allowed_files/stop_if vs
+# verify) — the exact defect class 4bef38c4's own oracle names as "a test
+# named in stop_if and absent from verify" — for scope_alignment.
+_CITATION_PATH_RE = re.compile(r"[\w][\w./-]*/[\w.-]+\.[A-Za-z]{1,5}\b")
+_CITATION_NODEID_RE = re.compile(r"\b[\w./-]+\.py::\w+")
+_CITATION_URL_RE = re.compile(r"https?://[^\s)\"'<>]+")
+_CITATION_BACKTICK_RE = re.compile(r"`[^`\n]{3,}`")
+
+
+def _names_something_checkable(text: str) -> bool:
+    """True iff ``text`` cites a concrete, verifiable artifact — a repo file
+    path, a pytest node id, a backtick-quoted command, or a URL — rather
+    than vague, unverifiable prose. A long, well-padded but wholly abstract
+    oracle ("this will work correctly for every case and has been tested
+    thoroughly") must NOT pass: a character-count floor alone is exactly the
+    gameable hole a real live-DB score exposed, because length rewards
+    padding, not substance."""
+    if not text:
+        return False
+    return bool(_CITATION_NODEID_RE.search(text)
+                or _CITATION_PATH_RE.search(text)
+                or _CITATION_URL_RE.search(text)
+                or _CITATION_BACKTICK_RE.search(text))
+
+
+def _claimed_files(plan_doc: str) -> set:
+    """Repo-path-shaped tokens (``a/b/c.py``) the plan_doc text itself
+    names — the plan's OWN claim about what it touches, read the same way a
+    human skimming the plan would."""
+    return {m.group(0).strip("`'\",.;:()")
+            for m in _CITATION_PATH_RE.finditer(plan_doc or "")}
+
+
+def _file_in_contract(path: str, allowed_files: list) -> bool:
+    for a in allowed_files:
+        a = str(a or "").strip()
+        if not a:
+            continue
+        if path == a or path.endswith("/" + a) or a.endswith("/" + path):
+            return True
+    return False
+
+
+def _stop_if_citations(stop_if: list) -> set:
+    """The same path/node-id citations, read out of stop_if entries — the
+    task's own named risks, which 4bef38c4's oracle names a real observed
+    defect class for: 'a test named in stop_if and absent from verify'."""
+    out: set = set()
+    for s in stop_if or []:
+        s = str(s or "")
+        for m in _CITATION_NODEID_RE.finditer(s):
+            out.add(m.group(0))
+        for m in _CITATION_PATH_RE.finditer(s):
+            out.add(m.group(0).strip("`'\",.;:()"))
+    return out
+
 
 def certainty_threshold() -> float:
     """PRISM_PLAN_GATE_CERTAINTY_THRESHOLD, defaulting to 0.90 on an unset,
@@ -265,12 +329,14 @@ def plan_gate_certainty(project: str, task_id: str, task) -> dict:
 
     Four signals, unweighted average:
       - plan_completeness: plan_doc word count against a floor.
-      - oracle_quality: oracle + likely_misfire each carry real substance,
-        not boilerplate or empty text.
+      - oracle_quality: oracle + likely_misfire clear a length floor AND
+        name a concrete, checkable artifact (a file path, a pytest node
+        id, a backtick command, or a URL) - not merely non-empty text.
       - diagram_quality: plan_diagram parses AND carries more than one
         trivial edge.
-      - scope_alignment: order_report's existing below_order check - a
-        ui-tagged feature is not below the order it admits.
+      - scope_alignment: order_report's existing below_order check, PLUS
+        the plan's own claimed files against task.allowed_files and any
+        stop_if-named test against task.verify.
     """
     plan_doc = getattr(task, "plan_doc", "") or ""
     oracle = getattr(task, "oracle", "") or ""
@@ -282,7 +348,10 @@ def plan_gate_certainty(project: str, task_id: str, task) -> dict:
 
     oracle_len = len(oracle.strip())
     misfire_len = len(misfire.strip())
-    if oracle_len >= _ORACLE_CHAR_FLOOR and misfire_len >= _ORACLE_CHAR_FLOOR:
+    checkable = (_names_something_checkable(oracle)
+                or _names_something_checkable(misfire))
+    if (oracle_len >= _ORACLE_CHAR_FLOOR
+            and misfire_len >= _ORACLE_CHAR_FLOOR and checkable):
         oracle_quality = 1.0
     elif oracle_len and misfire_len:
         oracle_quality = 0.5
@@ -299,7 +368,22 @@ def plan_gate_certainty(project: str, task_id: str, task) -> dict:
 
     proto_bytes = prototype_bytes_for(task_id)
     order = order_report(task, proto_bytes, diagram)
-    scope_alignment = 0.0 if order.get("below_order") else 1.0
+    below_order = bool(order.get("below_order"))
+
+    allowed_files = list(getattr(task, "allowed_files", None) or [])
+    claimed = _claimed_files(plan_doc)
+    out_of_contract = sorted(
+        f for f in claimed
+        if allowed_files and not _file_in_contract(f, allowed_files))
+
+    stop_if = list(getattr(task, "stop_if", None) or [])
+    verify_text = " ".join(str(v or "") for v in
+                           (getattr(task, "verify", None) or []))
+    missed_stop_targets = sorted(
+        t for t in _stop_if_citations(stop_if) if t not in verify_text)
+
+    scope_alignment = (0.0 if (below_order or out_of_contract
+                              or missed_stop_targets) else 1.0)
 
     signals = {
         "plan_completeness": round(plan_completeness, 3),
@@ -315,18 +399,34 @@ def plan_gate_certainty(project: str, task_id: str, task) -> dict:
             f"plan_doc is thin ({words} word(s) against a "
             f"{_PLAN_WORD_FLOOR}-word floor)")
     if oracle_quality < 1.0:
-        reasons.append(
-            "oracle and/or likely_misfire is missing or too short "
-            f"(< {_ORACLE_CHAR_FLOOR} chars each) for a human to judge "
-            "without reading the source")
+        if oracle_len >= _ORACLE_CHAR_FLOOR and misfire_len >= _ORACLE_CHAR_FLOOR:
+            reasons.append(
+                "oracle and likely_misfire are long enough but name "
+                "nothing checkable (no file path, pytest id, backtick "
+                "command, or URL) - length alone does not make an oracle "
+                "usable")
+        else:
+            reasons.append(
+                "oracle and/or likely_misfire is missing or too short "
+                f"(< {_ORACLE_CHAR_FLOOR} chars each) for a human to judge "
+                "without reading the source")
     if diagram_quality < 1.0:
         reasons.append(
             "plan_diagram is missing, does not parse, or carries fewer "
             "than two edges")
     if scope_alignment < 1.0:
-        reasons.append(
-            "the design packet is below the order the task admits (a "
-            "ui-tagged feature with no prototype on file)")
+        if below_order:
+            reasons.append(
+                "the design packet is below the order the task admits (a "
+                "ui-tagged feature with no prototype on file)")
+        if out_of_contract:
+            reasons.append(
+                "plan_doc claims file(s) outside allowed_files: "
+                + ", ".join(out_of_contract))
+        if missed_stop_targets:
+            reasons.append(
+                "stop_if names " + ", ".join(missed_stop_targets)
+                + " but verify[] does not pin it")
     return {"score": score, "signals": signals, "reasons": reasons}
 
 
