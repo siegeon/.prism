@@ -140,69 +140,53 @@ def test_inference_runs_only_when_the_rubric_states_no_refusal():
 
 
 # ------------------------------------------------- the flow-state shape
-def test_adjudication_is_expressed_as_named_flow_states():
-    """Owner 2026-08-29: "when you codify you better be making new agentic
-    states in the flow ... bot -> (agentic flow state | bot) is progressive
-    and infinitely hierarchical as needed."
+def test_inference_is_a_state_INSIDE_each_gate_not_a_top_level_peer():
+    """Owner 2026-08-29, pointing at the rail: "that is not part of a gate
+    step, that folder like the steps is hierarchical, and should not be at
+    that level since that is not a connected step in the bot's top level
+    behavior flow."
 
-    So the gate's work is a BEHAVIOUR with named states on the Workflows
-    page, not a private helper a seat calls where nobody can see it.
+    The rule already existed and I broke it. Changelog 7.12.16: "the
+    conductor IS its 10-state FSM, and progressive disclosure under it
+    should only show what an actual state CALLS (verify_green_state ->
+    validation, via linked_workflow_id) ... nesting them there claimed a
+    link that doesn't exist."
+
+    Every gate state already links to its OWN behaviour, and those
+    behaviours' steps ARE that gate's codified layer. So inference is the
+    LAST state inside each of them -- after everything that gate could
+    codify -- never a sibling of the flow's real steps.
     """
     import json
-    root = Path(__file__).resolve().parents[4]
-    doc = json.loads(
-        (root / ".prism/behaviors/conductor/gate-adjudication.json")
-        .read_text(encoding="utf-8"))
-    assert doc["botId"] == "conductor"
-    ids = [s["id"] for s in doc["steps"]]
-    assert ids == ["codified", "infer"], ids
-    # the deterministic layer must come FIRST in the flow, not after
-    assert ids.index("codified") < ids.index("infer")
+    bdir = Path(__file__).resolve().parents[4] / ".prism/behaviors/conductor"
+
+    assert not (bdir / "gate-adjudication.json").exists(), (
+        "adjudication is back as a top-level behaviour; no conductor state "
+        "calls it, so it claims a link that does not exist")
+
+    for name in ("story-gate-check", "plan-gate-check",
+                 "red-gate-status", "green-gate-status"):
+        doc = json.loads((bdir / f"{name}.json").read_text(encoding="utf-8"))
+        ids = [s["id"] for s in doc["steps"]]
+        assert "infer" in ids, f"{name} has no inference state: {ids}"
+        assert ids[-1] == "infer", (
+            f"{name} runs inference before it has finished codifying: {ids}")
 
 
-def test_the_behaviour_nests_under_the_conductor_bot():
+def test_the_gate_behaviours_are_reached_by_drilling_into_a_gate_state():
+    """Each gate STATE calls its own behaviour, which is what makes the
+    nesting real rather than asserted."""
     src = (Path(__file__).resolve().parent.parent.parent
            / "prism_service/api/workflows.py").read_text(encoding="utf-8")
-    i = src.index("_CONDUCTOR_LINKED_BEHAVIOR_IDS = (")
-    block = src[i:i + 400]
-    assert '"gate-adjudication"' in block, (
-        "the behaviour exists but does not nest under conductor, so it "
-        "renders as a disconnected top-level sibling")
-
-
-def test_the_behaviour_is_declared_on_the_conductor_bot_fsm():
-    """A behaviour FILE alone is invisible.
-
-    The catalog enumerates fsm.behaviorIds out of bot.json (api/workflows.py
-    walks `bot["fsms"][*]["behaviorIds"]` and fetches each by id), so a JSON
-    file dropped into .prism/behaviors/conductor/ that no FSM declares never
-    reaches the Workflows page at all. Measured 2026-08-29: the file existed
-    and was in _CONDUCTOR_LINKED_BEHAVIOR_IDS, and `GET /api/workflows`
-    still listed 11 conductor children without it.
-    """
-    import json
-    root = Path(__file__).resolve().parents[4]
-    bot = json.loads(
-        (root / ".prism/behaviors/conductor/bot.json").read_text(encoding="utf-8"))
-    declared = {b for f in bot.get("fsms", [])
-                for b in (f.get("behaviorIds") or [])}
-    assert "gate-adjudication" in declared, (
-        "the gate-adjudication behaviour is not declared on any conductor "
-        f"FSM, so it never renders; declared = {sorted(declared)}")
-
-
-def test_every_conductor_behaviour_file_is_declared_by_the_bot():
-    """Generalises the case above: no behaviour file may be orphaned."""
-    import json
-    root = Path(__file__).resolve().parents[4]
-    bdir = root / ".prism/behaviors/conductor"
-    bot = json.loads((bdir / "bot.json").read_text(encoding="utf-8"))
-    declared = {b for f in bot.get("fsms", [])
-                for b in (f.get("behaviorIds") or [])}
-    on_disk = {p.stem for p in bdir.glob("*.json") if p.stem != "bot"}
-    orphans = sorted(on_disk - declared)
-    assert not orphans, (
-        f"behaviour files no FSM declares, so they never render: {orphans}")
+    for step_id, behaviour in (
+            ("story_gate", "story-gate-check"),
+            ("plan_gate", "plan-gate-check"),
+            ("red_gate", "red-gate-status"),
+            ("green_gate", "green-gate-status")):
+        assert f'"{behaviour}" if step["id"] == "{step_id}"' in src, (
+            f"{step_id} does not link to {behaviour}")
+    assert '"gate-adjudication"' not in src, (
+        "the top-level peer registration is back")
 
 
 def test_the_workflow_rail_entries_are_clickable_by_an_agent():
@@ -224,3 +208,44 @@ def test_the_workflow_rail_entries_are_clickable_by_an_agent():
     # the hook must carry the id itself, not a static string
     assert "data-workflow-id={child.id}" in src
     assert "data-workflow-id={workflow.id}" in src
+
+
+# ------------------------------------------------------------- depth
+def test_a_behaviour_step_can_call_a_deeper_behaviour():
+    """Owner 2026-08-29: "you seem to think there are only two layers, when
+    they are infinitely [nested as] need[ed] to resolve our work", and
+    "bot -> (agentic flow state | bot) is progressive and infinitely
+    hierarchical as needed."
+
+    Before this, ONLY the conductor's 10 states carried linked_workflow_id,
+    from a hardcoded ternary chain in get_workflows. Every behaviour step
+    was therefore a leaf, and the tree could never be deeper than
+    conductor -> behaviour -> steps. A step declares its own link now, so
+    depth is bounded by the work rather than by the renderer.
+    """
+    block = (Path(__file__).resolve().parent.parent.parent
+             / "prism_service/api/workflows.py").read_text(encoding="utf-8")
+    assert 'step.get("linkedWorkflowId")' in block, (
+        "behaviour steps still cannot declare a deeper link, so the tree is "
+        "capped at two levels no matter how the work decomposes")
+    # It must come from the step ITSELF, never a fixed list of known ids.
+    # Checked against the expression only -- an earlier version of this
+    # assertion sliced a fixed 200-char window and tripped on an `==` in the
+    # comment below it, which is the same fixed-window fragility this file
+    # already corrected once in the p95 test.
+    k = block.index('step.get("linkedWorkflowId")')
+    expr_end = block.index("),", k)
+    expr = block[k:expr_end]
+    assert "==" not in expr and "if " not in expr, (
+        f"the deeper link is matched against hardcoded ids: {expr!r}")
+
+
+def test_the_canvas_walks_any_depth_already():
+    """The navigation model was never the cap: workflowPath is an appended
+    array with per-level breadcrumbs, so once links exist at depth the
+    canvas already drills and returns correctly."""
+    src = (Path(__file__).resolve().parent.parent.parent
+           / "prism_service/web/src/pages/WorkflowsPage.tsx").read_text(encoding="utf-8")
+    assert "[...workflowPath, {" in src, "drilling does not append a level"
+    assert "workflowPath.slice(0, pathIndex)" in src, (
+        "returning to an ancestor does not truncate the path")

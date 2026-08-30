@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Check plan coverage",
-  "version": 2,
+  "version": 3,
   "steps": [
     {
       "id": "rubric",
@@ -32,6 +32,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
       "body": "{\"task_id\": \"${taskId}\", \"check\": \"already_green_ac\"}",
       "timeoutSeconds": 300
+    },
+    {
+      "id": "infer",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/gate-adjudication?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"stage\": \"infer\"}",
+      "timeoutSeconds": 420
     }
   ]
 }

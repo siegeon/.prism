@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Check story completeness",
-  "version": 1,
+  "version": 2,
   "steps": [
     {
       "id": "evaluate",
@@ -11,6 +11,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/story-gate-check?project=${project}",
       "body": "{\"story_doc\": ${storyDoc}, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 30
+    },
+    {
+      "id": "infer",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/gate-adjudication?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"stage\": \"infer\"}",
+      "timeoutSeconds": 420
     }
   ]
 }

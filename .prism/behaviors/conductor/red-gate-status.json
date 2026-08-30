@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Red gate evidence status",
-  "version": 1,
+  "version": 2,
   "steps": [
     {
       "id": "status",
@@ -11,6 +11,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/red-gate-status?project=${project}",
       "body": "{\"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 30
+    },
+    {
+      "id": "infer",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/gate-adjudication?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"stage\": \"infer\"}",
+      "timeoutSeconds": 420
     }
   ]
 }

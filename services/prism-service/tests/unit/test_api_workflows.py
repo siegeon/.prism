@@ -1497,11 +1497,20 @@ def test_green_gate_status_behavior_json_has_one_step_per_registry_check():
                      / ".prism" / "behaviors" / "conductor" / "green-gate-status.json")
     data = json.loads(behavior_path.read_text())
     step_ids = {s["id"] for s in data["steps"]}
+    # `infer` is NOT a registry check: it is the inference layer that runs
+    # after everything this gate could codify (owner 2026-08-29, "it should
+    # be inferred AND rubric ... leaving room for inference to deal with
+    # unknowns"). It is asserted separately below, and must stay LAST.
     assert step_ids == {"candidate_controls", "reachability", "ui_artifact",
                         "screen_claim", "shipped_ness", "demo_evidence",
-                        "oracle_receipt", "status"}, step_ids
+                        "oracle_receipt", "status", "infer"}, step_ids
+    assert data["steps"][-1]["id"] == "infer", (
+        "inference must run after the codified checks, never before them")
     for step in data["steps"]:
-        if step["id"] != "status":
+        if step["id"] == "infer":
+            assert "gate-adjudication" in step["url"]
+            assert '"stage": "infer"' in step["body"]
+        elif step["id"] != "status":
             assert "green-gate-check" in step["url"]
             assert f'"check": "{step["id"]}"' in step["body"]
 

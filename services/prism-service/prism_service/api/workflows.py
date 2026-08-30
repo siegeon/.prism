@@ -925,6 +925,27 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                     "action": command or url,
                     "output": "Captured stdout, stderr, and exit code" if kind == "shell"
                         else "HTTP response body and status",
+                    # DEPTH IS NOT TWO LEVELS. A behaviour's own step may
+                    # itself call a deeper behaviour, which may call another,
+                    # as far down as the work actually decomposes (owner
+                    # 2026-08-29: "you seem to think there are only two
+                    # layers when they are infinitely [nested as] need[ed] to
+                    # resolve our work"; and "bot -> (agentic flow state |
+                    # bot) is progressive and infinitely hierarchical as
+                    # needed").
+                    #
+                    # Only the conductor's own 10 states carried a link
+                    # before this, from a hardcoded chain in get_workflows,
+                    # so a behaviour step was always a leaf and the tree
+                    # could never be deeper than conductor -> behaviour ->
+                    # steps. The step's own JSON declares it now, so depth
+                    # is bounded by the work, not by the renderer. The
+                    # canvas already walks any depth: `workflowPath` is an
+                    # appended array with per-level breadcrumbs.
+                    "linked_workflow_id": (
+                        step.get("linkedWorkflowId")
+                        or step.get("LinkedWorkflowId")
+                        or None),
                     # Deliberately "connected", not "scripted": "scripted"
                     # arms the canvas's "Run workflow" button, which posts to
                     # /{workflow_id}/runs -- a route hardcoded to the
@@ -1260,8 +1281,7 @@ def get_workflows(project: str = Query("default")) -> dict:
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
         "write-failing-tests-loop", "implement-tasks-loop",
-        "red-gate-status", "green-gate-status", "gate-adjudication",
-        "land",
+        "red-gate-status", "green-gate-status", "land",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
