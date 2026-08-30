@@ -24,12 +24,46 @@ every hedge and every oracle claim byte-identical.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 from pathlib import Path
 
 
 from prism_service.services import text_challenge as tc
+
+
+def _code_names(source: str) -> set:
+    """Every imported module and every dotted name in the real CODE of
+    `source`. Docstrings and comments are excluded by construction (the
+    parser drops comments and a docstring is a plain string constant),
+    so an explanatory note ABOUT a function can neither satisfy nor
+    break an assertion about CALLING it -- the exact trap where a
+    comment once satisfied a source-reading assertion three times."""
+    tree = ast.parse(source)
+    names: set = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            names.add(base)
+            for alias in node.names:
+                names.add(f"{base}.{alias.name}")
+                names.add(alias.name)
+        elif isinstance(node, ast.Attribute):
+            parts = []
+            cur = node
+            while isinstance(cur, ast.Attribute):
+                parts.append(cur.attr)
+                cur = cur.value
+            if isinstance(cur, ast.Name):
+                parts.append(cur.id)
+                names.add(".".join(reversed(parts)))
+        elif isinstance(node, ast.Name):
+            names.add(node.id)
+    return names
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _BEHAVIORS = _REPO_ROOT / ".prism" / "behaviors" / "conductor"
@@ -52,28 +86,36 @@ _STORY_IN = (
 
 # Written by hand from the spec, NEVER computed by calling the function
 # under test on its own input (that assertion proves nothing -- lesson
-# from task 5de57583). Semicolon becomes a sentence break, the
-# contraction expands, the lexicon synonym "ticket" becomes the
-# canonical "Task", the heading stays byte-identical because
+# from task 5de57583). The semicolon becomes a sentence break and the
+# contraction expands. The heading stays byte-identical because
 # arc_governance._sections keys a rubric section by its exact heading
 # text, and everything from the `oracle:` marker rightwards is held
 # byte-identical because a repair must never restate an oracle.
+#
+# "ticket" STAYS (owner, 2026-08-30): services/lexicon.py's align puts
+# ontology class names into sentences -- PR becomes PullRequest, ticket
+# becomes Task -- so "the PR is merged" becomes "the PullRequest is
+# merged". The challenge node reports a synonym and never substitutes
+# one; the canonical-term violation therefore survives the repair, by
+# design, and is named in the report instead.
 _STORY_OUT = (
     "## Summary\n"
     "\n"
-    "The Task cannot land. The queue blocks it.\n"
+    "The ticket cannot land. The queue blocks it.\n"
     "\n"
     "## Acceptance Criteria\n"
     "\n"
-    "- AC-1: A Task that cannot render shows an error. The user "
+    "- AC-1: A ticket that cannot render shows an error. The user "
     "retries. — oracle: `curl /api/tasks; grep row`\n"
 )
 
 
 def test_a_generated_story_lands_clean():
-    """The story draft_story emits carries a semicolon and a synonym;
-    what the challenge node stores carries neither, and the live
-    ontology rules agree it is clean."""
+    """The story draft_story emits carries a semicolon and a contraction
+    inside a BULLET, exactly where TaskService._align_plan_doc holds the
+    line byte-identical. What the challenge node stores carries neither.
+    The synonym is not rewritten -- prose substitution is forbidden --
+    so its rule stays named in the report instead of landing silently."""
     before = tc.challenge(_STORY_IN)
     assert not before["ok"], before
     fired = {v["name"] for v in before["violations"]}
@@ -85,8 +127,10 @@ def test_a_generated_story_lands_clean():
     assert result["text"] == _STORY_OUT
 
     after = tc.challenge(result["text"])
-    assert after["ok"], after
-    assert after["violations"] == []
+    fired_after = {v["name"] for v in after["violations"]}
+    assert "text-is-plain" not in fired_after, after
+    # Reported, never repaired -- and never silently dropped either.
+    assert fired_after == {"text-uses-canonical-terms"}, after
 
 
 def test_an_oracle_claim_survives_the_repair_byte_identical():
@@ -114,15 +158,15 @@ def test_the_challenge_node_calls_no_model():
     """Codified: neither the module nor the route handler reaches
     prism_service.inference, the only path to a model in this service,
     and the node still answers when every model entry point raises."""
-    module_src = inspect.getsource(tc)
-    assert "prism_service.inference" not in module_src
-    assert "claude_cli" not in module_src
+    module_names = _code_names(inspect.getsource(tc))
+    assert not [n for n in module_names if "inference" in n], module_names
+    assert not [n for n in module_names if "claude" in n], module_names
 
     from prism_service.api import workflows as wf
 
-    handler_src = inspect.getsource(wf.workflow_step_text_challenge)
-    assert "prism_service.inference" not in handler_src
-    assert "claude_cli" not in handler_src
+    handler_names = _code_names(inspect.getsource(wf.workflow_step_text_challenge))
+    assert not [n for n in handler_names if "inference" in n], handler_names
+    assert not [n for n in handler_names if "claude" in n], handler_names
 
     from prism_service.inference import claude_cli
 
@@ -136,7 +180,7 @@ def test_the_challenge_node_calls_no_model():
         assert verdict["ok"] is False
         fixed = tc.correct("The ticket can't land; it blocks.",
                            field="completion_proof")
-        assert fixed["text"] == "The Task cannot land. It blocks."
+        assert fixed["text"] == "The ticket cannot land. It blocks."
     finally:
         claude_cli.invoke = original
 
@@ -177,18 +221,51 @@ def test_a_repair_keeps_every_hedge():
         assert f" {hedge} " in out, out
 
 
+def test_the_repair_never_substitutes_a_lexicon_synonym():
+    """Owner 2026-08-30: lexicon.align puts ontology CLASS NAMES into
+    sentences, so "the PR is merged" becomes "the PullRequest is
+    merged". The challenge node must never do that to prose -- it
+    reports the synonym instead. Proven two ways: the module never calls
+    align, and a sentence full of synonyms comes back word for word."""
+    names = _code_names(inspect.getsource(tc))
+    assert not [n for n in names if "lexicon" in n], names
+    assert not [n for n in names if n.endswith("align")], names
+
+    text = "The PR is merged. The ticket links the doc."
+    result = tc.correct(text, field="completion_proof")
+    assert result["text"] == text
+    assert "PullRequest" not in result["text"]
+    assert "Document" not in result["text"]
+    assert [v["name"] for v in result["after"]["violations"]] == [
+        "text-uses-canonical-terms"]
+
+
+def test_the_node_starts_no_background_sweeper():
+    """Owner 2026-08-30: "if its working right we don't need a
+    background constant here". The enforcement is a pipeline node, so
+    this module starts no thread and leans on no worker."""
+    source = inspect.getsource(tc)
+    names = _code_names(source)
+    for forbidden in ("threading", "Thread", "language_alignment_worker",
+                      "time.sleep", "sleep"):
+        assert forbidden not in names, forbidden
+    tree = ast.parse(source)
+    assert not [n for n in ast.walk(tree) if isinstance(n, ast.While)], (
+        "a sweeper loop has no place in a pipeline node")
+
+
 def test_a_repair_that_would_drop_a_hedge_is_refused():
     """The hedge guard is a real tooth, not only a test: a repairer that
     dropped a hedge word makes correct() return the ORIGINAL text with a
     named refusal."""
-    import prism_service.services.lexicon as lexicon
+    from prism_service.services import ste
 
-    original = lexicon.align
+    original = ste.normalize
 
-    def _drop_hedge(text):
-        return text.replace("may ", ""), [{"from": "may", "to": ""}]
+    def _drop_hedge(text, mode="flavored"):
+        return text.replace("may ", ""), ["broken"]
 
-    lexicon.align = _drop_hedge
+    ste.normalize = _drop_hedge
     try:
         text = "The run may have failed."
         result = tc.correct(text, field="completion_proof")
@@ -197,7 +274,7 @@ def test_a_repair_that_would_drop_a_hedge_is_refused():
         assert result["hedges_kept"] is False
         assert "hedge" in result["refused"].lower()
     finally:
-        lexicon.align = original
+        ste.normalize = original
 
 
 # ----------------------------------------------------------------------
@@ -325,7 +402,12 @@ def test_the_node_writes_the_repair_back_through_the_task_service():
     report = tc.challenge_step_artifacts(_Svc(), "t1", "draft_story")
     assert writes == [{"plan_doc": _STORY_OUT}]
     assert report["fields"]["plan_doc"]["changed"] is True
-    assert report["fields"]["plan_doc"]["after"]["ok"] is True
+    # The synonym is reported, never substituted -- so it must appear in
+    # the report's own unrepaired list, naming the field and the rule.
+    assert report["unrepaired"] == [
+        {"field": "plan_doc", "name": "text-uses-canonical-terms",
+         "message": "text uses a synonym where the lexicon has a "
+                    "canonical term"}], report
 
 
 def test_a_real_task_service_stores_the_repaired_story(tmp_path):
@@ -347,11 +429,29 @@ def test_a_real_task_service_stores_the_repaired_story(tmp_path):
 
     report = tc.challenge_step_artifacts(svc, task.id, "draft_story")
     assert report["repaired"] == ["plan_doc"], report
-    assert report["unrepaired"] == [], report
 
+    # Hand-derived, not computed. The BULLET is what this node fixed:
+    # TaskService._align_plan_doc holds a bullet byte-identical, so the
+    # semicolon and the contraction there could only ever be cleared
+    # here. The PROSE line shows the split responsibility honestly --
+    # this node left "ticket" alone (prose substitution is forbidden),
+    # and TaskService._align_plan_doc's own lexicon.align call, existing
+    # behaviour outside this slice, then rewrote it on the way in.
     stored_after = svc.get(task.id).plan_doc
-    assert stored_after == _STORY_OUT
-    assert tc.challenge(stored_after)["ok"] is True
+    assert stored_after == (
+        "## Summary\n"
+        "\n"
+        "The Task cannot land. The queue blocks it.\n"
+        "\n"
+        "## Acceptance Criteria\n"
+        "\n"
+        "- AC-1: A ticket that cannot render shows an error. The user "
+        "retries. — oracle: `curl /api/tasks; grep row`\n")
+    assert "can't" not in stored_after
+    assert "; the user" not in stored_after
+    # The one rule this node reports rather than repairs.
+    assert [v["name"] for v in tc.challenge(stored_after)["violations"]] == [
+        "text-uses-canonical-terms"]
 
 
 def test_an_unrepairable_violation_is_named_not_swallowed():

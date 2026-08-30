@@ -31,10 +31,27 @@ is the SAME SPARQL the Rules tab runs -- there is no second checker here
 to drift from ``ontology/shapes.ttl``, and which rules count as TEXT
 rules is read off the shapes file itself (a rule whose own select reads
 ``rdfs:label`` or ``rdfs:comment``), never a hand-kept list. The repair
-is ``ste.normalize`` plus ``lexicon.align``, the same two functions every
-real write path already calls.
+is ``ste.normalize`` and nothing else.
+
+NO BACKGROUND SWEEPER (owner, 2026-08-30): "if its working right we
+don't need a background constant here". The check runs IN THE PIPELINE,
+at the moment an artifact is built -- as a behaviour step after each
+text node, and inside ``conductor_flow.flow_report`` before the advance.
+This module starts no thread, registers no worker, and does not depend
+on ``services/language_alignment_worker.py`` running.
 
 WHAT IT REFUSES TO TOUCH:
+
+* A lexicon synonym. ``services/lexicon.py``'s ``align`` substitutes
+  ontology CLASS NAMES into sentences (PR becomes PullRequest, ticket
+  becomes Task, doc becomes Document), so "the PR is merged" becomes
+  "the PullRequest is merged" -- the same corruption that once produced
+  "gate card" -> "gate Task". This node REPORTS the canonical-term
+  violation and never substitutes. Note that
+  ``TaskService._align_plan_doc`` and ``_apply_ste`` still call
+  ``lexicon.align`` on a prose run at write time. That is existing
+  behaviour outside this module and it is where the substitution really
+  happens today.
 
 * ``oracle``, ``stop_if`` and ``likely_misfire`` are challenged and never
   rewritten. They are claims a machine or a person must follow exactly.
@@ -230,11 +247,20 @@ def _hedge_counts(text: str) -> dict:
     return counts
 
 
-def _repair_line(line: str, mode: str, rules: list, aligned: list) -> str:
+def _repair_line(line: str, mode: str, rules: list) -> str:
     """One line of markdown. A heading, a table row and a blank line are
     copied through. Everything from a claim marker rightwards is copied
-    through. The rest runs through the same normaliser and the same
-    lexicon aligner every task write already uses."""
+    through. The rest runs through ``ste.normalize`` and NOTHING ELSE.
+
+    NORMALIZE ONLY, never the lexicon (owner, 2026-08-30): "lexicon.align
+    is something that happens as we build and merge artifacts it should
+    be language nodes that make sure we are not dealing with machine
+    generated slop", and the substitution itself is dangerous in prose --
+    ``services/lexicon.py`` puts ontology CLASS NAMES into sentences (PR
+    becomes PullRequest, ticket becomes Task, doc becomes Document), so
+    "the PR is merged" becomes "the PullRequest is merged". That is the
+    same corruption that once produced "gate card" -> "gate Task". A
+    synonym is therefore REPORTED by this node, never rewritten by it."""
     if not line.strip():
         return line
     if _HEADING_RE.match(line) or _TABLE_RE.match(line):
@@ -245,26 +271,17 @@ def _repair_line(line: str, mode: str, rules: list, aligned: list) -> str:
     if not head.strip():
         return line
 
-    from prism_service.services import lexicon
-
     fixed, line_rules = ste.normalize(head, mode=mode)
-    fixed, line_aligned = lexicon.align(fixed)
     for rule in line_rules:
         if rule not in rules:
             rules.append(rule)
-    if line_aligned:
-        if "lexicon" not in rules:
-            rules.append("lexicon")
-        aligned.extend(line_aligned)
     return fixed + tail
 
 
-def _repair_markdown(text: str, mode: str) -> tuple[str, list, list]:
+def _repair_markdown(text: str, mode: str) -> tuple[str, list]:
     rules: list = []
-    aligned: list = []
-    lines = [_repair_line(line, mode, rules, aligned)
-             for line in text.split("\n")]
-    return "\n".join(lines), rules, aligned
+    lines = [_repair_line(line, mode, rules) for line in text.split("\n")]
+    return "\n".join(lines), rules
 
 
 def correct(text: str, field: str = "completion_proof",
@@ -272,15 +289,16 @@ def correct(text: str, field: str = "completion_proof",
     """Challenge `text`, repair what is safe to repair, challenge again.
 
     Returns ``{"text", "changed", "repairable", "rules_applied",
-    "aligned", "hedges_kept", "refused", "before", "after"}``. ``text``
-    is what should be stored: the repaired text when the repair held
-    every hedge, the ORIGINAL otherwise. ``after`` names what neither
-    the normaliser nor the aligner could fix."""
+    "hedges_kept", "refused", "before", "after"}``. ``text`` is what
+    should be stored: the repaired text when the repair held every
+    hedge, the ORIGINAL otherwise. ``after`` names every violation the
+    normaliser did not clear, including every synonym -- this node
+    reports a synonym and never substitutes one."""
     body = str(text or "")
     before = challenge(body, project)
     repairable = field not in NEVER_REPAIR
     base = {"text": body, "changed": False, "repairable": repairable,
-            "rules_applied": [], "aligned": [], "hedges_kept": True,
+            "rules_applied": [], "hedges_kept": True,
             "refused": "", "before": before, "after": before}
 
     if not repairable:
@@ -292,7 +310,7 @@ def correct(text: str, field: str = "completion_proof",
         return base
 
     mode = _MODE_FOR_FIELD.get(field, "flavored")
-    fixed, rules, aligned = _repair_markdown(body, mode)
+    fixed, rules = _repair_markdown(body, mode)
     if _hedge_counts(body) != _hedge_counts(fixed):
         base["hedges_kept"] = False
         base["refused"] = (
@@ -304,7 +322,7 @@ def correct(text: str, field: str = "completion_proof",
 
     after = challenge(fixed, project)
     return {"text": fixed, "changed": True, "repairable": True,
-            "rules_applied": rules, "aligned": aligned, "hedges_kept": True,
+            "rules_applied": rules, "hedges_kept": True,
             "refused": "", "before": before, "after": after}
 
 
@@ -342,7 +360,6 @@ def challenge_step_artifacts(task_svc, task_id: str, step_id: str,
         report["fields"][field] = {
             "changed": result["changed"],
             "rules_applied": result["rules_applied"],
-            "aligned": result["aligned"],
             "hedges_kept": result["hedges_kept"],
             "refused": result["refused"],
             "before": result["before"],
