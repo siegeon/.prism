@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Implement tasks (Observe-Reason)",
-  "version": 1,
+  "version": 2,
   "steps": [
     {
       "id": "loop",
@@ -11,6 +11,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
       "body": "{\"persona\": \"dev\", \"prompt\": \"Draft an implementation approach (do NOT write any code, this is a DRAFT plan only) for this task: ${taskHint}\\n\\nDescribe the smallest source change that would turn the failing test(s) green. List the files you'd change.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"implementation_notes\": {\"type\": \"string\"}, \"files_to_change\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"implementation_notes\", \"files_to_change\"]}, \"rubric\": \"\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
+    },
+    {
+      "id": "text-challenge",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/text-challenge?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"step_id\": \"implement_tasks\"}",
+      "timeoutSeconds": 60
     }
   ]
 }

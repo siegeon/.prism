@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Verify plan (Observe-Reason-Validate)",
-  "version": 2,
+  "version": 3,
   "steps": [
     {
       "id": "loop",
@@ -11,6 +11,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
       "body": "{\"persona\": \"sm\", \"prompt\": \"Write an implementation plan in markdown for this task: ${taskHint}\\n\\nThe plan_doc MUST reference every AC-<n> id from the story so coverage can be diffed automatically. Separately, produce a plan_diagram: a mermaid flowchart (starting with 'flowchart TD' or similar) showing the plan's architectural layers/edges.\\n\\nFIVE RULES THE PLAN GATE ENFORCES. Each one rejected a real plan on task 72ccaf94.\\n1. Do not assert that a file or a test DOES NOT EXIST until you have looked. A false absence claim argues the reader out of looking.\\n2. Every test named in the task stop_if must appear in task.verify. The slice's own named risk must be pinned by its own gate.\\n3. An acceptance criterion offered as the observation for an oracle clause must FAIL at the base commit. Run it there. If it is green before the fix it observes nothing. Say plainly which criteria are regression guards; those are allowed to be green.\\n4. State the number you measured, and the command that measured it. Do not report a row count as a segment count.\\n5. A mechanism claim needs a runnable repro that you ran. If the repro does not clear the condition, the mechanism does not work.\\nWhen gate feedback directs a technique you have measured and found wrong, REFUSE IT and show the measurement. Correctness outranks compliance.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"plan_doc\": {\"type\": \"string\"}, \"plan_diagram\": {\"type\": \"string\"}}, \"required\": [\"plan_doc\", \"plan_diagram\"]}, \"rubric\": \"plan_coverage\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
+    },
+    {
+      "id": "text-challenge",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/text-challenge?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"step_id\": \"verify_plan\"}",
+      "timeoutSeconds": 60
     }
   ]
 }

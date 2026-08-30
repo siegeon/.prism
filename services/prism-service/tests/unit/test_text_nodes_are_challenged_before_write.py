@@ -293,6 +293,32 @@ def test_the_node_writes_the_repair_back_through_the_task_service():
     assert report["fields"]["plan_doc"]["after"]["ok"] is True
 
 
+def test_a_real_task_service_stores_the_repaired_story(tmp_path):
+    """The round trip through the REAL TaskService: draft_story writes a
+    story whose acceptance criterion carries a semicolon and a synonym
+    (TaskService._align_plan_doc holds a bullet byte-identical, which is
+    exactly why the violation used to land), the challenge node runs,
+    and what is ON FILE afterwards carries neither -- _apply_ste does not
+    undo the repair on the way back in."""
+    from prism_service.services.task_service import TaskService
+
+    svc = TaskService(str(tmp_path / "tasks.db"))
+    task = svc.create(title="A story lands clean", plan_doc=_STORY_IN)
+
+    stored_before = svc.get(task.id).plan_doc
+    assert "can't" in stored_before, "the bullet used to keep its contraction"
+    assert "; the user" in stored_before, "the bullet used to keep its semicolon"
+    assert " ticket " in stored_before, "the bullet used to keep its synonym"
+
+    report = tc.challenge_step_artifacts(svc, task.id, "draft_story")
+    assert report["repaired"] == ["plan_doc"], report
+    assert report["unrepaired"] == [], report
+
+    stored_after = svc.get(task.id).plan_doc
+    assert stored_after == _STORY_OUT
+    assert tc.challenge(stored_after)["ok"] is True
+
+
 def test_an_unrepairable_violation_is_named_not_swallowed():
     """"provide access": a violation the machine must not repair is
     reported with the rule's own message, so a person or an agent can

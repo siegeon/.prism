@@ -202,11 +202,28 @@ def test_verify_green_state_node_is_honestly_agentic(monkeypatch):
     for step in steps:
         assert step.get("kind") == "http-callback", (
             "an honest agentic node calls out, never runs in-process")
+    # SUPERSEDED by task d7947eb6: this used to require EVERY step in the
+    # behavior to reach a model. The node now ends with a CODIFIED
+    # text-challenge step that judges the completion proof against the
+    # live ontology rules at zero tokens, so an all-steps-are-agentic
+    # assertion would forbid exactly the kind of step this project is
+    # converting agentic work into. The real invariant -- the GENERATING
+    # step is honestly agentic, never a codified label pasted over a step
+    # that still calls a model -- is asserted per step below, and the
+    # challenge step must reach NO model at all.
+    for step in steps:
+        if step.get("id") == "text-challenge":
+            assert not _step_reaches_a_model(step), (
+                "the text-challenge step must be codified: its body carries "
+                f"a model-reaching field: {step.get('body')!r}")
+            continue
         assert _step_reaches_a_model(step), (
             "verify-green-state-loop's step body carries no model-reaching "
             f"field (model/persona/prompt/max_budget_usd/max_turns) — a "
             f"false agentic label with a url that merely looks right: "
             f"{step.get('body')!r}")
+    assert any(_step_reaches_a_model(s) for s in steps), (
+        "verify-green-state-loop has no agentic step left at all")
 
 
 def test_kind_detector_reports_agentic_from_body_not_endpoint_name():

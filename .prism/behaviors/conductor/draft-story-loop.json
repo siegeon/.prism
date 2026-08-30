@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Draft story (Observe-Reason-Validate)",
-  "version": 1,
+  "version": 2,
   "steps": [
     {
       "id": "loop",
@@ -11,6 +11,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
       "body": "{\"persona\": \"sm\", \"prompt\": \"Draft a PRISM story document in markdown for this task: ${taskHint}\\n\\nIt MUST have these exact headings: ## Summary, ## Requirements, ## Acceptance Criteria. Every acceptance criterion bullet MUST carry an id like AC-1 and end with an oracle marker, e.g. '\\u2014 oracle: <observable check>'.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"story_md\": {\"type\": \"string\"}}, \"required\": [\"story_md\"]}, \"rubric\": \"story_complete\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
+    },
+    {
+      "id": "text-challenge",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/text-challenge?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"step_id\": \"draft_story\"}",
+      "timeoutSeconds": 60
     }
   ]
 }
