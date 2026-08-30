@@ -140,5 +140,13 @@ def test_a_refused_node_says_why_in_the_details_panel():
     assert "selectedNodeVerdict.reason" in src, (
         "the check already computed a reason; leaving it on the server is "
         "what made the layer unreadable")
-    assert ("const selectedNodeVerdict = selectedNodeId ? "
-            "nodeVerdicts?.[selectedNodeId] ?? null : null;") in src
+    # SUPERSEDED 2026-08-30 (task 8fbd5cf0, AC-7): the exact one-line
+    # definition this used to pin unconditionally read the LIVE re-checked
+    # nodeVerdicts map, which is exactly what AC-7 forbids for a node that
+    # has already concluded ("a node panel recomputes a check instead of
+    # reading the stored execution"). selectedNodeVerdict now prefers a
+    # stored flow_node_runs record (selectedNodeRun) when one exists, and
+    # only a node with NO stored run yet falls back to the live map -- the
+    # invariant this test actually cares about (nodeVerdicts still backs
+    # the panel for the live/unrecorded case) survives, asserted below.
+    assert "nodeVerdicts?.[selectedNodeId] ?? null" in src

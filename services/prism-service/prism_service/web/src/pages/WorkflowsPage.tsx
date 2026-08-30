@@ -1285,7 +1285,7 @@ export default function WorkflowsPage() {
     const taskId = nodeStatusTaskId;
     const flowId = selectedWorkflow?.parent_id ? selectedWorkflow.parent_id : selectedWorkflowId;
     if (!taskId || !flowId) { setFlowRuns(null); return; }
-    api<FlowRuns>(`/api/workflows/${encodeURIComponent(flowId)}/runs?task_id=${encodeURIComponent(taskId)}&project=${encodeURIComponent(project)}`)
+    api.get<FlowRuns>(`/api/workflows/${encodeURIComponent(flowId)}/runs?task_id=${encodeURIComponent(taskId)}&project=${encodeURIComponent(project)}`)
       .then(setFlowRuns)
       .catch(() => setFlowRuns(null));
   }, [project, nodeStatusTaskId, selectedWorkflow, selectedWorkflowId]);
