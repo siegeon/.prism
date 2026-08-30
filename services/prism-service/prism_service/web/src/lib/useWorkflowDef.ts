@@ -58,6 +58,24 @@ export type WorkflowStepDef = {
   script_path?: string;
   script_language?: string;
   script_source?: string;
+  /** What this node returns for the tokens it costs, against the
+   * system-wide agentic baseline -- measured from its own agent_runs rows,
+   * never from `type`/`agent` (task 112dbb72). Null exactly when
+   * `token_indeterminate` is true. */
+  token_multiplier?: number | null;
+  /** Trailing average token cost over this node's own last
+   * `token_window` ceiling-passing runs. Null exactly when
+   * `token_indeterminate` is true. */
+  avg_tokens?: number | null;
+  /** How many ceiling-passing runs actually fed the trend/multiplier —
+   * may be less than `token_window` when the node has few runs. */
+  token_sample_count?: number;
+  /** The trend window's SIZE, named on screen so a reader can tell a
+   * settled average from a one-run spike. */
+  token_window?: number;
+  /** True when this node has too few measured runs for a real number —
+   * render an honest indeterminate state, never a fabricated 0 or 1.0. */
+  token_indeterminate?: boolean;
 };
 
 /** A bot: a role card that drives the conductor's FSM. */

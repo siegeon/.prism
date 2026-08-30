@@ -21,7 +21,10 @@ import {
 import type { Slot } from "./layout";
 import type { WorkflowDef } from "@/lib/useWorkflowDef";
 
-const STEP_W = 184, STEP_H = 88, STEP_GAP = 58;
+// STEP_H grew 88 -> 106 to fit one more line: the node's own measured
+// multiplier + trailing token trend (task 112dbb72). Every other offset
+// below is still relative to STEP_H/height, so nothing else moves.
+const STEP_W = 184, STEP_H = 106, STEP_GAP = 58;
 const BOT_W = 148, BOT_H = 58;
 const STEP_Y = 300, BOT_Y = 40;
 
@@ -42,6 +45,24 @@ export type WfNode = {
   /** Steps only: how many non-done tasks are standing here right now. */
   count: number;
   slot: Slot;
+  /** What this node returns for the tokens it costs, against the
+   * system-wide agentic baseline -- measured from the node's OWN runs
+   * (task 112dbb72). Undefined for __start__/__complete__/bot nodes,
+   * which carry no agent_runs of their own. */
+  tokenTrend?: TokenTrend;
+};
+
+/** A node's own measured token economics — GET /api/workflows'
+ * token_multiplier/avg_tokens/token_sample_count/token_window/
+ * token_indeterminate fields, carried straight through (never re-derived
+ * client-side; the ceiling filter and the ordering both live server-side
+ * against the real agent_runs spine). */
+export type TokenTrend = {
+  multiplier: number | null;
+  avgTokens: number | null;
+  sampleCount: number;
+  window: number;
+  indeterminate: boolean;
 };
 
 export type ActiveNodeProgress = {
@@ -204,6 +225,13 @@ export class WorkflowGraph {
         gate,
         count: def.occupancy[s.id] ?? 0,
         slot: this.place(s.id, (i + 1) * (STEP_W + STEP_GAP), STEP_Y, STEP_W, STEP_H),
+        tokenTrend: {
+          multiplier: s.token_multiplier ?? null,
+          avgTokens: s.avg_tokens ?? null,
+          sampleCount: s.token_sample_count ?? 0,
+          window: s.token_window ?? 20,
+          indeterminate: s.token_indeterminate ?? true,
+        },
       });
     });
 
@@ -648,7 +676,17 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
 
   ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
   ctx.fillStyle = PALETTE.textDim;
-  ctx.fillText(clip(ctx, n.sub, w - 20), x + 10, y + h / 2 + 12);
+  ctx.fillText(clip(ctx, n.sub, w - 20), x + 10, y + 38);
+
+  // The node's own measured multiplier + trailing token trend (task
+  // 112dbb72). Undefined for __start__/__complete__/bot nodes, which
+  // carry no agent_runs of their own -- drawn only when there is a real
+  // measurement to report, honest or indeterminate.
+  if (n.tokenTrend) {
+    ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+    ctx.fillStyle = n.tokenTrend.indeterminate ? PALETTE.textLabel : PALETTE.teal;
+    ctx.fillText(clip(ctx, tokenTrendLabel(n.tokenTrend), w - 20), x + 10, y + 58);
+  }
 
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
   ctx.fillStyle = PALETTE.textLabel;
@@ -660,6 +698,31 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   if (n.count > 0 && !active) drawOccupancy(ctx, n);
 
   if (verdictLook?.dim) ctx.restore();
+}
+
+/** A node's own measured token economics, rendered as one line —
+ * "12.3× · avg 640/run (last 20)" — or, with too few runs, an honest
+ * indeterminate reading that says why rather than guessing a number
+ * (task 112dbb72's stop_if: never a 0 or 1.0 that would read as measured).
+ * The window is always named here, per the owner's own rule for this
+ * feature ("name the window ... an unlabelled average invites a wrong
+ * reading"). */
+function tokenTrendLabel(t: TokenTrend): string {
+  if (t.indeterminate || t.multiplier == null || t.avgTokens == null) {
+    return `×? · too few runs (${t.sampleCount}/${t.window})`;
+  }
+  return `${formatMultiplier(t.multiplier)} · avg ${formatTokenCount(t.avgTokens)}/run (last ${t.window})`;
+}
+
+function formatMultiplier(m: number): string {
+  if (m >= 100) return `${Math.round(m)}×`;
+  if (m >= 10) return `${m.toFixed(1)}×`;
+  return `${m.toFixed(2)}×`;
+}
+
+function formatTokenCount(t: number): string {
+  if (t >= 1000) return `${(t / 1000).toFixed(1)}k`;
+  return `${Math.round(t)}`;
 }
 
 /** The count badge: how many tasks are standing on this step right now.

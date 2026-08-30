@@ -42,6 +42,10 @@ from prism_service.models.workflow import WORKFLOW_STEPS
 from prism_service.project_context import get_project
 from prism_service.services.context_builder import ROLE_CARDS, ContextBuilder
 from prism_service.services import sqlite_db
+from prism_service.services.agent_runs_data import (
+    NODE_TREND_WINDOW,
+    node_token_trend,
+)
 
 try:
     # Only available when the process is launched under
@@ -1243,10 +1247,30 @@ def get_workflows(project: str = Query("default")) -> dict:
     # pins exactly one get_project per request, and both occupancy and the
     # per-workflow task_count below read the same task service.
     try:
-        _svc = get_project(project).task_svc
+        _proj = get_project(project)
+        _svc = _proj.task_svc
     except Exception as exc:
         raise HTTPException(404, f"unknown project: {project}: {exc}")
     occupancy = _occupancy(project, [s["id"] for s in steps], svc=_svc)
+    # Per-node measured multiplier + trailing token trend (task 112dbb72,
+    # owner: "each programmatic node is a token multiplier"). Read straight
+    # off the agent_runs spine for these exact step ids, ceiling-filtered
+    # against pre-fix corrupt rows (task fc471aed) -- never derived from a
+    # step's declared type/agent, only from what its own runs measured.
+    # `_data_dir` is absent on the bare test doubles several suites pass as
+    # `get_project`'s return value (they only stub `.task_svc`) -- an
+    # honest empty trend there, same as a node with zero runs, rather than
+    # a 500 for a feature those suites never asked about.
+    _scores_db = getattr(_proj, "_data_dir", None)
+    trend = (node_token_trend(str(_scores_db / "scores.db"), [s["id"] for s in steps])
+             if _scores_db is not None else {})
+    for step in steps:
+        t = trend.get(step["id"]) or {}
+        step["token_multiplier"] = t.get("multiplier")
+        step["avg_tokens"] = t.get("avg_tokens")
+        step["token_sample_count"] = t.get("sample_count", 0)
+        step["token_window"] = t.get("window", NODE_TREND_WINDOW)
+        step["token_indeterminate"] = t.get("indeterminate", True)
     conductor = {
         "id": "conductor",
         "name": "Conductor",
