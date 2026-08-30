@@ -685,7 +685,7 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   if (n.tokenTrend) {
     ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
     ctx.fillStyle = n.tokenTrend.indeterminate ? PALETTE.textLabel : PALETTE.teal;
-    ctx.fillText(clip(ctx, tokenTrendLabel(n.tokenTrend), w - 20), x + 10, y + 58);
+    ctx.fillText(fitTokenTrend(ctx, n.tokenTrend, w - 20), x + 10, y + 58);
   }
 
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
@@ -712,6 +712,30 @@ function tokenTrendLabel(t: TokenTrend): string {
     return `×? · too few runs (${t.sampleCount}/${t.window})`;
   }
   return `${formatMultiplier(t.multiplier)} · avg ${formatTokenCount(t.avgTokens)}/run (last ${t.window})`;
+}
+
+/** The widest reading of a trend that FITS, never one that has lost its
+ * window. ``clip`` truncates from the tail, which is exactly where the
+ * window sits, so every node with a real number rendered "(last…" and the
+ * window went unnamed on screen -- this slice's own stop_if. The fallbacks
+ * shorten the prose instead, and the last one keeps the window and drops
+ * the average, because an unlabelled average invites the wrong reading
+ * while a bare multiplier does not. */
+function fitTokenTrend(
+  ctx: CanvasRenderingContext2D, t: TokenTrend, maxW: number,
+): string {
+  const fits = (s: string) => ctx.measureText(s).width <= maxW;
+  const full = tokenTrendLabel(t);
+  if (fits(full) || t.indeterminate || t.multiplier == null
+      || t.avgTokens == null) return full;
+  const mult = formatMultiplier(t.multiplier);
+  const avg = formatTokenCount(t.avgTokens);
+  for (const variant of [
+    `${mult} · ${avg}/run (last ${t.window})`,
+    `${mult} · ${avg}/run (${t.window})`,
+    `${mult} (${t.window})`,
+  ]) if (fits(variant)) return variant;
+  return `${mult} (${t.window})`;
 }
 
 function formatMultiplier(m: number): string {

@@ -404,7 +404,11 @@ def test_the_canvas_renders_the_trend_with_a_named_window():
     # Both the determinate and indeterminate branches must name it --
     # naming the window only when there IS a number is not honest either.
     assert label_fn.count("t.window") >= 2, label_fn
-    assert "drawNode" in src and "tokenTrendLabel(n.tokenTrend)" in src, (
+    # SUPERSEDED: the draw call went through clip(), which truncates from
+    # the tail and dropped "(last 20)" on every narrow node. The invariant
+    # (the card paints the trend) is unchanged; the painter is now the
+    # fitting helper -- see the truncation test below.
+    assert "drawNode" in src and "fitTokenTrend(ctx, n.tokenTrend" in src, (
         "drawNode never paints the trend label onto the node card")
 
 
@@ -429,3 +433,25 @@ def test_the_slice_never_touches_a_control_plane_policy_file():
         "services/prism-service/tests/unit/test_node_shows_multiplier_and_token_trend.py",
     }
     assert not (touched & set(POLICY_FILES)), (touched, POLICY_FILES)
+
+
+def test_the_window_survives_truncation_on_a_narrow_node():
+    """Every rendered trend names its window (this slice's own stop_if).
+
+    ``clip`` truncates from the tail, which is exactly where "(last 20)"
+    sits, so a narrow node painted "1.12x . avg 6.5k/run (last..." and the
+    window went unnamed. Measured live on 7.13.201: NOT ONE node with a
+    real number rendered the window. The draw call must therefore use the
+    fitting helper, and every fallback it can return must keep the window.
+    """
+    src = _read("live", "workflowGraph.ts")
+
+    # The trend is drawn through the fitting helper, never bare clip().
+    assert "fitTokenTrend(ctx, n.tokenTrend" in src
+    assert "clip(ctx, tokenTrendLabel" not in src
+
+    body = src.split("function fitTokenTrend(", 1)[1].split("\nfunction ", 1)[0]
+    variants = [ln for ln in body.splitlines() if "/run (" in ln or "} (${" in ln]
+    assert variants, "no fallback readings found"
+    for ln in variants:
+        assert "t.window" in ln, f"a fallback drops the window: {ln.strip()}"
