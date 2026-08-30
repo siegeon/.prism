@@ -235,15 +235,26 @@ def _invoke_budget(step_id: str, plan: Optional[dict]) -> dict:
     """
     runner_timeout = _step_timeout_s(step_id)
     if not plan:
-        return {"model": None, "max_turns": _max_turns(),
+        return {"model": "", "max_turns": _max_turns(),
                 "max_budget_usd": _max_budget_usd(),
                 "timeout_s": runner_timeout}
+    # ONLY THE MODEL IS SAFE TO ADOPT. A behavior's turn/budget caps are
+    # sized for the behavior's OWN narrow prompt (premise-judge merely
+    # rules on facts that premise-gather already resolved). This worker
+    # still sends job["instructions"] -- the full step brief -- so those
+    # caps do not fit it. Proven live on task 6a7105f9 (2026-08-30): with
+    # the declared max_turns=2 applied to the full brief, three attempts
+    # each spent their turns on "Let me fetch the task details..." and
+    # died `exit=1 ... truncated mid-turn`, and the task blocked at
+    # review_previous_notes. The saving is real without them: haiku
+    # instead of the default model, and a gather that removes the tool
+    # round trips the model used to spend finding its own citations.
+    # A future slice that also adopts the declared PROMPT may then adopt
+    # the caps that were written for it -- never one without the other.
     return {
-        "model": plan.get("model") or None,
-        "max_turns": plan.get("max_turns") or _max_turns(),
-        "max_budget_usd": (plan["max_budget_usd"]
-                           if plan.get("max_budget_usd") is not None
-                           else _max_budget_usd()),
+        "model": plan.get("model") or "",
+        "max_turns": _max_turns(),
+        "max_budget_usd": _max_budget_usd(),
         "timeout_s": runner_timeout,
     }
 

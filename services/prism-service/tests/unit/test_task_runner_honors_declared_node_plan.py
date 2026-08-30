@@ -136,21 +136,32 @@ def test_codified_preamble_survives_a_gather_failure(monkeypatch):
 # The declared plan reaches claude_cli.invoke
 # ----------------------------------------------------------------------
 
-def test_declared_plan_overrides_the_blanket_runner_defaults():
-    """review_previous_notes runs on its declared budget, not 30/$2.00/900s."""
+def test_declared_plan_pins_the_model_only():
+    """The declared MODEL applies; the declared caps do not.
+
+    A behavior's turn/budget caps are sized for its own narrow prompt.
+    This worker still sends the full step brief, so adopting them starves
+    it -- see test_a_declared_plan_never_shrinks_the_turn_budget below for
+    the live incident this encodes.
+    """
     plan = task_runner._node_plan("prism", "review_previous_notes")
     kwargs = task_runner._invoke_budget("review_previous_notes", plan)
 
     assert kwargs["model"] == "haiku"
-    assert kwargs["max_turns"] == 2
-    assert kwargs["max_budget_usd"] == pytest.approx(0.5)
+    assert kwargs["max_turns"] == task_runner._max_turns()
+    assert kwargs["max_budget_usd"] == pytest.approx(
+        task_runner._max_budget_usd())
 
 
 def test_an_unplanned_step_keeps_every_runner_default():
-    """No plan means the runner's own budget, and no model pin."""
+    """No plan means the runner's own budget, and no model pin.
+
+    The empty string is claude_cli.invoke's own default for `model`
+    (inference/claude_cli.py:284) -- None is not a valid value there.
+    """
     kwargs = task_runner._invoke_budget("implement_tasks", None)
 
-    assert kwargs["model"] is None
+    assert kwargs["model"] == ""
     assert kwargs["max_turns"] == task_runner._max_turns()
     assert kwargs["max_budget_usd"] == pytest.approx(
         task_runner._max_budget_usd())
@@ -271,13 +282,17 @@ def _drive_once(monkeypatch, step, tmp_path):
     return seen
 
 
-def test_run_one_step_applies_the_declared_budget(monkeypatch, tmp_path):
-    """review_previous_notes reaches claude_cli on haiku / 2 turns / $0.50."""
+def test_run_one_step_applies_the_declared_model(monkeypatch, tmp_path):
+    """review_previous_notes reaches claude_cli on haiku, with full turns.
+
+    The declared model is the saving that is safe to take; the declared
+    2-turn cap is not (see test_a_declared_plan_never_shrinks_the_turn_
+    budget).
+    """
     seen = _drive_once(monkeypatch, "review_previous_notes", tmp_path)
 
     assert seen["model"] == "haiku"
-    assert seen["max_turns"] == 2
-    assert seen["max_budget_usd"] == pytest.approx(0.5)
+    assert seen["max_turns"] == task_runner._max_turns()
 
 
 def test_run_one_step_prepends_the_codified_facts(monkeypatch, tmp_path):
@@ -292,6 +307,32 @@ def test_run_one_step_leaves_a_build_step_alone(monkeypatch, tmp_path):
     """implement_tasks keeps the runner's own budget and an unmodified prompt."""
     seen = _drive_once(monkeypatch, "implement_tasks", tmp_path)
 
-    assert seen["model"] is None
+    assert seen["model"] == ""
     assert seen["max_turns"] == task_runner._max_turns()
     assert seen["prompt"] == "DO THE STEP"
+
+
+def test_a_declared_plan_never_shrinks_the_turn_budget():
+    """REGRESSION, task 6a7105f9 (2026-08-30).
+
+    7.13.203 applied review-previous-notes-loop's declared max_turns=2 to
+    the FULL step brief. The first task the daemon drove afterwards spent
+    its two turns on "Let me fetch the task details and any prior notes to
+    review.", died `exit=1 ... truncated mid-turn` three times, and the
+    task blocked at review_previous_notes -- which would have happened to
+    EVERY task, since this is the first step of every drive.
+
+    A declared budget must never leave a step with fewer turns or less
+    money than the runner would have given it.
+    """
+    for step in ("review_previous_notes", "draft_story", "implement_tasks"):
+        plan = task_runner._node_plan("prism", step)
+        kwargs = task_runner._invoke_budget(step, plan)
+        assert kwargs["max_turns"] >= task_runner._max_turns(), step
+        assert kwargs["max_budget_usd"] >= task_runner._max_budget_usd(), step
+
+
+def test_the_model_reaches_invoke_as_a_string(monkeypatch, tmp_path):
+    """claude_cli.invoke types `model` as str, never None."""
+    seen = _drive_once(monkeypatch, "implement_tasks", tmp_path)
+    assert isinstance(seen["model"], str)

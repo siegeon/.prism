@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.205"
+PRISM_VERSION = "7.13.206"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7867,4 +7867,23 @@ PRISM_VERSION_NOTES += (
     "still returns the o:verifiedBy ref, so the triple and the catalog row do not move. "
     "Measured in a real primary checkout: pre-fix one run dirtied the tree, post-fix two "
     "runs left git status empty. A real promotion still installs its test. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.206 - a declared node plan pins the MODEL only, never the turn or money "
+    "cap. 7.13.203 adopted review-previous-notes-loop's declared max_turns=2 and "
+    "0.50 USD and applied them to the FULL step brief the runner sends. Those caps "
+    "were sized for the behavior's own narrow judge prompt, which only rules on facts "
+    "premise-gather already resolved. Task 6a7105f9 was the first task the daemon "
+    "drove afterwards. All three attempts spent their two turns saying 'Let me fetch "
+    "the task details and any prior notes to review.' and died with exit=1 truncated "
+    "mid-turn, and the task blocked at review_previous_notes. Every task would have "
+    "blocked there, because it is the first step of every drive. The codified halves "
+    "were healthy throughout: premise-gather resolved 10 grounded facts at 0 tokens, "
+    "and premise-citation-check named the real defect, no premises section present. "
+    "The saving survives without the caps: haiku instead of the default model, and a "
+    "gather that removes the tool round trips the model spent finding its own "
+    "citations. A slice that also adopts the declared PROMPT may then adopt the caps "
+    "written for it, never one without the other. model now reaches claude_cli as the "
+    "empty string, its own default, never None. "
 )
