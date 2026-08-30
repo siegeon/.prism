@@ -436,6 +436,24 @@ def _last_outcome_was_a_kill(task_svc, task_id: str, step_id: str) -> bool:
     return False
 
 
+def _green_gate_ever_passed(task_svc, task_id: str) -> bool:
+    """True when this task's OWN history carries a green_gate decision that
+    approved. Shipped-ness proves the work exists; only this proves somebody
+    judged it. FAILS CLOSED: any error answers False, so a history problem
+    refuses to close a task rather than closing one nobody adjudicated."""
+    try:
+        rows = task_svc.history(task_id) or []
+    except Exception:  # noqa: BLE001 - a stall handler never raises
+        return False
+    for r in rows:
+        if getattr(r, "action", "") != "gate_decide":
+            continue
+        d = str(getattr(r, "details", "") or "")
+        if "green_gate" in d and "action=approve" in d:
+            return True
+    return False
+
+
 def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
     """Fourth tick on a stalled step: close if shipped, else decompose or
     block, never invoke.
@@ -460,8 +478,29 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
         # live: 8fbd5cf0 went status=done, workflow_step=implement_tasks,
         # gate_state=pending, i.e. closed while its green_gate had never
         # been decided. Shipped-ness is not a verdict; a gate is.
-        _gate_state = str(getattr(task_svc.get(task_id), "gate_state", "")
-                          or "none")
+        # SHIPPED IS NOT ADJUDICATED (task 8fbd5cf0, closed falsely THREE
+        # times on 2026-08-30). Checking only for an OPEN gate is not enough:
+        # a task sitting on an AGENT step has gate_state="none", so this path
+        # closed it on shipped-ness alone while its driver was still working
+        # and its green_gate had never been decided. Observed at 08:53:05 —
+        # the runner closed the ticket while its driver was actively landing
+        # commits (06b6b28c, 5ed871ff) minutes earlier. Require a real
+        # green_gate PASS in this task's own history before shipped-ness may
+        # close it. A trailer reaching origin/main says the work exists; only
+        # a gate decision says anybody judged it.
+        _t_now = task_svc.get(task_id)
+        _gate_state = str(getattr(_t_now, "gate_state", "") or "none")
+        if not _green_gate_ever_passed(task_svc, task_id):
+            reason = (f"step {step_id} did not advance after "
+                      f"{STALL_ATTEMPTS} attempts and this task's work is "
+                      f"on origin/main ({sha[:12]}), but its green_gate has "
+                      f"never been decided — refusing to close. Shipped is "
+                      f"not adjudicated.")
+            task_svc.record_history(task_id, action="runner_stall",
+                                    details=reason, actor=SEAT_ID)
+            return {"ok": False, "task_id": task_id, "step": step_id,
+                    "run_id": "", "tokens": 0, "cost_usd": 0.0,
+                    "report": None, "reason": reason}
         if _gate_state in ("pending", "failed"):
             reason = (f"step {step_id} did not advance after "
                       f"{STALL_ATTEMPTS} attempts and this task's work is "

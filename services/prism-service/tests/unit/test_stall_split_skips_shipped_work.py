@@ -46,12 +46,22 @@ class _Svc:
         self.created = []
         self.updates = []
         self.history_rows = []
+        self.seeded_history = []
+
+    def seed_green_gate_pass(self):
+        self.seeded_history.append(type("H", (), {
+            "action": "gate_decide",
+            "details": "gate=green_gate; action=approve; verifier=pass",
+        })())
 
     def get(self, tid):
         return self.task
 
     def history(self, tid):
-        return []
+        # A REAL green_gate approval can now be seeded (task 8fbd5cf0,
+        # 2026-08-30): the shipped-close path requires one, because a trailer
+        # on origin/main says the work exists, never that anybody judged it.
+        return list(self.seeded_history)
 
     def create(self, **kw):
         self.created.append(kw)
@@ -70,6 +80,14 @@ def test_a_stalled_task_whose_trailer_is_on_main_is_closed_not_split(monkeypatch
     monkeypatch.setattr(tr, "_stall_work_is_shipped", lambda tid: True,
                         raising=False)
     svc = _Svc("4cbac65a-91cb-4ce3-95bc-bb5ec0979278")
+    # SUPERSEDED 2026-08-30 by task 8fbd5cf0: closing on shipped-ness now
+    # requires a real green_gate approval in the task's own history. Task
+    # 8fbd5cf0 was falsely closed THREE times because "no OPEN gate" was
+    # treated as "adjudicated" — an agent step has gate_state="none", so
+    # shipped-ness alone closed a task whose driver was still landing
+    # commits. The invariant THIS test protects — shipped work is never
+    # split into waste children — is unchanged and still asserted below.
+    svc.seed_green_gate_pass()
     out = tr._handle_stall(svc, svc.task.id, "verify_green_state")
 
     assert svc.created == [], (

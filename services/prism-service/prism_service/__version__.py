@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.196"
+PRISM_VERSION = "7.13.197"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7787,4 +7787,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     "7.13.194 - the red-anchor self-heal now reads the whole commit message. _red_tests_commit scanned git log --format=%H%x09%s, the SUBJECT LINE only, while this repo git-commit convention puts trailers in the commit BODY. A driver that followed the documented convention made its own tests-only commit invisible to the self-heal, so _red_step_sha found no replacement candidate and kept returning a stale unreachable sha, and the only symptom was readiness quoting that old sha verdict forever, pointing nowhere near the cause. Observed on task fc471aed, roughly 20 minutes lost, found only by reading the scanner source. It now reads %B so both conventions resolve, and it stays non-greedy: a commit that merely mentions another task is not claimed. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.197 - shipped is not adjudicated. The stall handler closed a task on shipped-ness alone, and checking only for an OPEN gate was not enough: a task sitting on an AGENT step carries gate_state none, so the close proceeded even though its green_gate had never been decided. Task 8fbd5cf0 was falsely closed THREE times this way, the last at 08:53:05 while its driver was still landing commits minutes earlier. The shipped-close path now requires a real green_gate approval in the task own history, and fails closed: any history error refuses to close rather than closing something nobody judged. The invariant the path exists for is unchanged, so shipped work is still never split into waste children, and a genuinely adjudicated shipped task still closes. "
 )
