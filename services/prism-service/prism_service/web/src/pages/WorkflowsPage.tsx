@@ -1232,9 +1232,26 @@ export default function WorkflowsPage() {
         const pacing = p95 ?? step?.average_duration_seconds;
         activeProgress = {
           nodeId: runtime.currentStep,
+          // NO SAWTOOTH. This used to be
+          //     0.12 + ((elapsedSeconds % 18) / 18) * 0.68
+          // for a step with no duration history: a pure wall-clock loop that
+          // swept 12% -> 80% and snapped back every 18 SECONDS, forever,
+          // while the step did nothing. Owner watching a task sit at
+          // plan_gate, 2026-08-29: "the progress on plan gate has filled to
+          // full like 15 times" and "it's not a progress, it's just an
+          // animation loop ... it should never fill up and then cycle to
+          // start again, unless the sub tasks in that flow step are actually
+          // getting done." (The same wiggle drew the earlier "Build and test
+          // stuck cycling at ~23% after 4m51s" report noted above.)
+          //
+          // With real pacing the bar still maths to full ONCE and stops at
+          // 0.98. Without it there is no honest number to draw, so we draw
+          // none: `indeterminate` tells the renderer to leave the body
+          // unfilled, and the card's own "RUN 6m 49s" elapsed clock carries
+          // the "this is running" signal, which is true.
           progress: pacing && pacing > 0
             ? Math.min(0.98, elapsedSeconds / pacing)
-            : 0.12 + ((elapsedSeconds % 18) / 18) * 0.68,
+            : 0,
           indeterminate: !(pacing && pacing > 0),
           elapsedSeconds,
           averageSeconds: pacing && pacing > 0 ? pacing : null,

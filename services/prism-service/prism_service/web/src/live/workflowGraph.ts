@@ -504,14 +504,23 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
     // card's body: "a bar in the body of the panel filling over time").
     // Painted before the glyph/label/sub/summary text below so the fill
     // always sits under, never over, the card's own content.
+    // An INDETERMINATE step paints no body fill at all. A width here is a
+    // claim about how far along the step is, and with no duration history
+    // there is nothing to base that claim on -- the old caller fed this a
+    // wall-clock sawtooth and the card visibly filled and reset every 18s
+    // while no work happened. The elapsed clock on the card still says it
+    // is running.
     const bodyY = y + 20, bodyH = h - 20;
-    ctx.fillStyle = `rgba(${rgb}, 0.16)`;
-    ctx.fillRect(x + 1, bodyY, fillWidth, bodyH - 1);
-    // A brighter leading edge marks exactly how far the fill has reached,
-    // the same "where is it right now" cue the header rail's hard right
-    // edge already gives.
-    ctx.fillStyle = `rgba(${rgb}, 0.55)`;
-    ctx.fillRect(x + 1 + Math.max(0, fillWidth - 2), bodyY, 2, bodyH - 1);
+    if (!active.indeterminate) {
+      ctx.fillStyle = `rgba(${rgb}, 0.16)`;
+      ctx.fillRect(x + 1, bodyY, fillWidth, bodyH - 1);
+      // A brighter leading edge marks exactly how far the fill has reached,
+      // the same "where is it right now" cue the header rail's hard right
+      // edge already gives. It is a POSITION claim, so it is guarded by the
+      // same condition as the fill it belongs to.
+      ctx.fillStyle = `rgba(${rgb}, 0.55)`;
+      ctx.fillRect(x + 1 + Math.max(0, fillWidth - 2), bodyY, 2, bodyH - 1);
+    }
   }
 
   // A gate is a DECISION, not a unit of work — magenta is the locked hue for

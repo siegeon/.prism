@@ -53,15 +53,35 @@ def test_p95_reads_from_the_same_dataset_the_pill_rail_counts():
     assert "p95StepDurationSeconds(visibleRunHistory, runtime.currentStep)" in src
 
 
+def _running_block(src: str) -> str:
+    """The `if (runtime?.status === "running" ...) { ... }` body, parsed by
+    BRACE DEPTH.
+
+    SUPERSEDES the fixed character window this case used to slice. That
+    window was widened once already (900 -> 2000 chars, 2026-08-26) when a
+    comment block pushed the pacing lines out of range, and it broke a third
+    time on 2026-08-29 when the sawtooth-removal comment did the same. A
+    window measures how much PROSE sits above a line, which is not what this
+    test is about; brace depth measures the block itself.
+    """
+    frame_at = src.index("const frame = (now: number) => {")
+    start = src.index("if (runtime?.status === \"running\"", frame_at)
+    open_at = src.index("{", start)
+    depth, i = 0, open_at
+    while i < len(src):
+        if src[i] == "{":
+            depth += 1
+        elif src[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[start:i + 1]
+        i += 1
+    raise AssertionError("unbalanced running block")
+
+
 def test_frame_pacing_prefers_p95_over_the_plain_mean():
     src = _src()
-    frame_at = src.index("const frame = (now: number) => {")
-    # The old direct assignment must be gone from the pacing block. Window
-    # widened from 900 -> 2000 chars (2026-08-26 follow-up to the p95 fix above):
-    # the catalog-fallback comment block pushed the pacing lines further
-    # from the block's start; 900 no longer reaches them.
-    old_block_start = src.index("if (runtime?.status === \"running\"", frame_at)
-    old_block = src[old_block_start:old_block_start + 2000]
+    old_block = _running_block(src)
     assert "const average = step?.average_duration_seconds;" not in old_block
     assert "const p95 = p95StepDurationSeconds(" in old_block
     assert "const pacing = p95 ?? step?.average_duration_seconds;" in old_block
