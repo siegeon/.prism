@@ -336,6 +336,9 @@ def test_ac6_gate_teeth_come_from_the_registry_node_status_already_uses():
 
 def test_ac6_an_agent_node_bar_counts_the_drive_heartbeats_work_units(
         recorder, scores_db):
+    """No history yet for this node -- an honest indeterminate state (no
+    total), never a fabricated percentage, while still showing the
+    heartbeat's own real climbing count."""
     from prism_service.services import drive_heartbeat
     drive_heartbeat.record_heartbeat(scores_db, {
         "task_id": "8fbd5cf0", "step": "implement_tasks", "elapsed_s": 412,
@@ -345,7 +348,39 @@ def test_ac6_an_agent_node_bar_counts_the_drive_heartbeats_work_units(
                                    project="prism")
     assert got["basis"] == "work_units"
     assert got["done"] == 17
+    assert got["total"] is None, got
     assert "in_step_s" not in got and "typical_s" not in got
+
+
+def test_ac6_an_agent_node_with_history_fills_against_its_own_wall_time(
+        recorder, scores_db):
+    """SUPERSEDED 2026-08-30 answers the plan's own open design point --
+    owner: 'progress bars based on historical durations against true wall
+    time ... like a real factory game, where the factory makes tasks.' Once
+    THIS node (implement_tasks) has concluded before, its own past runs'
+    MEDIAN duration is the total, and the bar fills against the heartbeat's
+    own already-measured elapsed_s. Never a duration borrowed from another
+    node (stop_if), never a fabricated percentage, never a shared typical_s."""
+    for i, ended in enumerate((
+            "2026-08-30T09:01:40Z",  # 100s
+            "2026-08-30T09:03:20Z",  # 200s
+            "2026-08-30T09:05:00Z",  # 300s
+    )):
+        recorder.record_node_execution(scores_db, _row(
+            task_id=f"other-{i}", node_id="implement_tasks",
+            started_at="2026-08-30T09:00:00Z", ended_at=ended))
+
+    from prism_service.services import drive_heartbeat
+    drive_heartbeat.record_heartbeat(scores_db, {
+        "task_id": "8fbd5cf0", "step": "implement_tasks", "elapsed_s": 150,
+        "last_tool": "Edit", "work_units": 9})
+
+    got = recorder.progress_source(scores_db, "8fbd5cf0", "implement_tasks",
+                                   project="prism")
+    assert got["basis"] == "wall_time", got
+    assert got["total"] == 200.0, got   # median of 100/200/300 -- THIS node only
+    assert got["done"] == 150.0, got    # the heartbeat's own measured seconds
+    assert 0 < got["done"] / got["total"] < 1
 
 
 def test_ac6_the_canvas_renders_those_two_counted_sources():

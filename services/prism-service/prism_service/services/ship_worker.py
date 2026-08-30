@@ -610,6 +610,26 @@ def ship_task(task_id: str, project: str = "default", *,
     # origin/main ref, so without the fetch it would re-refuse what just landed.
     _run(run, ["git", "fetch", "origin"], path)
 
+    # RECORD THE TERMINAL NODE (task 8fbd5cf0). The branch is on
+    # origin/main right now -- this is what "the token reaches the
+    # terminal node" means: the work landed, not that green_gate merely
+    # went green. Best-effort: a recorder error never blocks shipping.
+    try:
+        from prism_service.project_context import get_project
+        from prism_service.services.flow_run_recorder import (
+            record_node_execution, SHIPPED_NODE)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        record_node_execution(
+            str(get_project(project)._data_dir / "scores.db"),
+            {"task_id": task_id, "node_id": SHIPPED_NODE,
+             "actor": "ship-worker", "workflow_id": "conductor",
+             "outcome": "pass", "reason": f"landed on origin/main (pr #{pr})",
+             "started_at": now, "ended_at": now},
+            project=project)
+    except Exception:
+        pass
+
     land = on_landed or _replay_owner_approval
     replayed = land(task_svc, cond, task_id)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
