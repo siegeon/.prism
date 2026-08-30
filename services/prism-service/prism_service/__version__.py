@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.192"
+PRISM_VERSION = "7.13.193"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7757,4 +7757,8 @@ PRISM_VERSION_NOTES += (
     "the story gate reads, so no downstream gate changed. Task cd33263f, "
     "machine-adjudicated green: 18 pinned tests, 168 unit and 58 "
     "integration neighbour tests green, both trees. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.193 - the plan-gate node-status read no longer takes a repo lock, and the guard that prevents it finally exists in version control. workflows.py called pgc.run_all without measure=False, so a status endpoint could enter the measuring tier of already_green_ac, which does git worktree add --detach, runs pytest in the scratch tree, then git worktree remove. On 2026-08-29 that wedged the whole daemon: the worktree lock contended with agents on the same shared repo, the handler blocked on a subprocess that never returned, the thread pool drained, and the API stopped accepting with 65 connections backlogged and an unreaped git child. The fix existed only as an uncommitted edit in the shared checkout since that date. git log -S measure=False across all branches found nothing, so any reset or fresh clone reopened the wedge. It is now committed. "
 )

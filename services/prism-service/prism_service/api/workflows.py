@@ -2444,7 +2444,21 @@ def workflow_node_status(
             nodes.append(NodeStatus(
                 id="rubric", state="unknown",
                 reason=f"could not score the plan rubric: {exc}"))
-        for entry in pgc.run_all(task, project):
+        # measure=False: THIS IS A READ. The measuring tier of
+        # already_green_ac does `git worktree add --detach`, runs pytest in
+        # the scratch tree, then `git worktree remove` (plan_gate_checks.py
+        # ~326-342). Doing that inside a request handler wedged the whole
+        # daemon on 2026-08-29: the worktree lock contended with agents
+        # working the same shared repo, the handler blocked on a subprocess
+        # that never returned, the thread pool drained, and the API stopped
+        # accepting with 65 connections backlogged and an unreaped git
+        # child. A status endpoint must be cheap and must never take a repo
+        # lock; the cached/declaration tier still answers every node.
+        # NEVER COMMITTED until 2026-08-30: this guard lived only as an
+        # uncommitted edit in the shared checkout, so any reset or fresh
+        # clone reopened the wedge. `git log -S measure=False --all` found
+        # nothing before this commit.
+        for entry in pgc.run_all(task, project, measure=False):
             nodes.append(NodeStatus(
                 id=entry["id"],
                 state="passed" if entry["ok"] else "refused",
