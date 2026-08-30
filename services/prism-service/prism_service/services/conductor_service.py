@@ -3406,8 +3406,26 @@ class ConductorService:
                 if (r and self._commit_is_tests_only(r, recorded)
                         and self._commit_is_reachable(r, recorded)):
                     return recorded
+            # Both checks rejected the recorded row, so it is not a
+            # trustworthy anchor. Yield it up ONLY when something better can
+            # actually take over:
+            #   - a resolved tests-only commit (the self-heal above), or
+            #   - an ATTESTED pre-change ref, whose tier-2 path inside
+            #     adjudicate_test_red_gate is reachable only when this
+            #     resolver returns '' (task e4c631d7: a tests+impl-in-one-
+            #     commit drive stamped the SHIPPED sha into this row, so the
+            #     caller's `if not red_sha:` guard never fired and a correct
+            #     `red-anchor-ref:` attestation was silently ignored).
+            # With NEITHER on file the rejected row still beats nothing:
+            # dropping it would make the machine seat abstain and route
+            # red_gate to a human, which it must never do (owner 2026-08-04).
             if tests_sha:
                 return tests_sha
+            try:
+                if self._attested_red_ref(self._task_svc.get(task_id)):
+                    return ""
+            except Exception:
+                pass
         return recorded or tests_sha
 
     def _workspace_and_head(self, task_id: str) -> tuple[str, str]:
