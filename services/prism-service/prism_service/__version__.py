@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.204"
+PRISM_VERSION = "7.13.206"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7849,4 +7849,40 @@ PRISM_VERSION_NOTES += (
     "_archive/<domain>.jsonl. No row is deleted. Live result: 2899 rows to 491, with "
     "2408 rows in _archive and all 2899 accounted for on disk. The 397-fact active set "
     "is byte-identical before and after. The payload fell to 1554058 bytes. "
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.206: the ontology rule text-is-plain can now be satisfied by a "
+    "write (task b2f29d45). One concept had two representations that "
+    "disagreed. shapes.ttl ran a SPARQL regex over the whole literal; "
+    "services/ste.py normalised the same text only outside a protected span "
+    "and from a hand-kept table of 16 contractions plus a semicolon rule "
+    "that fired only when a letter followed the semicolon. Measured on the "
+    "live prism graph: the Rules tab reported 100 for each of three rules "
+    "because 100 is _FOCUS_CAP, and the true counts were 661 for "
+    "task-names-its-channel, 383 for text-is-plain and 214 for "
+    "text-uses-canonical-terms. Of 384 flagged literals ste.apply cleared "
+    "88. THE WRITER: _apply_semicolon now splits every semicolon in "
+    "unprotected prose, not only one followed by a letter, which is the "
+    "enumerated-clause shape (a semicolon then a bracket or a digit) that "
+    "left 438 live violations no write could clear. _CONTRACTION_RULES "
+    "replaces the table lookup with the rule's own branches, so hasn't, "
+    "there's, that's, what's, you've and we'll expand and a new contraction "
+    "cannot reopen the gap. An HTML entity joins _protected_spans, because "
+    "the old rule turned an escape into a sentence break. THE RULE: "
+    "text-is-plain and text-uses-canonical-terms strip fenced code, an "
+    "inline code span, a double-quoted string and a URL before they look. "
+    "ste and lexicon are forbidden from rewriting any of those, so the rule "
+    "was flagging 58 nodes that no write and no backfill could ever clear, "
+    "among them task descriptions that quote the fixture string of the test "
+    "they describe and memories that quote the owner. Changing that text "
+    "changes what it claims. Dry run over the live corpus: the new "
+    "normaliser clears 332 of 344 and loses zero hedges. The 12 that remain "
+    "sit inside single-quoted spans, which the strip leaves alone on "
+    "purpose, since SPARQL regex has no lookbehind and under-stripping is "
+    "the safe direction. Guard: "
+    "tests/unit/test_ontology_rules_enforce_at_the_write.py runs the "
+    "sh:select straight out of shapes.ttl over a small rdflib graph, so it "
+    "cannot drift from the shipped rule, and one test proves the sample set "
+    "still spans every branch of the regex."
 )
