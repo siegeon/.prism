@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.193"
+PRISM_VERSION = "7.13.194"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7761,4 +7761,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     "7.13.193 - the plan-gate node-status read no longer takes a repo lock, and the guard that prevents it finally exists in version control. workflows.py called pgc.run_all without measure=False, so a status endpoint could enter the measuring tier of already_green_ac, which does git worktree add --detach, runs pytest in the scratch tree, then git worktree remove. On 2026-08-29 that wedged the whole daemon: the worktree lock contended with agents on the same shared repo, the handler blocked on a subprocess that never returned, the thread pool drained, and the API stopped accepting with 65 connections backlogged and an unreaped git child. The fix existed only as an uncommitted edit in the shared checkout since that date. git log -S measure=False across all branches found nothing, so any reset or fresh clone reopened the wedge. It is now committed. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.194 - the red-anchor self-heal now reads the whole commit message. _red_tests_commit scanned git log --format=%H%x09%s, the SUBJECT LINE only, while this repo git-commit convention puts trailers in the commit BODY. A driver that followed the documented convention made its own tests-only commit invisible to the self-heal, so _red_step_sha found no replacement candidate and kept returning a stale unreachable sha, and the only symptom was readiness quoting that old sha verdict forever, pointing nowhere near the cause. Observed on task fc471aed, roughly 20 minutes lost, found only by reading the scanner source. It now reads %B so both conventions resolve, and it stays non-greedy: a commit that merely mentions another task is not claimed. "
 )

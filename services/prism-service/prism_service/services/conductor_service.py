@@ -3275,14 +3275,26 @@ class ConductorService:
             repos.append(root)
         for repo in repos:
             try:
-                r = _sp.run(["git", "log", "--format=%H%x09%s", "-n", "80"],
+                # %B, NOT %s (task fc471aed, 2026-08-30). This scanned the
+                # SUBJECT LINE only, while this repo's own git-commit
+                # convention puts trailers in the commit BODY. A driver that
+                # followed the documented convention literally made its
+                # tests-only commit invisible here, so the self-heal found no
+                # replacement anchor and _red_step_sha kept returning a stale,
+                # unreachable sha - and the only symptom was readiness quoting
+                # that old sha's verdict forever, pointing nowhere near the
+                # real cause. Read the whole message so BOTH conventions work.
+                r = _sp.run(["git", "log", "--format=%H%x09%B%x00", "-n", "80"],
                             cwd=repo, capture_output=True, text=True,
                             timeout=15)
                 if r.returncode != 0:
                     continue
-                for line in r.stdout.splitlines():
-                    sha, _, subj = line.partition("\t")
-                    if tag not in subj:
+                for record in r.stdout.split("\0"):
+                    record = record.strip()
+                    if not record:
+                        continue
+                    sha, _, message = record.partition("\t")
+                    if tag not in message:
                         continue
                     if self._commit_is_tests_only(repo, sha.strip()):
                         return sha.strip(), repo
