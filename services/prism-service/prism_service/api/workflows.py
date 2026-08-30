@@ -29,7 +29,7 @@ import os
 import re
 import sqlite3
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -2044,6 +2044,30 @@ class WorkflowInstance(BaseModel):
     kind: str
     outcome: str
     summary: str
+    # The version of the flow definition this run EXECUTED against, or None
+    # when the run predates version stamping. None means UNKNOWN and is
+    # never silently read as "the current one": a run of plan-gate-check v1
+    # (one opaque rubric callback) and a run of v3 (rubric + three teeth +
+    # infer) are not the same execution, and listing them together would
+    # misrepresent what actually ran (owner 2026-08-29: "it is INSTANCE ran
+    # per THIS version of the Bot/Agentic flow").
+    flow_version: Optional[int] = None
+
+
+_FLOW_VERSION_RE = re.compile(r"flow_version=(\d+)")
+
+
+def _behaviour_version(project: str, workflow_id: str) -> Optional[int]:
+    """The version of the behaviour definition as it stands NOW."""
+    from prism_service.services.claude_transcripts import _project_source_path
+    try:
+        root = Path(_project_source_path(project))
+        doc = json.loads(
+            (root / ".prism" / "behaviors" / "conductor"
+             / f"{workflow_id}.json").read_text(encoding="utf-8"))
+        return int(doc.get("version"))
+    except Exception:
+        return None
 
 
 @router.get("/{workflow_id}/instances")
@@ -2051,6 +2075,7 @@ def workflow_instances(
     workflow_id: str,
     project: str = Query(...),
     task_id: str = Query(""),
+    version: Optional[int] = Query(None),
 ) -> dict:
     """The EXECUTION INSTANCES of one layer.
 
@@ -2102,11 +2127,23 @@ def workflow_instances(
             if r["action"] != "advance_task" or f"from={step_id};" not in details:
                 continue
             outcome = "advanced"
+        vm = _FLOW_VERSION_RE.search(details)
+        ran_version = int(vm.group(1)) if vm else None
+        # An explicit version filter matches only runs that RECORDED that
+        # version. An unstamped run is unknown, not a match -- guessing
+        # would put a v1 execution under a v3 heading.
+        if version is not None and ran_version != version:
+            continue
         out.append(WorkflowInstance(
             id=str(r["id"]), at=str(r["timestamp"] or ""),
             actor=str(r["actor"] or ""), kind=str(r["action"]),
             outcome=outcome,
             summary=details[:180],
+            flow_version=ran_version,
         ))
+    current = _behaviour_version(project, workflow_id)
     return {"workflow_id": workflow_id, "step_id": step_id,
-            "task_id": task_id, "instances": [i.model_dump() for i in out]}
+            "task_id": task_id,
+            "current_version": current,
+            "unstamped": sum(1 for i in out if i.flow_version is None),
+            "instances": [i.model_dump() for i in out]}

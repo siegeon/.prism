@@ -160,6 +160,29 @@ def parse_verdict(text: str) -> Optional[dict]:
             "reason": str(data.get("reason") or "").strip()}
 
 
+_BEHAVIOUR_FOR_GATE = {
+    "story_gate": "story-gate-check", "plan_gate": "plan-gate-check",
+    "red_gate": "red-gate-status", "green_gate": "green-gate-status",
+}
+
+
+def _flow_version(project: str, step_id: str) -> Optional[int]:
+    """The version of the behaviour definition this gate is running."""
+    behaviour = _BEHAVIOUR_FOR_GATE.get(step_id)
+    if not behaviour:
+        return None
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        from prism_service.services.claude_transcripts import _project_source_path
+        doc = _json.loads((_Path(_project_source_path(project))
+                           / ".prism" / "behaviors" / "conductor"
+                           / f"{behaviour}.json").read_text(encoding="utf-8"))
+        return int(doc.get("version"))
+    except Exception:
+        return None
+
+
 def adjudicate(project: str, task_id: str, step_id: str,
                *, invoke=None, decide=None) -> Optional[dict]:
     """Run the inference seat on ONE gate and record its verdict.
@@ -228,8 +251,18 @@ def adjudicate(project: str, task_id: str, step_id: str,
     if verdict is None:
         return None
 
-    reason = (f"inference seat ({SEAT_ID}): {verdict['reason']}"
-              if verdict["reason"] else f"inference seat ({SEAT_ID})")
+    # STAMP THE FLOW VERSION THIS RAN AGAINST. An instance belongs to the
+    # version of the flow that executed it -- a run of plan-gate-check v1
+    # (one opaque rubric callback) is not a run of v3 (rubric + three teeth
+    # + infer), and without this the two are indistinguishable afterwards.
+    # Owner 2026-08-29: "it is INSTANCE ran per THIS version of the
+    # Bot/Agentic flow." Nothing stamped this before: 2,016 gate_decide rows
+    # on file, zero carrying a flow_version, which is why every historical
+    # instance reads as version UNKNOWN rather than being back-attributed.
+    fv = _flow_version(project, step_id)
+    stamp = f" flow_version={fv}" if fv is not None else ""
+    reason = (f"inference seat ({SEAT_ID}){stamp}: {verdict['reason']}"
+              if verdict["reason"] else f"inference seat ({SEAT_ID}){stamp}")
 
     if decide is None:
         decide = ctx.conductor_svc.gate_decide
