@@ -269,6 +269,38 @@ def _spend_ceiling_crossed() -> bool:
     return True
 
 
+# The value this seat writes into a drive heartbeat's `driver` column, and
+# the ONE driver name eligible_task ignores when it decides whether somebody
+# else is already on a task (task e4c631d7). The runner beats for itself at
+# the start of every step, and a step transition wakes the next tick well
+# inside HEARTBEAT_WINDOW_S -- a guard that only asked "is there a beat"
+# would make this seat skip its own work forever.
+RUNNER_DRIVER = "prism-task-runner"
+
+
+def _foreign_driver_on(project: str, task_id: str) -> str:
+    """The name of a DIFFERENT driver that beat for `task_id` inside
+    drive_heartbeat.HEARTBEAT_WINDOW_S, or "" when nobody else is on it.
+
+    This is the evidence half of the owner's "two queues of control"
+    complaint (task d9f082fe): a session driving a task over the REST flow
+    now marks it in_progress, which is what makes it visible on the board --
+    and would also make it claimable here. A live foreign beat says the task
+    already has a driver, so this seat stands down.
+    """
+    from prism_service.services import drive_heartbeat
+    try:
+        beat = drive_heartbeat.latest(_scores_db_for(project), task_id)
+    except Exception:
+        return ""
+    if beat is None:
+        return ""
+    if beat.get("age_s") is None or beat["age_s"] > drive_heartbeat.HEARTBEAT_WINDOW_S:
+        return ""
+    driver = str(beat.get("driver") or "")
+    return "" if driver in ("", RUNNER_DRIVER) else driver
+
+
 def _claim(task_id: str) -> bool:
     with _IN_FLIGHT_LOCK:
         if task_id in _IN_FLIGHT:
@@ -308,6 +340,14 @@ def eligible_task(project: str) -> Optional[str]:
     ctx = get_project(project)
     for t in ctx.task_svc.list(status="in_progress"):
         if t.id in _IN_FLIGHT:
+            continue
+        # Somebody else is demonstrably driving this task right now. Skipping
+        # is not a refusal to work -- the beat goes stale within
+        # HEARTBEAT_WINDOW_S of that driver stopping, and the task becomes
+        # eligible again on a later tick.
+        foreign = _foreign_driver_on(project, t.id)
+        if foreign:
+            _log(f"skipping {t.id[:8]}: driver {foreign!r} is live on it")
             continue
         if not t.workflow_step:
             return t.id
@@ -547,6 +587,7 @@ def _run_one_step(project: str, task_id: str) -> dict:
     drive_heartbeat.record_heartbeat(scores_db, {
         "task_id": task_id, "step": job["step"], "elapsed_s": 0,
         "last_tool": "claude_cli.invoke", "work_units": 1,
+        "driver": RUNNER_DRIVER,
     })
     try:
         result = claude_cli.invoke(

@@ -460,6 +460,34 @@ def flow_next(task_id: str, project: str = Query("default")) -> dict:
     return {"job": _job(task)}
 
 
+def _mark_in_progress(svc, task_id: str, session_id: str) -> None:
+    """HONEST ACTIVITY, REST HALF (task e4c631d7). A task a driver is calling
+    the flow for is WORKING, and the board must say so.
+
+    `conductor_service.activity_for` short-circuits to state "pending" on the
+    raw status BEFORE it consults motion, heartbeat or session quiet -- so a
+    task driven over this REST flow rendered as idle backlog while the
+    conductor advanced it step by step (owner 2026-08-30, observed on task
+    54585a5f at its fourth step). The MCP conductor_work handler has always
+    done this (`mcp/tools.py:_mark_in_progress`); only this path did not.
+
+    NEVER resurrects terminal work: only pending/blocked/unset flips.
+    """
+    try:
+        task = svc._task_svc.get(task_id)
+    except Exception:
+        return
+    if task is None:
+        return
+    if str(getattr(task, "status", "") or "") not in ("pending", "blocked", ""):
+        return
+    try:
+        svc._task_svc.update(task_id, status="in_progress",
+                             session_id=session_id or None)
+    except Exception:
+        pass
+
+
 @router.post("/start")
 def flow_start(body: Ident, project: str = Query("default")) -> dict:
     svc = _svc(project)
@@ -477,10 +505,14 @@ def flow_start(body: Ident, project: str = Query("default")) -> dict:
                 "error": f"workspace unavailable, refusing to start "
                          f"(fail closed): {exc}",
                 "workspace": None}
+    # The board must show the drive from the FIRST call, not from the first
+    # successful report -- an intake window that reads pending is the same
+    # blind spot one step earlier.
+    _mark_in_progress(svc, body.task_id, body.session_id)
     if not task.workflow_step:
         svc.advance_task(body.task_id, session_id=body.session_id,
                          model=body.model)
-        task = svc._task_svc.get(body.task_id)
+    task = svc._task_svc.get(body.task_id)
     return {"ok": True, "job": _job(task), "workspace": ws}
 
 
@@ -643,6 +675,10 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                 "reason": "stale/duplicate report: expected_step does not "
                 "match the task's current step; not advancing",
                 "next_job": _job(task)}
+
+    # The report is for the CURRENT step, so a driver is demonstrably on this
+    # task right now. Make that visible before anything else happens.
+    _mark_in_progress(svc, body.task_id, body.session_id)
 
     failed = _is_failure(body.outcome)
 

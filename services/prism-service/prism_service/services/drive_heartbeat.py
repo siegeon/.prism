@@ -39,6 +39,12 @@ BEAT_REFUSAL = "heartbeat_missing_required_field"
 
 _REQUIRED_FIELDS = ("task_id", "step", "elapsed_s", "last_tool", "work_units")
 
+# WHO is beating. Optional and defaulted to "" so every existing caller keeps
+# working, but it is what lets a consumer tell ITS OWN drive apart from
+# somebody else's (task e4c631d7): task_runner must skip a task another
+# driver is on, and must NOT skip a task it beat for itself.
+_DRIVER_COLUMN = "driver"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS drive_heartbeats (
     task_id TEXT PRIMARY KEY,
@@ -47,7 +53,8 @@ CREATE TABLE IF NOT EXISTS drive_heartbeats (
     last_tool TEXT,
     work_units INTEGER,
     last_progress_at TEXT NOT NULL,
-    recorded_at TEXT NOT NULL
+    recorded_at TEXT NOT NULL,
+    driver TEXT NOT NULL DEFAULT ''
 )
 """
 
@@ -55,6 +62,15 @@ CREATE TABLE IF NOT EXISTS drive_heartbeats (
 def _connect(scores_db: str) -> sqlite3.Connection:
     conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.execute(_SCHEMA)
+    # A table created before the driver column existed is ALTERed in place --
+    # the column is NOT NULL DEFAULT '' so every historical row reads as an
+    # unattributed beat, which is exactly what it was.
+    cols = {r["name"] for r in conn.execute(
+        "PRAGMA table_info(drive_heartbeats)")}
+    if _DRIVER_COLUMN not in cols:
+        conn.execute("ALTER TABLE drive_heartbeats ADD COLUMN "
+                     "driver TEXT NOT NULL DEFAULT ''")
+        conn.commit()
     return conn
 
 
@@ -93,14 +109,15 @@ def record_heartbeat(scores_db: str, row: dict) -> dict:
         conn.execute(
             "INSERT INTO drive_heartbeats "
             "(task_id, step, elapsed_s, last_tool, work_units, "
-            " last_progress_at, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            " last_progress_at, recorded_at, driver) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(task_id) DO UPDATE SET "
             "step=excluded.step, elapsed_s=excluded.elapsed_s, "
             "last_tool=excluded.last_tool, work_units=excluded.work_units, "
             "last_progress_at=excluded.last_progress_at, "
-            "recorded_at=excluded.recorded_at",
+            "recorded_at=excluded.recorded_at, driver=excluded.driver",
             (task_id, row["step"], row["elapsed_s"], row["last_tool"],
-             work_units, progress_at, now),
+             work_units, progress_at, now, str(row.get("driver") or "")),
         )
         conn.commit()
     finally:
@@ -123,7 +140,7 @@ def latest(scores_db: str, task_id: str):
     try:
         r = conn.execute(
             "SELECT step, elapsed_s, last_tool, work_units, "
-            "last_progress_at, recorded_at "
+            "last_progress_at, recorded_at, driver "
             "FROM drive_heartbeats WHERE task_id = ?",
             (task_id,),
         ).fetchone()

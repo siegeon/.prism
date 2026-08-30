@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.182"
+PRISM_VERSION = "7.13.183"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.183: a REST-driven task now shows as working -- flow_start/flow_report mark a pending/blocked task in_progress (conductor_flow._mark_in_progress), matching what mcp/tools.py already did for MCP-driven tasks. task_runner now skips any task carrying a fresh heartbeat from a different driver (RUNNER_DRIVER, _foreign_driver_on), and drive_heartbeat gained a driver column so the daemon never opens a second driver on a task a session is already driving (task e4c631d7). '
     "7.13.150: a manual reject at green_gate rewinds to implement_tasks, and the reject reason is in the next job's instructions (task 7c7f0f1b). "
     "7.13.139: implement step agents connect on tool_profile=drive "
     "(.mcp.json), no ToolSearch preload of PRISM verbs in implement.js, "
