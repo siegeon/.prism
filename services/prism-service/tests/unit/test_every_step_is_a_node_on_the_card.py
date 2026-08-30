@@ -43,7 +43,18 @@ _WEB = _SERVICE_ROOT / "prism_service" / "web" / "src"
 # id here is not this test's job — a real addition must extend THIS
 # allowlist deliberately, which is exactly the "recorded decision" the
 # task's own stop_if asks for.
-_DELIBERATELY_UNLINKED_PIPELINE_IDS = frozenset({"ci-local-dev"})
+_DELIBERATELY_UNLINKED_PIPELINE_IDS = frozenset({
+    "ci-local-dev",
+    # red-test-ids (task 404ef4ce, landed on main while this branch was in
+    # flight). A CODIFIED helper that names which of task.verify's pinned
+    # targets are demonstrated red at the task's red anchor, from data on
+    # file, no model involved. It serves implement_tasks rather than being
+    # its own WORKFLOW_STEPS entry, so it is deliberately unlinked - and
+    # recording that here IS the decision this test demands, rather than a
+    # way around it. This test caught the gap the moment the two branches
+    # met, which is what it exists for.
+    "red-test-ids",
+})
 
 # The one behaviorId that nests under conductor WITHOUT a WORKFLOW_STEPS
 # linked_workflow_id of its own, because green_gate is the FSM's
@@ -323,7 +334,15 @@ def test_ci_local_dev_is_deliberately_outside_the_pipeline():
     """AC-3 (ci-local-dev half): recorded, not silently dropped — the
     trigger text on file for it says a person runs it by hand, matching
     this test's own allowlist."""
-    assert _DELIBERATELY_UNLINKED_PIPELINE_IDS == frozenset({"ci-local-dev"})
+    # SUPERSEDED 2026-08-30: this pinned the allowlist to exactly one entry.
+    # Task 404ef4ce landed red-test-ids on main while this branch was in
+    # flight - a second, genuinely deliberate unlinked node. The EQUALITY
+    # check is kept rather than loosened to a membership test, because it is
+    # the guard that stops anyone quietly dumping nodes into the allowlist to
+    # make the card pass: every addition must be reviewed and written here on
+    # purpose. Expanded, not weakened.
+    assert _DELIBERATELY_UNLINKED_PIPELINE_IDS == frozenset(
+        {"ci-local-dev", "red-test-ids"})
     api_src = _read_source("prism_service", "api", "workflows.py")
     assert '"ci-local-dev":' in api_src
     assert "stays unparented" in api_src
