@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.203"
+PRISM_VERSION = "7.13.204"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7829,4 +7829,24 @@ PRISM_VERSION_NOTES += (
     "review_previous_notes opts in: the other five agentic behaviors carry identical "
     "template budgets that would cap implement_tasks at four turns. The declared plan "
     "governs model, turns and budget, never the wall clock. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.204 - the memory store keeps one copy of a fact. GET /api/memory/entries "
+    "served 7441732 bytes across 2899 rows. The active set was already clean, so the "
+    "bulk was archived generations: api/memory.py:82 applies no status filter, and the "
+    "transcript-import poller re-stored every file about every 60 s. store() minted a "
+    "new id on each call, so every pass archived the previous row and appended a "
+    "byte-identical one, at roughly 170 rows per hour. Worst group held 261 copies. "
+    "The domain architecture-principles held 15 rows of which 10 were surplus copies "
+    "of ARC-DEFAULT-1 and ARC-DEFAULT-2, which is the input law_promotion reads. "
+    "store() now upserts on name and description together, byte-exact within a domain, "
+    "and refreshes the earliest row in place so recorded_at still says when the fact "
+    "was learned. A same-name row with different text still supersedes as before. "
+    "importance takes the maximum so a re-seed cannot downgrade a curated value. "
+    "deduplicate() groups on name and description together, refuses any group whose "
+    "text is not identical, keeps the earliest member, and moves the rest to "
+    "_archive/<domain>.jsonl. No row is deleted. Live result: 2899 rows to 491, with "
+    "2408 rows in _archive and all 2899 accounted for on disk. The 397-fact active set "
+    "is byte-identical before and after. The payload fell to 1554058 bytes. "
 )
