@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 import rdflib
 
@@ -449,55 +450,151 @@ def test_{slug}_fires_on_violating_and_stays_quiet_on_compliant():
 '''
 
 
+def _law_tests_dest_root(project: str) -> Optional[Path]:
+    """Where THIS PROJECT's source lives, or None when it names no real
+    checkout to write into.
+
+    TASK 33a01b88 -- THE DESTINATION IS A PROPERTY OF THE PROJECT, NEVER OF
+    THE PROCESS. The generated regression test used to land wherever
+    `task_workspace._prism_repo_root()` ascended to, which is "the checkout
+    this module happens to be imported from". So ANY promotion, for ANY
+    project, dirtied the running checkout -- and
+    tests/unit/test_memory_promotes_to_law.py drives a full promotion, so a
+    plain unit-suite run wrote the file. Its bytes differ on every run
+    (the embedded o:derivedFrom carries the promoting memory's id, and
+    services/memory_service.py mints a fresh random id per store() call),
+    so the compare-before-write guard below could never match. One law
+    carried 13 distinct derivedFrom ids across the checkout and its
+    worktrees, all naming memories that do not exist, and the dirty file
+    then failed the green_gate cleanliness tooth (tasks 84a91b0b and
+    f61617c1).
+
+    A promotion is FOR a project, and a project already declares where its
+    source tree is (understand_state.json's `source_path`, folder-mode --
+    services/source_service.source_dir_for). So:
+
+      * the real `prism` project, whose source_path IS its checkout, still
+        gets its regression test committed into that checkout;
+      * a throwaway project (a test's own, or any project PRISM only holds
+        memory for) names no checkout, so nothing is written anywhere.
+
+    Refuses, in order: a project with no readable source dir; a source dir
+    that is not a git checkout; a TASK WORKTREE (`_is_writable_checkout`,
+    7.13.171); a checkout that is not a PRISM source tree (no tests/unit to
+    write into), since `_LAW_TESTS_RELDIR` is a PRISM-repo path and means
+    nothing anywhere else.
+    """
+    from prism_service.services import source_service
+
+    try:
+        root = Path(source_service.source_dir_for(project)).resolve()
+    except Exception:  # noqa: BLE001 - a destination resolver never raises
+        return None
+    if not _is_writable_checkout(root):
+        return None
+    # `_LAW_TESTS_RELDIR` is a PRISM-repo path. A project that is not the
+    # PRISM source tree has nowhere sensible to put it.
+    if not (root / Path(_LAW_TESTS_RELDIR).parent).is_dir():
+        return None
+    return root
+
+
+def _is_writable_checkout(root: Path) -> bool:
+    """True when `root` is a PRIMARY git checkout a generated test may be
+    written into. False for anything that is not a checkout, and for a TASK
+    WORKTREE.
+
+    NEVER WRITE INTO A GRADED CANDIDATE'S WORKTREE (task 84a91b0b): the
+    write dirtied the very tree the green_gate cleanliness tooth was about
+    to judge. Reproduced deterministically on task f61617c1 -- clear the
+    worktree (git status --porcelain = 0), POST /api/conductor/gate/mint,
+    read it again (= 1), and readiness answers "1 uncommitted change(s)
+    remain in the task's own workspace -- the implementation was never
+    committed". Two tasks that were green, rebased and already merged to
+    origin/main could not close on it.
+
+    A LINKED GIT WORKTREE HAS `.git` AS A FILE; a primary checkout has it as
+    a DIRECTORY. That is a filesystem fact, independent of any config, which
+    is why the guard keys on it: the first attempt compared against
+    task_workspace._root() and did NOT fire, because resolve_data_dir()
+    answers differently inside the oracle's own subprocess, so the
+    workspaces path it computed never matched the real one. The
+    task-workspaces match below stays as belt and braces, for the case where
+    the root is reached some other way.
+    """
+    try:
+        if not root.is_dir() or not (root / ".git").exists():
+            return False
+        if (root / ".git").is_file():
+            return False
+    except OSError:
+        return False
+    try:
+        ws_root = task_workspace._root().resolve()
+        rr = root.resolve()
+        if rr == ws_root or ws_root in rr.parents:
+            return False
+    except Exception:  # noqa: BLE001 - a destination resolver never raises
+        pass
+    return True
+
+
+# The pre-33a01b88 default: "nobody told me where, so ascend from this
+# module to the nearest .git". Kept ONLY so a caller that predates the
+# `dest_root` parameter still behaves exactly as 7.13.171 left it. EVERY NEW
+# CALLER MUST PASS `dest_root` -- discovering the destination is the defect
+# this ticket fixed.
+_ENCLOSING_CHECKOUT = object()
+
+
 def _write_verification_test(name: str, ttl: str, violating: str,
-                              compliant: str) -> str:
-    """Generate the self-contained pytest regression file for the
-    promoted rule `name` inside the ENCLOSING PRISM git checkout (same
-    `_prism_repo_root()` ascend-to-.git task_workspace.ensure_workspace
-    uses for its own worktrees -- this feature only makes sense when
-    PRISM runs from a source checkout). Returns the pytest node id
-    (repo-root-relative) the o:verifiedBy triple should carry."""
+                              compliant: str,
+                              dest_root=_ENCLOSING_CHECKOUT) -> str:
+    """Generate the self-contained pytest regression file for the promoted
+    rule `name` under `dest_root` -- the checkout the CALLER names (see
+    `_law_tests_dest_root`), never one this function discovers for itself.
+
+    `dest_root=None` means "this promotion has no source tree": nothing is
+    written, anywhere. The returned pytest node id (repo-root-relative) is
+    the o:verifiedBy triple's value either way, because that ref is a stable
+    repo-relative string, not a claim that the file exists on THIS machine.
+
+    TASK 33a01b88: taking the destination as a parameter IS the fix. The old
+    body ascended to the nearest `.git` from its own module, so the
+    destination was "the checkout this process was imported from" rather
+    than "the source tree of the project whose law this is" -- and
+    tests/unit/test_memory_promotes_to_law.py drives a full promotion, so a
+    plain unit-suite run wrote a generated test into the live checkout. Its
+    bytes differ on every run (the embedded o:derivedFrom carries the
+    promoting memory's id, and services/memory_service.py mints a fresh
+    random id per store() call), so the compare-before-write guard below
+    could never match, and the dirty file then failed the green_gate
+    cleanliness tooth.
+
+    Omitting `dest_root` keeps the pre-33a01b88 ascend, guarded exactly as
+    7.13.171 left it, for any caller that predates the parameter. The
+    production caller (`_install_rule`) always passes it.
+    """
     slug = _test_slug(name)
-    repo_root = task_workspace._prism_repo_root()
     ref = (f"{_LAW_TESTS_RELDIR}/test_promoted_{slug}.py"
            f"::test_{slug}_fires_on_violating_and_stays_quiet_on_compliant")
+    if dest_root is _ENCLOSING_CHECKOUT:
+        try:
+            enclosing = task_workspace._prism_repo_root()
+        except Exception:  # noqa: BLE001 - no source checkout: nothing to write
+            return ref
+        dest_root = enclosing if _is_writable_checkout(enclosing) else None
+    if dest_root is None:
+        return ref
+    repo_root = Path(dest_root)
     content = _VERIFICATION_TEST_TEMPLATE.format(
         name=name, ttl=ttl, violating=violating, compliant=compliant,
         slug=slug,
     )
 
-    # NEVER WRITE INTO A GRADED CANDIDATE'S WORKTREE (task 84a91b0b).
-    # _prism_repo_root() ascends from THIS MODULE, so when the oracle runs
-    # inside a task worktree and imports that worktree's own copy of
-    # prism_service, the root resolves to the WORKTREE -- and this write
-    # then dirtied the very tree the green_gate cleanliness tooth was about
-    # to judge. Reproduced deterministically on task f61617c1: clear the
-    # worktree (git status --porcelain = 0), POST /api/conductor/gate/mint,
-    # read it again (= 1), and readiness answers "1 uncommitted change(s)
-    # remain in the task's own workspace -- the implementation was never
-    # committed". Two tasks that were green, rebased and already merged to
-    # origin/main could not close on it.
-    # A LINKED GIT WORKTREE HAS `.git` AS A FILE; a primary checkout has it
-    # as a DIRECTORY. That is a filesystem fact, independent of any config,
-    # which is why the guard keys on it: the first attempt compared against
-    # task_workspace._root() and did NOT fire, because resolve_data_dir()
-    # answers differently inside the oracle's own subprocess, so the
-    # workspaces path it computed never matched the real one.
-    try:
-        if (repo_root / ".git").is_file():
-            return ref
-    except OSError:
-        pass
-    # Belt and braces: an explicit task-workspaces match, for the case where
-    # the root is reached some other way.
-    try:
-        ws_root = task_workspace._root().resolve()
-        rr = repo_root.resolve()
-        if rr == ws_root or ws_root in rr.parents:
-            return ref
-    except Exception:
-        pass
-
+    # By here the destination has been through `_is_writable_checkout`
+    # (task 84a91b0b / 7.13.171) either via `_law_tests_dest_root` or via the
+    # legacy branch above, so it is never a graded candidate's worktree.
     test_dir = repo_root / Path(_LAW_TESTS_RELDIR)
     test_dir.mkdir(parents=True, exist_ok=True)
     dest = test_dir / f"test_promoted_{slug}.py"
@@ -585,8 +682,9 @@ def _install_rule(drafted: dict, project: str) -> dict:
     # Both checks passed -- turn the fixture proof into a durable,
     # committed regression test, and record the link on the rule's own
     # URI so the ontology can answer "which test verifies this rule?".
-    test_ref = _write_verification_test(name, ttl, violating_snippet,
-                                         compliant_snippet)
+    test_ref = _write_verification_test(
+        name, ttl, violating_snippet, compliant_snippet,
+        dest_root=_law_tests_dest_root(project))
     _append_verified_by_triple(path, name, test_ref)
 
     ontology_rules.validate(project)
