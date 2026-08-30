@@ -84,7 +84,11 @@ def _pending_decline_reason(svc, task, step, project) -> str:
                 status = dp.approval_status(project, getattr(task, "id", ""),
                                             task)
                 if not status.get("approved"):
-                    return str(status.get("reason") or "")
+                    # task 594f9a58: the SAME string the certainty seat
+                    # parks with, so the surfacer and the seat never
+                    # disagree about why a human is being asked.
+                    return dp.root_plan_gate_escalation_reason(
+                        project, getattr(task, "id", ""), task, status)
             return ""
         if step == "red_gate":
             from prism_service.services import oracle_spec as osp
@@ -218,11 +222,27 @@ def sweep_once() -> list[dict]:
                     # alone; _pending_decline_reason then stamps the same
                     # refusal onto gate_reason for the driver to act on.
                     _hold = ""
+                    _pt = None
                     if step == "plan_gate":
                         from prism_service.services import plan_gate_checks as _pgc
                         _pt = ctx.task_svc.get(tid)
                         _hold = _pgc.refusal(_pt, pid) if _pt is not None else ""
-                    res = None if _hold else svc.adjudicate_rubric_gate(tid)
+                    if _hold:
+                        res = None
+                    elif step == "plan_gate" and _pt is not None:
+                        # task 594f9a58: the certainty seat decides a ROOT
+                        # plan_gate first. None means "not my remit" (a
+                        # child task, or a rubric not yet verified), which
+                        # falls through to the unchanged rubric autoclear.
+                        from prism_service.services import design_packet as _dp
+                        outcome = _dp.adjudicate_root_plan_gate(
+                            svc, tid, _pt, pid)
+                        if outcome is None:
+                            res = svc.adjudicate_rubric_gate(tid)
+                        else:
+                            res = outcome if outcome.get("ok") else None
+                    else:
+                        res = svc.adjudicate_rubric_gate(tid)
             except Exception as exc:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
                 continue

@@ -513,7 +513,18 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
         project = svc._project_name or "default"
         status = dp.approval_status(project, task_id, task)
         if not status.get("approved"):
-            _r = str(status.get("reason", "") or "") or ROOT_PLAN_GATE_REASON
+            # task 594f9a58, owner 2026-08-30: "the ontology and adjudicator
+            # is to mind the gates" — the certainty seat gets first look. A
+            # rich, obviously-ready packet clears here with no human click
+            # at all; anything else parks with the SAME reason gate_
+            # adjudicator's re-sweep would compute (root_plan_gate_
+            # escalation_reason), so the two seats never disagree.
+            outcome = dp.adjudicate_root_plan_gate(svc, task_id, task,
+                                                    project)
+            if outcome is not None and outcome.get("ok"):
+                return outcome
+            _r = dp.root_plan_gate_escalation_reason(
+                project, task_id, task, status) or ROOT_PLAN_GATE_REASON
             if _r != (getattr(task, "gate_reason", "") or ""):
                 try:
                     svc._task_svc.update(task_id, gate_reason=_r)
