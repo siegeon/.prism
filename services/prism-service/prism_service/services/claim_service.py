@@ -63,9 +63,16 @@ class ClaimService:
     def __init__(
         self,
         db_path: str,
-        task_svc: TaskService,
-        workspace_service: WorkspaceService,
+        task_svc: Optional[TaskService] = None,
+        workspace_service: Optional[WorkspaceService] = None,
     ) -> None:
+        # task_svc/workspace_service are required only by claim_next, which
+        # DISPENSES work and so must check membership and route by role. The
+        # per-task lease below (acquire/release/holder_of) is used by daemon
+        # SEATS -- task_runner, resume_actuator, ship_worker -- which are not
+        # workspace members and already know which task they intend to drive.
+        # Making them optional lets a seat take the same lease without
+        # inventing a fake membership (task 1bcb2b24).
         self._db_path = db_path
         self._task_svc = task_svc
         self._workspace_service = workspace_service
@@ -139,6 +146,74 @@ class ClaimService:
                     released_at=None,
                 )
         return None
+
+    # ------------------------------------------------------------------
+    # Per-task lease for daemon seats (task 1bcb2b24)
+    # ------------------------------------------------------------------
+    # LIVE INCIDENT 2026-08-30, task 1edee95c: two `claude -p` processes ran
+    # the same step against the same task workspace -- same directory, same
+    # index, same HEAD -- while an operator agent worked there too. A test
+    # file was overwritten mid-write; HEAD moved under a driver and an `rm`
+    # nearly destroyed committed work. The only guard was
+    # task_runner._foreign_driver_on, which sees a driver ONLY if it posts a
+    # heartbeat, and checks once at claim time rather than for the life of
+    # the run. This class already held the real answer -- the partial unique
+    # index below makes a second INSERT fail closed at the sqlite level --
+    # and had no caller at all.
+
+    def acquire(
+        self,
+        task_id: str,
+        holder_id: str,
+        ttl_s: float,
+        role: str = "",
+        workspace_id: str = "local",
+    ) -> Optional[str]:
+        """Take the lease on ONE task, or return None if somebody holds it.
+
+        Returns the claim id. A None return is not an error: it means another
+        driver is already working the task, and the caller should skip it.
+        Reaps an expired lease first, so a crashed holder never wedges the
+        task -- a lock that cannot expire is worse than the race it replaces.
+        """
+        return self._try_claim(
+            task_id=task_id, workspace_id=workspace_id, holder_id=holder_id,
+            role=role, now=time.time(),
+            # Guard only against zero/negative, never impose a floor: a
+            # caller may legitimately want a short lease, and a floor
+            # would silently extend it past what the caller asked for.
+            ttl_s=max(0.01, float(ttl_s)),
+        )
+
+    def release(self, claim_id: Optional[str]) -> None:
+        """Free the task. Safe to call with None or an unknown id."""
+        if not claim_id:
+            return
+        try:
+            conn = self._db
+            conn.execute(
+                "UPDATE claims SET released_at=? WHERE id=? "
+                "AND released_at IS NULL", (time.time(), claim_id))
+            conn.commit()
+        except Exception:
+            pass
+
+    def holder_of(self, task_id: str) -> Optional[str]:
+        """Who holds a live lease on `task_id`, or None when it is free.
+
+        An expired lease reads as free, matching what acquire() would do.
+        A refused driver uses this to say WHO holds the task -- the live
+        incident was diagnosable only by matching PIDs by hand.
+        """
+        try:
+            row = self._db.execute(
+                "SELECT holder_id FROM claims WHERE task_id=? "
+                "AND released_at IS NULL AND expires_at>? LIMIT 1",
+                (task_id, time.time()),
+            ).fetchone()
+        except Exception:
+            return None
+        return row[0] if row else None
 
     def _try_claim(
         self,

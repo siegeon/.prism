@@ -807,6 +807,22 @@ def run_one_step(project: str, task_id: str) -> dict:
         _release(task_id)
 
 
+
+def _claim_service(project: str):
+    """The per-task lease, or None when it cannot be built.
+
+    Returns None rather than raising: a seat that cannot reach the claims db
+    must still be able to drive, exactly as it did before this wiring. The
+    lease is a safety net, never a new single point of failure.
+    """
+    try:
+        from prism_service.services.claim_service import ClaimService
+
+        return ClaimService(db_path=_scores_db_for(project))
+    except Exception:
+        return None
+
+
 def _run_one_step(project: str, task_id: str) -> dict:
     from prism_service.api import conductor_flow as flow
     from prism_service.project_context import get_project
@@ -834,6 +850,26 @@ def _run_one_step(project: str, task_id: str) -> dict:
 
     from prism_service.inference import claude_cli
     from prism_service.services import drive_heartbeat
+
+    # ONE DRIVER PER TASK WORKTREE (task 1bcb2b24). On 2026-08-30 two
+    # `claude -p` processes ran the same step against this same directory --
+    # same index, same HEAD -- and a test file was overwritten mid-write while
+    # an agent authored it. _foreign_driver_on above is not enough: it sees a
+    # driver only if that driver posts a HEARTBEAT, and it checks once rather
+    # than for the life of the run. ClaimService's partial unique index makes
+    # a second claim fail closed inside sqlite, and reaps an expired lease so
+    # a crashed holder cannot wedge the task.
+    claim = _claim_service(project)
+    claim_id = None
+    if claim is not None:
+        claim_id = claim.acquire(
+            task_id, holder_id=SEAT_ID, ttl_s=_step_timeout_s(job["step"]))
+        if claim_id is None:
+            holder = claim.holder_of(task_id) or "another driver"
+            # Losing the race is not a failure: somebody else is doing the
+            # work. Skip without touching the task's step or status.
+            return {"ok": False, "task_id": task_id, "step": job["step"],
+                    "reason": f"already driving: held by {holder}"}
 
     scores_db = _scores_db_for(project)
     drive_heartbeat.record_heartbeat(scores_db, {
@@ -869,6 +905,8 @@ def _run_one_step(project: str, task_id: str) -> dict:
             purpose=f"task-runner@{job['step']}#{task_id[:8]}",
             session_id=str(uuid.uuid4()), **budget)
     except Exception as exc:
+        if claim is not None:
+            claim.release(claim_id)
         return {"ok": False, "task_id": task_id, "step": job["step"],
                 "reason": f"claude_cli invocation failed: {exc}"}
 
@@ -921,6 +959,9 @@ def _run_one_step(project: str, task_id: str) -> dict:
         outcome = {"ok": False,
                    "reason": f"exit={result.exit_code}, non-graceful "
                              "failure (crash/auth/truncated mid-turn)"}
+
+    if claim is not None:
+        claim.release(claim_id)
 
     report = flow.flow_report(flow.Ident(
         task_id=task_id, session_id=SEAT_ID, outcome=outcome,

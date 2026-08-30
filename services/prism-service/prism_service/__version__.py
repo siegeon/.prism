@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.211"
+PRISM_VERSION = "7.13.212"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7961,4 +7961,26 @@ PRISM_VERSION_NOTES += (
     "256 worktrees and 474 branches by 2026-08-30. The reap proves shippedness by the "
     "task trailer on main, never by merge-base is-ancestor, which misreads a squash "
     "merge. It refuses a dirty worktree, a live drive and an unfinished task. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.212 - one task worktree admits one driver. On 2026-08-30 two claude -p "
+    "processes ran the same step against the same task workspace, PIDs 373033 and "
+    "373577, while an operator agent worked in that directory too. Same directory, "
+    "same index, same HEAD. A test file was overwritten mid-write and landed half "
+    "written. HEAD moved under a driver, so a file it believed untracked was in fact "
+    "committed, and an rm nearly destroyed real work. A driver watched the flow "
+    "advance through a step it never performed. The only guard, "
+    "task_runner._foreign_driver_on, sees a driver ONLY when that driver posts a "
+    "heartbeat, and it checks once at claim time rather than for the life of the run. "
+    "ClaimService already held the real answer and had no caller at all: a UNIQUE "
+    "partial index on claims(task_id) where released_at IS NULL makes a second INSERT "
+    "fail closed inside sqlite, and _try_claim reaps an expired lease first. It now "
+    "carries a per-task entry point, acquire, release and holder_of, and task_runner "
+    "takes the lease BEFORE it invokes a model and frees it on every exit path. A "
+    "refused claim skips the task and names the holder, and it never marks the task "
+    "failed, because losing the race means somebody else is doing the work. "
+    "task_svc and workspace_service became optional, because a daemon seat is not a "
+    "workspace member and only claim_next needs them. The lease expires, so a crashed "
+    "holder cannot wedge the task the way the stall count in task 1ecbd866 does. "
 )
