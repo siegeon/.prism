@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.204"
+PRISM_VERSION = "7.13.205"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7849,4 +7849,22 @@ PRISM_VERSION_NOTES += (
     "_archive/<domain>.jsonl. No row is deleted. Live result: 2899 rows to 491, with "
     "2408 rows in _archive and all 2899 accounted for on disk. The 397-fact active set "
     "is byte-identical before and after. The payload fell to 1554058 bytes. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.205 - a promotion writes its regression test where the PROJECT's source "
+    "lives, not wherever the process happens to stand. law_promotion._write_verification"
+    "_test resolved its destination by ascending to the nearest .git, so simply running "
+    "the unit suite drove a promotion and wrote into the live checkout. "
+    "memory_service mints a new id per store call, and the generated TTL embeds it as "
+    "o:derivedFrom, so the bytes differed every run and the compare-before-write guard "
+    "never matched. One law carried 13 different derivedFrom ids across the checkout and "
+    "its worktrees, naming memories that do not exist, for a rule absent from "
+    "promoted-shapes.ttl. The dirty file then failed the green_gate cleanliness tooth, "
+    "seen on tasks 84a91b0b and f61617c1. The destination is now a property of the "
+    "project: _law_tests_dest_root reads the project's own source_path and refuses "
+    "anything that is not a writable primary checkout. dest_root=None writes nothing but "
+    "still returns the o:verifiedBy ref, so the triple and the catalog row do not move. "
+    "Measured in a real primary checkout: pre-fix one run dirtied the tree, post-fix two "
+    "runs left git status empty. A real promotion still installs its test. "
 )
