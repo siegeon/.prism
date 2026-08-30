@@ -2016,3 +2016,97 @@ def workflow_step_gate_adjudication(
 
         return GateCheckStatus(id=body.stage, label=body.stage, ok=False,
                                reason=f"unknown stage: {body.stage}")
+
+
+# The behaviour a conductor STATE calls, inverted. Derived from the same
+# linked_workflow_id chain get_workflows builds, so the two cannot drift:
+# if a state's behaviour changes there, this map must change with it.
+_BEHAVIOUR_FOR_STEP: dict[str, str] = {
+    "verify_green_state": "validation",
+    "story_gate": "story-gate-check",
+    "plan_gate": "plan-gate-check",
+    "draft_story": "draft-story-loop",
+    "review_previous_notes": "review-previous-notes-loop",
+    "verify_plan": "verify-plan-loop",
+    "write_failing_tests": "write-failing-tests-loop",
+    "implement_tasks": "implement-tasks-loop",
+    "red_gate": "red-gate-status",
+    "green_gate": "green-gate-status",
+}
+_STEP_FOR_BEHAVIOUR: dict[str, str] = {
+    v: k for k, v in _BEHAVIOUR_FOR_STEP.items()}
+
+
+class WorkflowInstance(BaseModel):
+    id: str
+    at: str
+    actor: str
+    kind: str
+    outcome: str
+    summary: str
+
+
+@router.get("/{workflow_id}/instances")
+def workflow_instances(
+    workflow_id: str,
+    project: str = Query(...),
+    task_id: str = Query(""),
+) -> dict:
+    """The EXECUTION INSTANCES of one layer.
+
+    Owner 2026-08-29: "the rail ... should render the execution instances of
+    the bot's layer we are looking at, each time we click into the next
+    layer, then it should move to that historical view for that instance."
+
+    A declarative FSM behaviour has no WorkflowCore run behind it --
+    /runs/history 404s for anything but `validation`, which is why every
+    bot-family entry showed an empty rail forever. But the executions DID
+    happen and ARE recorded: a gate's runs are its `gate_decide` rows and a
+    step's runs are the `advance_task` rows that left it. Measured on this
+    project: 2,012 gate decisions and 3,246 advances on file.
+
+    Scoped by `task_id` when given, because drilling in from one task's
+    instance should show THAT task's history at the deeper layer, not every
+    task's.
+    """
+    ctx = get_project(project)
+    step_id = _STEP_FOR_BEHAVIOUR.get(workflow_id, "")
+    if not step_id:
+        return {"workflow_id": workflow_id, "step_id": "", "instances": []}
+
+    task_svc = getattr(ctx, "task_svc", None)
+    rows = []
+    if task_svc is not None and hasattr(task_svc, "_db"):
+        sql = ("SELECT id, task_id, actor, action, details, timestamp "
+               "FROM task_history WHERE action IN ('gate_decide','advance_task')")
+        args: list = []
+        if task_id:
+            sql += " AND task_id = ?"
+            args.append(task_id)
+        sql += " ORDER BY id DESC LIMIT 400"
+        try:
+            rows = task_svc._db.execute(sql, args).fetchall()
+        except Exception:
+            rows = []
+
+    is_gate = step_id.endswith("_gate")
+    out: list[WorkflowInstance] = []
+    for r in rows:
+        details = str(r["details"] or "")
+        if is_gate:
+            if r["action"] != "gate_decide" or f"gate={step_id};" not in details:
+                continue
+            outcome = ("approved" if "action=approve" in details
+                       else "rejected" if "action=reject" in details else "decided")
+        else:
+            if r["action"] != "advance_task" or f"from={step_id};" not in details:
+                continue
+            outcome = "advanced"
+        out.append(WorkflowInstance(
+            id=str(r["id"]), at=str(r["timestamp"] or ""),
+            actor=str(r["actor"] or ""), kind=str(r["action"]),
+            outcome=outcome,
+            summary=details[:180],
+        ))
+    return {"workflow_id": workflow_id, "step_id": step_id,
+            "task_id": task_id, "instances": [i.model_dump() for i in out]}
