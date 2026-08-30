@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.184"
+PRISM_VERSION = "7.13.185"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7681,4 +7681,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.184 - a rejected red anchor no longer shadows the attestation path. _red_step_sha checked a recorded red_step_sha row for tests-only and reachable, refused it, and then returned it anyway through the tail `recorded or tests_sha`. The value was non-empty, so every callers `if not red_sha:` guard missed and the tier-2 red-anchor-ref attestation path the docstring promises was unreachable. A task whose tests and implementation landed in ONE commit could therefore never demonstrate red: the resolver kept pointing at the shipped commit, which passes. Observed live on task e4c631d7. The resolver now yields the resolved tests commit, or empty when nothing resolves, so the caller falls through to attestation as intended. The self-heal is unchanged - a real tests-only commit still wins over a mis-stamped row. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.185 - a fresh drive heartbeat now outranks the status word on the board. activity_for short-circuited on raw status BEFORE reading any liveness evidence, so a task with a driver actively beating on it rendered as idle backlog (pending) or as an alarm the owner must act on (blocked). Measured live: of 38 managed tiles, 24 read pending and 10 read blocked and NOT ONE read working or driving, while real drives were in flight. Owner: i still dont see you playing a task. status is the LAST thing a driver updates and the heartbeat is the FIRST, so a fresh beat is better evidence of now. done is deliberately excluded: terminal work never returns to the board as live, whoever beats on it. '
 )

@@ -5931,6 +5931,17 @@ class ConductorService:
                    and heartbeat_age <= drive_heartbeat.HEARTBEAT_WINDOW_S)
         if status == "done":
             state = "done"
+        elif driving and status in ("blocked", "pending"):
+            # A FRESH BEAT OUTRANKS A STALE STATUS WORD (task e4c631d7's
+            # second half, owner 2026-08-30: "i still dont see you playing a
+            # task"). These two branches used to short-circuit on the raw
+            # status BEFORE reading any liveness evidence, so a task with a
+            # driver actively beating on it rendered as idle backlog or as an
+            # alarm the owner had to act on. status is the LAST thing a driver
+            # updates; the heartbeat is the FIRST. Trust the beat.
+            # 'done' is deliberately NOT included: terminal work never returns
+            # to the board as live, whoever beats on it.
+            state = "driving"
         elif status == "blocked":
             state = "blocked"
         elif status == "pending":
