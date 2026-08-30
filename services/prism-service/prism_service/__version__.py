@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.185"
+PRISM_VERSION = "7.13.186"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7685,4 +7685,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.185 - a fresh drive heartbeat now outranks the status word on the board. activity_for short-circuited on raw status BEFORE reading any liveness evidence, so a task with a driver actively beating on it rendered as idle backlog (pending) or as an alarm the owner must act on (blocked). Measured live: of 38 managed tiles, 24 read pending and 10 read blocked and NOT ONE read working or driving, while real drives were in flight. Owner: i still dont see you playing a task. status is the LAST thing a driver updates and the heartbeat is the FIRST, so a fresh beat is better evidence of now. done is deliberately excluded: terminal work never returns to the board as live, whoever beats on it. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.186 - the adjudicator now minds a ROOT task plan_gate instead of every packet waiting on the owners own click forever. The only route that could clear a root plan_gate, POST /api/conductor/design-packet/approve, refuses anything but method=owner_explicit (task 98d38111), so a strong, obviously-ready design packet still parked on a human click with no escalation path at all. design_packet.py gained plan_gate_certainty, a real four-signal score (plan_completeness, oracle_quality, diagram_quality, scope_alignment) over the packets own content, and certainty_threshold (PRISM_PLAN_GATE_CERTAINTY_THRESHOLD, default 0.90). Both seats that ever touch a root plan_gate - conductor_flow._autoclear_machine_gate and gate_adjudicator.sweep_once - now consult the same adjudicate_root_plan_gate function first, so they can never disagree; conductor_service.py, a control_plane.POLICY_FILES entry, was deliberately left untouched. record_approvals owner_explicit-only rule is unchanged and the certainty path never calls it, so a machine approve is attributed to conductor-adjudicator on the gate_decide row and writes no approval-ledger row - the owner still keeps the only way to sign in their own name. Live-proved against the real root task 8fbd5cf0 (project=prism, genuinely parked at plan_gate): certainty scored 1.00 and the seat cleared its gate for real with no human action, while a synthetic thin fixture scored 0.38 and would have parked with a concrete reason naming what to judge. Owner 2026-08-30, on being asked to escalate: if we have to escalate, p90 certainty or whatever, then you can block on the gate, but the ontology and adjudicator is to mind the gates, we made it a game. 20/20 pinned plus 747 unit and 93 integration neighbour tests green, both trees.'
 )
