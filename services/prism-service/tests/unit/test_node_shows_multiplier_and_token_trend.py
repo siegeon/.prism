@@ -91,10 +91,17 @@ def _seed(db: str, rows: list[dict]) -> None:
         for i, row in enumerate(rows):
             row = dict(row)
             row.setdefault("run_id", f"seed-{i}")
-            vals = [row.get(c) for c in cols]
-            placeholders = ", ".join("?" for _ in cols)
+            # recorded_at is OMITTED from the insert unless a test supplies
+            # one explicitly -- the schema's own `DEFAULT (datetime('now'))`
+            # only fires when the column is absent from the statement, so a
+            # test that needs to control write-order (e.g. proving the
+            # window sorts by recorded_at, not the mixed-format started_at)
+            # can set it per row without breaking every other seed call.
+            use_cols = cols + ("recorded_at",) if "recorded_at" in row else cols
+            vals = [row.get(c) for c in use_cols]
+            placeholders = ", ".join("?" for _ in use_cols)
             conn.execute(
-                f"INSERT INTO agent_runs ({', '.join(cols)}) VALUES ({placeholders})",
+                f"INSERT INTO agent_runs ({', '.join(use_cols)}) VALUES ({placeholders})",
                 vals,
             )
         conn.commit()
@@ -231,6 +238,51 @@ def test_a_low_sample_outlier_node_never_skews_its_peers_baseline(tmp_path):
             f"{step} is a typical agentic node (peer average ~7250) and "
             f"must read near 1x -- a low-sample outlier dragged it to "
             f"{mult}x: {out}")
+
+
+def test_the_window_orders_by_recorded_at_never_the_mixed_format_started_at(tmp_path):
+    """Regression for a real live finding on this same task (team lead,
+    2026-08-30): agent_runs.started_at is stored in TWO formats on this
+    project's own table -- ISO strings on rows written before 2026-08-19
+    ("2026-08-18T22:54:56+00:00") and unix-epoch numbers on rows written
+    since ("1788113951.8..."), both landing in the same TEXT-affinity
+    column. SQLite's default text collation sorts '2' ahead of '1'
+    character-by-character, so 'ORDER BY started_at DESC' reads an
+    11-day-old ISO row as MORE recent than a genuinely-fresh epoch row --
+    live-verified: 14 such stale rows survive among exactly the 10 step
+    ids this feature reads.
+
+    Both tokens values here are individually PLAUSIBLE (well under any
+    model's ceiling) so this test exercises ordering alone, never the
+    ceiling filter -- and there are more rows than NODE_TREND_WINDOW so a
+    wrong sort actually evicts a genuine recent row rather than merely
+    reordering ones that would all fit anyway. If a wrongly-sorted stale
+    row displaces even one fresh row, the average moves measurably (a
+    single 50,000-token row swapped in for a 1,000-token one shifts a
+    20-sample average by ~2,450) -- this is not a coincidence a smaller
+    fixture could hide."""
+    db = str(tmp_path / "scores.db")
+    stale_iso_row = _row(
+        run_id="stale-iso", step="mixed_format_node", tokens=50_000,
+        started_at="2026-08-18T22:54:56.897506+00:00",
+        recorded_at="2026-06-01 00:00:00",  # genuinely old ingestion time
+    )
+    # 25 genuinely fresh rows (> NODE_TREND_WINDOW of 20), all plausible,
+    # all epoch-formatted started_at, spread across real recorded_at times.
+    fresh_epoch_rows = [
+        _row(run_id=f"fresh-{i}", step="mixed_format_node", tokens=1_000,
+             started_at="1788113951.84924",
+             recorded_at=f"2026-08-30 18:{i:02d}:00")
+        for i in range(25)
+    ]
+    _seed(db, [stale_iso_row] + fresh_epoch_rows)
+
+    out = node_token_trend(db, ["mixed_format_node"])["mixed_format_node"]
+    assert out["sample_count"] == 20, (
+        f"the window must hold exactly NODE_TREND_WINDOW fresh rows: {out}")
+    assert out["avg_tokens"] == 1_000, (
+        "the stale 50,000-token row displaced a genuinely-recent row -- "
+        f"the window is still influenced by started_at's mixed format: {out}")
 
 
 # ----------------------------------------------------------------------
