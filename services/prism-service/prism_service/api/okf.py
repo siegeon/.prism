@@ -8,7 +8,7 @@ cheap content signature, so the cache stays correct across writes elsewhere.
 
 import time
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from prism_service.project_context import get_project
@@ -149,6 +149,21 @@ def ontology_rules(project: str = Query("default")) -> dict:
     "violations" here, never in the SHACL runner itself, and an accepted
     rule carries its own "decision" key."""
     return rule_decisions.decorated_report(project)
+
+
+@router.post("/ontology/rules/{rule}/unexempt")
+def ontology_rule_unexempt(rule: str, payload: dict = Body(...)) -> dict:
+    """Undo one exemption from the Rules tab (task c3762cb5): remove
+    `iri` from decisions.json for `rule`, so the rule reports that record
+    again. 404 when the IRI is not exempt; decisions.json is untouched."""
+    project = str(payload.get("project") or "default")
+    iri = str(payload.get("iri") or "")
+    try:
+        remaining = rule_decisions._record_unexempt(project, rule, iri)
+    except KeyError:
+        raise HTTPException(status_code=404,
+                            detail=f"{iri!r} is not exempt from rule {rule!r}")
+    return {"rule": rule, "exempt": remaining}
 
 
 @router.get("/ontology/concept")

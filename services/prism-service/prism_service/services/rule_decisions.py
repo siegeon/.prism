@@ -150,6 +150,25 @@ def _record_exempt(project: str, rule_name: str, iris: list[str],
     _save_decisions(project, data)
 
 
+def _record_unexempt(project: str, rule_name: str, iri: str) -> list[str]:
+    """Undo one exemption (task c3762cb5). Returns the IRIs still exempt.
+    Raises KeyError when `iri` is not exempt from `rule_name` -- the
+    route turns that into a 404 and decisions.json is left untouched."""
+    data = _load_decisions(project)
+    entry = data.get(rule_name) or {}
+    existing = list(entry.get("exempt") or [])
+    if iri not in existing:
+        raise KeyError(iri)
+    existing.remove(iri)
+    if existing:
+        entry["exempt"] = existing
+    else:
+        entry.pop("exempt", None)
+    data[rule_name] = entry
+    _save_decisions(project, data)
+    return existing
+
+
 # ---------------------------------------------------------------------
 # GET /ontology/rules read-time filter (task b1971944: exempted focus
 # nodes are hidden from focus and subtracted from violations WITHOUT
@@ -201,6 +220,8 @@ def decorated_report(project: str) -> dict:
             "focus": [{"iri": iri, "label": graph.label_of(iri)}
                       for iri in remaining[:20]],
             "exempted": exempted,
+            "exempt": [{"iri": iri, "label": graph.label_of(iri)}
+                       for iri in sorted(exempt)],
             "validated_at": r["validated_at"],
             "derived_from": derived_by_name.get(r["name"], ""),
             "verified_by": verified_by_name.get(r["name"], ""),

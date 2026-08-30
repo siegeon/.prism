@@ -53,11 +53,14 @@ type StructurePayload = {
 };
 
 type RuleFocus = { iri?: string; label?: string } | string;
+type RuleExempt = { iri: string; label: string };
 type Rule = {
   name: string; title?: string; description: string; looked_at: number;
   violations: number; focus: RuleFocus[];
   // task 18f85c50: when the daemon last validated this rule (ISO time).
   validated_at: string;
+  // task c3762cb5: records the owner exempted from this rule; each one can be undone.
+  exempt: RuleExempt[];
   // task c5650403: which memory (mx-...) this rule was promoted from.
   // Empty for every built-in rule declared straight in shapes.ttl.
   derived_from?: string;
@@ -314,7 +317,7 @@ export default function OntologyPage() {
         <StructureTab data={structure} error={structureErr}
           highlightClass={highlightClass} highlightRef={highlightRef} />
       )}
-      {tab === "rules" && <RulesTab data={rules} error={rulesErr} />}
+      {tab === "rules" && <RulesTab data={rules} error={rulesErr} project={project} onChanged={fetchAll} />}
       {tab === "records" && (
         <RecordsTab
           data={records} error={recordsErr}
@@ -398,7 +401,9 @@ function StructureRelations({ relations }: { relations: StructureRelation[] }) {
   );
 }
 
-function RulesTab({ data, error }: { data: RulesPayload | null; error: string | null }) {
+function RulesTab({ data, error, project, onChanged }: {
+  data: RulesPayload | null; error: string | null; project: string; onChanged: () => void;
+}) {
   if (error) return <Card><Empty>{error}</Empty></Card>;
   if (!data) return <Card><Empty>Loading rules…</Empty></Card>;
   const needsDecision = data.rules.filter((r) => r.violations > 0);
@@ -416,7 +421,7 @@ function RulesTab({ data, error }: { data: RulesPayload | null; error: string | 
         </DotLabel>
         {needsDecision.length === 0 ? <Empty>Nothing needs a decision.</Empty> : (
           <div className="space-y-3">
-            {needsDecision.map((r) => <RuleRow key={r.name} rule={r} flagged />)}
+            {needsDecision.map((r) => <RuleRow key={r.name} rule={r} flagged project={project} onChanged={onChanged} />)}
           </div>
         )}
       </Card>
@@ -424,7 +429,7 @@ function RulesTab({ data, error }: { data: RulesPayload | null; error: string | 
         <SectionLabel>Quiet</SectionLabel>
         {quiet.length === 0 ? <Empty>No quiet rules.</Empty> : (
           <div className="space-y-3">
-            {quiet.map((r) => <RuleRow key={r.name} rule={r} flagged={false} />)}
+            {quiet.map((r) => <RuleRow key={r.name} rule={r} flagged={false} project={project} onChanged={onChanged} />)}
           </div>
         )}
       </Card>
@@ -432,9 +437,18 @@ function RulesTab({ data, error }: { data: RulesPayload | null; error: string | 
   );
 }
 
-function RuleRow({ rule, flagged }: { rule: Rule; flagged: boolean }) {
+function RuleRow({ rule, flagged, project, onChanged }: {
+  rule: Rule; flagged: boolean; project: string; onChanged: () => void;
+}) {
   const shown = rule.focus.slice(0, 8);
   const overflow = rule.focus.length - shown.length;
+  const exempt = rule.exempt ?? [];
+  // task c3762cb5: undo one exemption, then refetch /api/okf/ontology/rules via onChanged.
+  const unexempt = (iri: string) => {
+    api.post(`/api/okf/ontology/rules/${encodeURIComponent(rule.name)}/unexempt`, { project, iri })
+      .then(() => onChanged()) // fetchAll -> GET /api/okf/ontology/rules
+      .catch(() => onChanged());
+  };
   return (
     <div className="flex items-start gap-3 border-b border-[color:var(--border-default)]/20 pb-3">
       <i
@@ -462,9 +476,31 @@ function RuleRow({ rule, flagged }: { rule: Rule; flagged: boolean }) {
             {overflow > 0 && <span className="ont-rolled">+{overflow} more</span>}
           </div>
         )}
+        {exempt.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {rule.exempt.map((e) => (
+              <span
+                key={e.iri}
+                className="text-2xs px-2 py-0.5 rounded-full border inline-flex items-center gap-1.5"
+                style={{ borderColor: "var(--text-muted)", color: "var(--text-muted)" }}
+                title={e.iri}
+              >
+                EXEMPT · {e.label}
+                <button
+                  type="button"
+                  className="underline text-[color:var(--text-secondary)]"
+                  onClick={() => unexempt(e.iri)}
+                >Undo</button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       <div className="text-2xs text-[color:var(--text-muted)] whitespace-nowrap shrink-0 flex flex-col items-end gap-1">
-        <span>{rule.looked_at} CHECKED · {rule.violations} FAILED · {formatAt(rule.validated_at)}</span>
+        <span>
+          {rule.looked_at} CHECKED · {rule.violations} FAILED · {formatAt(rule.validated_at)}
+          {rule.exempt.length > 0 && <> · {rule.exempt.length} EXEMPT</>}
+        </span>
         {flagged && (
           <Link
             data-rule-decide
