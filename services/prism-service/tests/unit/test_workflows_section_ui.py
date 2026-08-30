@@ -1434,7 +1434,17 @@ def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
     # the top-level "conductor" bot. isStateMachineWorkflow already excludes
     # "validation" (line ~532), so that exclusion still holds here too.
     assert '!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable"' in phase_memo
-    assert "step?.average_duration_seconds" in phase_memo
+    # RETIRED by task 8fbd5cf0: conductorLivePhase no longer derives the
+    # bar from step.average_duration_seconds and Date.now(). That value
+    # filled because time passed, not because work got done. It is
+    # superseded by flow_run_recorder.progress_source, which counts real
+    # units server-side (teeth decided/total for a gate node, the drive
+    # heartbeat's own work_units for an agent node) -- pinned by
+    # tests/unit/test_conductor_run_is_recorded_and_live.py::
+    # test_ac5_the_live_tile_progress_reads_no_clock. The surviving
+    # INVARIANT is that the memo still reports a counted basis:
+    assert "counted.basis" in phase_memo
+    assert "average_duration_seconds" not in phase_memo
 
     activity_memo = _function_body(page, "const conductorLiveActivity = useMemo<Activity | null>(() => {")
     # Reuses ACTIVITY_META's existing vocabulary (awaiting_gate/blocked/

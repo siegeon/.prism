@@ -26,6 +26,7 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 
 DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
 
@@ -248,6 +249,27 @@ def sweep_once() -> list[dict]:
                 continue
             if res and res.get("ok"):
                 _backoff_clear(tid)
+                # RECORD THE CONCLUDED GATE (task 8fbd5cf0). This seat never
+                # passes through conductor_flow.flow_report, so without this
+                # the canvas has no record of a machine-decided gate at all.
+                try:
+                    from prism_service.services.flow_run_recorder import (
+                        record_node_execution)
+                    record_node_execution(
+                        str(ctx._data_dir / "scores.db"),
+                        {"task_id": tid, "node_id": step,
+                         "actor": "conductor-adjudicator",
+                         "workflow_id": "conductor", "outcome": "pass",
+                         "reason": str(res.get("reason") or
+                                       "approved on machine evidence")[:500],
+                         # TRUE WALL TIME: t's own updated_at is when the
+                         # task last moved onto this step; never a clock
+                         # read invented here.
+                         "started_at": _task_updated_at(t),
+                         "ended_at": datetime.now(timezone.utc).isoformat()},
+                        project=pid)
+                except Exception:
+                    pass
                 approved.append({"project": pid, "task_id": tid, **res})
                 _log(f"{pid}/{tid[:8]}: {step} approved on machine "
                      f"evidence -> {res.get('to_step', 'advanced')}")

@@ -24,8 +24,11 @@ _KEEPALIVE_SECONDS = 25.0
 # drive.heartbeat, agent.run, tokens.turn are new bus publishers (see
 # api/drive_heartbeat.py, api/agent_runs.py, services/conductor_service.py
 # _record_agent_run, services/work_stream.py).
+# flow.node (task 8fbd5cf0): one event per CONCLUDED conductor node, so an
+# open canvas moves the token in real time instead of waiting for a reload.
 _WORK_EVENT_TYPES = frozenset({
     "task.changed", "drive.heartbeat", "agent.run", "tokens.turn",
+    "flow.node",
 })
 
 # gamify data-enrichment slice item 3: NO separate "work.status" event.

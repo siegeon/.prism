@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
+import { subscribeStream } from "@/lib/sharedStream";
 import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
@@ -106,6 +107,21 @@ function replayStepMs(event: ReplayEvent, speed: number = REPLAY_SPEED): number 
     : REPLAY_MIN_STEP_MS;
   return Math.min(REPLAY_MAX_STEP_MS, Math.max(REPLAY_MIN_STEP_MS, elapsed / speed));
 }
+
+/** One CONCLUDED conductor node, exactly as the recorder stored it: what the
+ * node said at decision time, never a live re-check. */
+type FlowNodeRun = {
+  run_id: string; task_id: string; node_id: string; actor: string;
+  outcome: string; reason: string; started_at: string; ended_at: string;
+  flow_version: number;
+};
+/** basis is "teeth" (decided/total for a gate) or "work_units" (the drive
+ * heartbeat's own counted units for an agent step). Never elapsed time. */
+type FlowRuns = {
+  workflow_id: string; task_id: string; flow_version: number;
+  finished: boolean; visible: boolean; runs: FlowNodeRun[];
+  progress?: { basis: string; done: number; total: number | null } | null;
+};
 
 function replayGapMs(event: ReplayEvent, next?: ReplayEvent, speed: number = REPLAY_SPEED): number {
   if (!next?.startedAt || !event.endedAt) return 0;
@@ -299,6 +315,8 @@ export default function WorkflowsPage() {
   const { managed: conductorManaged } = useConductorState(project);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<WorkflowGraph>(new WorkflowGraph());
+  const [flowRuns, setFlowRuns] = useState<FlowRuns | null>(null);
+  const lastFlowNodeRef = useRef<string>("");
   const dragRef = useRef<DragState>({ ...IDLE_DRAG });
   const suppressCanvasClickRef = useRef(false);
   const [connectionInterrupted, setConnectionInterrupted] = useState(false);
@@ -535,9 +553,18 @@ export default function WorkflowsPage() {
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);
-  // The verdict for the node whose details panel is open, so a REFUSAL can
-  // say why instead of leaving the reason on the server.
-  const selectedNodeVerdict = selectedNodeId ? nodeVerdicts?.[selectedNodeId] ?? null : null;
+  // AC-7 (task 8fbd5cf0): a CONCLUDED node is read from the stored run, never
+  // recomputed -- the same node's live /node-status re-check can answer
+  // differently later and must not overwrite what this node said when it
+  // actually decided. Only a node with no stored run yet falls back to the
+  // live check.
+  const selectedNodeRun = selectedNodeId
+    ? [...(flowRuns?.runs ?? [])].reverse().find((r) => r.node_id === selectedNodeId) ?? null
+    : null;
+  const selectedNodeVerdict: NodeVerdict | null = selectedNodeRun
+    ? { state: selectedNodeRun.outcome === "pass" ? "passed" : "refused",
+        reason: selectedNodeRun.reason }
+    : selectedNodeId ? nodeVerdicts?.[selectedNodeId] ?? null : null;
   // ONE rail mechanism for the whole state-machine family, not one per page
   // (owner, task 3baadd19, 2026-08-24: "we should only have one, we have
   // it the same in conductor, and in build and test, there should not be
@@ -578,17 +605,22 @@ export default function WorkflowsPage() {
   // same tradeoff the canvas's own activeProgress already makes.
   const conductorLivePhase = useMemo<PhaseProgress | null>(() => {
     if (!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
-    const step = selectedWorkflow?.steps.find((candidate) => candidate.id === workflowRun.runtime?.currentStep);
-    const typical = step?.average_duration_seconds ?? undefined;
-    const startedAt = workflowRun.runtime.startedAt;
-    const inStepS = startedAt ? Math.max(0, (Date.now() - Date.parse(startedAt)) / 1000) : 0;
+    // COUNTED UNITS ONLY. This value once grew off the wall clock and the
+    // step's stored average duration -- a bar that filled because time
+    // passed, not because work got done. The server counts the real units
+    // instead (flow_run_recorder.progress_source): teeth decided / teeth
+    // total for a gate node, the drive heartbeat's own work_units for an
+    // agent node. No clock reaches this value.
+    const counted = flowRuns?.progress;
+    if (!counted) return null;
+    const total = counted.total ?? undefined;
     return {
-      pct: typical && typical > 0 ? Math.min(0.97, inStepS / typical) : undefined,
-      basis: "time",
-      in_step_s: inStepS,
-      typical_s: typical,
+      pct: total && total > 0 ? Math.min(1, counted.done / total) : undefined,
+      basis: counted.basis,
+      children_done: counted.done,
+      children_total: total,
     };
-  }, [isStateMachineWorkflow, workflowRun, selectedWorkflow]);
+  }, [isStateMachineWorkflow, workflowRun, flowRuns]);
   const conductorLiveActivity = useMemo<Activity | null>(() => {
     const t = conductorLivePhase && workflowRun?.data.conductorTask;
     if (!t) return null;
@@ -1243,6 +1275,42 @@ export default function WorkflowsPage() {
     ev.preventDefault();
     setAndRememberDirectoryWidth(next);
   }, [directoryOpen, directoryWidth, setAndRememberDirectoryWidth]);
+
+  // ---- the recorded flow: stored node runs + live movement (task 8fbd5cf0)
+  // The canvas used to reverse-map task_history rows and guess progress from
+  // a clock. It now READS what each node said at decision time
+  // (GET /api/workflows/{id}/runs) and moves on the flow.node event the
+  // recorder publishes -- no reload, and a concluded node is never recomputed.
+  const refreshFlowRuns = useCallback(() => {
+    const taskId = nodeStatusTaskId;
+    const flowId = selectedWorkflow?.parent_id ? selectedWorkflow.parent_id : selectedWorkflowId;
+    if (!taskId || !flowId) { setFlowRuns(null); return; }
+    api<FlowRuns>(`/api/workflows/${encodeURIComponent(flowId)}/runs?task_id=${encodeURIComponent(taskId)}&project=${encodeURIComponent(project)}`)
+      .then(setFlowRuns)
+      .catch(() => setFlowRuns(null));
+  }, [project, nodeStatusTaskId, selectedWorkflow, selectedWorkflowId]);
+
+  useEffect(() => { refreshFlowRuns(); }, [refreshFlowRuns]);
+
+  /** Play the token ALONG THE DRAWN WIRE from one node to the next. The
+   * graph's own packet router already walks the routed polyline, so the
+   * token travels the wire a person can see; re-rendering at the new node
+   * would be the teleport this task forbids. */
+  const animateTokenAlong = useCallback((from: string, to: string) => {
+    if (!from || !to || from === to) return;
+    graphRef.current.sendTransition(from, to);
+  }, []);
+
+  useEffect(() => {
+    return subscribeStream(`/sse/work?project=${encodeURIComponent(project)}`, (frame) => {
+      const ev = frame as { type?: string; task_id?: string; node_id?: string };
+      if (ev?.type !== "flow.node") return;
+      if (nodeStatusTaskId && ev.task_id && ev.task_id !== nodeStatusTaskId) return;
+      animateTokenAlong(lastFlowNodeRef.current, String(ev.node_id || ""));
+      lastFlowNodeRef.current = String(ev.node_id || "");
+      refreshFlowRuns();
+    });
+  }, [project, nodeStatusTaskId, animateTokenAlong, refreshFlowRuns]);
 
   // Crisp at devicePixelRatio: backing store scaled, CSS size unscaled.
   useEffect(() => {

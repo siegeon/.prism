@@ -1362,6 +1362,32 @@ def get_workflow_run_history(
     return _workflow_engine_json(f"/workflows/history/{project}?limit={limit}")
 
 
+@router.get("/{workflow_id}/runs")
+def get_workflow_runs(
+    workflow_id: str, project: str = Query(...), task_id: str = Query(""),
+) -> dict:
+    """The STORED node executions for one task on one flow (task 8fbd5cf0).
+
+    A read path only: it serves what each node said AT DECISION TIME. It
+    never re-runs a tooth (stop_if: "a node panel recomputes a check
+    instead of reading the stored execution") and it never reverse-maps
+    task_history the way /{workflow_id}/instances does.
+    """
+    from prism_service.services import flow_run_recorder
+
+    scores_db = str(get_project(project)._data_dir / "scores.db")
+    runs = flow_run_recorder.runs_for_task(scores_db, task_id, workflow_id)
+    step = str(runs[-1]["node_id"]) if runs else ""
+    return {"workflow_id": workflow_id, "task_id": task_id,
+            "progress": flow_run_recorder.progress_source(
+                scores_db, task_id, step, project=project) if task_id else None,
+            "nodes": list(flow_run_recorder.CONDUCTOR_NODES),
+            "flow_version": flow_run_recorder.flow_version_for(workflow_id),
+            "finished": flow_run_recorder.is_finished(runs),
+            "visible": flow_run_recorder.is_visible(runs),
+            "runs": runs}
+
+
 @router.post("/{workflow_id}/fixes")
 def request_workflow_fix(
     workflow_id: str, body: WorkflowFixRequest, project: str = Query(...),

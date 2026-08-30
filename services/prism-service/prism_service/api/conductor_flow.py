@@ -17,6 +17,7 @@ so a producer can never clear its own gate.
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -26,6 +27,7 @@ from prism_service.project_context import get_project
 from prism_service.services.conductor_service import ConductorService
 from prism_service.services import task_workspace
 from prism_service.services.context_builder import role_rule_assets
+from prism_service.services.flow_run_recorder import record_node_execution
 
 router = APIRouter()
 
@@ -745,6 +747,11 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
     step = ConductorService._step_by_id(task.workflow_step, _task_workflow(task))
     if step is None:
         return {"ok": False, "error": "task has not started the flow"}
+    # TRUE WALL TIME for the recorder (task 8fbd5cf0): the task's own
+    # updated_at is when it last transitioned ONTO this step -- a real
+    # timestamp the task row already carries, never Date.now() at the
+    # canvas. ended_at is stamped just before the row is written, below.
+    _node_started_at = str(getattr(task, "updated_at", "") or "")
 
     # (2) IDEMPOTENT + STALE-SAFE — the report must name the step it is FOR.
     # A report whose expected_step != the task's current step is stale or a
@@ -869,5 +876,23 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
     _autoclear_machine_gate(svc, body.task_id)
 
     nxt = svc._task_svc.get(body.task_id)
+
+    # RECORD THE CONCLUDED NODE (task 8fbd5cf0). The canvas used to
+    # reverse-map task_history; a node execution is now its own record —
+    # what this seat said, at decision time. Best-effort: a recorder error
+    # never changes the report's own answer.
+    try:
+        record_node_execution(
+            str(get_project(project)._data_dir / "scores.db"),
+            {"task_id": body.task_id, "node_id": step["id"],
+             "actor": body.session_id or "", "workflow_id": "conductor",
+             "outcome": "pass" if res.get("ok") else "fail",
+             "reason": str(body.outcome or "")[:500],
+             "started_at": _node_started_at,
+             "ended_at": datetime.now(timezone.utc).isoformat()},
+            project=project)
+    except Exception:
+        pass
+
     return {"ok": res.get("ok", False), "advanced": res,
             "next_job": _job(nxt)}
