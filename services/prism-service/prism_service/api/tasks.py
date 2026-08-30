@@ -609,6 +609,19 @@ def _compute_stranded(svc, repo: str) -> dict:
                 branch = cand
         except Exception:
             branch = ""
+        # The workspace record is not the only way to find a task's branch,
+        # and it disappears the moment the worktree is reaped while the
+        # branch itself survives. ensure_workspace names every branch
+        # deterministically (task_workspace.py: f"prism/ws/{task_id}"), so
+        # fall back to that convention before giving up. Without this the
+        # scan drops to counting origin/main..HEAD -- 0 on a synced checkout
+        # -- and a genuinely stranded task reads as clean. Task bbfd1a19 is
+        # the live case: done, 2 commits on its branch, no worktree left,
+        # and it vanished from the card entirely (task 5ba44108).
+        if not branch:
+            conv = f"prism/ws/{tid}"
+            if conv in refs or f"origin/{conv}" in refs:
+                branch = conv
         if branch:
             commits_ahead = ahead_of_main.get(
                 branch, ahead_of_main.get(f"origin/{branch}"))

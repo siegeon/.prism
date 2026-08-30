@@ -141,3 +141,30 @@ def test_the_endpoint_emits_no_zero_commit_row(monkeypatch):
         "the filter helper exists but the scan never calls it")
     # called somewhere other than its own definition
     assert src.count("_stranded_rows_worth_showing") >= 2
+
+
+# ----------------------------------------------------------------------
+# The scan must not lose a branch just because the worktree is gone
+# ----------------------------------------------------------------------
+
+def test_the_scan_finds_a_branch_by_convention_when_the_worktree_is_gone():
+    """A reaped worktree must not make a stranded task read as clean.
+
+    LIVE CASE (task bbfd1a19, 2026-08-30): done, branch
+    prism/ws/bbfd1a19-... holding 2 commits that are on no other ref, and
+    its worktree removed. `workspace_record` returned nothing, so the scan
+    fell through to counting origin/main..HEAD -- 0 on a synced checkout --
+    and the filter then dropped it. The card read "nothing waiting to
+    ship" while real unshipped work sat on disk. That is a worse lie than
+    the 205 false rows, because it is silent.
+
+    ensure_workspace names every branch deterministically
+    (task_workspace.py: f"prism/ws/{task_id}"), so the scan can always
+    recover it from the id alone.
+    """
+    import inspect
+
+    src = inspect.getsource(tasks_api)
+    assert 'f"prism/ws/{tid}"' in src, (
+        "the scan must fall back to the conventional branch name before "
+        "giving up and counting origin/main..HEAD")
