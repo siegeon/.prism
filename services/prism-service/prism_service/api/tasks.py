@@ -636,10 +636,40 @@ def _compute_stranded(svc, repo: str) -> dict:
             "branch_on_origin": branch_on_origin,
             "state": "pushed_unmerged" if branch_on_origin else "local_only",
         })
-    return {"stranded": rows}
+    return {"stranded": _stranded_rows_worth_showing(rows)}
+
+
+def _stranded_rows_worth_showing(rows: list[dict]) -> list[dict]:
+    """Drop every scanned row that reports no commits ahead of main.
+
+    Task 5ba44108. A done task with nothing ahead of origin/main has
+    nothing stranded, so such a row is false on its face -- the card
+    renders "<n> commits ahead" beside each entry, and 0 there is a
+    contradiction. The scan produces them because a task whose branch it
+    cannot resolve (deleted, or never created) falls back to counting
+    `origin/main..HEAD`, which is 0 on a synced checkout.
+
+    On 2026-08-30 that emitted 205 rows for project prism, all reading
+    "local only / 0 commits ahead", burying the ~20 real cases. Filtering
+    here rather than at the fallback keeps the fallback honest for a
+    checkout that genuinely IS ahead of main.
+
+    A non-integer or negative count is not evidence of stranded work
+    either, so it drops too. Order and row shape are preserved: the card
+    renders these verbatim.
+    """
+    kept: list[dict] = []
+    for r in rows:
+        n = r.get("commits_ahead")
+        if isinstance(n, bool) or not isinstance(n, int):
+            continue
+        if n > 0:
+            kept.append(r)
+    return kept
 
 
 @router.get("/stranded")
+
 def get_stranded_work(project: str = Query("default")) -> dict:
     """DONE means SHIPPED (owner 2026-07-16) -- merged and validated on
     main, not merely gate-passed. Scans every status=done task and reports

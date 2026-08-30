@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.207"
+PRISM_VERSION = "7.13.208"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7919,4 +7919,23 @@ PRISM_VERSION_NOTES += (
     "sh:select straight out of shapes.ttl over a small rdflib graph, so it "
     "cannot drift from the shipped rule, and one test proves the sample set "
     "still spans every branch of the regex."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.208 - the Dashboard Stranded work card counts real stranded commits. "
+    "It listed 205 rows for project prism, and every one read 'local only' with "
+    "'0 commits ahead'. A done task with nothing ahead of origin/main has nothing "
+    "stranded, so all 205 were false, and the wall of them hid the real cases: "
+    "19 tasks holding unshipped commits, plus bbfd1a19, done with no commits on "
+    "main at all. Cause: when the scan cannot resolve a done task's branch, which "
+    "happens when the branch was deleted or never existed, it falls back to "
+    "counting origin/main..HEAD. That is 0 on a synced checkout. It then appended "
+    "the row anyway. Nothing dropped a row whose commits_ahead was 0. "
+    "_stranded_rows_worth_showing now drops any row without a positive integer "
+    "count, and the scan calls it. The fallback stays honest for a checkout that "
+    "really is ahead of main. The shipped-ness test is unchanged: it reads the "
+    "bracketed task trailer off main, which is squash-safe, and not "
+    "merge-base is-ancestor, which is not. One neighbour fixture moved: it pinned "
+    "the real invariant that a bare task-id substring is no trailer, but observed "
+    "it through a 0-commit row, so it now commits a local-only follow-up. "
 )

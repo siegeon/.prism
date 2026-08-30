@@ -262,6 +262,14 @@ def test_bare_substring_occurrence_does_not_count_as_a_trailer_match(
                   f"unrelated note mentioning task:{task_id}extra in prose")
     _set_origin_main(repo, sha)
 
+    # The scan now drops any row reporting 0 commits ahead (task
+    # 5ba44108: 205 false "local only / 0 commits ahead" rows buried
+    # the real ones). This fixture must therefore be genuinely ahead
+    # of main for the row to exist at all. The INVARIANT under test is
+    # unchanged: a bare "task:<id>" substring is not a bracketed
+    # trailer and must not satisfy the shipped check.
+    _commit(repo, "y.txt", "2\n", "local-only follow-up, never shipped")
+
     task = SimpleNamespace(id=task_id, title="Not actually shipped", status="done")
     _wire(monkeypatch, repo, [task], {})
 
