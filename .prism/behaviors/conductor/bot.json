@@ -13,6 +13,7 @@
         "verify-plan-loop",
         "write-failing-tests-loop",
         "implement-tasks-loop",
+        "red-test-ids",
         "red-gate-status",
         "green-gate-status",
         "land"
