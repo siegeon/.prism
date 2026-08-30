@@ -165,6 +165,31 @@ def _has_production_reference(symbol: str, defining_file: str,
         r'(?:from\s+[\w.]*\b' + stem_re + r'\b[\w.]*\s+import\b'
         r'|from\s+[\w.]+\s+import\s+[^\n#]*\b' + stem_re + r'\b'
         r'|import\s+[\w.]*\b' + stem_re + r'\b)')
+    # (a2) THE SERVICE CONTAINER counts as importing the defining module.
+    # PRISM reaches almost every service through project_context: a route
+    # does `ctx = get_project(project)` then `ctx.brain_svc.method()`, and
+    # never imports brain_service at all -- nor should it. Without this,
+    # signal (a)'s import gate can never see the single most common way a
+    # service method is called, so every new one reads as unreachable.
+    # Task 1edee95c parked at green_gate on exactly this: the refusal named
+    # BrainService.expertise_coverage while api/brain.py:54 was calling it.
+    # Kept narrow on purpose -- the container only satisfies the gate for a
+    # symbol DEFINED under services/, and an attribute call (`.symbol(`) is
+    # still required, so the atexit.register false positive the gate exists
+    # to stop stays stopped.
+    container_re = re.compile(
+        r'(?:from\s+prism_service(?:\.\w+)*\s+import\s+[^\n#]*'
+        r'\b(?:get_project|project_context)\b'
+        r'|import\s+prism_service\.project_context\b)')
+    defines_a_service = "/services/" in ("/" + defining_rel)
+    # The receiver must be a SERVICE attribute of the container, not any
+    # attribute at all. `.register(` on an arbitrary object in a file that
+    # happens to import get_project is not evidence -- that loosening made
+    # WorkItemSync.register (the original defect this tooth was built for,
+    # test_green_gate_requires_reachability) read as reachable.
+    # PRISM's convention is `ctx.<name>_svc` / `<name>_service`.
+    attr_call_re = re.compile(
+        r'\.\w*_(?:svc|service)\s*\.\s*' + sym + r'\s*\(')
     call_re = re.compile(r'(?<!\w)' + sym + r'\s*\(')
     dispatch_key_re = re.compile(r'''['"]''' + sym + r'''['"]\s*:''')
     route_path_re = re.compile(
@@ -207,6 +232,12 @@ def _has_production_reference(symbol: str, defining_file: str,
         except OSError:
             continue
         if dispatch_key_re.search(text) or route_path_re.search(text):
+            return True
+        # (a2) reached through the project-context container -- see the
+        # container_re comment above for why this is the common shape.
+        if (rel.endswith(".py") and defines_a_service
+                and container_re.search(text)
+                and attr_call_re.search(text)):
             return True
         if rel.endswith(".py") and import_re.search(text) \
                 and call_re.search(text):

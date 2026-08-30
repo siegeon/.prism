@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.212"
+PRISM_VERSION = "7.13.213"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7983,4 +7983,24 @@ PRISM_VERSION_NOTES += (
     "task_svc and workspace_service became optional, because a daemon seat is not a "
     "workspace member and only claim_next needs them. The lease expires, so a crashed "
     "holder cannot wedge the task the way the stall count in task 1ecbd866 does. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.213 - the reachability tooth sees a call made through the service "
+    "container. Task 1edee95c parked at green_gate with 'Unreachable entry points: "
+    "BrainService.expertise_coverage' while api/brain.py line 54 was calling it, "
+    "inside the very route the slice existed to build. Signal (a) counts an explicit "
+    "call only when the CALLING file imports the DEFINING module. api/brain.py "
+    "imports get_project from project_context and reaches every service through the "
+    "container, and never imports brain_service. That container is PRISM's dominant "
+    "architecture, so the gap was not a one-off: every new service method called the "
+    "normal way read as unreachable, and a tooth that refuses correct wiring gets "
+    "switched off. The container now satisfies the import gate, kept deliberately "
+    "narrow. It applies only to a symbol defined under services, and the receiver "
+    "must be a service attribute matching _svc or _service. A first cut accepted any "
+    "attribute call and made WorkItemSync.register reachable, which is the original "
+    "defect this tooth exists to catch. The neighbouring suite caught that, and a "
+    "regression test now pins it. The suite carries a positive control, because the "
+    "check answers permissively when git lists no candidate files, so a fixture that "
+    "is not a real repository passes every negative case while proving nothing. "
 )
