@@ -251,14 +251,11 @@ function failureMarkerLine(scriptSource: string, scriptPath: string | undefined,
 }
 
 function workflowForGraph(workflow: WorkflowCatalogEntry): WorkflowCatalogEntry {
-  const graphWorkflow = workflow.id === "conductor"
-    ? {
-      ...workflow,
-      steps: workflow.steps.map((step) => step.id === "verify_green_state"
-        ? { ...step, linked_workflow_id: step.linked_workflow_id ?? "validation" }
-        : step),
-    }
-    : workflow;
+  // task 25b2a05c: verify_green_state now carries its own real
+  // linked_workflow_id (verify-green-state-loop) straight off the API, so
+  // this no longer needs to inject a "validation" fallback here -- the
+  // backend never omits it.
+  const graphWorkflow = workflow;
   // Validation is a state machine; persona ownership is already disclosed on
   // each state card and must not become a competing second topology.
   return graphWorkflow.id === "validation" ? { ...graphWorkflow, bots: [] } : graphWorkflow;
@@ -269,8 +266,9 @@ function connectWorkflowCatalog(catalog: WorkflowCatalogEntry[]): WorkflowCatalo
   return catalog.map((workflow) => ({
     ...workflow,
     steps: workflow.steps.map((step) => {
-      const linkedId = step.linked_workflow_id
-        ?? (workflow.id === "conductor" && step.id === "verify_green_state" ? "validation" : null);
+      // task 25b2a05c: no "validation" fallback -- linked_workflow_id is
+      // always real for every step that has one now.
+      const linkedId = step.linked_workflow_id ?? null;
       const linked = linkedId ? byId.get(linkedId) : null;
       return linked ? {
         ...step, linked_workflow_id: linkedId,
@@ -1681,10 +1679,9 @@ export default function WorkflowsPage() {
     const linkedStep = selectedWorkflow?.steps.find(
       (step) => step.id === node.id,
     );
-    const linkedWorkflowId = linkedStep?.linked_workflow_id
-      ?? (selectedWorkflow?.id === "conductor" && node.id === "verify_green_state"
-        ? "validation"
-        : null);
+    // task 25b2a05c: no "validation" fallback -- verify_green_state's own
+    // linked_workflow_id (verify-green-state-loop) is always real now.
+    const linkedWorkflowId = linkedStep?.linked_workflow_id ?? null;
     if (linkedWorkflowId) {
       const linkedWorkflow = workflows.find(
         (workflow) => workflow.id === linkedWorkflowId,

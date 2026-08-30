@@ -721,12 +721,18 @@ def test_conductor_validation_node_opens_build_and_test_workflow():
     )
 
     assert "linked_workflow_id?: string | null" in data
-    assert '"validation" if step["id"] == "verify_green_state"' in api
+    # The next two assertions are superseded by task 25b2a05c:
+    # verify_green_state now carries its own real node
+    # (verify-green-state-loop, see test_every_step_is_a_node_on_the_card.py)
+    # instead of a fallback link into the unrelated "validation" catalog
+    # entry -- the backend always supplies a real linked_workflow_id now, so
+    # the frontend fallback these two lines used to pin is gone.
+    assert '"verify-green-state-loop" if step["id"] == "verify_green_state"' in api
     assert "const linkedStep = selectedWorkflow?.steps.find(" in page
     assert "const linkedWorkflowId = linkedStep?.linked_workflow_id" in page
     assert "workflow.id === linkedWorkflowId" in page
     assert "selectWorkflow(linkedWorkflow, [...workflowPath, {" in page
-    assert 'linked_workflow_id: step.linked_workflow_id ?? "validation"' in page
+    assert "const linkedId = step.linked_workflow_id ?? null;" in page
     graph = _read("live", "workflowGraph.ts")
     assert 'linkedWorkflowLabel ? "⌄" : "↗"' in graph
     assert '`${linkedWorkflowLabel} workflow`' in graph
