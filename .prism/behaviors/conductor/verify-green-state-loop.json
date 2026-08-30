@@ -1,0 +1,16 @@
+{
+  "id": "verify-green-state-loop",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Verify green state (Observe-Reason)",
+  "version": 1,
+  "steps": [
+    {
+      "id": "loop",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
+      "body": "{\"persona\": \"qa\", \"prompt\": \"Observe whether this task's real run is genuinely green (do NOT change anything, this is an OBSERVE-only check): ${taskHint}\\n\\nReport what a real test/build run actually showed, and whether the evidence matches the task's own oracle.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"observed_notes\": {\"type\": \"string\"}, \"matches_oracle\": {\"type\": \"boolean\"}}, \"required\": [\"observed_notes\", \"matches_oracle\"]}, \"rubric\": \"\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 120
+    }
+  ]
+}

@@ -403,11 +403,14 @@ def _project_validation_workflow(project: str) -> dict:
             "duration_sample_count": scripted.duration_sample_count,
         })
     # task 408138e8 (epic 61821448): the AosWorkflows engine owns
-    # definition.description's own text -- append the real trigger
-    # (verify_green_state links here, see get_workflows' linked_workflow_id
-    # map) so the skill-description-says-when SHACL rule reads a true
-    # "when" clause no matter what the engine's own text says.
-    trigger = "Runs when a task's verify_green_state step needs to build and test the project."
+    # definition.description's own text -- append the real trigger so the
+    # skill-description-says-when SHACL rule reads a true "when" clause no
+    # matter what the engine's own text says. UPDATED task 25b2a05c:
+    # verify_green_state no longer links here (it now has its own honest
+    # agentic node, verify-green-state-loop -- see get_workflows'
+    # linked_workflow_id map); this build+test workflow stays reachable
+    # from the conductor directory for browsing, run directly or from CI.
+    trigger = "Runs when a developer starts it directly or from CI."
     description = f"{definition.description.rstrip()} {trigger}".strip()
     return {
         "id": definition.id,
@@ -842,6 +845,12 @@ _BEHAVIOR_TRIGGER = {
     "red-gate-status": "Runs when a task's write_failing_tests step finishes and red_gate needs a decision.",
     "implement-tasks-loop": "Runs when a task's red_gate is approved and implement_tasks starts.",
     "red-test-ids": "Runs when a task's implement_tasks step needs the red test ids -- names which of task.verify's pinned targets are demonstrated red at the task's red anchor, from data on file, no model involved.",
+    # task 25b2a05c: verify_green_state's own node -- an honest agentic
+    # loop (a real qa-role judgement call, never a deterministic check
+    # wearing a codified name), so the step is no longer scored ONLY via
+    # its drill-down into the unrelated "validation" build+test catalog
+    # entry (see get_workflows()'s linked_workflow_id ladder below).
+    "verify-green-state-loop": "Runs when a task's implement_tasks step finishes and verify_green_state starts.",
     "green-gate-status": "Runs when a task's verify_green_state step finishes and green_gate needs a decision.",
     "review-previous-notes-loop": "Runs first, when a task starts the implement workflow.",
     "land": "Runs when a task's green_gate is approved and the branch is ready to ship.",
@@ -859,8 +868,9 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
     real steps (e.g. land's push/open-pr), not a fake single node standing
     in for the whole thing.
 
-    Nested under "conductor" only when a real state->behavior link exists --
-    the same rule verify_green_state already follows via linked_workflow_id.
+    Nested under "conductor" only when a real state->behavior link exists,
+    with two documented exceptions (`land`, terminal step; `validation`,
+    predates this registry -- see get_workflows below for both).
     RESOLVED (owner, 2026-08-21): "make the conductor's workflow have a
     final ship step when it's all done" -- green_gate approval DOES now
     trigger shipping, automatically, on BOTH tracks: the human-approved path
@@ -1221,7 +1231,7 @@ def get_workflows(project: str = Query("default")) -> dict:
             "machine_only_gate": step["id"] in MACHINE_ONLY_GATES,
             "execution": "connected",
             "linked_workflow_id": (
-                "validation" if step["id"] == "verify_green_state"
+                "verify-green-state-loop" if step["id"] == "verify_green_state"
                 else "story-gate-check" if step["id"] == "story_gate"
                 else "plan-gate-check" if step["id"] == "plan_gate"
                 else "draft-story-loop" if step["id"] == "draft_story"
@@ -1261,9 +1271,13 @@ def get_workflows(project: str = Query("default")) -> dict:
     }
     validation = _project_validation_workflow(project)
     # Nested, not a flat sibling of conductor: this IS the conductor's own
-    # capability -- the FSM its own verify_green_state step links to
-    # (linked_workflow_id below) -- same category as land/ci-local-dev, it
-    # simply predates the Bot/Behavior registry and is sourced differently.
+    # capability, it simply predates the Bot/Behavior registry and is
+    # sourced differently. UPDATED task 25b2a05c: verify_green_state's
+    # linked_workflow_id now points at its own honest node
+    # (verify-green-state-loop, below) instead of here -- validation stays
+    # nested for browsability (a person can still open the project's real
+    # build+test workflow from the conductor directory), it just is not
+    # the step that lights up when a task is standing at verify_green_state.
     validation["parent_id"] = "conductor"
     conductor_behaviors = _conductor_behavior_workflows(project)
     # Same rule as validation above: nest only the behavior(s) an actual
@@ -1282,6 +1296,7 @@ def get_workflows(project: str = Query("default")) -> dict:
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
         "write-failing-tests-loop", "implement-tasks-loop", "red-test-ids",
+        "verify-green-state-loop",
         "red-gate-status", "green-gate-status", "land",
     )
     for entry in conductor_behaviors:
