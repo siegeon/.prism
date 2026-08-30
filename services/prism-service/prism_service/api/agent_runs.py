@@ -53,7 +53,14 @@ def ingest(
         return {"ok": False, "refused": PRODUCER_GATE_VERDICT_REFUSAL,
                 "reason": refusal, "run_id": row.get("run_id"),
                 "agent_id": row.get("agent_id"), "step": row.get("step")}
-    upsert_agent_run(_scores_db(project), row)
+    write_result = upsert_agent_run(_scores_db(project), row)
+    if isinstance(write_result, dict) and write_result.get("ok") is False:
+        # task fc471aed: an impossible tokens value (bigger than any known
+        # model's context window) is refused inside upsert_agent_run itself
+        # -- surface that refusal here too, same shape as the gate-verdict
+        # refusal above, instead of claiming ok:true for a row that was
+        # never written.
+        return write_result
     # gamify walking skeleton: publish onto the bus so /sse/work and the
     # /live graph can add/update this session's node live. Best-effort,
     # never lets a publish failure surface as a write failure (the row is

@@ -163,6 +163,67 @@ def _has_llm_turn_signature(row: dict) -> bool:
         return False
 
 
+# Per-model max context window (tokens the model can hold in one turn).
+# Mirrors PRICING's shape and sourcing discipline (the claude-api skill's
+# current model table) but for a CEILING, not a $ rate. Every Claude 4.x/5
+# model ships a 200K standard window; a "[1m]" id (the explicit long-context
+# variant, e.g. this very session's own claude-opus-5[1m]) is 1,000,000 --
+# the largest window PRISM has access to anywhere (task fc471aed's own
+# live-data finding).
+_MODEL_CONTEXT_WINDOW: dict[str, int] = {
+    "claude-fable-5": 200_000,
+    "claude-mythos-5": 200_000,
+    "claude-opus-5": 200_000,
+    "claude-opus-5[1m]": 1_000_000,
+    "claude-opus-4-8": 200_000,
+    "claude-opus-4-8[1m]": 1_000_000,
+    "claude-opus-4-7": 200_000,
+    "claude-opus-4-6": 200_000,
+    "claude-sonnet-5": 200_000,
+    "claude-sonnet-4-6": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-haiku-4-5-20251001": 200_000,
+}
+# Ceiling for a row with no (or an unrecognized) model: the largest window
+# across every model this table knows about. We cannot rule out the row
+# came from the biggest one, so this never rejects a legitimate run of a
+# known model -- only a value no known model could have produced.
+_MAX_KNOWN_CONTEXT_WINDOW = max(_MODEL_CONTEXT_WINDOW.values())
+
+# Machine-readable name for the refusal below (task fc471aed), so a driver
+# reading agent_runs (or a human reading a ranking built on it) can tell
+# "refused, impossible value" apart from an ordinary write.
+IMPOSSIBLE_TOKENS_REFUSAL = "impossible_token_count"
+
+
+def _impossible_tokens_reason(row: dict) -> str:
+    """"" when row['tokens'] is plausible for the row's model, else a
+    NAMED reason string.
+
+    A run cannot process more tokens in one turn than the model's own
+    context window can hold -- a claimed count above that ceiling is not
+    a big number, it is a wrong number (task fc471aed: live rows recorded
+    up to 2,659,518,144 tokens, thousands of times the largest window any
+    model here has). When no model is recorded, checked against the
+    largest window PRISM knows about (see _MAX_KNOWN_CONTEXT_WINDOW), so
+    an unattributed row is never given an unlimited pass.
+    """
+    try:
+        tokens = int((row or {}).get("tokens") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if tokens <= 0:
+        return ""
+    model = str((row or {}).get("model") or "").strip()
+    ceiling = _MODEL_CONTEXT_WINDOW.get(model, _MAX_KNOWN_CONTEXT_WINDOW)
+    if tokens <= ceiling:
+        return ""
+    return (
+        f"tokens={tokens} exceeds the {ceiling}-token context window of "
+        f"{model or '(no model recorded)'} -- refused, not stored"
+    )
+
+
 def gate_source_for_row(row) -> str | None:
     """How a PASSING verdict got into the spine, so a reader can tell a
     genuine machine decision from a producer-written one without squinting
@@ -225,14 +286,28 @@ def _add_missing_columns(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def upsert_agent_run(scores_db: str, row: dict) -> None:
+def upsert_agent_run(scores_db: str, row: dict) -> dict:
     """Insert or update one telemetry row, idempotent on
     (run_id, agent_id, step). Booleans are coerced to 0/1 for sqlite.
+    Returns {"ok": True, ...} on a normal write, or {"ok": False,
+    "refused": ..., "reason": ...} when the row is refused outright (see
+    below) -- a caller that ignores the return value loses nothing it had
+    before (this function used to return None); one that reads it gets a
+    named signal instead of guessing why nothing landed.
 
     A ``tokens`` value on a row with no LLM-turn signature (task c740443e)
     is zeroed here, before it ever reaches disk -- a non-LLM bookkeeping
     event (gate transition, etc.) has no tokens of its own to report, so a
     client-claimed number on such a row is never trustworthy.
+
+    Independently (task fc471aed), a row whose tokens exceed the context
+    window of the model that (claimed to have) produced it is IMPOSSIBLE,
+    not just untrustworthy -- refused outright, by name, rather than
+    stored as a garbage number that would silently win every spend
+    ranking. This check runs AFTER the zeroing above: a row already
+    zeroed for lacking a turn signature trivially passes it (0 is never
+    impossible); it only fires on a row that DOES look like a real turn
+    but still claims a magnitude no model could have produced.
     """
     if not _has_llm_turn_signature(row):
         try:
@@ -242,6 +317,18 @@ def upsert_agent_run(scores_db: str, row: dict) -> None:
         if claimed > 0:
             row = dict(row)
             row["tokens"] = 0
+
+    refusal = _impossible_tokens_reason(row)
+    if refusal:
+        return {
+            "ok": False,
+            "refused": IMPOSSIBLE_TOKENS_REFUSAL,
+            "reason": refusal,
+            "run_id": (row or {}).get("run_id"),
+            "agent_id": (row or {}).get("agent_id"),
+            "step": (row or {}).get("step"),
+        }
+
     vals = []
     for c in _COLS:
         v = row.get(c)
@@ -264,6 +351,12 @@ def upsert_agent_run(scores_db: str, row: dict) -> None:
         conn.commit()
     finally:
         conn.close()
+    return {
+        "ok": True,
+        "run_id": row.get("run_id"),
+        "agent_id": row.get("agent_id"),
+        "step": row.get("step"),
+    }
 
 
 def get_agent_runs(scores_db: str, limit: int = 500, **filters) -> list[dict]:

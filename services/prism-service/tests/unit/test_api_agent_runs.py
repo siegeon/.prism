@@ -371,13 +371,22 @@ def test_ingest_zeroes_tokens_when_duration_ms_zero_even_with_model(tmp_path, mo
 
 
 def test_ingest_preserves_plausible_tokens_on_real_llm_turn(tmp_path, monkeypatch):
+    # NOTE (task fc471aed, 2026-08-30): this test used to claim
+    # tokens=42,898,333 for claude-sonnet-5 -- ~214x that model's 200K
+    # context window. That placeholder was never actually plausible; it
+    # was itself an instance of the exact defect fc471aed exists to fix
+    # (agent_runs recording token counts no model could have produced).
+    # Superseded here with a value that is still large but genuinely
+    # inside claude-sonnet-5's window, so the test keeps testing its real
+    # point -- a large legitimate value is not zeroed -- without also
+    # asserting an impossible one must survive.
     client, _ = _client(tmp_path, monkeypatch)
     post = client.post(
         "/api/agent-runs/ingest",
         params={"project": "prism"},
         json=_row(
             run_id="run-real-1", agent_id="agent-real-1",
-            model="claude-sonnet-5", duration_ms=345941, tokens=42898333,
+            model="claude-sonnet-5", duration_ms=345941, tokens=185000,
         ),
     )
     assert post.status_code == 200, post.text
@@ -385,9 +394,9 @@ def test_ingest_preserves_plausible_tokens_on_real_llm_turn(tmp_path, monkeypatc
     got = client.get("/api/agent-runs", params={"project": "prism"})
     rows = [r for r in got.json()["rows"] if r["run_id"] == "run-real-1"]
     assert len(rows) == 1, rows
-    assert int(rows[0]["tokens"]) == 42898333, (
+    assert int(rows[0]["tokens"]) == 185000, (
         f"a real LLM turn (model set, duration_ms>0) must keep its "
-        f"reported tokens unchanged even when large: {rows[0]}"
+        f"reported tokens unchanged when the value is plausible: {rows[0]}"
     )
 
 
