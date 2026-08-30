@@ -73,6 +73,33 @@ def _behavior_file(behavior_id: str) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# A step's body carrying one of these keys only makes sense when a model is
+# actually being invoked -- detected from what the step's own PAYLOAD
+# carries, never from matching its url against a known endpoint name like
+# "/reason-loop". A URL-substring check silently OVER-reports codified
+# nodes and would let any future agentic step evade the card just by
+# calling a differently-named endpoint: caught live on this same task
+# (team lead, 2026-08-30) when a URL-only check misclassified task
+# cd33263f's premise-judge step as codified, even though its body carries
+# model/persona/prompt/max_budget_usd/max_turns -- it simply does not
+# route through /reason-loop. See test_kind_detector_reports_agentic_from_
+# body_not_endpoint_name below for the regression pin.
+_MODEL_REACHING_BODY_KEYS = frozenset(
+    {"model", "persona", "prompt", "max_budget_usd", "max_turns"})
+
+
+def _step_reaches_a_model(step: dict) -> bool:
+    """True when this step's own body carries a model-reaching field --
+    the honest signal that a node is AGENTIC, independent of its URL."""
+    try:
+        body = json.loads(step.get("body") or "{}")
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(body, dict):
+        return False
+    return bool(_MODEL_REACHING_BODY_KEYS & set(body.keys()))
+
+
 def _read_source(*parts: str) -> str:
     path = _SERVICE_ROOT.joinpath(*parts) if parts[0] != "web" else _WEB.joinpath(*parts[1:])
     assert path.exists(), f"expected {path} to exist"
@@ -146,9 +173,10 @@ def test_every_workflow_step_has_a_real_node(monkeypatch):
 
 def test_verify_green_state_node_is_honestly_agentic(monkeypatch):
     """AC-2: verify_green_state's own node is verify-green-state-loop, and
-    that node's kind is genuinely agentic (a reason-loop http-callback,
-    the same shape every other agent-step loop already uses) — never a
-    codified label pasted over a step that still calls a model."""
+    that node's kind is genuinely agentic — detected from what its body
+    actually carries (a model-reaching field), never from matching its url
+    against a known endpoint name — never a codified label pasted over a
+    step that still calls a model."""
     body = _get_workflows_body(monkeypatch)
     steps_by_id = {s["id"]: s for s in body["steps"]}
 
@@ -163,9 +191,41 @@ def test_verify_green_state_node_is_honestly_agentic(monkeypatch):
     for step in steps:
         assert step.get("kind") == "http-callback", (
             "an honest agentic node calls out, never runs in-process")
-        url = str(step.get("url") or "")
-        assert "/reason-loop" in url, (
-            f"a codified endpoint here would be a false 'agentic' label: {url!r}")
+        assert _step_reaches_a_model(step), (
+            "verify-green-state-loop's step body carries no model-reaching "
+            f"field (model/persona/prompt/max_budget_usd/max_turns) — a "
+            f"false agentic label with a url that merely looks right: "
+            f"{step.get('body')!r}")
+
+
+def test_kind_detector_reports_agentic_from_body_not_endpoint_name():
+    """Regression for a real live mistake caught on this same task (team
+    lead, 2026-08-30): a URL-substring check ("does the url contain
+    /reason-loop") reported task cd33263f's premise-judge step as
+    codified, because it reaches a model through a differently-named
+    endpoint (/api/workflows/steps/premise-judge). The detector must
+    classify by BODY CONTENT, so a synthetic step with a brand-new
+    endpoint name but a model-reaching body is still caught as agentic —
+    and a synthetic step whose URL merely LOOKS agentic but whose body
+    carries only identifiers is not falsely flagged either."""
+    agentic_synthetic = {
+        "kind": "http-callback",
+        "url": "${prismBackendUrl}/api/workflows/steps/a-brand-new-endpoint-name?project=${project}",
+        "body": json.dumps({"persona": "qa", "prompt": "judge this",
+                            "model": "haiku", "max_budget_usd": 0.5,
+                            "max_turns": 2, "task_id": "${taskId}"}),
+    }
+    codified_synthetic = {
+        "kind": "http-callback",
+        "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
+        "body": json.dumps({"task_id": "${taskId}"}),
+    }
+    assert _step_reaches_a_model(agentic_synthetic), (
+        "a body carrying model/persona/prompt must be detected as agentic "
+        "regardless of its endpoint name")
+    assert not _step_reaches_a_model(codified_synthetic), (
+        "a body carrying only identifiers must not be detected as agentic "
+        "even when its url happens to contain reason-loop")
 
 
 def test_every_pipeline_node_maps_to_a_step_or_is_recorded_as_deliberate():
