@@ -1633,10 +1633,17 @@ def test_land_is_ordered_last_in_bot_json_so_it_renders_as_the_terminal_step():
 
     fsm = next(f for f in data["fsms"] if f["fsmId"] == "pipeline")
     ids = fsm["behaviorIds"]
-    assert ids[-1] == "land", (
-        f"'land' must be the LAST entry so it renders as conductor's "
-        f"terminal step, not wherever it happened to be listed: {ids}")
+    # SUPERSEDED (task f97c196d): this asserted ids[-1] == "land". `reap`
+    # is now the step AFTER land -- it removes the drive's git worktree and
+    # its prism/ws/<task_id> branch once the work is really on origin/main.
+    # The INVARIANT the assertion actually encodes is unchanged and still
+    # pinned: display order follows behaviorIds order, so the two terminal
+    # behaviors must be the last two, land before reap.
+    assert ids[-2:] == ["land", "reap"], (
+        f"'land' then 'reap' must be the LAST entries so they render as "
+        f"conductor's terminal steps, in that order: {ids}")
     assert ids.count("land") == 1
+    assert ids.count("reap") == 1
 
 
 def test_write_failing_tests_loop_forbids_uncaught_exception_red():

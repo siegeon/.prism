@@ -793,7 +793,13 @@ export default function WorkflowsPage() {
     // terminal step, so there is nowhere on the canvas to hang the link) --
     // mirrors that exact same hardcoded exception on the backend, not a
     // new one invented here.
-    if (selectedWorkflowId === "land") return new Set(["green_gate"]);
+    // "reap" (task f97c196d) is the step AFTER land and carries the same
+    // exception for the same reason: green_gate is the FSM's structurally-
+    // terminal WORKFLOW_STEPS entry, so neither terminal behavior has a step
+    // to hang a linked_workflow_id on.
+    if (selectedWorkflowId === "land" || selectedWorkflowId === "reap") {
+      return new Set(["green_gate"]);
+    }
     return new Set<string>();
   }, [selectedWorkflow, selectedWorkflowId, workflows, hasChildWorkflows]);
   // managed_tasks() (useConductorState's own source) deliberately EXCLUDES

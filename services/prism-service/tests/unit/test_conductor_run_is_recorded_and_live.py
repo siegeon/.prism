@@ -219,14 +219,21 @@ def test_ac3b_the_canvas_flow_ends_on_land_without_touching_the_fsm_enum(
     from prism_service.models.workflow import WORKFLOW_STEPS
 
     nodes = list(recorder.CONDUCTOR_NODES)
-    assert nodes[-1] == "land"
+    # SUPERSEDED (task f97c196d): this asserted nodes[-1] == "land". `reap`
+    # is the step AFTER land -- it removes the drive's git worktree and its
+    # prism/ws/<task_id> branch. The invariant this test really guards is
+    # untouched and still pinned below: the canvas grows terminal nodes
+    # WITHOUT editing the WORKFLOW_STEPS enum.
+    assert nodes[-2:] == ["land", "reap"]
     assert nodes.index("green_gate") < nodes.index("land")
     for step in WORKFLOW_STEPS:
         assert step["id"] in nodes, step["id"]
 
-    assert "land" not in {s["id"] for s in WORKFLOW_STEPS}, (
-        "the terminal node is drawn from the real ship record; adding it to "
-        "WORKFLOW_STEPS edits a control_plane.POLICY_FILES module")
+    fsm_ids = {s["id"] for s in WORKFLOW_STEPS}
+    for terminal in ("land", "reap"):
+        assert terminal not in fsm_ids, (
+            "the terminal nodes are drawn from the real ship record; adding "
+            "one to WORKFLOW_STEPS edits a control_plane.POLICY_FILES module")
 
 
 def test_ac3b_a_task_that_reaches_land_stays_on_the_board_as_finished(

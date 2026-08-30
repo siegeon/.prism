@@ -17,7 +17,8 @@
         "verify-green-state-loop",
         "red-gate-status",
         "green-gate-status",
-        "land"
+        "land",
+        "reap"
       ]
     }
   ]

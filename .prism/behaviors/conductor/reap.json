@@ -1,0 +1,23 @@
+{
+  "id": "reap",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Reap a landed task's worktree and branch",
+  "version": 1,
+  "steps": [
+    {
+      "id": "survey",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/reap?project=${project}&mode=survey",
+      "body": "{\"task_id\": \"${taskId}\", \"mode\": \"survey\"}",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "reap",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/reap?project=${project}&mode=reap",
+      "body": "{\"task_id\": \"${taskId}\", \"mode\": \"reap\"}",
+      "timeoutSeconds": 120
+    }
+  ]
+}

@@ -632,8 +632,55 @@ def ship_task(task_id: str, project: str = "default", *,
 
     land = on_landed or _replay_owner_approval
     replayed = land(task_svc, cond, task_id)
+    _reap_after_land(task_svc, task_id, project)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
             "replayed": replayed}
+
+
+def _reap_after_land(task_svc, task_id: str, project: str) -> None:
+    """THE PIPELINE'S TERMINAL STEP (task f97c196d): remove what the drive
+    left behind -- its git worktree and its `prism/ws/<task_id>` branch.
+
+    THE TRIGGER IS A SUCCESSFUL LAND, not `status == done`: the checkout and
+    the branch are only provably disposable once the work is really on
+    origin/main. Every refusal (uncommitted work, commits that exist nowhere
+    else, a live drive, a locked worktree) is decided inside task_reaper.
+
+    IT RUNS AFTER THE GATE IS SETTLED, never before. `_adjudicate_after_ship`
+    re-runs every green_gate tooth, and receipt freshness resolves the tree
+    sha THROUGH the task's workspace (task_workspace.workspace_path ->
+    oracle_spec.current_tree_sha). Reaping first would delete the checkout
+    the gate is about to read and refuse a task that had in fact shipped.
+
+    Best-effort in both directions: a reap error never affects the ship, and
+    a ship that already succeeded is never re-run to retry a reap.
+    """
+    try:
+        from datetime import datetime as _dt, timezone as _tz
+
+        from prism_service.project_context import get_project
+        from prism_service.services import drive_heartbeat, task_reaper
+        from prism_service.services.flow_run_recorder import (
+            record_node_execution as _record)
+        scores = str(get_project(project)._data_dir / "scores.db")
+
+        def _live(tid: str) -> bool:
+            age = drive_heartbeat.heartbeat_age_s(scores, tid)
+            return age is not None and age < 900.0
+
+        verdict = task_reaper.reap_task(task_id, status="done", is_live=_live)
+        _audit(task_svc, task_id, "reap", str(verdict.get("reason") or "")[:200])
+        now = _dt.now(_tz.utc).isoformat()
+        _record(scores,
+                {"task_id": task_id, "node_id": task_reaper.REAP_NODE,
+                 "actor": "ship-worker", "workflow_id": "conductor",
+                 "outcome": "pass" if verdict.get("outcome") == "pass"
+                            else "refused",
+                 "reason": str(verdict.get("reason") or ""),
+                 "started_at": now, "ended_at": now},
+                project=project)
+    except Exception:  # noqa: BLE001 - a reap never fails a completed ship
+        pass
 
 
 def _replay_owner_approval(task_svc, cond, task_id: str) -> bool:

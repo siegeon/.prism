@@ -47,8 +47,21 @@ from prism_service.services import sqlite_db
 # canvas's own "land" node as reached -- fixed here by recording against
 # the id that is actually on the diagram.
 SHIPPED_NODE = "land"
+# The step AFTER land (task f97c196d): a landed task's git worktree and its
+# `prism/ws/<task_id>` branch are removed. Same reasoning as SHIPPED_NODE --
+# a real, drawn FSM node (.prism/behaviors/conductor/reap.json, the 14th
+# behaviorId in bot.json), never a WORKFLOW_STEPS entry. Imported from the
+# service that owns the behaviour so the drawn node and the recorded run
+# cannot drift apart.
+from prism_service.services.task_reaper import REAP_NODE  # noqa: E402
+
 CONDUCTOR_NODES: tuple[str, ...] = tuple(
-    [str(s["id"]) for s in WORKFLOW_STEPS] + [SHIPPED_NODE])
+    [str(s["id"]) for s in WORKFLOW_STEPS] + [SHIPPED_NODE, REAP_NODE])
+
+# A walk that reached EITHER terminal node is finished. `land` alone stays
+# finished: a task whose worktree was already cleaned by hand, or whose reap
+# refused because the branch still holds unique work, still shipped.
+_TERMINAL_NODES: frozenset = frozenset({SHIPPED_NODE, REAP_NODE})
 
 # Which nodes are gates -- read off the same step list, so a new gate in the
 # FSM is a gate here without a second list to keep in sync.
@@ -181,8 +194,9 @@ def runs_for_task(scores_db: str, task_id: str,
 
 
 def is_finished(runs: list) -> bool:
-    """True once the flow reached its terminal node -- the work landed."""
-    return bool(runs) and str(runs[-1].get("node_id") or "") == SHIPPED_NODE
+    """True once the flow reached a terminal node -- the work landed, and
+    (task f97c196d) optionally had its worktree and branch reaped after."""
+    return bool(runs) and str(runs[-1].get("node_id") or "") in _TERMINAL_NODES
 
 
 def is_visible(runs: list) -> bool:
