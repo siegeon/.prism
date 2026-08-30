@@ -868,6 +868,25 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
                                       session_id=body.session_id)
             except Exception:
                 pass
+        # CHALLENGE THE TEXT THIS NODE JUST WROTE (task d7947eb6). Every
+        # driver writes the artifact and then reports HERE -- task_runner's
+        # _route_proof, resume_actuator, and the MCP conductor_work loop --
+        # so this is the one choke point where a generated story, plan,
+        # premise note or completion proof can be judged against the LIVE
+        # ontology rules BEFORE the advance, and therefore before any gate
+        # rubric reads it. services/text_challenge.py is codified: the
+        # verdict is ontology_rules.run_shapes over a one-node probe graph
+        # and the repair is ste.normalize plus lexicon.align, so this adds
+        # no model call to the report path. A step that writes no text
+        # artifact returns immediately. Best-effort, like the red and green
+        # mints above: a challenge error never blocks the advance.
+        try:
+            from prism_service.services.text_challenge import (
+                challenge_step_artifacts)
+            challenge_step_artifacts(svc._task_svc, body.task_id, step["id"],
+                                     project=project)
+        except Exception:
+            pass
         res = svc.advance_task(body.task_id, session_id=body.session_id,
                               model=body.model, usage=body.usage)
 

@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Review previous notes (Gather-Judge-Check, task cd33263f)",
-  "version": 2,
+  "version": 3,
   "steps": [
     {
       "id": "gather",
@@ -25,6 +25,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/premise-citation-check?project=${project}",
       "body": "{\"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 30
+    },
+    {
+      "id": "text-challenge",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/text-challenge?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"step_id\": \"review_previous_notes\"}",
+      "timeoutSeconds": 60
     }
   ]
 }

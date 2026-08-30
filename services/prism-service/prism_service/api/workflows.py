@@ -1942,6 +1942,69 @@ def workflow_step_premise_citation_check(
             reason=result["reason"])
 
 
+# ----------------------------------------------------------------------
+# CHALLENGE THE TEXT A NODE JUST WROTE (task d7947eb6)
+# ----------------------------------------------------------------------
+# Owner: "we must make sure all of the text generation nodes that hit
+# artifacts use the ontology rules, they should have separate nodes to
+# challenge, correct or provide access to prevent this from happening
+# again." Same three-node shape review_previous_notes already uses --
+# codified gather, agentic judge, codified check -- applied to every
+# text-generating node: the generating step runs, then this CODIFIED
+# step judges what it wrote with the LIVE ontology rules
+# (services/text_challenge.py runs ontology_rules.run_shapes over a
+# one-node probe graph, so the verdict is the same SPARQL the Rules tab
+# runs), repairs what a machine can repair safely, and NAMES what it
+# must not repair. Never a model call.
+
+
+class TextChallengeRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    step_id: str = Field(min_length=1)
+
+
+class TextChallengeViolation(BaseModel):
+    field: str
+    name: str
+    message: str
+
+
+class TextChallengeResponse(BaseModel):
+    step: str
+    repaired: list[str] = []
+    unrepaired: list[TextChallengeViolation] = []
+    fields_checked: list[str] = []
+    reason: str
+
+
+@router.post("/steps/text-challenge")
+def workflow_step_text_challenge(
+    body: TextChallengeRequest, project: str = Query(...),
+) -> TextChallengeResponse:
+    """CODIFIED. Judges the artifact `step_id` just wrote against the
+    live ontology text rules, repairs what the deterministic normaliser
+    and the lexicon aligner can repair without changing a claim, and
+    reports every violation neither can fix. Holds an oracle, a stop_if,
+    a heading, a table row and every hedge byte-identical. Never calls a
+    model."""
+    with _tracer.start_as_current_span("workflow.step.text_challenge") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        span.set_attribute("workflow.step.id", body.step_id)
+
+        from prism_service.services import text_challenge
+
+        ctx = get_project(project)
+        report = text_challenge.challenge_step_artifacts(
+            ctx.task_svc, body.task_id, body.step_id, project=project)
+        return TextChallengeResponse(
+            step=report["step"], repaired=report["repaired"],
+            unrepaired=[TextChallengeViolation(**v)
+                        for v in report["unrepaired"]],
+            fields_checked=sorted(report["fields"]),
+            reason=report["reason"])
+
+
 class RedGateStatusRequest(BaseModel):
 
     task_id: str = Field(min_length=1)

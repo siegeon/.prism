@@ -435,12 +435,23 @@ def test_review_previous_notes_behavior_is_three_steps_agentic_only_in_the_middl
     behavior = json.loads(path.read_text())
     steps = behavior["steps"]
     ids = [s["id"] for s in steps]
-    assert ids == ["gather", "loop", "check"]
+    # SUPERSEDED by task d7947eb6: the chain is no longer exactly three
+    # steps. Every text-generating node now carries a CODIFIED
+    # text-challenge step after it (owner: "all of the text generation
+    # nodes that hit artifacts use the ontology rules, they should have
+    # separate nodes to challenge, correct or provide access"), so this
+    # behavior is gather -> loop -> check -> text-challenge. The real
+    # invariant this test encodes -- exactly ONE agentic step, and it is
+    # the judge in the middle -- is asserted below against the model
+    # payload rather than against a fixed step count, so a further
+    # codified step cannot break it again.
+    assert ids[:3] == ["gather", "loop", "check"]
     assert "/steps/premise-gather" in steps[0]["url"]
     assert "/steps/premise-judge" in steps[1]["url"]
     assert "/steps/premise-citation-check" in steps[2]["url"]
-    # the middle step is the ONLY one carrying a model -- gather and check
-    # are pure http-callbacks with no reasoning payload at all
-    assert "model" not in steps[0]["body"]
-    assert "model" in steps[1]["body"]
-    assert "model" not in steps[2]["body"]
+    assert ids[3:] == ["text-challenge"]
+    assert "/steps/text-challenge" in steps[3]["url"]
+    # the judge is the ONLY step carrying a model -- every other step is a
+    # pure http-callback with no reasoning payload at all
+    agentic = [s["id"] for s in steps if "model" in s["body"]]
+    assert agentic == ["loop"], agentic
