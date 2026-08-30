@@ -290,10 +290,24 @@ def node_token_trend(
     conn = _connect(scores_db)
     try:
         placeholders = ", ".join("?" for _ in steps)
+        # Ordered by recorded_at ALONE, never started_at: started_at is
+        # mixed-format on this table (ISO strings pre-2026-08-19 vs. epoch
+        # numbers written since -- both land in a TEXT-affinity column, so
+        # SQLite's default text collation sorts "2026-08-18T..." AHEAD of
+        # "1788113951.8..." lexicographically, because '2' > '1' as a
+        # character. A DESC sort on that column reads a real 11-day-old
+        # row as the MOST recent one. Live-verified on this project's own
+        # agent_runs: 14 ISO-format rows survive among exactly these 10
+        # step ids, which would have silently bumped genuinely-recent
+        # runs out of the trailing window (found live on this task,
+        # 2026-08-30, before this fix). recorded_at is a single
+        # server-stamped `datetime('now')` DEFAULT (schema above) -- always
+        # one format, always ingestion-ordered, regardless of what a
+        # caller sends as started_at.
         rows = conn.execute(
             f"SELECT step, model, tokens FROM agent_runs "
             f"WHERE step IN ({placeholders}) AND tokens IS NOT NULL AND tokens > 0 "
-            f"ORDER BY started_at DESC, recorded_at DESC",
+            f"ORDER BY recorded_at DESC",
             list(steps),
         ).fetchall()
     finally:
