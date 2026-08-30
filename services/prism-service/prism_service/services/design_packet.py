@@ -365,6 +365,36 @@ def _root_conductor_plan_gate(task) -> bool:
     return not parent_id and workflow == "implement"
 
 
+def _name_the_deciding_seat(cond, task_id: str, reason: str) -> None:
+    """Make sure the audit trail NAMES the seat that decided this gate.
+
+    ConductorService.gate_decide's legacy no-verifier branch hardcodes
+    ``actor="conductor"`` and discards the caller's actor, and that module
+    is a pinned ``control_plane.POLICY_FILES`` entry this task must not
+    edit. So the seat appends its OWN gate_decide row whenever the row
+    gate_decide wrote does not already name it: a reader of the history can
+    always tell WHO released a root plan_gate and on what certainty, never
+    "conductor" alone. A no-op on the verifier-wired production path, where
+    gate_decide's actor passthrough already records the seat.
+    """
+    from prism_service.services.conductor_service import ADJUDICATOR_SEAT
+    svc = getattr(cond, "_task_svc", None)
+    if svc is None:
+        return
+    try:
+        rows = [h for h in svc.history(task_id)
+                if getattr(h, "action", "") == "gate_decide"]
+        if rows and getattr(rows[-1], "actor", "") == ADJUDICATOR_SEAT:
+            return
+        svc.record_history(
+            task_id, action="gate_decide",
+            details=(f"gate=plan_gate; action=approve; "
+                     f"seat={ADJUDICATOR_SEAT}; {reason}"),
+            actor=ADJUDICATOR_SEAT)
+    except Exception:
+        pass
+
+
 def adjudicate_root_plan_gate(cond, task_id: str, task, project: str
                               ) -> Optional[dict]:
     """The adjudicator's OWN certainty-gated decision for a root plan_gate
@@ -432,7 +462,10 @@ def adjudicate_root_plan_gate(cond, task_id: str, task, project: str
             task_id, "approve", reason=reason,
             session_id=ADJUDICATOR_SEAT, actor=ADJUDICATOR_SEAT,
             model="machine")
-        return res if res and res.get("ok") else {"ok": False}
+        if res and res.get("ok"):
+            _name_the_deciding_seat(cond, task_id, reason)
+            return res
+        return {"ok": False}
 
     _r = root_plan_gate_escalation_reason(project, task_id, task, status)
     if _r != (getattr(task, "gate_reason", "") or ""):
