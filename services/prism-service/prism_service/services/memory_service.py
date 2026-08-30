@@ -114,6 +114,18 @@ class MemoryService:
         safe = domain.replace("/", "_").replace("\\", "_")
         return self._dir / f"{safe}.jsonl"
 
+    def _archive_file(self, domain: str) -> Path:
+        """The sidecar the reduction pass moves surplus copies into.
+
+        A SUBDIRECTORY of the expertise dir. Every reader globs ``*.jsonl``
+        one level deep (``list_domains`` here, ``mulch.py:44``,
+        ``brain_engine.py:3836``), so an archived row leaves the API payload
+        and Brain hydration while staying readable on disk forever. The pass
+        NEVER deletes a row.
+        """
+        safe = domain.replace("/", "_").replace("\\", "_")
+        return self._dir / "_archive" / f"{safe}.jsonl"
+
     @staticmethod
     def _generate_id() -> str:
         """Generate a unique entry ID in mx-XXXXXX format."""
@@ -256,6 +268,54 @@ class MemoryService:
 
         now = datetime.now(timezone.utc).isoformat()
         entries = self._read_entries(domain)
+
+        # UPSERT on (name, description) — task f0633425. A memory whose name
+        # AND description are byte-identical to a row already on disk is the
+        # SAME fact, not a new generation of it. Before this, every re-seed
+        # minted a fresh mx- id and APPENDED: on 2026-08-30 one feedback
+        # memory held 252 identical copies and /api/memory/entries served
+        # 7,441,732 bytes. The EARLIEST matching row wins, so recorded_at
+        # keeps saying when the fact was first learned.
+        identical = None
+        for existing in entries:
+            if existing.name == name and existing.description == description:
+                identical = existing
+                break
+        if identical is not None:
+            # A same-name row holding DIFFERENT text is a DIFFERENT fact and
+            # is superseded exactly as before. Only the identical row revives.
+            for other in entries:
+                if other is identical:
+                    continue
+                if (other.name == name and other.status == "active"
+                        and not other.invalid_at):
+                    other.status = "archived"
+                    other.invalid_at = now
+            identical.status = "active"
+            identical.invalid_at = ""
+            identical.type = type or identical.type
+            identical.classification = (
+                classification or identical.classification)
+            identical.memory_type = memory_type or identical.memory_type
+            # max(), never the caller's value alone: a seed that re-stores at
+            # the default importance must not silently downgrade a curated
+            # one. update_entry() is the way to LOWER importance.
+            identical.importance = max(int(identical.importance),
+                                       int(importance))
+            if evidence:
+                identical.evidence = evidence
+            if adr_status:
+                identical.adr_status = adr_status
+            if supersedes:
+                identical.supersedes = supersedes
+            if owner_user_id:
+                identical.owner_user_id = owner_user_id
+            if not identical.valid_at:
+                identical.valid_at = identical.recorded_at or now
+            self._write_entries(domain, entries)
+            self._index_in_brain(identical)
+            return identical
+
         superseded = None
 
         # Check for exact name match
@@ -310,6 +370,161 @@ class MemoryService:
         self._index_in_brain(entry)
 
         return entry
+
+    # ------------------------------------------------------------------
+    # Reduction pass — one copy of each fact (task f0633425)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _dedupe_order(pair: tuple) -> tuple:
+        """Sort key for one member of a duplicate group: oldest first.
+
+        recorded_at, then valid_at, then file position — a row missing both
+        timestamps falls back to where it sits in the file, which is append
+        order, so the answer is stable and never random.
+        """
+        index, entry = pair
+        return (entry.recorded_at or entry.valid_at or "", index)
+
+    def deduplicate(self, dry_run: bool = True,
+                    sample_limit: int = 20) -> dict:
+        """Collapse byte-identical copies of a fact to ONE live row.
+
+        A group is entries in ONE domain that share their ``name`` AND their
+        ``description`` EXACTLY. Name alone is never enough: two rows under
+        one name with different text are two real facts, and folding them
+        would lose one. The EARLIEST member survives (it carries the true
+        recorded_at) and inherits the group's CURRENT state, so collapsing a
+        chain of generations never retires a live memory. Every other member
+        is marked archived and MOVED to ``_archive/<domain>.jsonl`` — out of
+        the API payload, never off the disk.
+
+        ``dry_run=True`` (the default) writes nothing and returns the same
+        report, including ``samples``: the real text on both sides of each
+        decision. Read the samples, not only the counts, before applying.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        report: dict = {
+            "dry_run": bool(dry_run),
+            "archive_dir": str(self._dir / "_archive"),
+            "domains": 0,
+            "rows_scanned": 0,
+            "groups": 0,
+            "rows_archived": 0,
+            "bytes_freed": 0,
+            "per_domain": {},
+            "samples": [],
+            "refused": [],
+        }
+        candidates: list[dict] = []
+
+        for domain in self.list_domains():
+            entries = self._read_entries(domain)
+            report["domains"] += 1
+            report["rows_scanned"] += len(entries)
+
+            grouped: dict[tuple, list[tuple]] = {}
+            for index, entry in enumerate(entries):
+                grouped.setdefault(
+                    (entry.name, entry.description), []).append((index, entry))
+
+            dropped_indexes: set[int] = set()
+            dropped_rows: list[ExpertiseEntry] = []
+            domain_groups = 0
+
+            for (name, description), members in grouped.items():
+                if len(members) < 2:
+                    continue
+                # Guard the stop_if: a group whose text is not identical is
+                # refused whole, never merged.
+                if any(e.description != description for _, e in members):
+                    report["refused"].append({
+                        "domain": domain, "name": name,
+                        "reason": "descriptions are not identical",
+                    })
+                    continue
+
+                members = sorted(members, key=self._dedupe_order)
+                keep_index, keep = members[0]
+                rest = members[1:]
+                domain_groups += 1
+
+                self._merge_group_state(keep, [e for _, e in members])
+                for index, entry in rest:
+                    entry.status = "archived"
+                    entry.invalid_at = entry.invalid_at or now
+                    dropped_indexes.add(index)
+                    dropped_rows.append(entry)
+                    report["bytes_freed"] += len(
+                        json.dumps(self._entry_to_dict(entry)))
+
+                candidates.append({
+                    "domain": domain,
+                    "name": name,
+                    "copies": len(members),
+                    "kept_id": keep.id,
+                    "kept_recorded_at": keep.recorded_at,
+                    "kept_status": keep.status,
+                    "dropped_ids": [e.id for _, e in rest][:10],
+                    "kept_description": keep.description,
+                    "dropped_description": rest[0][1].description,
+                })
+
+            if not dropped_indexes:
+                continue
+            report["groups"] += domain_groups
+            report["rows_archived"] += len(dropped_rows)
+            report["per_domain"][domain] = {
+                "groups": domain_groups,
+                "archived": len(dropped_rows),
+                "kept": len(entries) - len(dropped_rows),
+            }
+            if not dry_run:
+                survivors = [
+                    e for i, e in enumerate(entries) if i not in dropped_indexes
+                ]
+                self._append_archive(domain, dropped_rows)
+                self._write_entries(domain, survivors)
+
+        candidates.sort(key=lambda c: c["copies"], reverse=True)
+        report["samples"] = candidates[:sample_limit]
+        return report
+
+    @staticmethod
+    def _merge_group_state(keep: ExpertiseEntry,
+                           members: list[ExpertiseEntry]) -> None:
+        """Carry the group's CURRENT state onto the surviving earliest row.
+
+        Keeping the earliest row must not retire a live memory: if ANY copy
+        is active the survivor is active. Recall stats take the highest
+        observed value rather than a sum, so no number is invented.
+        """
+        live = [e for e in members if e.status == "active" and not e.invalid_at]
+        if live:
+            keep.status = "active"
+            keep.invalid_at = ""
+        else:
+            latest = members[-1]
+            keep.status = latest.status
+            keep.invalid_at = latest.invalid_at
+        keep.recall_count = max(int(e.recall_count) for e in members)
+        keep.last_recalled = max((e.last_recalled or "") for e in members)
+        keep.importance = max(int(e.importance) for e in members)
+        keep.generation = max(int(e.generation) for e in members)
+        if not keep.summary:
+            keep.summary = next((e.summary for e in members if e.summary), "")
+        if not keep.effectiveness:
+            keep.effectiveness = next(
+                (e.effectiveness for e in members if e.effectiveness), 0.0)
+
+    def _append_archive(self, domain: str,
+                        rows: list[ExpertiseEntry]) -> None:
+        """Append dropped rows to the archive sidecar. Never overwrites."""
+        path = self._archive_file(domain)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            for entry in rows:
+                handle.write(json.dumps(self._entry_to_dict(entry)) + "\n")
 
     def _index_in_brain(self, entry: ExpertiseEntry) -> None:
         """Index a memory entry into Brain's FTS5 for full-text recall."""
