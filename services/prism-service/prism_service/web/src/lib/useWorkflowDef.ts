@@ -169,6 +169,12 @@ export type WorkflowRun = {
       status: string;
       workflowStep?: string | null;
       gateState?: string | null;
+      /** The seat's own words for why gateState is "failed" -- task
+       * 8fbd5cf0 stop_if "a stored gate refusal reason never reaches the
+       * canvas". A correct red/teal label alone still leaves a driver
+       * guessing WHAT to fix; this is the same task.gate_reason the task
+       * page already renders, just carried onto this synthesized run. */
+      gateReason?: string | null;
       stranded: boolean;
     };
   };
@@ -233,6 +239,7 @@ export type ConductorRunTask = {
   status?: string;
   workflow_step?: string | null;
   gate_state?: string | null;
+  gate_reason?: string | null;
   stranded?: boolean;
 };
 
@@ -333,6 +340,7 @@ type ConductorFreshTask = {
   status?: string;
   workflow_step?: string | null;
   gate_state?: string | null;
+  gate_reason?: string | null;
   stranded?: boolean;
 };
 
@@ -353,6 +361,7 @@ export function fetchConductorRunFromTask(project: string, task: ConductorRunTas
     const status = fresh?.status ?? task.status;
     const workflowStep = fresh?.workflow_step ?? task.workflow_step;
     const gateState = fresh?.gate_state ?? task.gate_state;
+    const gateReason = fresh?.gate_reason ?? task.gate_reason ?? null;
     const timeline = conductorTimelineFromHistory(history ?? []);
     const last = timeline.at(-1);
     const done = status === "done";
@@ -373,7 +382,7 @@ export function fetchConductorRunFromTask(project: string, task: ConductorRunTas
         passed: done && !stranded,
         conductorTask: {
           id: task.id, title: title ?? task.title, status: status ?? "",
-          workflowStep, gateState, stranded,
+          workflowStep, gateState, gateReason, stranded,
         },
       },
     };

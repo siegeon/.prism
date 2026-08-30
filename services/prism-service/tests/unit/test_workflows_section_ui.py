@@ -1412,7 +1412,9 @@ def test_fetch_conductor_run_prefers_the_fresh_task_over_the_callers_stale_copy(
     # stale (the caller's rail-poll snapshot), which is what let two
     # different step names appear on screen at once.
     assert "currentStep: last?.step ?? workflowStep ?? \"\"," in builder
-    assert "workflowStep, gateState, stranded," in builder
+    # gateReason joined this assignment in task 8fbd5cf0's refusal-legibility
+    # fix (test_the_conductor_run_type_carries_gate_reason_end_to_end below)
+    assert "workflowStep, gateState, gateReason, stranded," in builder
 
 
 def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
@@ -1654,31 +1656,34 @@ def test_run_workflow_button_is_hidden_for_conductor():
 # Craft bar (task 8fbd5cf0): "Respect prefers-reduced-motion: fall back to
 # instant state changes, never to a broken layout." The token/packet system
 # is a hand-rolled canvas-2D animation (workflowGraph.ts/packets.ts), not a
-# CSS transition a browser setting suppresses for free -- it has to be
-# taught the OS preference explicitly, on both the page (reads matchMedia)
-# and the graph (what "reduced" means: no packet ever rides a wire, so a
-# transition still lands the same frame, it just never travels there).
+# CSS transition a browser setting suppresses for free. The page already
+# reads the OS preference live via motion/react's useReducedMotion() (for
+# SdlcProgress's own tweens) -- the fix relays that SAME value onto the
+# graph instance the rAF loop actually draws, rather than standing up a
+# second, independent matchMedia listener that could drift from the first.
 # --------------------------------------------------------------------------
 
 def test_the_page_relays_the_os_reduced_motion_preference_into_the_graph():
-    """WorkflowsPage.tsx must read prefers-reduced-motion once on mount AND
-    keep it live on change (a user can toggle the OS setting without
-    reloading the tab), and hand it to the SAME graph instance the rAF loop
-    already drives -- not a parallel flag nothing reads."""
+    """WorkflowsPage.tsx must hand the SAME `reduced` value it already reads
+    (useReducedMotion(), used by SdlcProgress) onto the canvas graph
+    instance, reactively -- not a parallel flag nothing reads, and not a
+    second independent OS-preference read that could disagree with the
+    first."""
     page = _read("pages", "WorkflowsPage.tsx")
 
-    assert 'matchMedia("(prefers-reduced-motion: reduce)")' in page, (
-        "WorkflowsPage.tsx must read the real OS media query, not a "
-        "hand-rolled substitute")
-    assert "graphRef.current.setReducedMotion(mq.matches)" in page, (
-        "the initial read must be relayed onto the graph instance the "
-        "canvas actually renders")
-    assert 'mq.addEventListener("change"' in page, (
-        "the preference must stay live -- a change event, not a one-shot "
-        "read at mount")
-    assert "graphRef.current.setReducedMotion(e.matches)" in page, (
-        "a later OS change must also reach the graph, not just the "
-        "initial value")
+    assert "const reduced = useReducedMotion();" in page, (
+        "the page's existing OS reduced-motion read must survive untouched"
+    )
+    effect_body = _function_body(
+        page,
+        "useEffect(() => {\n    graphRef.current.setReducedMotion(!!reduced);",
+    )
+    assert "graphRef.current.setReducedMotion(!!reduced);" in effect_body, (
+        "the graph instance the canvas actually renders must be kept in "
+        "sync with the page's single `reduced` source of truth")
+    assert "[reduced]" in page, (
+        "the relay effect must re-run whenever the OS preference changes, "
+        "not just once at mount")
 
 
 def test_reduced_motion_means_no_packet_ever_travels():
@@ -1705,3 +1710,64 @@ def test_reduced_motion_means_no_packet_ever_travels():
         "the graph needs a setter the page can call on mount and on "
         "every OS preference change"
     )
+
+
+# --------------------------------------------------------------------------
+# Task 8fbd5cf0 stop_if: "A gate reads as deciding or waiting while its seat
+# has already refused" / "A stored gate refusal reason never reaches the
+# canvas." Live misfire named in the task: on fc471aed the bottom bar read
+# "machine deciding" for 18 minutes after the seat had already refused, and
+# the stored reason (naming the exact fix) never reached the screen. Fixed
+# by threading task.gate_reason through fetchConductorRunFromTask's
+# synthesized run and reading gateState in the banner's own tone, not just
+# run.status (which stays "Runnable" for a refused-but-not-yet-rewound
+# task -- the SAME state a still-deciding gate is in).
+# --------------------------------------------------------------------------
+
+def test_a_refused_gate_reads_differently_from_a_deciding_one_on_the_canvas():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    tone_body = _function_body(page, "function conductorRunTone(run: WorkflowRun): string {")
+    assert 'run.data.conductorTask?.gateState === "failed"' in tone_body, (
+        "the banner's own border/text tone must react to a refused gate "
+        "even while run.status is still \"Runnable\" -- the exact state a "
+        "gate that is merely still deciding is also in")
+    assert '"border-red-500/60 text-red-300"' in tone_body
+
+    summary_body = _function_body(page, "function conductorRunSummary(run: WorkflowRun): string {")
+    assert 't.gateState === "failed" ? ` · REFUSED: ${t.gateReason' in summary_body, (
+        "a refused gate's summary text must include the STORED reason, "
+        "not just a generic \"gate failed\" label a driver can't act on")
+
+    # The call site must actually pass gate_reason through -- adding the
+    # field to the type without wiring the one real caller would leave it
+    # permanently undefined.
+    assert "gate_reason: task.gate_reason," in page, (
+        "openConductorInstance must pass the task's real gate_reason into "
+        "fetchConductorRunFromTask, or gateReason is always empty")
+
+
+def test_the_conductor_run_type_carries_gate_reason_end_to_end():
+    """useWorkflowDef.ts: gate_reason must survive from the caller's task
+    row, through the /api/tasks?scope=core refetch (fresh wins when
+    present, same fallback pattern as workflowStep/gateState), onto the
+    synthesized run's conductorTask -- not dropped at any one of the three
+    hops."""
+    src = _read("lib", "useWorkflowDef.ts")
+
+    assert "gate_reason?: string | null;" in src, (
+        "ConductorRunTask and ConductorFreshTask must both carry gate_reason"
+    )
+    assert "gateReason?: string | null;" in src, (
+        "the synthesized run's conductorTask type must expose it"
+    )
+    builder = _function_body(
+        src,
+        "export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {\n  return api.get<{ task?: ConductorFreshTask; history: ConductorHistoryRow[] }>(",
+    )
+    assert "const gateReason = fresh?.gate_reason ?? task.gate_reason ?? null;" in builder, (
+        "the fresh re-fetch must win over the caller's possibly-stale "
+        "gate_reason, same as workflowStep/gateState just above it")
+    assert "workflowStep, gateState, gateReason, stranded," in builder, (
+        "gateReason must actually be assigned onto the returned "
+        "conductorTask object, not just computed and dropped")

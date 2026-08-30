@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.195"
+PRISM_VERSION = "7.13.196"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.196: task 8fbd5cf0, two more craft-bar fixes. (1) the reduced- '
+    'motion relay now reuses the page own useReducedMotion() (motion/react, '
+    'already read for SdlcProgress) instead of a second matchMedia listener '
+    '-- one source of truth. (2) a refused gate now reads differently from '
+    'a still-deciding one on the canvas itself: task.gate_reason is threaded '
+    'through fetchConductorRunFromTask onto conductorTask.gateReason, '
+    'conductorRunSummary renders the actual stored reason (not just "gate '
+    'failed"), and conductorRunTone turns the banner red the moment '
+    'gateState is "failed", even while run.status is still "Runnable" -- '
+    'the exact state a gate that is merely still deciding is also in (the '
+    'fc471aed misfire this task names: "machine deciding" shown 18 minutes '
+    'after the seat had already refused). '
     '7.13.195: task 8fbd5cf0, craft pass -- the canvas token/packet '
     'system now respects prefers-reduced-motion. WorkflowsPage.tsx reads '
     'matchMedia("(prefers-reduced-motion: reduce)") once on mount and '

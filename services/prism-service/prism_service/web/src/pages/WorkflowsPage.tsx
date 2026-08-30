@@ -188,13 +188,27 @@ function conductorRunSummary(run: WorkflowRun): string {
   const t = run.data.conductorTask;
   if (!t) return "";
   if (t.status === "done") return `${t.title} · ${t.stranded ? "done · not yet on origin/main" : "shipped"}`;
-  const gate = t.gateState === "pending" ? " · awaiting gate" : t.gateState === "failed" ? " · gate failed" : "";
+  // Task 8fbd5cf0 stop_if: "a stored gate refusal reason never reaches the
+  // canvas." A correct "gate failed" label still leaves a driver guessing
+  // WHAT to fix -- the seat already named the exact reason in
+  // task.gate_reason (TaskDetailPage renders the same string via
+  // LinkedText); this is the SAME text, carried here instead of a second,
+  // silent source of truth.
+  const gate = t.gateState === "pending" ? " · awaiting gate"
+    : t.gateState === "failed" ? ` · REFUSED: ${t.gateReason?.trim() || "gate failed"}`
+    : "";
   return `${t.title} · ${(t.workflowStep ?? "").replace(/_/g, " ") || "in progress"}${gate}`;
 }
 
 function conductorRunTone(run: WorkflowRun): string {
   if (run.status === "Terminated") return "border-amber-300/60 text-amber-200";
   if (run.status === "Complete") return run.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300";
+  // A refused gate on a still-RUNNING task (the seat has decided, the task
+  // just hasn't rewound/closed yet) must read as refused immediately, not
+  // as the same in-progress teal as a gate that is still deciding -- this
+  // is the exact live misfire the task names (fc471aed: "machine deciding"
+  // shown for 18 minutes after the seat had already refused).
+  if (run.data.conductorTask?.gateState === "failed") return "border-red-500/60 text-red-300";
   return "border-[color:var(--accent-solid)]/60 text-[color:var(--text-secondary)]";
 }
 
@@ -315,16 +329,15 @@ export default function WorkflowsPage() {
   const { managed: conductorManaged } = useConductorState(project);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<WorkflowGraph>(new WorkflowGraph());
-  // prefers-reduced-motion: read once, kept live on change. The graph
-  // itself owns what "reduced" means for a token (no travel, instant
-  // state change) -- this effect only relays the OS setting.
+  // prefers-reduced-motion: `reduced` (useReducedMotion() above) already
+  // tracks the OS setting live for SdlcProgress's own framer-motion tweens
+  // -- the canvas's token/packet system is hand-rolled canvas-2D, not a
+  // framer-motion element the hook can reach directly, so it needs the
+  // SAME value relayed onto the graph instance the rAF loop actually
+  // draws. One source of truth, not a second matchMedia listener.
   useEffect(() => {
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    graphRef.current.setReducedMotion(mq.matches);
-    const onChange = (e: MediaQueryListEvent) => graphRef.current.setReducedMotion(e.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
+    graphRef.current.setReducedMotion(!!reduced);
+  }, [reduced]);
   const [flowRuns, setFlowRuns] = useState<FlowRuns | null>(null);
   const lastFlowNodeRef = useRef<string>("");
   const dragRef = useRef<DragState>({ ...IDLE_DRAG });
@@ -1094,6 +1107,7 @@ export default function WorkflowsPage() {
     fetchConductorRunFromTask(project, {
       id: task.id, title: task.title, status: task.status,
       workflow_step: task.workflow_step, gate_state: task.gate_state,
+      gate_reason: task.gate_reason,
       stranded: strandedTaskIds.has(task.id),
     })
       .then((run) => replayHistoricalRun(run))
