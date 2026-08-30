@@ -646,6 +646,28 @@ class BrainService:
     # Status
     # ------------------------------------------------------------------
 
+    def expertise_coverage(self) -> int:
+        """How many DISTINCT memories are indexed, never how many chunk rows.
+
+        `status()["doc_count"]` is a raw `COUNT(*)` over every domain, and
+        MemoryService._index_in_brain writes one row per CHUNK of a memory,
+        so that number reads far above the memory count and cannot be shown
+        as coverage. This counts `source_file`, the pre-chunk memory path.
+        Read-only: it opens the store and does no indexing work.
+        """
+        if not self._available:
+            return 0
+        try:
+            conn = sqlite_db.connect(self._brain_db, timeout=5.0)
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT source_file) FROM docs "
+                "WHERE domain = 'expertise'"
+            ).fetchone()
+            conn.close()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     def status(self) -> dict:
         """Return summary statistics about the Brain databases.
 
