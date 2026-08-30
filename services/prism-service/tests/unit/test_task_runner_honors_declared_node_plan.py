@@ -216,3 +216,82 @@ def test_behavior_json_on_disk_still_declares_the_premise_split():
 
     assert routes == ["premise-gather", "premise-judge",
                       "premise-citation-check"]
+
+
+# ----------------------------------------------------------------------
+# THE WIRING — _run_one_step must actually call the above
+# ----------------------------------------------------------------------
+# The whole defect this task fixes was a set of codified endpoints with no
+# caller outside their own unit tests. Testing the helpers in isolation
+# would reproduce exactly that: every helper green, the drive unchanged.
+# These two pin the call itself.
+
+class _Result:
+    exit_code = 0
+    run_id = "r-live"
+    usage = {"input_tokens": 10, "output_tokens": 5, "cost_usd": 0.01,
+             "model": "haiku"}
+
+    def final_text(self):
+        return "## premises\n- The runner ignored the plan (task_runner.py:656)"
+
+    def graceful_budget_stop(self):
+        return False
+
+
+def _drive_once(monkeypatch, step, tmp_path):
+    """Run _run_one_step for `step`, returning the invoke kwargs it used."""
+    from prism_service.api import conductor_flow as flow
+    from prism_service.inference import claude_cli
+    from prism_service.services import task_workspace, premise_gather
+
+    seen = {}
+
+    monkeypatch.setattr(flow, "flow_start", lambda *a, **k: {
+        "ok": True, "job": {"step": step, "kind": "agent",
+                            "instructions": "DO THE STEP"}})
+    monkeypatch.setattr(flow, "flow_report",
+                        lambda *a, **k: {"ok": True, "advanced": True})
+    monkeypatch.setattr(task_workspace, "workspace_for",
+                        lambda tid: {"path": str(tmp_path)})
+    monkeypatch.setattr(task_runner, "_stall_count", lambda *a, **k: 0)
+    monkeypatch.setattr(task_runner, "_route_proof", lambda *a, **k: None)
+    monkeypatch.setattr(premise_gather, "gather", lambda *a, **k: [
+        premise_gather.GatheredFact(
+            kind="memory", text="The declared plan was ignored.",
+            citation="services/task_runner.py:656")])
+
+    def _fake_invoke(prompt, **kwargs):
+        seen["prompt"] = prompt
+        seen.update(kwargs)
+        return _Result()
+
+    monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
+    task_runner._run_one_step("prism", "t-live")
+    return seen
+
+
+def test_run_one_step_applies_the_declared_budget(monkeypatch, tmp_path):
+    """review_previous_notes reaches claude_cli on haiku / 2 turns / $0.50."""
+    seen = _drive_once(monkeypatch, "review_previous_notes", tmp_path)
+
+    assert seen["model"] == "haiku"
+    assert seen["max_turns"] == 2
+    assert seen["max_budget_usd"] == pytest.approx(0.5)
+
+
+def test_run_one_step_prepends_the_codified_facts(monkeypatch, tmp_path):
+    """The judge is handed resolved citations instead of grepping cold."""
+    seen = _drive_once(monkeypatch, "review_previous_notes", tmp_path)
+
+    assert "services/task_runner.py:656" in seen["prompt"]
+    assert seen["prompt"].endswith("DO THE STEP")
+
+
+def test_run_one_step_leaves_a_build_step_alone(monkeypatch, tmp_path):
+    """implement_tasks keeps the runner's own budget and an unmodified prompt."""
+    seen = _drive_once(monkeypatch, "implement_tasks", tmp_path)
+
+    assert seen["model"] is None
+    assert seen["max_turns"] == task_runner._max_turns()
+    assert seen["prompt"] == "DO THE STEP"

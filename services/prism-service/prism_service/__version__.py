@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.202"
+PRISM_VERSION = "7.13.203"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7811,4 +7811,22 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     "7.13.197 - shipped is not adjudicated. The stall handler closed a task on shipped-ness alone, and checking only for an OPEN gate was not enough: a task sitting on an AGENT step carries gate_state none, so the close proceeded even though its green_gate had never been decided. Task 8fbd5cf0 was falsely closed THREE times this way, the last at 08:53:05 while its driver was still landing commits minutes earlier. The shipped-close path now requires a real green_gate approval in the task own history, and fails closed: any history error refuses to close rather than closing something nobody judged. The invariant the path exists for is unchanged, so shipped work is still never split into waste children, and a genuinely adjudicated shipped task still closes. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.203 - the drive worker runs a node declared plan. Every conductor node "
+    "declares its execution plan in .prism/behaviors/conductor: which model, how many "
+    "turns, what budget, and which sub-steps are codified Python that costs no tokens. "
+    "task_runner._run_one_step ignored all of it and fired one claude_cli.invoke per "
+    "step at the blanket 30-turn, 2.00 USD, 900 s defaults, so premise_gather.py from "
+    "task cd33263f had no caller outside its own unit tests. review_previous_notes, the "
+    "first step of every task, therefore grepped the repo cold on every drive: 3762 "
+    "tokens and a 1725 s mean against a declared 180 s bound. The runner now reads the "
+    "behavior JSON off disk, runs the codified gather in-process at zero tokens, hands "
+    "the resolved file:line citations to the judge, applies the declared haiku, 2-turn, "
+    "0.50 USD budget, and records each codified sub-step as its own zero-token "
+    "agent_runs row so the saving is visible on the Workflows card. Only "
+    "review_previous_notes opts in: the other five agentic behaviors carry identical "
+    "template budgets that would cap implement_tasks at four turns. The declared plan "
+    "governs model, turns and budget, never the wall clock. "
 )

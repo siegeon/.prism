@@ -123,6 +123,184 @@ def _step_timeout_s(step_id: str = "") -> float:
     return base * _SLOW_STEPS.get(str(step_id or ""), 1.0)
 
 
+# ----------------------------------------------------------------------
+# Declared node plans (task 8848089d)
+# ----------------------------------------------------------------------
+# Every conductor node declares an execution plan in
+# .prism/behaviors/conductor/<behavior>.json: which model, how many turns,
+# what budget, and which sub-steps are CODIFIED -- deterministic Python
+# that costs no tokens. This worker used to ignore all of it and fire ONE
+# claude_cli.invoke per step with the blanket 30-turn / $2.00 / 900 s
+# defaults, so services/premise_gather.py (task cd33263f) had no caller
+# outside its own unit tests and review_previous_notes -- the FIRST step of
+# every task -- grepped the repo cold on every drive (3,762 tokens, 1,725 s
+# mean, against a declared 180 s bound).
+#
+# Only review_previous_notes opts in today, and DELIBERATELY so: it is the
+# one behavior with a hand-tuned v2 plan and real codified sub-steps. The
+# other five agentic behaviors all carry the SAME template budget (haiku /
+# 4 turns / $0.50 / 120 s), which is boilerplate rather than a considered
+# figure -- implement_tasks alone has a 474 s median and needs far more
+# than four turns, so honouring that template would break every build step.
+# A node joins this set when its declaration is real, never by default.
+_PLANNED_STEPS = frozenset({"review_previous_notes"})
+
+# Behavior ids per conductor step. Mirrors api/workflows._BEHAVIOUR_FOR_STEP
+# for the steps THIS seat drives; the file is read straight off disk rather
+# than through the AosWorkflows engine, so a drive never depends on that
+# separate service being reachable.
+_BEHAVIOR_FOR_STEP = {
+    "review_previous_notes": "review-previous-notes-loop",
+    "draft_story": "draft-story-loop",
+    "verify_plan": "verify-plan-loop",
+    "write_failing_tests": "write-failing-tests-loop",
+    "implement_tasks": "implement-tasks-loop",
+    "verify_green_state": "validation",
+}
+
+# A /steps/* route that calls a model. Everything else on a behavior is
+# codified by construction (see api/workflows.py -- reason-loop is the one
+# generic agentic endpoint, premise-judge the one bespoke one).
+_AGENTIC_ROUTES = frozenset({"reason-loop", "premise-judge"})
+
+
+def _behavior_dir(project: str):
+    """The on-disk conductor behavior directory for `project`."""
+    from pathlib import Path
+    from prism_service.services.claude_transcripts import _project_source_path
+
+    configured = Path(_project_source_path(project))
+    fallback = Path.home() / "projects" / project
+    root = configured if configured.is_absolute() and configured.exists() \
+        else fallback
+    return root / ".prism" / "behaviors" / "conductor"
+
+
+def _node_plan(project: str, step_id: str) -> Optional[dict]:
+    """The declared execution plan for `step_id`, or None.
+
+    None means "no credible declaration" -- either the step is not in
+    _PLANNED_STEPS, or its behavior file is missing/unreadable. Every
+    caller then keeps this module's own defaults, so a malformed JSON can
+    never make a drive cheaper than it should be, only unchanged.
+    """
+    import json
+
+    if step_id not in _PLANNED_STEPS:
+        return None
+    behavior = _BEHAVIOR_FOR_STEP.get(step_id)
+    if not behavior:
+        return None
+    path = _behavior_dir(project) / f"{behavior}.json"
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    codified: list[str] = []
+    model: Optional[str] = None
+    max_turns: Optional[int] = None
+    budget: Optional[float] = None
+    for step in doc.get("steps") or []:
+        url = step.get("url") or ""
+        route = url.split("/steps/")[-1].split("?")[0] if "/steps/" in url else ""
+        if not route:
+            continue
+        if route not in _AGENTIC_ROUTES:
+            codified.append(route)
+            continue
+        # The agentic middle carries the budget, as a JSON string body.
+        try:
+            body = json.loads(step.get("body") or "{}")
+        except Exception:
+            body = {}
+        model = body.get("model") or model
+        if isinstance(body.get("max_turns"), int):
+            max_turns = body["max_turns"]
+        if isinstance(body.get("max_budget_usd"), (int, float)):
+            budget = float(body["max_budget_usd"])
+    return {"model": model, "max_turns": max_turns,
+            "max_budget_usd": budget, "codified": codified}
+
+
+def _invoke_budget(step_id: str, plan: Optional[dict]) -> dict:
+    """claude_cli.invoke kwargs for `step_id` under `plan`.
+
+    The declared plan governs the MODEL, TURN LIMIT and BUDGET -- the three
+    caps that actually bound spend. The wall clock stays this module's:
+    _step_timeout_s already encodes hard-won knowledge about which steps
+    run things rather than write about them, and a timeout that is too
+    small kills a drive outright while one that is too large costs nothing
+    once the turn and budget caps bind first.
+    """
+    runner_timeout = _step_timeout_s(step_id)
+    if not plan:
+        return {"model": None, "max_turns": _max_turns(),
+                "max_budget_usd": _max_budget_usd(),
+                "timeout_s": runner_timeout}
+    return {
+        "model": plan.get("model") or None,
+        "max_turns": plan.get("max_turns") or _max_turns(),
+        "max_budget_usd": (plan["max_budget_usd"]
+                           if plan.get("max_budget_usd") is not None
+                           else _max_budget_usd()),
+        "timeout_s": runner_timeout,
+    }
+
+
+def _codified_preamble(project: str, task, memory_svc=None, task_svc=None,
+                       brain_svc=None):
+    """Resolved citations for `task`, as (preamble_text, facts).
+
+    This is the CODIFIED gather sub-step running in-process: pure local
+    reads, no model call, and no git/worktree lock (the 2026-08-29 daemon
+    wedge this must not reproduce). Handing the judge real file:line
+    citations up front is the whole token saving -- without it the model
+    greps the repo cold, one tool round trip per claim.
+
+    Degrades to ("", []) on ANY failure: a broken gather must leave the
+    drive exactly as it was, never halt it.
+    """
+    try:
+        from prism_service.services import premise_gather
+
+        facts = premise_gather.gather(
+            task, memory_svc=memory_svc, task_svc=task_svc,
+            brain_svc=brain_svc)
+    except Exception:
+        return "", []
+    if not facts:
+        return "", []
+    lines = [f"- [{f.kind}] {f.text} ({f.citation})" for f in facts]
+    preamble = (
+        "Grounded facts already resolved for this task (codified gather -- "
+        "reuse a citation verbatim rather than searching for it again):\n"
+        + "\n".join(lines))
+    return preamble, list(facts)
+
+
+def _record_codified_run(project: str, task_id: str, route: str,
+                         run_id: str, ok: bool, summary: str) -> None:
+    """Report a codified sub-step as its own ZERO-TOKEN agent_runs row.
+
+    Without this the saving is invisible: the Workflows node card would
+    keep reporting only the agentic middle, and nobody could tell the
+    codified half ever ran.
+    """
+    try:
+        from prism_service.services import agent_runs_data
+
+        agent_runs_data.upsert_agent_run(_scores_db_for(project), {
+            "run_id": run_id, "workflow_name": "implement",
+            "task_id": task_id, "agent_id": SEAT_ID, "role": "sm",
+            "step": route, "model": "codified", "tokens": 0,
+            "cost_usd": 0.0, "ok": 1 if ok else 0,
+            "verdict_summary": summary[:500],
+        })
+    except Exception:
+        pass
+
+
 def _max_total_usd() -> Optional[float]:
     """Aggregate spend ceiling across every tick this process ever runs
     (epic 3baadd19 AC-5) -- unlike `_max_budget_usd` (a PER-INVOCATION cap
@@ -652,14 +830,33 @@ def _run_one_step(project: str, task_id: str) -> dict:
         "last_tool": "claude_cli.invoke", "work_units": 1,
         "driver": RUNNER_DRIVER,
     })
+    # A node's DECLARED plan governs this invoke (task 8848089d): the
+    # codified sub-steps run here as Python at zero tokens, and the agentic
+    # middle gets the declared model/turns/budget instead of the blanket
+    # 30-turn / $2.00 default. `plan` is None for every step without a
+    # credible declaration, and then nothing below changes behaviour.
+    plan = _node_plan(project, job["step"])
+    prompt = job["instructions"]
+    run_id = str(uuid.uuid4())
+    if plan and "premise-gather" in (plan.get("codified") or []):
+        ctx = get_project(project)
+        task = task_svc.get(task_id)
+        preamble, facts = _codified_preamble(
+            project, task, memory_svc=getattr(ctx, "memory_svc", None),
+            task_svc=task_svc, brain_svc=getattr(ctx, "brain_svc", None))
+        if preamble:
+            prompt = preamble + "\n\n" + prompt
+        _record_codified_run(
+            project, task_id, "premise-gather", run_id, bool(facts),
+            f"resolved {len(facts)} grounded facts")
+
+    budget = _invoke_budget(job["step"], plan)
     try:
         result = claude_cli.invoke(
-            job["instructions"], work_dir=work_dir, plugin_dir=work_dir,
-            max_turns=_max_turns(), max_budget_usd=_max_budget_usd(),
-            timeout_s=_step_timeout_s(job['step']),
+            prompt, work_dir=work_dir, plugin_dir=work_dir,
             allowed_tools=BUILD_TOOLS, project=project,
             purpose=f"task-runner@{job['step']}#{task_id[:8]}",
-            session_id=str(uuid.uuid4()))
+            session_id=str(uuid.uuid4()), **budget)
     except Exception as exc:
         return {"ok": False, "task_id": task_id, "step": job["step"],
                 "reason": f"claude_cli invocation failed: {exc}"}
@@ -686,6 +883,23 @@ def _run_one_step(project: str, task_id: str) -> dict:
     # because the post-hoc budget check marked the run is_error. Any OTHER
     # non-zero exit (crash, auth failure, truncation mid-generation) keeps
     # failing exactly as before.
+    # The codified CHECK sub-step (task 8848089d): verify the report's own
+    # shape with the SAME regexes the story_gate rubric uses, in-process and
+    # at zero tokens, so a report that cites nothing is caught here rather
+    # than one full gate sweep later. Advisory -- it records what it found
+    # and never fails a step the model completed, because premise_grounded
+    # remains the seat that actually decides.
+    if plan and "premise-citation-check" in (plan.get("codified") or []) and proof:
+        try:
+            from prism_service.services import premise_gather
+
+            verdict = premise_gather.citation_check(proof)
+            _record_codified_run(
+                project, task_id, "premise-citation-check", run_id,
+                bool(verdict.get("ok")), str(verdict.get("reason") or ""))
+        except Exception:
+            pass
+
     if proof and (result.exit_code == 0 or result.graceful_budget_stop()):
         _route_proof(task_svc, task_id, step_id, proof)
         outcome: object = "pass"
