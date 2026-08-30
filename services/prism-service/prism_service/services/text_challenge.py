@@ -118,6 +118,11 @@ def text_rule_names(project: str | None = None) -> tuple[str, ...]:
     channel, a blocked task's children) is not a text rule and is left
     to the Rules tab, where it belongs.
 
+    Narrowed a second time to the rules that TARGET the probe's own
+    class, so a text rule about some other class (a skill description, a
+    dated folder) is not reported as a rule this node checked. Both
+    filters read the shapes file; neither is a list kept in Python.
+
     Derived, never hand-kept: a new text rule added to shapes.ttl is
     enforced by this node for free, and a renamed one cannot leave a
     stale copy behind in Python."""
@@ -133,7 +138,13 @@ def text_rule_names(project: str | None = None) -> tuple[str, ...]:
             if name.endswith(".target"):
                 name = name[: -len(".target")]
             names.add(name)
-    return tuple(sorted(names))
+    probe_class = ontology_rules.NS + _PROBE_CLASS
+    targeting = {r["name"] for r in _rule_meta(project).values()
+                 if probe_class in (r.get("target_classes")
+                                    or [r.get("target_class")])}
+    # An empty catalog means the catalog query failed, not that no rule
+    # targets the probe class -- report the wider set rather than none.
+    return tuple(sorted(names & targeting if targeting else names))
 
 
 @functools.lru_cache(maxsize=8)
