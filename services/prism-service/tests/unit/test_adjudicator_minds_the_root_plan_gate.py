@@ -194,9 +194,16 @@ def test_certainty_scores_a_rich_packet_above_a_thin_one(dp_env, tmp_path):
 
 
 def test_certainty_computes_each_signal_independently(dp_env, tmp_path):
+    # A packet that is rich on oracle/diagram/scope but SHORT on plan_doc:
+    # if the four signals were secretly one constant wearing four names,
+    # this mix would still read as uniform. A real per-signal computation
+    # must show plan_completeness diverge from the other three, which the
+    # maximally-rich fixture (everything at 1.0) cannot demonstrate on its
+    # own.
     from prism_service.services import design_packet as dp
     task_svc, _ = _services(tmp_path, dp_env)
-    task = _rich_task(task_svc)
+    task = _task(task_svc, "AC-1: covered.", _RICH_DIAGRAM, _RICH_ORACLE,
+                _RICH_MISFIRE)
     out = dp.plan_gate_certainty(dp_env, task.id, task)
     signals = out["signals"]
     assert set(signals) == {"plan_completeness", "oracle_quality",
@@ -204,6 +211,7 @@ def test_certainty_computes_each_signal_independently(dp_env, tmp_path):
     assert len(set(signals.values())) > 1, (
         "four signals that always share one value are one constant wearing "
         "four names")
+    assert signals["plan_completeness"] < signals["oracle_quality"], signals
     assert isinstance(out["reasons"], list)
 
 
@@ -224,13 +232,20 @@ def test_certainty_reports_a_reason_for_every_missing_signal(dp_env, tmp_path):
 
 def test_resweep_seat_releases_a_high_certainty_root_plan(dp_env, tmp_path,
                                                           monkeypatch):
+    # conductor_service.py is a pinned control_plane.POLICY_FILES entry
+    # (task 594f9a58's own likely_misfire guard against editing its own
+    # judge), so adjudicate_rubric_gate is deliberately UNTOUCHED. The
+    # certainty seat lives in design_packet.py and is what
+    # gate_adjudicator.sweep_once's re-sweep actually consults -- this is
+    # the real call, not adjudicate_rubric_gate.
+    from prism_service.services import design_packet as dp
     from prism_service.services.conductor_service import ADJUDICATOR_SEAT
     task_svc, cond = _services(tmp_path, dp_env)
     task = _rich_task(task_svc)
     assert task.parent_id == ""
     _stub_rubric_pass(monkeypatch, cond)
 
-    res = cond.adjudicate_rubric_gate(task.id)
+    res = dp.adjudicate_root_plan_gate(cond, task.id, task, dp_env)
 
     assert res is not None and res.get("ok") is True, res
     after = task_svc.get(task.id)
@@ -240,7 +255,7 @@ def test_resweep_seat_releases_a_high_certainty_root_plan(dp_env, tmp_path,
     assert rows, "the decision must leave a gate_decide history row"
     assert rows[-1].actor == ADJUDICATOR_SEAT, rows[-1].actor
     _row = " ".join(str(getattr(rows[-1], f, "") or "")
-                     for f in ("detail", "reason", "notes", "summary"))
+                     for f in ("details", "reason", "notes", "summary"))
     assert "certainty=" in _row, _row
 
 
@@ -257,9 +272,9 @@ def test_a_thin_packet_parks_and_names_what_the_human_must_judge(
     _stub_rubric_pass(monkeypatch, cond)
     reasons = dp.plan_gate_certainty(dp_env, task.id, task)["reasons"]
 
-    res = cond.adjudicate_rubric_gate(task.id)
+    res = dp.adjudicate_root_plan_gate(cond, task.id, task, dp_env)
 
-    assert res is None, res
+    assert res is not None and not res.get("ok"), res
     after = task_svc.get(task.id)
     assert after.workflow_step == "plan_gate"
     assert after.gate_state == "pending"
@@ -292,7 +307,7 @@ def test_a_machine_certainty_approval_writes_no_approval_row(dp_env, tmp_path,
     task = _rich_task(task_svc)
     _stub_rubric_pass(monkeypatch, cond)
 
-    res = cond.adjudicate_rubric_gate(task.id)
+    res = dp.adjudicate_root_plan_gate(cond, task.id, task, dp_env)
 
     assert res is not None and res.get("ok") is True, res
     assert task_svc.get(task.id).workflow_step != "plan_gate"
@@ -320,12 +335,13 @@ def test_threshold_defaults_to_090_when_unset(monkeypatch):
 
 def test_a_lowered_threshold_releases_a_packet_that_would_park(
         dp_env, tmp_path, monkeypatch):
+    from prism_service.services import design_packet as dp
     task_svc, cond = _services(tmp_path, dp_env)
     task = _thin_task(task_svc)
     _stub_rubric_pass(monkeypatch, cond)
     monkeypatch.setenv("PRISM_PLAN_GATE_CERTAINTY_THRESHOLD", "0.0")
 
-    res = cond.adjudicate_rubric_gate(task.id)
+    res = dp.adjudicate_root_plan_gate(cond, task.id, task, dp_env)
 
     assert res is not None and res.get("ok") is True, res
     assert task_svc.get(task.id).workflow_step != "plan_gate"
@@ -334,6 +350,7 @@ def test_a_lowered_threshold_releases_a_packet_that_would_park(
 def test_both_seats_reach_the_same_verdict_on_the_same_packet(
         dp_env, tmp_path, monkeypatch):
     from prism_service.api import conductor_flow as cf
+    from prism_service.services import design_packet as dp
     task_svc, cond = _services(tmp_path, dp_env)
     _stub_entry_seat_pass(monkeypatch, cond)
     _stub_rubric_pass(monkeypatch, cond)
@@ -342,7 +359,10 @@ def test_both_seats_reach_the_same_verdict_on_the_same_packet(
     thin_entry, thin_resweep = _thin_task(task_svc), _thin_task(task_svc)
 
     assert cf._autoclear_machine_gate(cond, rich_entry.id) is not None
-    assert cond.adjudicate_rubric_gate(rich_resweep.id) is not None
+    assert dp.adjudicate_root_plan_gate(
+        cond, rich_resweep.id, rich_resweep, dp_env) is not None
     assert cf._autoclear_machine_gate(cond, thin_entry.id) is None
-    assert cond.adjudicate_rubric_gate(thin_resweep.id) is None
+    thin_resweep_res = dp.adjudicate_root_plan_gate(
+        cond, thin_resweep.id, thin_resweep, dp_env)
+    assert thin_resweep_res is not None and not thin_resweep_res.get("ok")
     assert task_svc.get(thin_entry.id).gate_reason.strip()

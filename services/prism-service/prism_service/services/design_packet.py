@@ -346,9 +346,16 @@ def root_plan_gate_escalation_reason(project: str, task_id: str, task,
             "Plan rubric passed (machine review). Your approval releases "
             "the plan.")
     threshold = certainty_threshold()
+    # Keeps the pre-existing contract every reader of a parked root
+    # plan_gate already relies on (tests/unit/test_root_plan_gate_waits_
+    # for_the_user.py, tests/unit/test_design_packet_plan_gate.py): a
+    # parked reason must still say that the OWNER'S OWN approval is what
+    # releases the plan - the certainty gap augments that message, it
+    # never replaces it.
     return (
         f"escalating to you - design-packet certainty {certainty['score']:.2f} "
-        f"is below the {threshold:.2f} threshold: " + "; ".join(reasons))
+        f"is below the {threshold:.2f} threshold: " + "; ".join(reasons) +
+        " - your own owner approval still releases the plan.")
 
 
 def _root_conductor_plan_gate(task) -> bool:
