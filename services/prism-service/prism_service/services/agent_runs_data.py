@@ -224,6 +224,138 @@ def _impossible_tokens_reason(row: dict) -> str:
     )
 
 
+# How many of a node's own most recent (ceiling-passing) runs feed its
+# moving average -- task 112dbb72. Named on screen (see
+# api/workflows.py::get_workflows) so a reader can tell a settled trend
+# from a one-run spike, per the owner's honesty rule for this feature.
+NODE_TREND_WINDOW = 20
+
+# A node needs at least this many ceiling-passing runs in its own window
+# before its trend/multiplier is reported as a real number. Below this,
+# node_token_trend reports "indeterminate" rather than a fabricated 0 or
+# 1.0 -- both would read as MEASURED, and neither is (task 112dbb72's own
+# stop_if: "A node with insufficient run history shows a number instead
+# of an honest indeterminate state").
+NODE_MIN_SAMPLES = 3
+
+
+def node_token_trend(
+    scores_db: str, steps: list[str],
+    window: int = NODE_TREND_WINDOW, min_samples: int = NODE_MIN_SAMPLES,
+) -> dict[str, dict]:
+    """Per-node (per agent_runs.step) measured multiplier + trailing token
+    average, for the /workflows canvas (task 112dbb72, owner: "each
+    programmatic node is a token multiplier").
+
+    Every row is read through the SAME ceiling _impossible_tokens_reason
+    already applies at write time (task fc471aed) -- fc471aed protects
+    writes from here forward but deliberately does NOT rewrite history, so
+    a pre-fix row (up to 2.66 BILLION claimed tokens, measured live) would
+    otherwise win every average it touched. A row that fails the ceiling
+    is excluded outright here, never zeroed-and-kept: zeroing would read
+    as "this run cost nothing," which is its own false number.
+
+    The MULTIPLIER is never derived from a node's declared kind (agent vs
+    gate, codified vs agentic) -- only from what its own runs measured,
+    against a single system-wide baseline: the mean ceiling-passing token
+    cost per run, POOLED ACROSS EVERY NODE'S OWN TRAILING WINDOW (never an
+    all-time figure). Measured live on this project: an all-time baseline
+    read ~69,000 tokens/run while every node's last-20-run average sat
+    6,000-9,500 -- an unrelated system-wide cost trend (shorter prompts,
+    caching) would have made EVERY agentic node read 7-11x its true peers
+    forever, which is exactly the "confident and wrong" reading task
+    fc471aed's own likely_misfire warns against. Pooling the same windows
+    the per-node averages already use keeps both sides of the ratio on the
+    same footing. A node whose own average sits near that pooled baseline
+    reads near 1x; a node whose average is far below it (a codified check
+    that made no model call) reads as a large multiplier -- because its
+    runs said so, not because anything labelled it "codified." Swap what a
+    node actually does and its own runs change, so the number changes
+    with it.
+
+    Returns ``{step: {"avg_tokens": float|None, "sample_count": int,
+    "window": int, "indeterminate": bool, "multiplier": float|None}}``,
+    one entry per element of `steps` (always present, even with zero
+    runs). `avg_tokens`/`multiplier` are None exactly when
+    `indeterminate` is True.
+    """
+    out: dict[str, dict] = {
+        step: {"avg_tokens": None, "sample_count": 0, "window": window,
+               "indeterminate": True, "multiplier": None}
+        for step in steps
+    }
+    if not steps or not Path(scores_db).exists():
+        return out
+
+    conn = _connect(scores_db)
+    try:
+        placeholders = ", ".join("?" for _ in steps)
+        # Ordered by recorded_at ALONE, never started_at: started_at is
+        # mixed-format on this table (ISO strings pre-2026-08-19 vs. epoch
+        # numbers written since -- both land in a TEXT-affinity column, so
+        # SQLite's default text collation sorts "2026-08-18T..." AHEAD of
+        # "1788113951.8..." lexicographically, because '2' > '1' as a
+        # character. A DESC sort on that column reads a real 11-day-old
+        # row as the MOST recent one. Live-verified on this project's own
+        # agent_runs: 14 ISO-format rows survive among exactly these 10
+        # step ids, which would have silently bumped genuinely-recent
+        # runs out of the trailing window (found live on this task,
+        # 2026-08-30, before this fix). recorded_at is a single
+        # server-stamped `datetime('now')` DEFAULT (schema above) -- always
+        # one format, always ingestion-ordered, regardless of what a
+        # caller sends as started_at.
+        rows = conn.execute(
+            f"SELECT step, model, tokens FROM agent_runs "
+            f"WHERE step IN ({placeholders}) AND tokens IS NOT NULL AND tokens > 0 "
+            f"ORDER BY recorded_at DESC",
+            list(steps),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Rows arrive newest-first, so the first `window` ceiling-passing rows
+    # seen for a step ARE its trailing window -- no separate sort needed.
+    per_step_window: dict[str, list[int]] = {step: [] for step in steps}
+    for r in rows:
+        row = {"model": r["model"], "tokens": r["tokens"]}
+        if _impossible_tokens_reason(row):
+            continue
+        bucket = per_step_window[r["step"]]
+        if len(bucket) < window:
+            bucket.append(int(r["tokens"]))
+
+    # The baseline is the mean of each QUALIFYING node's own window average
+    # -- one vote per node, never one vote per sample. Measured live on
+    # this project: red_gate carries only 2 ceiling-passing rows (below
+    # min_samples) at ~926,000 tokens each -- a step-average pool would
+    # exclude it correctly, but a RAW-SAMPLE pool does not, and those 2
+    # outlier rows alone dragged a 122-sample pooled baseline from ~7,250
+    # to ~22,300, mis-reading every genuinely-typical agentic node as a
+    # 3-4x multiplier instead of the ~1x the oracle describes. Per-node
+    # averaging gives a step with few (but huge) runs no more say in the
+    # reference than a step with many.
+    node_avgs = [sum(b) / len(b) for b in per_step_window.values()
+                 if len(b) >= min_samples]
+    baseline = (sum(node_avgs) / len(node_avgs)) if node_avgs else None
+
+    for step in steps:
+        samples = per_step_window[step]
+        n = len(samples)
+        entry = out[step]
+        entry["sample_count"] = n
+        if n < min_samples or baseline is None:
+            continue
+        avg = sum(samples) / n
+        entry["avg_tokens"] = avg
+        entry["indeterminate"] = False
+        # A floor of 1 token keeps a near-zero-cost node's multiplier a
+        # large, finite, honestly-derived number (baseline / 1) instead of
+        # a divide-by-zero -- the node still earns the number by having a
+        # real average this far below baseline, never a hardcoded win.
+        entry["multiplier"] = baseline / max(avg, 1.0)
+    return out
+
+
 def gate_source_for_row(row) -> str | None:
     """How a PASSING verdict got into the spine, so a reader can tell a
     genuine machine decision from a producer-written one without squinting
