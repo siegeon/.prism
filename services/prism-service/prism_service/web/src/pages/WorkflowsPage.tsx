@@ -286,6 +286,31 @@ function historicalWorkflowForRun(workflow: WorkflowCatalogEntry, run: WorkflowR
   return steps.length ? workflowForGraph({ ...workflow, steps }) : workflowForGraph(workflow);
 }
 
+/** Task 8fbd5cf0 oracle: "REPLAY: any finished run replays from the stored
+ * record only, node by node, each showing what it concluded at that time.
+ * Recompute nothing, so the same run twice gives the identical answer."
+ *
+ * Before this, replay's timeline came from conductorTimelineFromHistory --
+ * a reverse-map of task_history rows, the exact thing this task's own
+ * premises name as the OLD, wrong mechanism (workflows.py's own docstring:
+ * "A declarative FSM behaviour has no WorkflowCore run behind it"). This
+ * maps the RECORDED flow_node_runs rows (GET /{workflow}/runs, read by
+ * flow_run_recorder.runs_for_task -- a plain SELECT, never a re-run of any
+ * check) onto the same ReplayEvent shape the player already walks, so one
+ * code path drives replay regardless of where the events came from.
+ * outcome is only ever "pass"/"fail" at every one of the three recorder
+ * call sites (conductor_flow.flow_report, gate_adjudicator.sweep_once,
+ * ship_worker.ship_task) -- a refused gate records "fail", not a third
+ * value, so the mapping below is exhaustive. */
+function replayTimelineFromRecordedRuns(runs: FlowNodeRun[]): NonNullable<WorkflowRun["timeline"]> {
+  return runs.map((r) => ({
+    step: r.node_id,
+    startedAt: r.started_at,
+    endedAt: r.ended_at || undefined,
+    status: r.outcome === "pass" ? "passed" : "failed",
+  }));
+}
+
 type DragState = {
   mode: "none" | "pan" | "node" | "port" | "waypoint" | "segment";
   moved: boolean;
@@ -586,6 +611,27 @@ export default function WorkflowsPage() {
     ? { state: selectedNodeRun.outcome === "pass" ? "passed" : "refused",
         reason: selectedNodeRun.reason }
     : selectedNodeId ? nodeVerdicts?.[selectedNodeId] ?? null : null;
+  // Task 8fbd5cf0 oracle: "passed nodes keep a visible completed trail."
+  // The drilled-in-layer node-status effect above (nodeVerdicts) only ever
+  // populates for a CHILD behaviour (nodeStatusLayerId requires
+  // selectedWorkflow.parent_id) -- the top-level conductor canvas, the
+  // actual walking skeleton, drew every passed node with no persistent
+  // mark at all. Every CONCLUDED node already has a stored verdict
+  // (flowRuns.runs); reduce it the same way selectedNodeVerdict above
+  // does, latest-wins per node, and merge it under the drilled-in verdicts
+  // so a child layer's own node-status answer (a different id space) is
+  // never shadowed.
+  const flowRunNodeVerdicts = useMemo<Record<string, NodeVerdict> | null>(() => {
+    if (!flowRuns?.runs?.length) return null;
+    const out: Record<string, NodeVerdict> = {};
+    for (const r of flowRuns.runs) {
+      out[r.node_id] = { state: r.outcome === "pass" ? "passed" : "refused", reason: r.reason };
+    }
+    return out;
+  }, [flowRuns]);
+  const effectiveNodeVerdicts = (flowRunNodeVerdicts || nodeVerdicts)
+    ? { ...(flowRunNodeVerdicts ?? {}), ...(nodeVerdicts ?? {}) }
+    : null;
   // ONE rail mechanism for the whole state-machine family, not one per page
   // (owner, task 3baadd19, 2026-08-24: "we should only have one, we have
   // it the same in conductor, and in build and test, there should not be
@@ -1063,14 +1109,35 @@ export default function WorkflowsPage() {
       return;
     }
     const historicalStepIds = new Set(historicalWorkflow.steps.map((step) => step.id));
-    replayTimelineRef.current = (run.timeline ?? []).filter((event) =>
+    const fallbackTimeline = (run.timeline ?? []).filter((event) =>
       event.status !== "skipped" && historicalStepIds.has(event.step));
-    testModeRef.current = "replay";
-    setReplayStoppedAt(null);
-    replayStepStartedRef.current = performance.now();
-    setReplayEventIndex(-1);
-    setTestStep(-1);
-  }, [selectedWorkflow]);
+    const beginWith = (timeline: NonNullable<WorkflowRun["timeline"]>) => {
+      replayTimelineRef.current = timeline;
+      testModeRef.current = "replay";
+      setReplayStoppedAt(null);
+      replayStepStartedRef.current = performance.now();
+      setReplayEventIndex(-1);
+      setTestStep(-1);
+    };
+    const flowId = selectedWorkflow.parent_id ? selectedWorkflow.parent_id : selectedWorkflowId;
+    if (!flowId) { beginWith(fallbackTimeline); return; }
+    // Read the STORED record fresh, at replay time -- never the possibly-
+    // stale `flowRuns` poll snapshot the live view happens to be holding.
+    // "the same run twice gives the identical answer" means the source is
+    // a plain SELECT against flow_node_runs, not client state.
+    api.get<FlowRuns>(`/api/workflows/${encodeURIComponent(flowId)}/runs?task_id=${encodeURIComponent(run.id)}&project=${encodeURIComponent(project)}`)
+      .then((recorded) => {
+        const fromRecord = recorded.runs?.length
+          ? replayTimelineFromRecordedRuns(recorded.runs).filter((event) => historicalStepIds.has(event.step))
+          : null;
+        // Recorded rows exist only for flows the recorder actually covers
+        // (conductor's own pipeline) and for tasks driven since it shipped
+        // -- an older task or a non-conductor scripted workflow falls back
+        // to the task_history reconstruction rather than replaying nothing.
+        beginWith(fromRecord?.length ? fromRecord : fallbackTimeline);
+      })
+      .catch(() => beginWith(fallbackTimeline));
+  }, [selectedWorkflow, selectedWorkflowId, project]);
 
   const replayHistoricalRun = useCallback((run: WorkflowRun) => {
     if (!selectedWorkflow) return;
@@ -1362,7 +1429,27 @@ export default function WorkflowsPage() {
       graphRef.current.step(dt, now);
       let activeProgress: ActiveNodeProgress | null = null;
       const runtime = workflowRun?.runtime;
-      if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
+      if (isStateMachineWorkflow && runtime?.status === "running" && flowRuns?.progress) {
+        // Task 8fbd5cf0 oracle: "the occupied node carries its OWN progress
+        // fill... progress fills against TRUE WALL TIME over that node's
+        // OWN historical duration... never a fabricated percentage." The
+        // conductor/bot-family canvas has a REAL recorded source for this
+        // now (flow_run_recorder.progress_source, the same one
+        // conductorLivePhase already reads for the bottom rail) -- so the
+        // NODE'S OWN fill reads it too, instead of the p95/average-duration
+        // clock math below (which stays for the scripted "validation"
+        // workflow's Build-and-test node, the one thing it was ever tuned
+        // for; conductor never went through that path's own run history).
+        const p = flowRuns.progress;
+        const total = p.total ?? null;
+        activeProgress = {
+          nodeId: runtime.currentStep,
+          progress: total && total > 0 ? Math.min(0.98, p.done / total) : 0,
+          indeterminate: !(total && total > 0),
+          elapsedSeconds: p.basis === "wall_time" ? p.done : 0,
+          averageSeconds: total && total > 0 ? total : null,
+        };
+      } else if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
         // A linked CHILD node (e.g. verify_green_state's "Build and test",
         // whose own steps are "build"/"test" from the external AOS engine)
         // never appears in selectedWorkflow.steps (the CONDUCTOR's own 10
@@ -1449,12 +1536,12 @@ export default function WorkflowsPage() {
           tone,
         };
       }
-      drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, nodeVerdicts);
+      drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, effectiveNodeVerdicts);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, nodeVerdicts]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node

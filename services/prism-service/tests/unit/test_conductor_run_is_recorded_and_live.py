@@ -22,8 +22,9 @@ WHAT THIS FILE PINS (the contract the build must satisfy):
   flow_run_recorder.gate_teeth(project, task_id, step)
       -> list     the SAME teeth /node-status already reports.
   flow_run_recorder.CONDUCTOR_NODES
-      -> tuple    the canvas node ids, terminating in "shipped" AFTER
-                  green_gate, WITHOUT touching models.workflow.WORKFLOW_STEPS.
+      -> tuple    the canvas node ids, terminating in "land" (bot.json's own
+                  declared terminal behaviorId) AFTER green_gate, WITHOUT
+                  touching models.workflow.WORKFLOW_STEPS.
 
 Both real decision sites construct the recorder: api/conductor_flow.py's
 flow_report and services/gate_adjudicator.py's sweep_once. Neither is in
@@ -200,40 +201,47 @@ def test_ac3_the_runs_route_exists_for_the_conductor_and_is_not_validation_only(
 
 
 # ---------------------------------------------------------------------------
-# AC-3b / oracle — the flow carries a TERMINAL SHIPPED node AFTER green_gate,
-# and it is NOT bolted onto the FSM enum (likely_misfire: editing
-# WORKFLOW_STEPS in conductor_service/models is a POLICY change that fails
-# the candidate-controls-judge tooth).
+# AC-3b / oracle — the flow carries a TERMINAL node AFTER green_gate, and it
+# is NOT bolted onto the FSM enum (likely_misfire: editing WORKFLOW_STEPS in
+# conductor_service/models is a POLICY change that fails the
+# candidate-controls-judge tooth).
+#
+# SUPERSEDED 2026-08-30: SHIPPED_NODE used to be the literal string
+# "shipped", which matches NO node bot.json actually declares -- a real
+# ship could never paint the canvas's own drawn "land" bot node (the
+# pipeline's real, 13th behaviorId) as reached. Renamed to "land" so the
+# recorded terminal node and the visible one are the same id; every
+# assertion below moved with it.
 # ---------------------------------------------------------------------------
 
-def test_ac3b_the_canvas_flow_ends_on_shipped_without_touching_the_fsm_enum(
+def test_ac3b_the_canvas_flow_ends_on_land_without_touching_the_fsm_enum(
         recorder):
     from prism_service.models.workflow import WORKFLOW_STEPS
 
     nodes = list(recorder.CONDUCTOR_NODES)
-    assert nodes[-1] == "shipped"
-    assert nodes.index("green_gate") < nodes.index("shipped")
+    assert nodes[-1] == "land"
+    assert nodes.index("green_gate") < nodes.index("land")
     for step in WORKFLOW_STEPS:
         assert step["id"] in nodes, step["id"]
 
-    assert "shipped" not in {s["id"] for s in WORKFLOW_STEPS}, (
+    assert "land" not in {s["id"] for s in WORKFLOW_STEPS}, (
         "the terminal node is drawn from the real ship record; adding it to "
         "WORKFLOW_STEPS edits a control_plane.POLICY_FILES module")
 
 
-def test_ac3b_a_task_that_reaches_shipped_stays_on_the_board_as_finished(
+def test_ac3b_a_task_that_reaches_land_stays_on_the_board_as_finished(
         recorder, scores_db):
-    """stop_if: 'A task that reaches shipped disappears from the board
-    instead of showing as finished'."""
+    """stop_if: 'A task that reaches the terminal node disappears from the
+    board instead of showing as finished'."""
     recorder.record_node_execution(scores_db, _row(node_id="green_gate"))
     recorder.record_node_execution(
-        scores_db, _row(node_id="shipped", actor="ship-worker",
+        scores_db, _row(node_id="land", actor="ship-worker",
                         outcome="pass", reason="landed on origin/main"))
     runs = recorder.runs_for_task(scores_db, "8fbd5cf0")
-    assert runs[-1]["node_id"] == "shipped"
+    assert runs[-1]["node_id"] == "land"
     assert recorder.is_finished(runs) is True
     assert recorder.is_visible(runs) is True, (
-        "arriving at shipped is the win state — the row must stay visible, "
+        "arriving at land is the win state — the row must stay visible, "
         "not drop out the way managed_tasks drops every done row")
 
 

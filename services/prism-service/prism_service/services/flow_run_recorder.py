@@ -9,7 +9,7 @@ Mirrors drive_heartbeat.py: every function takes ``scores_db: str``, opens
 a plain sqlite3 connection through the shared hardening funnel, and returns
 plain dicts. Non-policy -- no ``control_plane.POLICY_FILES`` entry imports
 it, and it never edits ``models.workflow.WORKFLOW_STEPS`` (the terminal
-``shipped`` node lives HERE, as a canvas node, not as an FSM state).
+``land`` node lives HERE, as a canvas node, not as an FSM state).
 
   record_node_execution  ONE row + ONE "flow.node" bus event per concluded
                          node. ``flow_version`` is always a real int.
@@ -36,7 +36,17 @@ from prism_service.services import sqlite_db
 # record, never added to WORKFLOW_STEPS -- that module is read by
 # conductor_service.py, a POLICY_FILES entry, so a feature task that edits
 # it fails its own candidate-controls-judge tooth.
-SHIPPED_NODE = "shipped"
+#
+# "land", not "shipped": .prism/behaviors/conductor/bot.json already
+# declares a real, VISIBLE "land" bot node as the pipeline's 13th and
+# final behaviorId (this task's own likely_misfire: "the slice invents a
+# new terminal node when bot.json already declares land as the eleventh
+# [now 13th, after 25b2a05c] -- do not add a twelfth"). An earlier pass
+# recorded the terminal node under a THIRD, unrelated id ("shipped") that
+# matches no drawn node at all, so a real ship could never paint the
+# canvas's own "land" node as reached -- fixed here by recording against
+# the id that is actually on the diagram.
+SHIPPED_NODE = "land"
 CONDUCTOR_NODES: tuple[str, ...] = tuple(
     [str(s["id"]) for s in WORKFLOW_STEPS] + [SHIPPED_NODE])
 
@@ -166,7 +176,7 @@ def is_finished(runs: list) -> bool:
 
 
 def is_visible(runs: list) -> bool:
-    """A recorded task stays on the board. Arriving at ``shipped`` is the
+    """A recorded task stays on the board. Arriving at ``land`` is the
     WIN state, so it must render as finished, never drop out the way
     managed_tasks drops every done row."""
     return bool(runs)

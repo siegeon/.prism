@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.198"
+PRISM_VERSION = "7.13.199"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.199: task 8fbd5cf0, closing team-lead gate-refusal findings. (1) '
+    'REPLAY now reads flow_node_runs fresh at replay time (GET workflows '
+    'conductor runs), never conductorTimelineFromHistory task_history '
+    'reverse-map, so the same run replays identically every time; the old '
+    'reconstruction survives only as a fallback for flows/tasks the '
+    'recorder never covered. (2) the OCCUPIED CANVAS NODE own fill now '
+    'reads flow_run_recorder progress_source (wall time over that nodes '
+    'own historical median) instead of Date dot now elapsed over p95 or '
+    'average_duration_seconds -- team-lead measured VERIFY PLAN at 36.36 '
+    'percent live, which is exactly 4 of 11, the node position in the '
+    'pipeline, not elapsed work; the scripted validation Build-and-test '
+    'path is untouched. (3) passed nodes on the TOP-LEVEL conductor canvas '
+    'now keep a persistent trail too -- effectiveNodeVerdicts merges the '
+    'drilled-in-layer node-status answer with a new source built from '
+    'flowRuns runs, which previously only fed the click-to-inspect panel. '
+    '(4) SHIPPED_NODE renamed from the literal shipped, which matched no '
+    'drawn node at all, to land, the real terminal behaviorId bot json '
+    'already declares -- a prior agent flagged this exact mismatch in '
+    'their own completion_proof and it was never resolved; a real ship can '
+    'now paint the canvas own land node as reached. '
     '7.13.196: task 8fbd5cf0, two more craft-bar fixes. (1) the reduced- '
     'motion relay now reuses the page own useReducedMotion() (motion/react, '
     'already read for SdlcProgress) instead of a second matchMedia listener '

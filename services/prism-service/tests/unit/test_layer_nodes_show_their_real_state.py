@@ -71,11 +71,24 @@ def test_a_drilled_layer_asks_the_server_for_its_real_node_state():
 
 
 def test_the_canvas_is_handed_the_verdicts():
+    # SUPERSEDED 2026-08-30 (task 8fbd5cf0): the raw `nodeVerdicts` state
+    # only ever populated for a drilled-in CHILD behaviour layer
+    # (nodeStatusLayerId requires selectedWorkflow.parent_id) -- the
+    # top-level conductor canvas, the actual walking skeleton, painted no
+    # persistent trail on a passed node at all. drawWorkflows now reads
+    # `effectiveNodeVerdicts`, which merges the SAME `nodeVerdicts` this
+    # test already pins with a second source built from flowRuns.runs (the
+    # recorded flow_node_runs rows) for the top-level canvas. The surviving
+    # invariant -- verdicts reach drawWorkflows and the draw effect re-runs
+    # when they change -- is asserted against the merged value instead.
     src = _PAGE.read_text(encoding="utf-8")
-    assert "activeProgress, nodeVerdicts)" in src, (
+    assert "activeProgress, effectiveNodeVerdicts)" in src, (
         "the verdicts never reach drawWorkflows, so nothing is painted")
-    assert "workflows, nodeVerdicts]" in src, (
+    assert "workflows, effectiveNodeVerdicts]" in src, (
         "the draw effect does not re-run when the verdicts arrive")
+    assert "...(nodeVerdicts ?? {}) }" in src, (
+        "the drilled-in-layer node-status verdicts this test's sibling "
+        "pins must still feed the merged value, not be dropped")
 
 
 def test_a_failed_read_is_not_a_verdict():

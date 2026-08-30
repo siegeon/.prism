@@ -1777,3 +1777,115 @@ def test_the_conductor_run_type_carries_gate_reason_end_to_end():
     assert "workflowStep, gateState, gateReason, stranded," in builder, (
         "gateReason must actually be assigned onto the returned "
         "conductorTask object, not just computed and dropped")
+
+
+# --------------------------------------------------------------------------
+# Task 8fbd5cf0 stop_if: "any progress value derives from one shared typical
+# duration instead of that node's own measured history." Live finding
+# (team-lead, 2026-08-30): the bottom SdlcProgress rail read "VERIFY PLAN ·
+# 36.36%" where 36.36% = 4/11, the node's POSITION in the pipeline, not
+# elapsed work -- because the OCCUPIED CANVAS NODE'S OWN fill (the oracle's
+# primary ask: "the occupied node carries its OWN progress fill... on the
+# node itself, not only in a rail at the bottom of the screen") was still
+# computed from Date.now()/p95StepDurationSeconds/average_duration_seconds,
+# never migrated to flow_run_recorder's honest wall-time source the bottom
+# rail already reads.
+# --------------------------------------------------------------------------
+
+def test_the_occupied_node_reads_the_recorders_wall_time_not_a_clock():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    frame_body = _function_body(page, "const frame = (now: number) => {")
+    # The state-machine (conductor/bot-family) branch must come FIRST and
+    # read flowRuns.progress -- the exact source conductorLivePhase already
+    # uses for the bottom rail -- never Date.now()/p95/average_duration.
+    m = re.search(
+        r"if \(isStateMachineWorkflow && runtime\?\.status === \"running\" && flowRuns\?\.progress\) \{(.*?)\n      \} else if",
+        frame_body, re.DOTALL,
+    )
+    assert m, "the state-machine branch of activeProgress must exist and run before the scripted-workflow fallback"
+    sm_branch = m.group(1)
+    assert "const p = flowRuns.progress;" in sm_branch
+    assert "Date.now()" not in sm_branch, (
+        "the conductor's own node fill must never read the wall clock -- "
+        "that is the p95/average-duration path's job for scripted "
+        "workflows only")
+    assert "p95StepDurationSeconds" not in sm_branch
+    assert "average_duration_seconds" not in sm_branch
+    assert "progress: total && total > 0 ? Math.min(0.98, p.done / total) : 0," in sm_branch
+    assert "indeterminate: !(total && total > 0)," in sm_branch, (
+        "a node with no history yet must render indeterminate, never a "
+        "fabricated percentage")
+
+    # The scripted-workflow (Build and test) path must survive completely
+    # untouched -- it has its own hard-won history (the 18s-sawtooth fix,
+    # the p95-vs-mean fix) and conductor never went through its run
+    # history in the first place.
+    assert "const p95 = p95StepDurationSeconds(visibleRunHistory, runtime.currentStep);" in frame_body
+    assert "const pacing = p95 ?? step?.average_duration_seconds;" in frame_body
+
+
+# --------------------------------------------------------------------------
+# Task 8fbd5cf0 oracle: "REPLAY: any finished run replays from the stored
+# record only, node by node, each showing what it concluded at that time.
+# Recompute nothing, so the same run twice gives the identical answer."
+# Team-lead's live finding: replay's timeline still came from
+# conductorTimelineFromHistory (task_history reverse-map), the exact
+# mechanism this task's own premises retire elsewhere on the same canvas.
+# --------------------------------------------------------------------------
+
+def test_replay_walks_the_recorded_runs_not_task_history():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    mapper = _function_body(
+        page,
+        "function replayTimelineFromRecordedRuns(runs: FlowNodeRun[]): NonNullable<WorkflowRun[\"timeline\"]> {",
+    )
+    assert "step: r.node_id," in mapper
+    assert "startedAt: r.started_at," in mapper
+    assert 'status: r.outcome === "pass" ? "passed" : "failed",' in mapper, (
+        "outcome is only ever pass/fail at every recorder call site -- "
+        "the mapping must be exhaustive over exactly those two"
+    )
+
+    begin_body = _function_body(page, "const beginHistoricalReplay = useCallback((run: WorkflowRun) => {")
+    assert "api.get<FlowRuns>(`/api/workflows/${encodeURIComponent(flowId)}/runs?task_id=${encodeURIComponent(run.id)}" in begin_body, (
+        "replay must fetch the STORED record fresh at replay time, not "
+        "reuse a possibly-stale flowRuns poll snapshot -- 'the same run "
+        "twice gives the identical answer' means the source is a plain "
+        "read, not client state that could have moved between two clicks")
+    assert "replayTimelineFromRecordedRuns(recorded.runs)" in begin_body
+    assert "beginWith(fromRecord?.length ? fromRecord : fallbackTimeline);" in begin_body, (
+        "recorded rows must win over the task_history reconstruction when "
+        "they exist; the reconstruction survives only as a fallback for "
+        "flows/tasks the recorder never covered")
+
+
+# --------------------------------------------------------------------------
+# Task 8fbd5cf0 oracle: "passed nodes keep a visible completed trail."
+# Team-lead's punch list: "unverified, confirm or fix... passed nodes
+# keeping a per-node trail." The drilled-in-layer node-status effect only
+# ever populates for a CHILD behaviour -- the top-level conductor canvas
+# painted no persistent mark on a passed node at all until this fix.
+# --------------------------------------------------------------------------
+
+def test_the_top_level_canvas_gets_a_persistent_trail_from_recorded_runs():
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    memo_body = _function_body(
+        page,
+        "const flowRunNodeVerdicts = useMemo<Record<string, NodeVerdict> | null>(() => {",
+    )
+    assert "if (!flowRuns?.runs?.length) return null;" in memo_body
+    assert 'out[r.node_id] = { state: r.outcome === "pass" ? "passed" : "refused", reason: r.reason };' in memo_body, (
+        "every CONCLUDED node already has a stored verdict -- the trail "
+        "must be built from it, never recomputed or re-checked")
+
+    assert (
+        "const effectiveNodeVerdicts = (flowRunNodeVerdicts || nodeVerdicts)\n"
+        "    ? { ...(flowRunNodeVerdicts ?? {}), ...(nodeVerdicts ?? {}) }\n"
+        "    : null;"
+    ) in page, (
+        "the recorded-run trail and the drilled-in-layer node-status "
+        "verdicts must be merged, with the layer's own answer never "
+        "shadowed by the top-level trail")
