@@ -264,9 +264,17 @@ def test_the_reap_node_is_codified_and_calls_no_model() -> None:
         assert step["kind"] == "http-callback"
         assert "/api/workflows/steps/reap" in step["url"]
         assert "model" not in step["body"]
-    source = Path(task_reaper.__file__).read_text(encoding="utf-8")
-    for agentic in ("claude", "anthropic", "run_agent", "max_turns"):
-        assert agentic not in source.lower()
+    # The inference package is the ONE way this service calls a model
+    # (api/workflows.py's /steps/premise-judge imports
+    # prism_service.inference.claude_cli). Neither the reaper nor the route
+    # that serves it reaches for it.
+    reaper = Path(task_reaper.__file__).read_text(encoding="utf-8")
+    assert "prism_service.inference" not in reaper
+
+    from prism_service.api import workflows as wf
+    route = Path(wf.__file__).read_text(encoding="utf-8")
+    handler = route[route.index("def workflow_step_reap("):]
+    assert "prism_service.inference" not in handler
 
 
 def test_the_survey_step_deletes_nothing(repo: Path) -> None:

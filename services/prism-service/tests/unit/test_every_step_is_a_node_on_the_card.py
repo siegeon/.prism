@@ -56,11 +56,18 @@ _DELIBERATELY_UNLINKED_PIPELINE_IDS = frozenset({
     "red-test-ids",
 })
 
-# The one behaviorId that nests under conductor WITHOUT a WORKFLOW_STEPS
-# linked_workflow_id of its own, because green_gate is the FSM's
+# The behaviorIds that nest under conductor WITHOUT a WORKFLOW_STEPS
+# linked_workflow_id of their own, because green_gate is the FSM's
 # structurally-terminal step (14+ call sites in conductor_service.py, a
-# control_plane.POLICY_FILES entry, treat it as literally last — this task
-# does not touch that file or insert a step after it).
+# control_plane.POLICY_FILES entry, treat it as literally last — neither
+# task touches that file or inserts a step after it).
+#
+# SUPERSEDED (task f97c196d): this was the single id "land". `reap` is the
+# step AFTER land — it removes the drive's git worktree and its
+# prism/ws/<task_id> branch once the work is really on origin/main — and it
+# nests through the SAME mechanism for the same reason, so the constant is
+# now the pair. `land` alone is no longer the last pipeline node.
+_TERMINAL_PIPELINE_IDS = frozenset({"land", "reap"})
 _TERMINAL_PIPELINE_ID = "land"
 
 
@@ -262,7 +269,7 @@ def test_every_pipeline_node_maps_to_a_step_or_is_recorded_as_deliberate():
     for behavior_id in pipeline_ids:
         if behavior_id in linked_ids:
             continue
-        if behavior_id == _TERMINAL_PIPELINE_ID:
+        if behavior_id in _TERMINAL_PIPELINE_IDS:
             continue
         if behavior_id in _DELIBERATELY_UNLINKED_PIPELINE_IDS:
             continue

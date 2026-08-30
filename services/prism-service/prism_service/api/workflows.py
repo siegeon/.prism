@@ -858,6 +858,11 @@ _BEHAVIOR_TRIGGER = {
     "green-gate-status": "Runs when a task's verify_green_state step finishes and green_gate needs a decision.",
     "review-previous-notes-loop": "Runs first, when a task starts the implement workflow.",
     "land": "Runs when a task's green_gate is approved and the branch is ready to ship.",
+    # task f97c196d. The trigger is a SUCCESSFUL land, not `status == done`:
+    # the worktree and the branch are only provably disposable once the work
+    # is really on origin/main. ship_worker.py fires it in the same block
+    # that records the `land` node.
+    "reap": "Runs when a task's land step merged the branch and its worktree is no longer needed.",
     "ci-local-dev": "Run this when a developer wants local CI results before pushing.",
 }
 _DEFAULT_BEHAVIOR_TRIGGER = "Runs when the conductor bot's own FSM calls this behavior."
@@ -1322,6 +1327,15 @@ def get_workflows(project: str = Query("default")) -> dict:
         "write-failing-tests-loop", "implement-tasks-loop", "red-test-ids",
         "verify-green-state-loop",
         "red-gate-status", "green-gate-status", "land",
+        # "reap" (task f97c196d): the step AFTER land, and the FSM's real
+        # terminal node -- a drive that shipped still left its git worktree
+        # and its prism/ws/<task_id> branch behind forever (256 worktrees,
+        # 474 branches measured 2026-08-30). It nests through this set for
+        # exactly the same reason land does: green_gate is the structurally
+        # -terminal WORKFLOW_STEPS entry, so there is no step to hang a
+        # linked_workflow_id on, and models/workflow.py is read by
+        # conductor_service.py (a control_plane.POLICY_FILES entry).
+        "reap",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
@@ -2616,3 +2630,64 @@ def workflow_node_status(
 
     return {"workflow_id": workflow_id, "task_id": task_id,
             "nodes": [n.model_dump() for n in nodes]}
+
+
+# ---------------------------------------------------------------------------
+# The pipeline's TERMINAL node: reap (task f97c196d)
+#
+# `land` merges the branch; `reap` removes what the drive left behind. It is
+# CODIFIED -- deterministic Python plus git, zero model calls, exactly like
+# /steps/premise-gather and /steps/green-gate-check. Only /steps/reason-loop
+# and /steps/premise-judge are agentic routes on this router.
+#
+# The behaviour lives in services/task_reaper.py (all five safety rules and
+# the line that keeps each one are in that module's docstring); this route
+# only resolves the task's real status and hands back the typed verdict.
+# ---------------------------------------------------------------------------
+class ReapRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    mode: str = Field(default="reap", pattern="^(reap|survey)$")
+
+
+@router.post("/steps/reap")
+def workflow_step_reap(
+    body: ReapRequest, project: str = Query(...),
+    mode: str = Query(""),
+) -> dict:
+    """Reap one finished task's git worktree and `prism/ws/<id>` branch.
+
+    Always HTTP 200, same contract as /steps/green-gate-check: a refusal is
+    a REPORTED fact ("uncommitted changes", "3 commits exist nowhere else"),
+    never a callback failure -- the behaviour must reach its next step and
+    the reason must reach a person.
+
+    `mode=survey` computes the identical verdict and deletes nothing, so the
+    reap.json behaviour records the decision BEFORE anything is removed.
+    """
+    from prism_service.services import drive_heartbeat, task_reaper
+
+    with _tracer.start_as_current_span("workflow.step.reap") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        chosen = str(mode or body.mode or "reap")
+        span.set_attribute("workflow.mode", chosen)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return {"kind": "conductor.reap", "node_id": "reap",
+                    "task_id": body.task_id, "outcome": "refused",
+                    "reaped": False, "would_reap": False,
+                    "reason": f"no such task: {body.task_id}"}
+
+        # Rule 4, third net: a drive that beat within the last 15 minutes is
+        # standing in that worktree right now. Unreadable heartbeat state is
+        # NOT read as "nobody is there" -- reap_task fails closed on it.
+        def _is_live(task_id: str) -> bool:
+            age = drive_heartbeat.heartbeat_age_s(
+                str(ctx._data_dir / "scores.db"), task_id)
+            return age is not None and age < 900.0
+
+        return task_reaper.reap_task(
+            body.task_id, status=str(getattr(task, "status", "") or ""),
+            mode=chosen, is_live=_is_live)
