@@ -247,6 +247,30 @@ _CONTRACTIONS = [
     ("you're", "you are", False),
     ("i'm", "I am", True),
     ("let's", "let us", False),
+    # Irregular stems the generic rules below would mangle ("ca not",
+    # "wo not", "sha not"), so they must be expanded from the table first.
+    ("shan't", "shall not", False),
+    ("ain't", "is not", False),
+]
+
+# The generic contraction rules (task b2f29d45). The table above is a
+# hand-kept list, and the ontology rule text-is-plain (shapes.ttl) names
+# a PATTERN — "n't", "'re", "'ll", "'ve", and (it|that|what|there)'s. The
+# two drifted: the rule flagged hasn't, there's, that's, what's, you've
+# and we'll, which the table never listed, so no write could ever clear
+# them. These rules close the branch rather than the word, so a new
+# contraction cannot open the gap again. They run AFTER the table, which
+# has already taken the irregular stems out of the text.
+#
+# "'s" is deliberately NOT generic: outside the four words the rule
+# names it is a possessive ("the gate's receipt"), and expanding that
+# would change the sentence.
+_CONTRACTION_RULES = [
+    (re.compile(r"\b(\w+)n't\b", re.IGNORECASE), r"\1 not"),
+    (re.compile(r"\b(it|that|what|there)'s\b", re.IGNORECASE), r"\1 is"),
+    (re.compile(r"\b(\w+)'re\b", re.IGNORECASE), r"\1 are"),
+    (re.compile(r"\b(\w+)'ll\b", re.IGNORECASE), r"\1 will"),
+    (re.compile(r"\b(\w+)'ve\b", re.IGNORECASE), r"\1 have"),
 ]
 
 _FILLER = [
@@ -353,6 +377,13 @@ def _protected_spans(text: str) -> list[tuple[int, int]]:
         spans.append((m.start(), m.end()))
     for m in re.finditer(r"\bmx-[0-9a-fA-F]+\b", text, re.IGNORECASE):
         spans.append((m.start(), m.end()))
+    # An HTML entity carries a semicolon that is part of the TOKEN, not
+    # punctuation between clauses (task b2f29d45). Without this, the
+    # semicolon rule turns "&gt; the seat" into "&gt. The seat", which
+    # corrupts the escape. Live prism data carried nine of these.
+    for m in re.finditer(r"&(?:#[0-9]{1,6}|#[xX][0-9a-fA-F]{1,5}|[A-Za-z][A-Za-z0-9]{1,9});",
+                          text):
+        spans.append((m.start(), m.end()))
     for m in re.finditer(r"\b[0-9a-fA-F]{8}\b", text):
         spans.append((m.start(), m.end()))
     for m in re.finditer(r"\S+", text):
@@ -450,7 +481,35 @@ def _apply_table(text: str, table, rule_name: str) -> tuple[str, bool]:
     return text, changed
 
 
+def _apply_contraction_rules(text: str) -> tuple[str, bool]:
+    """Expand every contraction the ontology rule names but the table
+    does not list (task b2f29d45). Runs on unprotected prose only, like
+    every other safe fix, so a contraction inside a quoted string or a
+    code span stays byte-identical."""
+    changed = False
+    for pattern, repl in _CONTRACTION_RULES:
+        text, n = pattern.subn(repl, text)
+        if n:
+            changed = True
+    return text, changed
+
+
 def _apply_semicolon(text: str) -> tuple[str, bool]:
+    """Turn every clause-joining semicolon into a sentence break.
+
+    A letter after the semicolon starts the next sentence, so it is
+    capitalised. Anything else keeps its own case: the live shape this
+    rule missed until task b2f29d45 is an enumerated clause list -- "the
+    seat reads the receipt; (b) it records the refusal" -- where the next
+    character is a bracket, a digit, a dash, or the end of the run. The
+    ontology rule text-is-plain flags EVERY semicolon, so leaving those
+    behind left 438 violations in live prose that no write could clear.
+
+    Splitting a clause at its own semicolon never changes what the
+    sentence claims, and this function is only ever called on unprotected
+    prose, so a semicolon inside a code span, a quoted string, a URL, a
+    file path, or an HTML entity is never touched.
+    """
     changed = False
 
     def _repl(m):
@@ -459,6 +518,11 @@ def _apply_semicolon(text: str) -> tuple[str, bool]:
         return ". " + m.group(1).upper()
 
     new_text = re.sub(r";\s*([a-zA-Z])", _repl, text)
+    # Every remaining semicolon still ends its clause. Keep the spacing
+    # that followed it so a line break or an indent survives the split.
+    new_text, count = re.subn(r";", ".", new_text)
+    if count:
+        changed = True
     return new_text, changed
 
 
@@ -485,6 +549,10 @@ def _normalize_segment(text: str) -> tuple[str, list[str]]:
 
     text, c = _apply_table(text, _CONTRACTIONS, "contraction")
     if c:
+        applied.append("contraction")
+
+    text, c = _apply_contraction_rules(text)
+    if c and "contraction" not in applied:
         applied.append("contraction")
 
     text, c = _apply_semicolon(text)

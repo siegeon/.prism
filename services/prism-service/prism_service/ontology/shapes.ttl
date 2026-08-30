@@ -326,6 +326,17 @@ o:signal-joins-on-address a sh:SPARQLConstraint ;
 # or a marketing adjective — sentence length, passive voice, and
 # present-perfect stay in services/ste.py, which needs real tokenizing
 # a SPARQL regex cannot do.
+#
+# Task b2f29d45: the select strips fenced code, an inline code span, a
+# double-quoted string, and a URL before it looks. This rule judges what
+# a WRITER can fix, and services/ste.py is forbidden from rewriting any
+# of those spans — a task description that quotes the fixture string of
+# the test it describes, or quotes the owner, must stay byte-identical,
+# because changing it changes what the text CLAIMS. Without the strip the
+# rule flagged 58 live nodes that no write and no backfill could ever
+# clear. The strip is deliberately narrower than ste._protected_spans (no
+# single-quoted string, no bare file path): SPARQL regex has no
+# lookbehind, so an approximation that under-strips is the safe one.
 # ---------------------------------------------------------------------
 
 o:text-is-plain-task.target a sh:NodeShape ;
@@ -358,7 +369,12 @@ o:text-is-plain a sh:SPARQLConstraint ;
     sh:select """
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT $this WHERE {
-            { $this rdfs:label ?t } UNION { $this rdfs:comment ?t }
+            { $this rdfs:label ?raw } UNION { $this rdfs:comment ?raw }
+            BIND(REPLACE(REPLACE(REPLACE(REPLACE(?raw,
+                "```[^`]*```", " "),
+                "`[^`]*`", " "),
+                "\\"[^\\"]*\\"", " "),
+                "https?://[^ ]+", " ") AS ?t)
             FILTER(REGEX(?t, ";|n't\\\\b|\\\\b(it|that|what|there)'s\\\\b|'re\\\\b|'ll\\\\b|'ve\\\\b|\\\\bI'm\\\\b|\\\\b(seamless(ly)?|robust|powerful|cutting-edge|effortless(ly)?|blazing-fast)\\\\b", "i"))
         }
     """ .
@@ -373,6 +389,11 @@ o:text-is-plain a sh:SPARQLConstraint ;
 # lexicon is enforced here for free. The trailing "s?" tolerates a
 # plain plural of the synonym ("tickets" as well as "ticket") since the
 # lexicon stores only the singular alt label.
+#
+# Task b2f29d45: the same protected-span strip text-is-plain uses, for
+# the same reason — services/lexicon.py's align() skips fenced code, an
+# inline code span, a quoted string, and a URL, so a synonym that only
+# ever appears inside one is a synonym no write can align.
 # ---------------------------------------------------------------------
 
 o:text-uses-canonical-terms-task.target a sh:NodeShape ;
@@ -400,7 +421,12 @@ o:text-uses-canonical-terms a sh:SPARQLConstraint ;
         PREFIX o: <urn:prism:onto:>
         PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
         SELECT $this WHERE {
-            $this rdfs:label|rdfs:comment ?c .
+            $this rdfs:label|rdfs:comment ?raw .
+            BIND(REPLACE(REPLACE(REPLACE(REPLACE(?raw,
+                "```[^`]*```", " "),
+                "`[^`]*`", " "),
+                "\\"[^\\"]*\\"", " "),
+                "https?://[^ ]+", " ") AS ?c)
             ?t a o:Term ; o:altLabel ?alt .
             FILTER(REGEX(?c, CONCAT("\\\\b", ?alt, "s?\\\\b"), "i"))
         }

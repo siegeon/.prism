@@ -41,9 +41,25 @@ def project(tmp_path, monkeypatch):
     pc._contexts.clear()
 
 
-# A body the normaliser leaves alone (a quoted string is a protected
-# span) but the ontology's regex still sees: the residual case.
-_BODY = 'The owner called the first draft "robust" and asked for a plain rewrite.'
+# A body the normaliser leaves alone but the ontology's regex still
+# sees: the residual case.
+#
+# SUPERSEDED 2026-08-30 (task b2f29d45). This was a DOUBLE-quoted string.
+# text-is-plain now strips fenced code, an inline code span, a
+# double-quoted string and a URL before it looks, because services/ste.py
+# is forbidden from rewriting any of those - a task description that
+# quotes the fixture string of the test it describes, or quotes the
+# owner, must stay byte-identical, so flagging it named a violation no
+# write could ever clear. A SINGLE-quoted span is the residual case that
+# remains: ste protects it (services/ste.py _protected_spans uses a
+# lookaround so a contraction apostrophe cannot open a span), and the
+# rule's strip deliberately does not remove it, because SPARQL regex has
+# no lookbehind and under-stripping is the safe direction.
+#
+# The invariant this fixture exists to prove is unchanged and still
+# tested below: the rule reads the BODY (rdfs:comment), not only the
+# title (rdfs:label).
+_BODY = "The owner called the first draft 'robust' and asked for a plain rewrite."
 
 
 def _seed(project: str):
