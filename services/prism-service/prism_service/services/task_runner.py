@@ -450,6 +450,30 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
     """
     if _stall_work_is_shipped(task_id):
         sha = _shipped_sha_for_stall(task_id)
+        # NEVER CLOSE OVER AN UNDECIDED GATE (task 8fbd5cf0, 2026-08-30).
+        # TaskService refuses status=done while a gate is open, but that
+        # guard reads is_open_gate_step(), which only fires when the
+        # workflow_step ITSELF is a gate. A rewind moves the task back to an
+        # AGENT step and leaves gate_state='pending' behind, so the row
+        # carries an open gate the guard cannot see -- and this path calls
+        # task_svc.update directly, past the route-level check. Observed
+        # live: 8fbd5cf0 went status=done, workflow_step=implement_tasks,
+        # gate_state=pending, i.e. closed while its green_gate had never
+        # been decided. Shipped-ness is not a verdict; a gate is.
+        _gate_state = str(getattr(task_svc.get(task_id), "gate_state", "")
+                          or "none")
+        if _gate_state in ("pending", "failed"):
+            reason = (f"step {step_id} did not advance after "
+                      f"{STALL_ATTEMPTS} attempts and this task's work is "
+                      f"on origin/main ({sha[:12]}), but its gate is still "
+                      f"undecided (gate_state={_gate_state}) -- refusing to "
+                      f"close. Decide the gate first; shipped is not the "
+                      f"same as adjudicated.")
+            task_svc.record_history(task_id, action="runner_stall",
+                                    details=reason, actor=SEAT_ID)
+            return {"ok": False, "task_id": task_id, "step": step_id,
+                    "run_id": "", "tokens": 0, "cost_usd": 0.0,
+                    "report": None, "reason": reason}
         reason = (f"step {step_id} did not advance after {STALL_ATTEMPTS} "
                   f"attempts, but this task's work is already on "
                   f"origin/main ({sha[:12]}) -- closing instead of "

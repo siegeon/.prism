@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.188"
+PRISM_VERSION = "7.13.189"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7710,4 +7710,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.187 - oracle_quality and scope_alignment, two of the four root-plan-gate certainty signals from 7.13.186, actually grade now instead of reading as a constant. Team-lead scored REAL tasks from the live DB instead of a synthetic fixture and found both signals at 1.0 across the board except on the two dimensions plan_completeness and diagram_quality already covered - a rich-looking plan with a worthless oracle or an out-of-contract scope could have cleared the gate on the strength of those other two signals alone, which is the exact one-constant-wearing-four-names failure the pinned suite was written to catch, just wearing two different faces. oracle_quality now also requires the oracle and likely_misfire to name a concrete, checkable artifact (a file path, a pytest node id, a backtick command, or a URL), not merely clear a character floor - closing a real padding hole (a long, wholly abstract oracle used to score the same as a real citation). scope_alignment now also compares the plans own claimed files against task.allowed_files, and any stop_if-named test against task.verify, the exact defect class task 4bef38c4s own oracle names as observed: a test named in stop_if and absent from verify. Verified against the same live task ids the audit used: 9db4f4c8 and 4bef38c4 keep oracle_quality=1.0 because their oracles genuinely cite real test paths, 12d0597c drops from 1.0 to 0.5 because its oracle clears the old length floor but names nothing checkable. A live scan of 205 real tasks carrying both allowed_files and plan_doc found a genuine organic scope_alignment hit with no fixture involved. The pinned suites weak len(set(signals.values()))>1 assertion is retired in place (comment left naming what superseded it) by a new test that isolates each of the four signals one at a time from a common rich baseline and asserts only the targeted signal moves. 22/22 pinned plus the full unit and integration neighbour sweep green, both trees.'
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.189 - the stall handler refuses to close a task over an undecided gate. Observed live on task 8fbd5cf0: the row ended status=done, workflow_step=implement_tasks, gate_state=pending - auto-closed while its green_gate had never been decided. TaskService already refuses that, but its guard reads is_open_gate_step(), which fires only when the workflow_step ITSELF is a gate. A rewind moves the task back to an AGENT step and leaves gate_state pending behind, so the row carries an open gate the guard cannot see, and the runner called task_svc.update directly, past the route-level check. The shipped-close path now reads gate_state and refuses, naming why. Shipped is not adjudicated. The original behaviour survives: a shipped task with a settled gate still closes rather than splitting into children that change nothing. '
 )
