@@ -168,3 +168,59 @@ def test_the_behaviour_nests_under_the_conductor_bot():
     assert '"gate-adjudication"' in block, (
         "the behaviour exists but does not nest under conductor, so it "
         "renders as a disconnected top-level sibling")
+
+
+def test_the_behaviour_is_declared_on_the_conductor_bot_fsm():
+    """A behaviour FILE alone is invisible.
+
+    The catalog enumerates fsm.behaviorIds out of bot.json (api/workflows.py
+    walks `bot["fsms"][*]["behaviorIds"]` and fetches each by id), so a JSON
+    file dropped into .prism/behaviors/conductor/ that no FSM declares never
+    reaches the Workflows page at all. Measured 2026-08-29: the file existed
+    and was in _CONDUCTOR_LINKED_BEHAVIOR_IDS, and `GET /api/workflows`
+    still listed 11 conductor children without it.
+    """
+    import json
+    root = Path(__file__).resolve().parents[4]
+    bot = json.loads(
+        (root / ".prism/behaviors/conductor/bot.json").read_text(encoding="utf-8"))
+    declared = {b for f in bot.get("fsms", [])
+                for b in (f.get("behaviorIds") or [])}
+    assert "gate-adjudication" in declared, (
+        "the gate-adjudication behaviour is not declared on any conductor "
+        f"FSM, so it never renders; declared = {sorted(declared)}")
+
+
+def test_every_conductor_behaviour_file_is_declared_by_the_bot():
+    """Generalises the case above: no behaviour file may be orphaned."""
+    import json
+    root = Path(__file__).resolve().parents[4]
+    bdir = root / ".prism/behaviors/conductor"
+    bot = json.loads((bdir / "bot.json").read_text(encoding="utf-8"))
+    declared = {b for f in bot.get("fsms", [])
+                for b in (f.get("behaviorIds") or [])}
+    on_disk = {p.stem for p in bdir.glob("*.json") if p.stem != "bot"}
+    orphans = sorted(on_disk - declared)
+    assert not orphans, (
+        f"behaviour files no FSM declares, so they never render: {orphans}")
+
+
+def test_the_workflow_rail_entries_are_clickable_by_an_agent():
+    """Owner 2026-08-29: "CLICK ON IT AS A USER WOULD thats why you have
+    remote assist... so you can show stuff."
+
+    The bridge resolves selectors with a plain document.querySelector (CSS
+    only, no text matching -- lib/agentBridge.tsx resolveSelector), and these
+    rail buttons carried no id, no data attribute and no aria-label. An agent
+    could SEE the entry in a screenshot and had no way to click it, so it
+    could never demonstrate anything on this page.
+    """
+    src = (Path(__file__).resolve().parent.parent.parent
+           / "prism_service/web/src/pages/WorkflowsPage.tsx").read_text(encoding="utf-8")
+    assert src.count("data-workflow-id=") >= 2, (
+        "both rail levels (root workflows and nested behaviours) need a "
+        "stable selector hook; found "
+        f"{src.count('data-workflow-id=')}")
+    # the hook must carry the id itself, not a static string
+    assert "data-workflow-id={child.id}" in src
+    assert "data-workflow-id={workflow.id}" in src

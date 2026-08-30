@@ -1635,6 +1635,7 @@ export default function WorkflowsPage() {
                 return (
                   <div key={workflow.id}>
                     <button
+                      data-workflow-id={workflow.id}
                       type="button"
                       aria-current={selected ? "page" : undefined}
                       onClick={() => selectWorkflow(workflow)}
@@ -1669,6 +1670,15 @@ export default function WorkflowsPage() {
                         <button
                           type="button"
                           key={child.id}
+                          // A STABLE HOOK. These rail entries carried no id,
+                          // no data attribute and no aria-label, and the
+                          // remote-assist bridge resolves selectors with a
+                          // plain document.querySelector -- CSS only, no text
+                          // matching. So an agent could SEE this entry in a
+                          // screenshot and had no way to click it (owner
+                          // 2026-08-29: "CLICK ON IT AS A USER WOULD thats
+                          // why you have remote assist").
+                          data-workflow-id={child.id}
                           draggable
                           aria-current={childSel ? "page" : undefined}
                           aria-grabbed={draggedChildId === child.id}

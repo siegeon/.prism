@@ -15,6 +15,7 @@
         "implement-tasks-loop",
         "red-gate-status",
         "green-gate-status",
+        "gate-adjudication",
         "land"
       ]
     }
