@@ -1683,7 +1683,213 @@ def workflow_step_reason_loop(
         return ReasonLoopResponse(observe=observe, reason=reason, validation=validation)
 
 
+# ----------------------------------------------------------------------
+# review_previous_notes, leveled up (task cd33263f)
+# ----------------------------------------------------------------------
+# Owner: "how can we level up more nodes moving faster programmatically,
+# finish tasks faster with less tokens as you find issues" / "enough
+# agentic to generate the content for the task, but always striving to
+# ensure maximum correct throughput." review_previous_notes ran FIRST on
+# every task as ONE opaque reason-loop call whose prompt told the model to
+# go "review the prior notes/decisions" with only Read/Glob/Grep
+# (claude_cli.READ_ONLY_TOOLS) -- no memory_recall, no brain_search, no
+# task history -- so grounding a citation meant grepping the repo cold,
+# one tool-call round trip per claim, on every single task. Split into
+# three nodes, agentic ONLY in the middle:
+#   /steps/premise-gather          codified -- resolves real citations
+#   /steps/premise-judge           agentic  -- judges load-bearing facts
+#   /steps/premise-citation-check  codified -- verifies the report's shape
+# Both codified steps call prism_service.services.premise_gather -- pure
+# retrieval/regex, no model call, no repo lock or worktree op (the
+# 2026-08-29 daemon wedge this must not reproduce).
+
+class PremiseGatherRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+class GatheredFactOut(BaseModel):
+    kind: str
+    text: str
+    citation: str
+
+
+class PremiseGatherResponse(BaseModel):
+    facts: list[GatheredFactOut] = []
+    reason: str = ""
+
+
+@router.post("/steps/premise-gather")
+def workflow_step_premise_gather(
+    body: PremiseGatherRequest, project: str = Query(...),
+) -> PremiseGatherResponse:
+    """CODIFIED. Collects related memories, prior decisions on this task
+    and its neighbours, and resolvable file:line references for symbols
+    the task names -- every citation is one this step ACTUALLY resolved
+    from a real row (memory_svc.recall / task_svc.history / task_svc.list
+    / brain_svc.find_symbol, each a plain local read); nothing is
+    invented. Never calls a model. An honest empty result carries a named
+    `reason` instead of a silently empty list."""
+    with _tracer.start_as_current_span("workflow.step.premise_gather") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return PremiseGatherResponse(
+                facts=[], reason=f"no such task: {body.task_id}")
+
+        from prism_service.services import premise_gather as pg
+        facts = pg.gather(
+            task, memory_svc=getattr(ctx, "memory_svc", None),
+            task_svc=ctx.task_svc, brain_svc=getattr(ctx, "brain_svc", None))
+        reason = ("" if facts else
+                   "no memories, prior decisions, or resolvable symbols "
+                   "found for this task")
+        return PremiseGatherResponse(
+            facts=[GatheredFactOut(kind=f.kind, text=f.text, citation=f.citation)
+                   for f in facts],
+            reason=reason)
+
+
+class PremiseJudgeRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    model: str = "haiku"
+    max_budget_usd: float = 0.5
+    max_turns: int = 2
+
+
+class PremiseJudgeResponse(BaseModel):
+    facts_used: int
+    reason: dict
+    validation: dict
+
+
+@router.post("/steps/premise-judge")
+def workflow_step_premise_judge(
+    body: PremiseJudgeRequest, project: str = Query(...),
+) -> PremiseJudgeResponse:
+    """AGENTIC -- the one model call left in review_previous_notes.
+    Gathers the SAME facts /steps/premise-gather resolves, then asks the
+    model ONLY to judge which are load-bearing for this task and to reuse
+    each one's citation VERBATIM -- never to go find citations itself.
+    `allowed_tools=()`: unlike the old single-step reason-loop call (up to
+    4 turns of Read/Glob/Grep hunting for evidence), this call needs zero
+    tool round trips because the facts already carry real citations."""
+    with _tracer.start_as_current_span("workflow.step.premise_judge") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return PremiseJudgeResponse(
+                facts_used=0, reason={"ok": False, "fields": {}},
+                validation={"ok": False, "reason": f"no such task: {body.task_id}"})
+
+        from prism_service.services import premise_gather as pg
+        facts = pg.gather(
+            task, memory_svc=getattr(ctx, "memory_svc", None),
+            task_svc=ctx.task_svc, brain_svc=getattr(ctx, "brain_svc", None))
+        facts_md = "\n".join(
+            f"- ({f.kind}) {f.text} — {f.citation}" for f in facts
+        ) or "(nothing gathered -- mark any claim you make UNVERIFIED)"
+
+        prompt = (
+            "Material already GATHERED for you is below; every line already "
+            "carries a real citation. Decide which are load-bearing for this "
+            "task and report them as a '## Premises' markdown list, one "
+            "bullet per claim, reusing its citation VERBATIM. Never invent a "
+            "new citation. You may add a claim of your own only if you mark "
+            "it UNVERIFIED or REFUTED.\n\n"
+            f"Task: {task.title}\n{task.description}\n\n"
+            f"Gathered material:\n{facts_md}"
+        )
+
+        from pathlib import Path
+        from prism_service.services.claude_transcripts import _project_source_path
+        from prism_service.inference import claude_cli
+
+        configured = Path(_project_source_path(project))
+        fallback = Path.home() / "projects" / project
+        root = configured if configured.is_absolute() and configured.exists() else fallback
+        result = claude_cli.invoke(
+            prompt, work_dir=root, plugin_dir=root,
+            model=body.model, max_budget_usd=body.max_budget_usd,
+            max_turns=body.max_turns, allowed_tools=(),
+            project=project, purpose="premise-judge",
+            json_schema={"type": "object",
+                        "properties": {"notes_md": {"type": "string"}},
+                        "required": ["notes_md"]},
+        )
+        fields = result.structured_output or {}
+        reason = {"ok": bool(fields), "fields": fields,
+                  "cost_usd": result.usage.get("cost_usd", 0.0),
+                  "run_id": result.run_id}
+
+        from prism_service.services import arc_governance as gov
+        rubric = gov.load_rubrics().get("premise_grounded") or {}
+        verdict = gov.score_premise_grounded(
+            {"notes_md": fields.get("notes_md", "")}, rubric)
+        validation = {"ok": verdict.get("ok", False), "reason": verdict.get("reason", "")}
+
+        return PremiseJudgeResponse(facts_used=len(facts), reason=reason, validation=validation)
+
+
+class PremiseCitationCheckRequest(BaseModel):
+    notes_md: str = ""
+    task_id: str = ""
+
+
+class PremiseCitationCheckFailing(BaseModel):
+    claim: str
+    reason: str
+
+
+class PremiseCitationCheckResponse(BaseModel):
+    ok: bool
+    section_present: bool
+    claims_checked: int
+    failing: list[PremiseCitationCheckFailing] = []
+    reason: str
+
+
+@router.post("/steps/premise-citation-check")
+def workflow_step_premise_citation_check(
+    body: PremiseCitationCheckRequest, project: str = Query(...),
+) -> PremiseCitationCheckResponse:
+    """CODIFIED. Verifies every claim bullet under review_previous_notes'
+    Premises section ends with a citation or an explicit
+    REFUTED/UNVERIFIED/UNRESOLVED marker, and names the bullets that
+    fail. Pure regex (reuses the SAME grounding predicates
+    arc_governance.score_premise_grounded enforces at story_gate, by
+    import -- never a copy that can drift). Never calls a model. When
+    `notes_md` is omitted, reads task.premise_notes for `task_id`."""
+    with _tracer.start_as_current_span("workflow.step.premise_citation_check") as span:
+        span.set_attribute("workflow.project", project)
+        if body.task_id:
+            span.set_attribute("workflow.task.id", body.task_id)
+
+        notes_md = body.notes_md
+        if not notes_md.strip() and body.task_id:
+            ctx = get_project(project)
+            task = ctx.task_svc.get(body.task_id)
+            notes_md = getattr(task, "premise_notes", "") or "" if task else ""
+
+        from prism_service.services import premise_gather as pg
+        from prism_service.services import arc_governance as gov
+        rubric = gov.load_rubrics().get("premise_grounded") or {}
+        section_name = rubric.get("claims_section", "premises")
+        result = pg.citation_check(notes_md, claims_section=section_name)
+        return PremiseCitationCheckResponse(
+            ok=result["ok"], section_present=result["section_present"],
+            claims_checked=result["claims_checked"],
+            failing=[PremiseCitationCheckFailing(**f) for f in result["failing"]],
+            reason=result["reason"])
+
+
 class RedGateStatusRequest(BaseModel):
+
     task_id: str = Field(min_length=1)
 
 

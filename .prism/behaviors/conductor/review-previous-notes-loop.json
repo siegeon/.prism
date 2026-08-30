@@ -2,15 +2,29 @@
   "id": "review-previous-notes-loop",
   "fsmId": "pipeline",
   "botId": "conductor",
-  "name": "Review previous notes (Observe-Reason-Validate)",
-  "version": 1,
+  "name": "Review previous notes (Gather-Judge-Check, task cd33263f)",
+  "version": 2,
   "steps": [
+    {
+      "id": "gather",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/premise-gather?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    },
     {
       "id": "loop",
       "kind": "http-callback",
-      "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
-      "body": "{\"persona\": \"sm\", \"prompt\": \"Review the prior notes/decisions for this task: ${taskHint}\\n\\nProduce a review_previous_notes report in markdown with a '## Premises' heading. Under it, list each load-bearing claim you are relying on as a bullet. Every bullet MUST end with EITHER a citation (a file:line reference, a run/PR/commit/issue id, or backtick command output) OR an explicit REFUTED or UNVERIFIED marker if you cannot ground it. Never leave a claim with neither.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"notes_md\": {\"type\": \"string\"}}, \"required\": [\"notes_md\"]}, \"rubric\": \"premise_grounded\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "url": "${prismBackendUrl}/api/workflows/steps/premise-judge?project=${project}",
+      "body": "{\"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 2, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
+    },
+    {
+      "id": "check",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/premise-citation-check?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
     }
   ]
 }
