@@ -1,0 +1,16 @@
+{
+  "id": "red-test-ids",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Codified red test ids",
+  "version": 1,
+  "steps": [
+    {
+      "id": "status",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/red-test-ids?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    }
+  ]
+}

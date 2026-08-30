@@ -841,6 +841,7 @@ _BEHAVIOR_TRIGGER = {
     "write-failing-tests-loop": "Runs when a task's plan_gate is approved and write_failing_tests starts.",
     "red-gate-status": "Runs when a task's write_failing_tests step finishes and red_gate needs a decision.",
     "implement-tasks-loop": "Runs when a task's red_gate is approved and implement_tasks starts.",
+    "red-test-ids": "Runs when a task's implement_tasks step needs the red test ids -- names which of task.verify's pinned targets are demonstrated red at the task's red anchor, from data on file, no model involved.",
     "green-gate-status": "Runs when a task's verify_green_state step finishes and green_gate needs a decision.",
     "review-previous-notes-loop": "Runs first, when a task starts the implement workflow.",
     "land": "Runs when a task's green_gate is approved and the branch is ready to ship.",
@@ -1280,7 +1281,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     _CONDUCTOR_LINKED_BEHAVIOR_IDS = (
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
-        "write-failing-tests-loop", "implement-tasks-loop",
+        "write-failing-tests-loop", "implement-tasks-loop", "red-test-ids",
         "red-gate-status", "green-gate-status", "land",
     )
     for entry in conductor_behaviors:
@@ -1951,6 +1952,83 @@ def workflow_step_red_gate_status(
             latest_receipt_status=(getattr(latest, "status", "") or "") if latest else "",
             latest_receipt_reason=(getattr(latest, "reason", "") or "") if latest else "",
         )
+
+
+class RedTestIdsRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+class RedTestIdsResponse(BaseModel):
+    red_test_ids: list[str] = []
+    anchor_sha: str = ""
+    reason: str = ""
+
+
+@router.post("/steps/red-test-ids")
+def workflow_step_red_test_ids(
+    body: RedTestIdsRequest, project: str = Query(...),
+) -> RedTestIdsResponse:
+    """CODIFIED implement_tasks helper -- names the red test ids from data
+    PRISM already holds, never from a model. Task 404ef4ce (owner
+    2026-08-30: "make a new codified step in the workflow, that's how we
+    play, making maximum codified nodes from agentic blocks so we can not
+    stall"). Task 8fbd5cf0 held a complete implementation and stalled
+    anyway because implement-tasks-loop is AGENTIC (reason-loop prose) and
+    the runner's stall-splitter greps that prose for a pytest node id --
+    a fact a model has to retype instead of read off the system that
+    already has it (task_runner.red_test_ids / _TEST_ID_RE).
+
+    Same pattern as workflow_step_red_gate_status: pure reads over the
+    exact functions the real red-gate path already trusts --
+    oracle_spec.OracleSpec.from_task for task.verify's pinned targets,
+    ConductorService._red_step_sha for the anchor, oracle_spec.
+    fresh_red_receipt for the demonstration. NEVER calls a model, NEVER
+    runs pytest, NEVER takes a worktree or repo lock inside this request
+    handler (2026-08-29 wedged the whole daemon that way once already,
+    see workflow_node_status's plan-gate-check branch) -- when no fresh
+    red receipt is on file, this reports an honest empty result naming
+    why, rather than guessing or invoking the trusted runner itself."""
+    from prism_service.services import oracle_spec as osp
+
+    with _tracer.start_as_current_span("workflow.step.red_test_ids") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return RedTestIdsResponse(reason=f"no such task: {body.task_id}")
+
+        spec = osp.OracleSpec.from_task(task)
+        if spec.adapter != osp.ADAPTER_PYTEST:
+            return RedTestIdsResponse(
+                reason="task's derived oracle spec is not pytest-backed "
+                       f"(adapter={spec.adapter}) -- no pytest node ids "
+                       "to name")
+
+        pinned = [t for t in spec.target.split() if t]
+        if not pinned:
+            return RedTestIdsResponse(
+                reason="task.verify names no pytest node ids or test paths")
+
+        red_sha = ctx.conductor_svc._red_step_sha(body.task_id)
+        if not red_sha:
+            return RedTestIdsResponse(
+                reason="no red-step commit resolved yet -- "
+                       "write_failing_tests hasn't landed a tests-only commit")
+
+        fresh = osp.fresh_red_receipt(
+            project, body.task_id, red_sha, spec.spec_hash())
+        if fresh is None:
+            return RedTestIdsResponse(
+                anchor_sha=red_sha,
+                reason="no fresh red receipt for the current red-step "
+                       f"commit ({red_sha[:12]}) -- nothing observed "
+                       "failing there yet")
+
+        return RedTestIdsResponse(
+            red_test_ids=pinned, anchor_sha=red_sha,
+            reason=f"red demonstrated at {red_sha[:12]}: {fresh.reason}")
 
 
 class GreenGateStatusRequest(BaseModel):
