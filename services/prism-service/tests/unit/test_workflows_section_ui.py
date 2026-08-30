@@ -1419,9 +1419,13 @@ def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
     page = _read("pages", "WorkflowsPage.tsx")
 
     assert 'import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";' in page
-    # Synthesized from data this page already holds (the step's own
-    # average_duration_seconds, the run's own runtime.startedAt) -- not a
-    # second, slower phase_progress fetch (scope=full costs ~30s cold).
+    # Task 8fbd5cf0 (c705e20a) SUPERSEDES the prior "step?.average_duration_seconds"
+    # assertion here: that was a clock ratio (elapsed / the step's stored
+    # average duration), exactly what the craft brief's stop_if forbids
+    # ("any progress value derives from one shared typical duration instead
+    # of that node's own measured history"). conductorLivePhase now reads
+    # ONLY server-counted units (flow_run_recorder.progress_source, exposed
+    # as flowRuns.progress) -- no clock, no average, ever.
     phase_memo = _function_body(
         page,
         'const conductorLivePhase = useMemo<PhaseProgress | null>(() => {',
@@ -1434,17 +1438,11 @@ def test_workflows_page_reuses_sdlc_progress_for_a_live_conductor_instance():
     # the top-level "conductor" bot. isStateMachineWorkflow already excludes
     # "validation" (line ~532), so that exclusion still holds here too.
     assert '!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable"' in phase_memo
-    # RETIRED by task 8fbd5cf0: conductorLivePhase no longer derives the
-    # bar from step.average_duration_seconds and Date.now(). That value
-    # filled because time passed, not because work got done. It is
-    # superseded by flow_run_recorder.progress_source, which counts real
-    # units server-side (teeth decided/total for a gate node, the drive
-    # heartbeat's own work_units for an agent node) -- pinned by
-    # tests/unit/test_conductor_run_is_recorded_and_live.py::
-    # test_ac5_the_live_tile_progress_reads_no_clock. The surviving
-    # INVARIANT is that the memo still reports a counted basis:
-    assert "counted.basis" in phase_memo
-    assert "average_duration_seconds" not in phase_memo
+    assert "const counted = flowRuns?.progress;" in phase_memo, (
+        "conductorLivePhase must read the server's counted units, never a "
+        "clock/average-duration ratio")
+    assert "average_duration_seconds" not in phase_memo, (
+        "a clock-ratio pacing source has crept back into the live phase memo")
 
     activity_memo = _function_body(page, "const conductorLiveActivity = useMemo<Activity | null>(() => {")
     # Reuses ACTIVITY_META's existing vocabulary (awaiting_gate/blocked/
@@ -1650,3 +1648,60 @@ def test_run_workflow_button_is_hidden_for_conductor():
         "the historical-run replay-return button must still be gated on selectedHistoryRun")
     assert "leaveHistoricalReplay" in page, (
         "the Ran button must still call leaveHistoricalReplay")
+
+
+# --------------------------------------------------------------------------
+# Craft bar (task 8fbd5cf0): "Respect prefers-reduced-motion: fall back to
+# instant state changes, never to a broken layout." The token/packet system
+# is a hand-rolled canvas-2D animation (workflowGraph.ts/packets.ts), not a
+# CSS transition a browser setting suppresses for free -- it has to be
+# taught the OS preference explicitly, on both the page (reads matchMedia)
+# and the graph (what "reduced" means: no packet ever rides a wire, so a
+# transition still lands the same frame, it just never travels there).
+# --------------------------------------------------------------------------
+
+def test_the_page_relays_the_os_reduced_motion_preference_into_the_graph():
+    """WorkflowsPage.tsx must read prefers-reduced-motion once on mount AND
+    keep it live on change (a user can toggle the OS setting without
+    reloading the tab), and hand it to the SAME graph instance the rAF loop
+    already drives -- not a parallel flag nothing reads."""
+    page = _read("pages", "WorkflowsPage.tsx")
+
+    assert 'matchMedia("(prefers-reduced-motion: reduce)")' in page, (
+        "WorkflowsPage.tsx must read the real OS media query, not a "
+        "hand-rolled substitute")
+    assert "graphRef.current.setReducedMotion(mq.matches)" in page, (
+        "the initial read must be relayed onto the graph instance the "
+        "canvas actually renders")
+    assert 'mq.addEventListener("change"' in page, (
+        "the preference must stay live -- a change event, not a one-shot "
+        "read at mount")
+    assert "graphRef.current.setReducedMotion(e.matches)" in page, (
+        "a later OS change must also reach the graph, not just the "
+        "initial value")
+
+
+def test_reduced_motion_means_no_packet_ever_travels():
+    """WorkflowGraph must actually DO something with reducedMotion: step()
+    (the ambient-motion driver) must bail before spawning or advancing any
+    packet, and sendTransition (the deliberate, per-transition call) must
+    skip spawning a travelling marker while still returning true -- the
+    node's own occupied/verdict state changes the same frame regardless,
+    so a transition is never silently dropped, only its marker is."""
+    src = _read("live", "workflowGraph.ts")
+
+    step_body = _function_body(src, "step(dtMs: number, now: number): void {")
+    assert re.match(r"\{\s*if \(this\.reducedMotion\) return;", step_body), (
+        "step() must bail out before any ambient packet spawn/advance "
+        "when reducedMotion is set")
+
+    send_body = _function_body(src, "sendTransition(source: string, target: string): boolean {")
+    assert "if (!this.reducedMotion) this.packets.push(spawnPacket(" in send_body, (
+        "sendTransition must gate the travelling-marker spawn on "
+        "reducedMotion -- the transition itself (return true) must not "
+        "be gated, only the marker")
+
+    assert "setReducedMotion(reduced: boolean): void {" in src, (
+        "the graph needs a setter the page can call on mount and on "
+        "every OS preference change"
+    )

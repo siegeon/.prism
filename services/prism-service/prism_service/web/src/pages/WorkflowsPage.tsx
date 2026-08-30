@@ -315,6 +315,16 @@ export default function WorkflowsPage() {
   const { managed: conductorManaged } = useConductorState(project);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<WorkflowGraph>(new WorkflowGraph());
+  // prefers-reduced-motion: read once, kept live on change. The graph
+  // itself owns what "reduced" means for a token (no travel, instant
+  // state change) -- this effect only relays the OS setting.
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    graphRef.current.setReducedMotion(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => graphRef.current.setReducedMotion(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
   const [flowRuns, setFlowRuns] = useState<FlowRuns | null>(null);
   const lastFlowNodeRef = useRef<string>("");
   const dragRef = useRef<DragState>({ ...IDLE_DRAG });

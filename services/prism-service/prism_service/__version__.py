@@ -13,10 +13,20 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.194"
+PRISM_VERSION = "7.13.195"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.195: task 8fbd5cf0, craft pass -- the canvas token/packet '
+    'system now respects prefers-reduced-motion. WorkflowsPage.tsx reads '
+    'matchMedia("(prefers-reduced-motion: reduce)") once on mount and '
+    'stays live on change, relaying it into WorkflowGraph.setReducedMotion. '
+    'While reduced, step() never advances or spawns an ambient packet and '
+    'sendTransition never spawns a travelling marker -- the occupied node '
+    'still flips state the same frame, it just never rides a token there. '
+    'Also retired a stale test assertion (average_duration_seconds) left '
+    'over from the c705e20a clock-ratio removal; conductorLivePhase is '
+    'pinned instead to the counted-units source it actually reads now. '
     '7.13.188: task 8fbd5cf0 -- a task moves on the canvas in real time. '
     'flow_run_recorder.py (new, non-policy) records one flow_node_runs row '
     'per concluded conductor node from api/conductor_flow.py:flow_report, '

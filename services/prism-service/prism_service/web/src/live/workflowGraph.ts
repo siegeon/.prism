@@ -129,6 +129,12 @@ export class WorkflowGraph {
   packets: Packet[] = [];
   pan = { x: 0, y: 0 };
   zoom = 1;
+  /** prefers-reduced-motion: OS-level, set once by the page from
+   * matchMedia and kept live on change. While true, no packet ever rides
+   * a wire -- a transition still lands (the occupied node's own state
+   * changes instantly, same frame), it just never travels there. Never a
+   * broken layout, never a frozen-mid-flight marker. */
+  private reducedMotion = false;
   /** How the shared interaction layer reads THIS board. The only wire
    * behaviour that is ours to answer: the FSM chain keeps its plain
    * edge-midpoint elbow while untouched, and this canvas simplifies every
@@ -348,11 +354,20 @@ export class WorkflowGraph {
     return this.wireEdits.slotForEnd(w.key, end);
   }
 
+  /** Read by the page from matchMedia("(prefers-reduced-motion: reduce)")
+   * and kept in sync on change. Clears any packets already in flight so
+   * the switch takes effect immediately, not just for the next spawn. */
+  setReducedMotion(reduced: boolean): void {
+    this.reducedMotion = reduced;
+    if (reduced) this.packets = [];
+  }
+
   /** Ambient motion, driven by real occupancy only: a bot->step wire whose
    * step has someone standing on it carries exactly one marker at a time,
    * the next spawning a beat after the previous arrives. A step with no
    * work is silent, so a still canvas honestly means an idle board. */
   step(dtMs: number, now: number): void {
+    if (this.reducedMotion) return;
     for (const p of this.packets) {
       const wire = this.wires.find((w) => w.from === p.source && w.to === p.target);
       if (wire) p.pts = this.route(wire);
@@ -386,7 +401,11 @@ export class WorkflowGraph {
     this.packets = this.packets.filter((packet) => !(
       packet.source === source && packet.target === target
     ));
-    this.packets.push(spawnPacket(source, target, false, pts));
+    // Reduced motion: the transition is real (the caller's own node
+    // state flips this same frame) -- it just never rides a marker to
+    // get there, per the craft brief's "instant state changes, never a
+    // broken layout."
+    if (!this.reducedMotion) this.packets.push(spawnPacket(source, target, false, pts));
     return true;
   }
 
