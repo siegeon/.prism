@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.189"
+PRISM_VERSION = "7.13.190"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7714,4 +7714,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.189 - the stall handler refuses to close a task over an undecided gate. Observed live on task 8fbd5cf0: the row ended status=done, workflow_step=implement_tasks, gate_state=pending - auto-closed while its green_gate had never been decided. TaskService already refuses that, but its guard reads is_open_gate_step(), which fires only when the workflow_step ITSELF is a gate. A rewind moves the task back to an AGENT step and leaves gate_state pending behind, so the row carries an open gate the guard cannot see, and the runner called task_svc.update directly, past the route-level check. The shipped-close path now reads gate_state and refuses, naming why. Shipped is not adjudicated. The original behaviour survives: a shipped task with a settled gate still closes rather than splitting into children that change nothing. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.190 - an inconclusive oracle receipt is no longer read as a failure, and a rewind no longer leaves an open gate on an agent step. green_rewind tested only receipt.passed, which is False for EVERY non-pass including manual_evidence_required and error - states that mean the runner could not judge, never that the work is wrong. Observed live on task 8fbd5cf0: a demo oracle reading Open /workflows and watch has no literal URL for the browser adapter, so it answered manual_evidence_required and this path rewound the green_gate off a task whose work was already on origin/main. Below the confidence bar the seat now escalates with a named reason instead of rejecting. Second fix: the rewind wrote gate_state=pending onto implement_tasks, an AGENT step with no gate. That incoherent row is invisible to is_open_gate_step, which is how the stall handler closed the task over an undecided gate. It now writes none. A genuinely FAILED receipt still rewinds. '
 )

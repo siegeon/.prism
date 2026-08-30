@@ -78,6 +78,29 @@ def maybe_rewind(ctx, task, project: str) -> Optional[dict]:
     receipt = oracle_spec.latest_receipt(project, task.id)
     if receipt is None or receipt.passed:
         return None
+    # INCONCLUSIVE IS NOT FAILED (task 8fbd5cf0, 2026-08-30). `passed` is
+    # False for every non-pass, including ST_MANUAL ("manual evidence
+    # required") and ST_ERROR — states that mean the runner COULD NOT JUDGE,
+    # never that the work is wrong. Observed live: a proof_type=demo oracle
+    # reading "Open /workflows and watch..." has no literal URL for the
+    # browser adapter to probe, so it answered ST_MANUAL, and this path read
+    # that as a hard failure and rewound a green_gate off a task whose work
+    # was already on origin/main. Owner rule 2026-08-30: below the confidence
+    # bar we ESCALATE with a named reason, we do not reject. Only a receipt
+    # that genuinely FAILED earns a rewind.
+    if receipt.status != oracle_spec.ST_FAILED:
+        task_svc_early = ctx.task_svc
+        reason = (
+            f"green_gate: the oracle runner could not judge this "
+            f"(receipt status={receipt.status}). That is not a failure — it "
+            f"means no automated verdict is available, so this gate needs a "
+            f"decision on the evidence rather than another build cycle.")
+        try:
+            task_svc_early.update(task.id, gate_reason=reason)
+        except Exception:  # noqa: BLE001 - reporting never breaks the sweep
+            pass
+        return {"ok": False, "inconclusive": True, "task_id": task.id,
+                "status": receipt.status, "reason": reason}
     tree = oracle_spec.current_tree_sha(_workspace_path(task))
     if not tree or receipt.tree_sha != tree:
         return None
@@ -95,8 +118,15 @@ def maybe_rewind(ctx, task, project: str) -> Optional[dict]:
     attempt = spent + 1
     reason = (f"Rewind {attempt}/{budget}: green receipt FAILED at tree "
               f"{tree}; failing: {names}")
+    # A REWIND LANDS ON AN AGENT STEP, WHICH HAS NO GATE. Writing
+    # gate_state="pending" here left implement_tasks carrying an open gate,
+    # which is incoherent AND invisible to task_service.is_open_gate_step()
+    # (it only fires when the step ITSELF is a gate). That blind spot let
+    # task_runner's stall handler close 8fbd5cf0 as done while its green_gate
+    # had never been decided. The gate reopens when the flow advances back
+    # into green_gate; until then there is no gate to be pending.
     task_svc.update(task.id, workflow_step=REWIND_TO_STEP,
-                    gate_state="pending", gate_reason=reason)
+                    gate_state="none", gate_reason=reason)
     task_svc.record_history(
         task.id, action=REWIND_ACTION,
         details=f"green_gate -> {REWIND_TO_STEP}; attempt={attempt}; "

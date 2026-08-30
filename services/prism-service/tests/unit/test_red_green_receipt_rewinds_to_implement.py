@@ -72,7 +72,17 @@ def test_fresh_failed_receipt_rewinds(tmp_path, monkeypatch):
     assert res and res["ok"] and res["to_step"] == "implement_tasks"
     t = svc.get(task.id)
     assert t.workflow_step == "implement_tasks"
-    assert t.gate_state == "pending"
+    # SUPERSEDED 2026-08-30 by test_inconclusive_receipt_is_not_a_failure.py
+    # (task 8fbd5cf0). This used to assert gate_state == "pending" after the
+    # rewind. implement_tasks is an AGENT step and has no gate, so a pending
+    # gate there is incoherent — and invisible to
+    # task_service.is_open_gate_step(), which only fires when the step ITSELF
+    # is a gate. That blind spot let task_runner's stall handler close a task
+    # as done while its green_gate had never been decided. The real invariant
+    # the old line was reaching for is that the rewind does not leave a
+    # SETTLED gate behind, which "none" satisfies; the gate is recreated when
+    # the flow advances back into green_gate.
+    assert t.gate_state == "none"
 
 
 def test_instructions_name_failing_tests(tmp_path, monkeypatch):
