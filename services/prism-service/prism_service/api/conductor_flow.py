@@ -346,6 +346,71 @@ def _is_root_conductor_task(task) -> bool:
     return not parent_id and workflow == "implement"
 
 
+# THE PARKED-GATE PROMPT (task 54585a5f). Correct for exactly ONE case: a
+# gate that is genuinely a human's to decide. It used to be written for
+# EVERY machine decline, which is how task 72ccaf94's card told the owner
+# the evidence was ready while readiness answered status=not_shipped.
+_SIGN_OFF_PROMPT = ("awaiting your sign-off — the evidence is ready; review it "
+                    "and Approve (the single human decision for this ticket)")
+# The claim that prompt makes. It must never stand while a refusal is
+# outstanding — including when an earlier build already stored it.
+_EVIDENCE_READY_CLAIM = "the evidence is ready"
+
+
+def _parked_green_gate_reason(svc, task) -> str:
+    """What a DECLINED green_gate parks with (task 54585a5f).
+
+    The seat used to write ``_SIGN_OFF_PROMPT`` on every decline without
+    ever reading WHY it declined, so a gate that no Approve could satisfy
+    asked the owner to Approve. This asks the SAME teeth, in the SAME
+    order, that ``GET /api/conductor/gate/readiness`` asks (api/conductor.py,
+    green_gate branch), so the card and the seat cannot contradict:
+
+      1. HUMAN-ONLY BY DESIGN first — a demo/review proof_type, or a
+         human-judgment oracle. ``adjudicate_green_gate`` abstains on those
+         by owner rule eaafdf75, so "declined" there does NOT mean
+         "blocked": the click IS the decision and the prompt is correct.
+         Checked BEFORE the teeth precisely because a demo oracle has no
+         machine receipt, so the receipt tooth always has something to say
+         about it — letting it answer would silence the one prompt that is
+         true (this task's pre-declared likely_misfire).
+      2. otherwise the shipped-ness tooth, then the oracle-receipt tooth —
+         readiness' own order, and the order that produced the
+         status=not_shipped that 72ccaf94's card contradicted.
+      3. no refusal at all —> the prompt, unchanged.
+
+    Never raises: any error falls back to the prompt, which is what this
+    field said before this function existed."""
+    try:
+        from prism_service.services import oracle_spec as _osp
+        _pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if _pt in ("demo", "review") or _osp.is_human_judgment(
+                _osp.OracleSpec.from_task(task)):
+            return _SIGN_OFF_PROMPT
+    except Exception:
+        return _SIGN_OFF_PROMPT
+    refusal = ""
+    try:
+        refusal = str(svc._unshipped_gate_reason(task) or "")
+    except Exception:
+        refusal = ""
+    if not refusal:
+        try:
+            _r, _receipt = svc._oracle_receipt_refusal(
+                task, override=False, reason="")
+            refusal = str(_r or "")
+        except Exception:
+            refusal = ""
+    if not refusal:
+        return _SIGN_OFF_PROMPT
+    # Both teeth already name their own remedy (merge/land the branch;
+    # re-run the oracle). What neither says is that waiting for a signature
+    # is not the answer — say that, so a driver self-diagnoses instead of
+    # pinging a human who has no click to give.
+    return (refusal.rstrip() + " This gate is NOT waiting on a signature: "
+            "an Approve cannot clear it until the refusal above is resolved.")
+
+
 def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     """Approve a just-entered PENDING rubric gate iff its machine check says
     verified=True. Anything else (fail, None, non-rubric gate) is left
@@ -368,17 +433,28 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
                if gate_adjudicator.is_enabled() else None)
         if res:
             return res
-        # Parked for the HUMAN sign-off — write an actionable reason so the
-        # field itself says WHAT to do (was blank; owner 2026-07-19). The
-        # readiness card already carries the prompt; this makes the raw task
-        # consistent for a driver reading gate_reason.
+        # PARKED — record the SEAT'S OWN refusal, never a fixed prompt (task
+        # 54585a5f). Writing the sign-off prompt unconditionally is what told
+        # task 72ccaf94's owner the evidence was ready while readiness
+        # answered status=not_shipped; no Approve makes a commit trailer
+        # reachable from origin/main. A tooth that COMPUTES a refusal and
+        # then discards it has only half-shipped (task e0149f1f).
         try:
             _t = svc._task_svc.get(task_id)
-            if _t and getattr(_t, "gate_state", "") == "pending" \
-                    and not (getattr(_t, "gate_reason", "") or "").strip():
-                svc._task_svc.update(task_id, gate_reason=(
-                    "awaiting your sign-off — the evidence is ready; review it "
-                    "and Approve (the single human decision for this ticket)"))
+            if _t is not None and getattr(_t, "gate_state", "") == "pending":
+                _reason = _parked_green_gate_reason(svc, _t)
+                _stored = str(getattr(_t, "gate_reason", "") or "").strip()
+                # Blank: nothing to lose. Non-blank: only ever REPLACE a
+                # stale "the evidence is ready" claim, and only when a real
+                # refusal now contradicts it. Every OTHER stored reason
+                # belongs to a tooth that parked it deliberately
+                # (_park_green_refusal / _park_policy_abstention) and is
+                # never overwritten from here.
+                if _reason and (
+                        not _stored
+                        or (_reason != _SIGN_OFF_PROMPT
+                            and _EVIDENCE_READY_CLAIM in _stored.lower())):
+                    svc._task_svc.update(task_id, gate_reason=_reason)
         except Exception:
             pass
         return None
