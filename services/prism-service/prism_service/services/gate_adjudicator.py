@@ -250,9 +250,28 @@ def sweep_once() -> list[dict]:
                                  f"-> {rw.get('to_step') or 'parked'}")
                             continue
                     if task is not None:
-                        _write_pending_reason(
-                            ctx, task,
-                            _pending_decline_reason(svc, task, step, pid))
+                        _decline = _pending_decline_reason(
+                            svc, task, step, pid)
+                        _write_pending_reason(ctx, task, _decline)
+                        # RUBRIC FIRST, INFERENCE FOR THE RESIDUE (owner
+                        # 2026-08-29: "it should be inferred AND rubric ...
+                        # make it the MOST deterministic it can be by
+                        # codifying things as much as it can, and leaving
+                        # room for inference to deal with unknowns").
+                        #
+                        # A codified REFUSAL is final for this pass: it is
+                        # already a decision, stated in words, and inference
+                        # does not get to talk it away. Only when the
+                        # deterministic half has nothing left to say -- no
+                        # refusal, yet still no approval -- is what remains
+                        # judgement a rubric cannot express, and only then
+                        # does a real agent seat read the packet.
+                        if not str(_decline or "").strip():
+                            from prism_service.services import gate_agent
+                            _inf = gate_agent.adjudicate(pid, tid, step)
+                            if _inf:
+                                _log(f"{pid}/{tid[:8]}: {step} decided by "
+                                     f"the inference seat")
                     # Record the refusal AFTER the write: _write_pending_reason
                     # may move updated_at, and the backoff compares against the
                     # value this pass leaves behind.

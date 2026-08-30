@@ -1260,7 +1260,8 @@ def get_workflows(project: str = Query("default")) -> dict:
         "story-gate-check", "plan-gate-check", "draft-story-loop",
         "review-previous-notes-loop", "verify-plan-loop",
         "write-failing-tests-loop", "implement-tasks-loop",
-        "red-gate-status", "green-gate-status", "land",
+        "red-gate-status", "green-gate-status", "gate-adjudication",
+        "land",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
@@ -1922,3 +1923,76 @@ def workflow_step_plan_gate_check_one(
                 id=body.check, label=body.check, ok=False,
                 reason=f"no such task: {body.task_id}")
         return GateCheckStatus(**pgc.run_check(body.check, task, project))
+
+
+class GateAdjudicationRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    stage: str = Field(min_length=1)
+
+
+@router.post("/steps/gate-adjudication")
+def workflow_step_gate_adjudication(
+    body: GateAdjudicationRequest, project: str = Query(...),
+) -> GateCheckStatus:
+    """ONE named state of the gate-adjudication flow.
+
+    A gate is a STATE the conductor hands a task to, and it is worked, not
+    merely computed (owner 2026-08-29). Its work is layered: "it should be
+    inferred AND rubric ... make it the MOST deterministic it can be by
+    codifying things as much as it can, and leaving room for inference to
+    deal with unknowns." Each layer is its own step here so the Workflows
+    page shows what the gate actually does, rather than one opaque verdict.
+
+      stage=codified  -- every mechanically checkable property. ok=false
+                         carries the refusal, which is already a decision.
+      stage=infer     -- the residue a rubric cannot express, judged by a
+                         real read-only `claude -p` seat. Reached ONLY when
+                         `codified` had nothing to say: inference never
+                         talks a codified refusal away.
+
+    Always HTTP 200, like /steps/green-gate-check: a refusal is a REPORTED
+    fact, not a callback failure, so the chain reaches every later state.
+    """
+    with _tracer.start_as_current_span("workflow.step.gate_adjudication") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        span.set_attribute("workflow.stage", body.stage)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return GateCheckStatus(id=body.stage, label=body.stage, ok=False,
+                                   reason=f"no such task: {body.task_id}")
+        step_id = str(getattr(task, "workflow_step", "") or "")
+
+        from prism_service.services import gate_adjudicator, gate_agent
+        if body.stage == "codified":
+            reason = gate_adjudicator._pending_decline_reason(
+                ctx.conductor_svc, task, step_id, project)
+            return GateCheckStatus(
+                id="codified", label="Everything the rubric can decide",
+                ok=not str(reason or "").strip(), reason=str(reason or ""))
+
+        if body.stage == "infer":
+            reason = gate_adjudicator._pending_decline_reason(
+                ctx.conductor_svc, task, step_id, project)
+            if str(reason or "").strip():
+                return GateCheckStatus(
+                    id="infer", label="Judgement on what the rubric cannot say",
+                    ok=True,
+                    reason="not reached: the codified layer already decided")
+            if not gate_agent.is_enabled():
+                return GateCheckStatus(
+                    id="infer", label="Judgement on what the rubric cannot say",
+                    ok=True, reason="inference seat is off "
+                                    "(PRISM_GATE_AGENT_ENABLED)")
+            decided = gate_agent.adjudicate(project, body.task_id, step_id)
+            return GateCheckStatus(
+                id="infer", label="Judgement on what the rubric cannot say",
+                ok=True,
+                reason=("the inference seat decided this gate" if decided
+                        else "the inference seat reached no decision; "
+                             "the gate stays as it was"))
+
+        return GateCheckStatus(id=body.stage, label=body.stage, ok=False,
+                               reason=f"unknown stage: {body.stage}")
