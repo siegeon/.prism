@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.191"
+PRISM_VERSION = "7.13.192"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7731,4 +7731,30 @@ PRISM_VERSION_NOTES += (
     "feeds the dispatch count from durable history, which strictly increases "
     "and survives a restart, and stamps driver=SEAT so the runner can tell its "
     "own beats from a foreign one. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.192 - review_previous_notes is now agentic only in the middle. "
+    "It ran as one opaque reason-loop call whose only tool access was "
+    "Read, Glob, and Grep, so grounding a citation meant grepping the "
+    "repo cold on every task. Split into three nodes: a codified gather "
+    "step (new services/premise_gather.py) that resolves real citations "
+    "from memory_svc.recall, task_svc.history and list, and "
+    "brain_svc.find_symbol before the model ever runs; an agentic judge "
+    "that only decides which gathered facts are load bearing, calling "
+    "claude_cli.invoke with allowed_tools set to an empty tuple and "
+    "max_turns of 2, so it needs zero tool round trips where the old "
+    "call allowed up to four turns of Read, Glob, and Grep; and a "
+    "codified citation check that reuses arc_governance own grounding "
+    "regexes by import, never a copy, so it can never drift from the "
+    "story_gate rubric. Three new endpoints land in api/workflows.py: "
+    "/steps/premise-gather, /steps/premise-judge, and "
+    "/steps/premise-citation-check. The on-disk behavior JSON bumped to "
+    "version 2, three http-callback steps gather, then loop, then check, "
+    "mirroring green-gate-status.json own multi-step shape. "
+    "arc_governance.py, a control_plane.POLICY_FILES entry, stayed byte "
+    "for byte untouched, and premise_notes keeps the identical contract "
+    "the story gate reads, so no downstream gate changed. Task cd33263f, "
+    "machine-adjudicated green: 18 pinned tests, 168 unit and 58 "
+    "integration neighbour tests green, both trees. "
 )
