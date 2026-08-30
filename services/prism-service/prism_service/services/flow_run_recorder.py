@@ -78,9 +78,19 @@ CREATE TABLE IF NOT EXISTS flow_node_runs (
 """
 
 
+# Runs recorded before the terminal node was renamed carry the id
+# "shipped", which no drawn node matches -- so a COMPLETE walk read back
+# as unfinished and the win state could not paint. Renaming the constant
+# fixed new recordings only; the stored ones needed carrying across.
+_MIGRATE_TERMINAL = (
+    "UPDATE flow_node_runs SET node_id = ? WHERE node_id = 'shipped'")
+
+
 def _connect(scores_db: str) -> sqlite3.Connection:
     conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.execute(_SCHEMA)
+    conn.execute(_MIGRATE_TERMINAL, (SHIPPED_NODE,))
+    conn.commit()
     return conn
 
 
