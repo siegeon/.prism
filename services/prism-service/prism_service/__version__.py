@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.181"
+PRISM_VERSION = "7.13.182"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -7653,4 +7653,27 @@ PRISM_VERSION_NOTES += (
     "\n7.13.179: every layer of the flow can now answer what it has actually RUN. Owner: the rail should render the execution instances of the bot layer we are looking at, and each time we click into the next layer it should move to that historical view for that instance. The blocker was real and the page said so in its own comment: /runs/history 404s for anything but validation, no WorkflowCore run ever backs a declarative FSM behaviour, so every bot-family entry showed an empty rail forever. But the executions DID happen and ARE recorded. Measured on this project: 2,012 gate_decide and 3,246 advance_task rows. GET /api/workflows/{id}/instances answers them per layer, a gate instances being its own gate_decide rows and a step instances being the advance_task rows that LEFT it, scoped by task_id so drilling in from one task shows THAT task history at the deeper layer rather than every task. The behaviour-to-step map is the linked_workflow_id chain inverted, pinned by a test against that same chain so the two cannot drift. This is the DATA half; the rail still renders the catalog, and wiring it to this endpoint is the next slice. 144 green. "
     "\n7.13.180: an execution instance now belongs to the VERSION of the flow that ran it. Owner: it is INSTANCE ran per THIS version of the Bot/Agentic flow. A run of plan-gate-check v1, one opaque rubric callback, is not a run of v3, rubric plus three teeth plus infer, and listing them together misrepresents what executed. MEASURED FIRST: of 2,016 gate_decide rows on file, ZERO carry a flow version; the 1,401 that mention the word are incidental prose such as PRISM_VERSION inside a reason string. So no historical instance can be attributed to a flow version, and none is: an unstamped run reads flow_version=null, meaning UNKNOWN, and a version filter never sweeps it in, because guessing would file a v1 execution under a v3 heading. The instances endpoint reports the definition current_version and how many runs are unstamped, and the inference seat stamps flow_version on every decision it records from here on. Other seats still do not stamp; that is named rather than hidden. 919 green. "
     "\n7.13.181: a drilled-in layer can finally say what is going on. Owner, looking at the plan-gate layer his task was parked on: I do not see any steps with their progress bar like from conductor, there is no indication anywhere what the hell is going on. He was right, and the cause is structural: WorkflowsPage derives node state ONLY from workflowRun.runtime, and no WorkflowCore run backs a declarative FSM behaviour, so activeProgress is null on every drilled layer and the canvas draws a dead diagram. The verdicts were never missing, only unexposed per node. GET /api/workflows/{id}/node-status answers each node for one task as passed, refused, not_reached, or unknown, and unknown is never dressed up as passed. Live on the parked task: rubric passed with 5 AC ids covered and the diagram parsing, all three deterministic teeth passed, and infer reads not_reached because the codified layer already decided it needs the owner approval. TWO CORRECTIONS FOUND WHILE BUILDING IT: the rubric node reported nothing at all at first, leaving one node of five permanently blank; and once wired it was scored with plan_md/story_md when _score_rubric reads fields[plan_doc], so it graded an EMPTY document and produced a confident story carries no AC-<n> ids on a plan carrying AC-1 to AC-5. That false red was caught before shipping only because the verdict looked wrong. This is the DATA; the canvas still has to be wired to it. 66 green. "
+)
+
+PRISM_VERSION_NOTES += (
+    "\n7.13.182: the drilled-in layer now PAINTS what 7.13.181 measured. "
+    "WorkflowsPage derived node state only from workflowRun.runtime, which is "
+    "null on every behaviour layer because no WorkflowCore run backs a "
+    "declarative FSM behaviour, so the canvas drew a dead diagram. It now "
+    "fetches GET /api/workflows/{id}/node-status for the layer plus the task "
+    "in context (the ?task= param, else the attached conductor instance) on "
+    "the same 10s cadence the page already polls, and draws each node's real "
+    "answer: passed is a green border with a full-width STILL completion "
+    "rail, refused is red with the same rail, and not_reached and unknown are "
+    "drawn back at 45 percent with NO rail at all, so a node inference never "
+    "reached can never be mistaken for a pass it never earned. NOTHING here "
+    "animates and nothing is derived from a clock: a verdict is an answer, "
+    "not a reading, which is the same rule 7.13.174 and 7.13.175 wrote when "
+    "they removed the 18-second wall-clock sawtooth. The state-details panel "
+    "now carries the node's own reason, so a refusal says WHY instead of "
+    "leaving it on the server. A neighbouring test that pinned the frame "
+    "effect deps as one literal string was re-anchored per dep with a note "
+    "naming what superseded it; its invariant, that the pacing inputs stay in "
+    "the deps, is unchanged. 196 green across every suite that reads "
+    "WorkflowsPage or workflowGraph, and npm run build rc=0. "
 )

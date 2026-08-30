@@ -57,6 +57,49 @@ export type ActiveNodeProgress = {
   tone?: "active" | "success" | "failure" | "warning";
 };
 
+/** The REAL per-node answer of a drilled-in behaviour layer, for one task,
+ * as GET /api/workflows/{id}/node-status reports it.
+ *
+ * A behaviour layer has no WorkflowCore run behind it, so `ActiveNodeProgress`
+ * is always null there and the canvas drew a dead diagram (owner 2026-08-29:
+ * "there is no indication anywhere what the hell is going on"). Each node of
+ * such a layer IS a check with an answer, and this is that answer. It is a
+ * VERDICT, never a progress reading: nothing here animates and nothing here
+ * is measured against a clock. */
+export type NodeVerdict = {
+  state: "passed" | "refused" | "not_reached" | "unknown";
+  reason?: string;
+};
+
+type VerdictPaint = {
+  /** Border and label colour. */
+  stroke: string;
+  /** The word drawn where a running node draws its elapsed clock. */
+  label: string;
+  /** A check that RAN gets a full-width, STATIC completion rail. A check
+   * that never ran gets NONE -- a partial or moving rail is a claim about
+   * how far along something is, and there is no measurement behind it. The
+   * 18-second wall-clock sawtooth removed in 7.13.174/175 is exactly the
+   * mistake this rule exists to prevent. */
+  rail: boolean;
+  /** Never-ran states are drawn back, so a node inference never reached can
+   * never be mistaken for one that passed. */
+  dim: boolean;
+};
+
+function verdictPaint(verdict: NodeVerdict): VerdictPaint {
+  switch (verdict.state) {
+    case "passed":
+      return { stroke: "#34d399", label: "PASSED", rail: true, dim: false };
+    case "refused":
+      return { stroke: "#f87171", label: "REFUSED", rail: true, dim: false };
+    case "not_reached":
+      return { stroke: PALETTE.border, label: "NOT REACHED", rail: false, dim: true };
+    default:
+      return { stroke: PALETTE.border, label: "UNKNOWN", rail: false, dim: true };
+  }
+}
+
 function shortDuration(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(whole / 60);
@@ -424,6 +467,7 @@ export function drawWorkflows(
   now: number,
   selectedNodeId: string | null = null,
   activeProgress: ActiveNodeProgress | null = null,
+  nodeVerdicts: Record<string, NodeVerdict> | null = null,
 ): void {
   drawGrid(ctx, w, h, g.pan, g.zoom);
   ctx.save();
@@ -455,6 +499,7 @@ export function drawWorkflows(
   for (const n of g.nodes) drawNode(
     ctx, n, n.id === selectedNodeId,
     activeProgress?.nodeId === n.id ? activeProgress : null,
+    nodeVerdicts?.[n.id] ?? null,
   );
 
   ctx.restore();
@@ -473,8 +518,18 @@ function drawTransitionLabel(ctx: CanvasRenderingContext2D, label: string, at: P
   ctx.textAlign = "left";
 }
 
-function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null): void {
+function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null): void {
   const { x, y, w, h } = n.slot;
+
+  // A live run wins: `active` is what is happening RIGHT NOW, a verdict is
+  // what a check already answered. They never coincide on a behaviour layer
+  // (no WorkflowCore run backs one), so this is an ordering rule, not a
+  // conflict.
+  const verdictLook = !active && verdict ? verdictPaint(verdict) : null;
+  if (verdictLook?.dim) {
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+  }
 
   if (n.childCount) {
     ctx.fillStyle = PALETTE.cardTitle;
@@ -488,6 +543,14 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // Establish stable card chrome.
   ctx.fillStyle = n.gate ? "#3a2f45" : n.kind === "bot" ? "#2c3550" : PALETTE.cardTitle;
   ctx.fillRect(x, y, w, 20);
+
+  if (verdictLook?.rail) {
+    // FULL WIDTH and STILL. A check that ran is finished, not in progress:
+    // there is no width here to interpolate and no frame in which this
+    // moves.
+    ctx.fillStyle = verdictLook.stroke;
+    ctx.fillRect(x + 1, y + 1, w - 2, 3);
+  }
 
   if (active) {
     const fillWidth = Math.max(3, (w - 2) * active.progress);
@@ -529,8 +592,10 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   const activeStroke = active?.tone === "failure" ? "#f87171"
     : active?.tone === "success" ? "#34d399"
       : active?.tone === "warning" ? "#fcd34d" : PALETTE.teal;
-  ctx.strokeStyle = active ? activeStroke : n.gate ? PALETTE.magenta : PALETTE.border;
-  ctx.lineWidth = active || n.gate ? 1.5 : 1;
+  ctx.strokeStyle = active ? activeStroke
+    : verdictLook ? verdictLook.stroke
+      : n.gate ? PALETTE.magenta : PALETTE.border;
+  ctx.lineWidth = active || n.gate || verdictLook ? 1.5 : 1;
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   if (selected) {
     ctx.strokeStyle = PALETTE.teal;
@@ -548,14 +613,17 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   ctx.fillText(clip(ctx, n.label, w - 104), x + 24, y + 10);
   ctx.textAlign = "right";
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
-  ctx.fillStyle = active ? activeStroke : selected ? PALETTE.teal : PALETTE.textLabel;
+  ctx.fillStyle = active ? activeStroke
+    : verdictLook ? verdictLook.stroke
+      : selected ? PALETTE.teal : PALETTE.textLabel;
   const runLabel = active
     ? active.label ?? (active.averageSeconds
       ? active.elapsedSeconds <= active.averageSeconds
         ? `RUN ${shortDuration(active.elapsedSeconds)} / ~${shortDuration(active.averageSeconds)}`
         : `RUN ${shortDuration(active.elapsedSeconds)}`
       : `RUN ${shortDuration(active.elapsedSeconds)}`)
-    : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
+    : verdictLook ? verdictLook.label
+      : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
   ctx.fillText(runLabel, x + w - 8, y + 10);
   ctx.textAlign = "left";
 
@@ -571,6 +639,8 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // Showing the numeric badge at the same time duplicates that signal and,
   // during replay, looks like an error count rather than occupancy.
   if (n.count > 0 && !active) drawOccupancy(ctx, n);
+
+  if (verdictLook?.dim) ctx.restore();
 }
 
 /** The count badge: how many tasks are standing on this step right now.

@@ -94,11 +94,21 @@ def test_frame_effect_depends_on_run_history_and_catalog_so_pacing_stays_fresh()
     # alongside workflowRunHistory so a linked child step's catalog-wide
     # fallback lookup (see test_linked_child_step_falls_back_to_the_full_
     # catalog below) doesn't run on a stale closure.
+    #
+    # SUPERSEDED AGAIN (2026-08-29, per-node verdicts on a drilled layer):
+    # `nodeVerdicts` joined the same deps list, so the frame effect re-runs
+    # when a behaviour layer's real node states arrive. The INVARIANT this
+    # test exists for is that the pacing inputs stay in the deps -- pinning
+    # the whole list as one literal string made every later addition read as
+    # a regression, so each required dep is asserted on its own now.
     src = _src()
-    assert (
-        "}, [selectedNodeId, selectedWorkflow, workflowRun, testStep, "
-        "replayStoppedAt, workflowRunHistory, workflows]);"
-    ) in src
+    start = src.index("}, [selectedNodeId, selectedWorkflow, workflowRun,")
+    deps = src[start:src.index("]", start)]
+    for required in ("workflowRunHistory", "workflows", "testStep",
+                     "replayStoppedAt", "selectedWorkflow", "workflowRun"):
+        assert required in deps, (
+            f"{required} left the frame effect deps, so pacing runs on a "
+            "stale closure")
 
 
 def test_linked_child_step_falls_back_to_the_full_catalog():

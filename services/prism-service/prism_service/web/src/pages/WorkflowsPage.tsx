@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
-import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress } from "@/live/workflowGraph";
+import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
 import Editor from "@monaco-editor/react";
@@ -334,6 +334,10 @@ export default function WorkflowsPage() {
     stepId: string;
   }>>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // The real per-node answers of a drilled-in behaviour layer, for the task
+  // in context. Null on any layer or context where there is nothing real to
+  // say -- an empty map is drawn as "no verdict", never as a pass.
+  const [nodeVerdicts, setNodeVerdicts] = useState<Record<string, NodeVerdict> | null>(null);
   const [stateDetailsOpen, setStateDetailsOpen] = useState(false);
   const [stateDetailsOrigin, setStateDetailsOrigin] = useState({ x: 50, y: 50 });
   const [scriptDiagnosticOpen, setScriptDiagnosticOpen] = useState(false);
@@ -531,6 +535,9 @@ export default function WorkflowsPage() {
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedWorkflowId);
   const selectedStep = selectedWorkflow?.steps.find((step) => step.id === selectedNodeId);
+  // The verdict for the node whose details panel is open, so a REFUSAL can
+  // say why instead of leaving the reason on the server.
+  const selectedNodeVerdict = selectedNodeId ? nodeVerdicts?.[selectedNodeId] ?? null : null;
   // ONE rail mechanism for the whole state-machine family, not one per page
   // (owner, task 3baadd19, 2026-08-24: "we should only have one, we have
   // it the same in conductor, and in build and test, there should not be
@@ -1075,6 +1082,63 @@ export default function WorkflowsPage() {
     }
   }, [searchParams, conductorManaged, openConductorInstance]);
 
+  // A drilled-in BEHAVIOUR layer (plan-gate-check, green-gate-status, ...)
+  // has no WorkflowCore run behind it, so `workflowRun.runtime` is null and
+  // every node used to draw with no state at all -- owner 2026-08-29, on the
+  // plan-gate layer his task was parked on: "there is no indication anywhere
+  // what the hell is going on."
+  //
+  // The verdicts were never missing, only unexposed. Each node of such a
+  // layer IS a check with an answer, and GET /api/workflows/{id}/node-status
+  // reports it per node for ONE task. So this needs a task in context: the
+  // ?task= param the drill-in carries, else the conductor instance the
+  // canvas is attached to. With no task there is no question to answer, and
+  // the canvas correctly says nothing rather than inventing a state.
+  const nodeStatusTaskId = searchParams.get("task")
+    ?? workflowRun?.data.conductorTask?.id
+    ?? null;
+  const nodeStatusLayerId = selectedWorkflow?.parent_id && selectedWorkflowId !== "validation"
+    ? selectedWorkflowId
+    : null;
+  useEffect(() => {
+    if (!nodeStatusLayerId || !nodeStatusTaskId) {
+      setNodeVerdicts(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      api.get<{ nodes: Array<{ id: string; state: string; reason?: string }> }>(
+        `/api/workflows/${encodeURIComponent(nodeStatusLayerId)}/node-status`
+        + `?project=${encodeURIComponent(project)}`
+        + `&task_id=${encodeURIComponent(nodeStatusTaskId)}`,
+      )
+        .then((res) => {
+          if (cancelled) return;
+          const next: Record<string, NodeVerdict> = {};
+          for (const node of res.nodes ?? []) {
+            next[node.id] = {
+              state: node.state as NodeVerdict["state"],
+              reason: node.reason ?? "",
+            };
+          }
+          setNodeVerdicts(Object.keys(next).length > 0 ? next : null);
+        })
+        .catch(() => {
+          // A failed read is NOT a verdict. Clearing back to null draws the
+          // layer plain rather than freezing a stale answer on the canvas.
+          if (!cancelled) setNodeVerdicts(null);
+        });
+    };
+    load();
+    // A gate check answers on the same timescale as a task transition -- the
+    // same 10s cadence this page already polls its definition on.
+    const timer = window.setInterval(load, 10000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [project, nodeStatusLayerId, nodeStatusTaskId]);
+
   // The whole state-machine family's own version of validation's "reattach
   // after reload/navigation" effect below: land on ANY bot-family canvas
   // (not just the top "conductor" one) with a task genuinely in flight on
@@ -1295,12 +1359,12 @@ export default function WorkflowsPage() {
           tone,
         };
       }
-      drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress);
+      drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, nodeVerdicts);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, nodeVerdicts]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
@@ -2038,6 +2102,32 @@ export default function WorkflowsPage() {
                   <button type="button" aria-label="Close state details" onClick={closeStateDetails} className="text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]">×</button>
                 </div>
               </div>
+              {selectedNodeVerdict && (
+                <div className={`mt-4 border px-3 py-3 ${
+                  selectedNodeVerdict.state === "passed" ? "border-emerald-500/50 bg-emerald-950/20"
+                    : selectedNodeVerdict.state === "refused" ? "border-red-500/50 bg-red-950/20"
+                      : "border-[color:var(--border-default)] bg-[color:var(--surface-2)]"
+                }`}>
+                  <div className={`font-mono text-2xs uppercase tracking-wider ${
+                    selectedNodeVerdict.state === "passed" ? "text-emerald-300"
+                      : selectedNodeVerdict.state === "refused" ? "text-red-300"
+                        : "text-[color:var(--text-muted)]"
+                  }`}>
+                    {selectedNodeVerdict.state.replace(/_/g, " ")}
+                  </div>
+                  {/* The reason is the whole point of the panel for a
+                    * REFUSED node: the check already said why, and leaving
+                    * that on the server is what made the layer unreadable. */}
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-[color:var(--text-secondary)]">
+                    {selectedNodeVerdict.reason
+                      || (selectedNodeVerdict.state === "passed"
+                        ? "This check ran and is satisfied."
+                        : selectedNodeVerdict.state === "not_reached"
+                          ? "The codified layer already decided, so this state never ran."
+                          : "This layer has no per-node check to report here.")}
+                  </p>
+                </div>
+              )}
               {selectedStep && <div className="mt-4 grid grid-cols-3 gap-6">
                 <div><div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">Timeout</div><div className="mt-1 text-base text-[color:var(--text-primary)]">{formatDuration(selectedStep.timeout_seconds)}</div></div>
                 <div><div className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">Avg duration</div><div className="mt-1 text-base text-[color:var(--text-primary)]">{formatDuration(selectedStep.average_duration_seconds)}</div></div>
