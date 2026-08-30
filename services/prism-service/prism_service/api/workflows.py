@@ -2147,3 +2147,109 @@ def workflow_instances(
             "current_version": current,
             "unstamped": sum(1 for i in out if i.flow_version is None),
             "instances": [i.model_dump() for i in out]}
+
+
+class NodeStatus(BaseModel):
+    id: str
+    state: str          # passed | refused | not_reached | unknown
+    reason: str = ""
+
+
+@router.get("/{workflow_id}/node-status")
+def workflow_node_status(
+    workflow_id: str,
+    project: str = Query(...),
+    task_id: str = Query(...),
+) -> dict:
+    """The REAL per-node state of one layer, for one task.
+
+    Owner 2026-08-29, looking at a drilled-in gate layer: "I do not see any
+    steps in what you are showing me with their progress bar like from
+    conductor ... there is no indication anywhere what the hell is going
+    on." Correct: WorkflowsPage only ever derives node state from
+    `workflowRun.runtime`, and no WorkflowCore run backs a declarative FSM
+    behaviour, so `activeProgress` is null on every drilled layer and the
+    canvas draws a dead diagram.
+
+    The verdicts were never missing -- only unexposed per node. Each node of
+    a gate behaviour IS a check with an answer, so this reports it:
+
+      passed      the check ran and is satisfied
+      refused     it ran and says no, with the reason it gave
+      not_reached the codified layer already decided, so inference never ran
+      unknown     this layer has no per-node check to report (said plainly,
+                  never dressed up as passed)
+    """
+    ctx = get_project(project)
+    task = ctx.task_svc.get(task_id)
+    if task is None:
+        return {"workflow_id": workflow_id, "task_id": task_id, "nodes": []}
+
+    nodes: list[NodeStatus] = []
+    if workflow_id == "plan-gate-check":
+        from prism_service.services import plan_gate_checks as pgc
+        # The `rubric` node comes FIRST in the behaviour and is not one of
+        # the deterministic teeth, so run_all does not cover it. Reporting
+        # only the teeth left one node of five permanently blank, which is
+        # the same "no indication what is going on" this endpoint exists to
+        # end.
+        try:
+            # _score_rubric's plan_coverage branch reads fields["plan_doc"]
+            # -- NOT plan_md/story_md. Passing the wrong key scored an EMPTY
+            # document and reported a confident "story carries no AC-<n>
+            # ids" on a plan that carries AC-1..AC-5, i.e. a false red on a
+            # node this endpoint exists to tell the truth about.
+            scored = _score_rubric(
+                "plan_coverage",
+                {"plan_doc": str(getattr(task, "plan_doc", "") or ""),
+                 "plan_diagram": str(getattr(task, "plan_diagram", "") or "")},
+                project)
+            nodes.append(NodeStatus(
+                id="rubric",
+                state="passed" if scored.get("ok") else "refused",
+                reason=str(scored.get("reason") or "")))
+        except Exception as exc:
+            nodes.append(NodeStatus(
+                id="rubric", state="unknown",
+                reason=f"could not score the plan rubric: {exc}"))
+        for entry in pgc.run_all(task, project):
+            nodes.append(NodeStatus(
+                id=entry["id"],
+                state="passed" if entry["ok"] else "refused",
+                reason=str(entry.get("reason") or "")))
+    elif workflow_id == "green-gate-status":
+        # The registry IS the node list for this layer -- read it rather
+        # than keeping a second copy that can drift from the behaviour JSON.
+        for check in _green_gate_check_registry(ctx, task, project):
+            got = _run_one_check(ctx, task, project, check)
+            nodes.append(NodeStatus(
+                id=check, state="passed" if got.ok else "refused",
+                reason=got.reason))
+
+    # `infer` is the last state of every gate behaviour: it runs only when
+    # the codified layer had nothing left to say.
+    behaviour_gates = {"story-gate-check", "plan-gate-check",
+                       "red-gate-status", "green-gate-status"}
+    if workflow_id in behaviour_gates:
+        from prism_service.services import gate_adjudicator, gate_agent
+        step_id = _STEP_FOR_BEHAVIOUR.get(workflow_id, "")
+        decline = ""
+        try:
+            decline = gate_adjudicator._pending_decline_reason(
+                ctx.conductor_svc, task, step_id, project)
+        except Exception:
+            decline = ""
+        if str(decline or "").strip():
+            nodes.append(NodeStatus(
+                id="infer", state="not_reached",
+                reason="the codified layer already decided: "
+                       + str(decline)[:160]))
+        elif not gate_agent.is_enabled():
+            nodes.append(NodeStatus(
+                id="infer", state="unknown",
+                reason="inference seat is off (PRISM_GATE_AGENT_ENABLED)"))
+        else:
+            nodes.append(NodeStatus(id="infer", state="passed", reason=""))
+
+    return {"workflow_id": workflow_id, "task_id": task_id,
+            "nodes": [n.model_dump() for n in nodes]}
