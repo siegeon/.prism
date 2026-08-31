@@ -87,7 +87,9 @@ def _memory_ids_written_by(scores_db: str, task_id: str) -> list[str]:
     either sidecar table has been touched in a fresh project.
     """
     try:
-        conn = sqlite3.connect(scores_db, timeout=5.0)
+        from prism_service.services import sqlite_db
+
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
     except sqlite3.Error:
         return []
     try:
@@ -134,9 +136,15 @@ _SAMPLES_SCHEMA = """
 
 
 def _samples_conn(scores_db: str):
-    import sqlite3
+    """Open the samples db through the project's one hardening chokepoint.
 
-    conn = sqlite3.connect(scores_db, timeout=30)
+    `sqlite_db.connect` applies WAL and a Row factory; a bare
+    `sqlite3.connect` skips both, which is why `test_no_bare_connect`
+    forbids it outside that helper.
+    """
+    from prism_service.services import sqlite_db
+
+    conn = sqlite_db.connect(scores_db, timeout=30.0)
     conn.executescript(_SAMPLES_SCHEMA)
     return conn
 

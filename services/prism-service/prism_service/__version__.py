@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.218"
+PRISM_VERSION = "7.13.219"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8071,4 +8071,21 @@ PRISM_VERSION_NOTES += (
     "reads exactly as clearly as a climb. Points are keyed by stable index and their "
     "POSITION is animated, so a new sample makes the existing points glide to their "
     "new places rather than the chart remounting and blinking. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.219 - every driver takes the same lease, and brain_health stops opening "
+    "sqlite bare. 7.13.212 wired the per-task lease into task_runner only, and "
+    "resume_actuator kept spawning claude_cli into the SAME task worktree. On "
+    "2026-08-30 it did so twice during one drive while another driver held the "
+    "claim, and one of those runs truncated that driver's red-step test commit to a "
+    "docstring stub. A lock that one seat honours is not a lock. The ticket's own "
+    "likely_misfire named this exact outcome and the fix shipped without it. "
+    "resume_actuator now acquires before it invokes, refuses and names the holder "
+    "when the task is taken, and releases on every exit path. Separately, "
+    "brain_health opened sqlite with a bare sqlite3.connect in two places, which "
+    "skips the WAL and Row hardening that services/sqlite_db.connect applies. "
+    "test_no_bare_connect was ALREADY red on the older of those two call sites, so a "
+    "newly added violation hid inside an existing failure. Both now route through "
+    "the chokepoint and the rule is green. "
 )

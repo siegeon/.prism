@@ -179,3 +179,31 @@ def test_a_dead_holders_lease_can_be_reclaimed(tmp_path):
 
 def test_reclaiming_a_free_task_is_harmless(tmp_path):
     assert _svc(tmp_path).reclaim("never-held", reason="nothing to do") is None
+
+
+def test_the_resume_actuator_takes_the_lease_too():
+    """A lock one seat honours is not a lock.
+
+    7.13.212 wired only `task_runner`. On 2026-08-30 `resume_actuator` kept
+    spawning `claude_cli` into the SAME task worktree while another driver
+    held the claim -- twice in one drive, once truncating that driver's
+    red-step commit to a stub. The ticket's own likely_misfire named this
+    exact outcome ("the lock covers only task_runner, so resume_actuator,
+    ship_worker and an operator agent still enter") and it shipped anyway.
+    """
+    import inspect
+
+    from prism_service.services import resume_actuator
+
+    src = inspect.getsource(resume_actuator)
+    assert "acquire(" in src, (
+        "resume_actuator must take the lease before it invokes a model")
+    assert "release(" in src, (
+        "resume_actuator must release the lease when its step ends")
+
+    i_acq = src.index("acquire(")
+    i_inv = src.index("claude_cli.invoke")
+    assert i_acq < i_inv, (
+        "the lease must be taken BEFORE the model is invoked, not after")
+    assert "already driving" in src, (
+        "a refused claim must name the holder, as task_runner's does")

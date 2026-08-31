@@ -210,6 +210,25 @@ def dispatch_once(project: str, task_id: str) -> dict:
     if not work_dir:
         return _no_advance("no workspace on file for task", step=job["step"])
 
+    # EVERY DRIVER TAKES THE SAME LEASE (task 1bcb2b24). 7.13.212 wired only
+    # task_runner, and this seat kept spawning claude_cli into the SAME task
+    # worktree -- on 2026-08-30 it did so twice while another driver held the
+    # claim, once truncating that driver's red-step commit to a stub. A lock
+    # that one seat honours is not a lock. This is the ticket's own named
+    # misfire, shipped: "the lock covers only task_runner, so resume_actuator,
+    # ship_worker and an operator agent still enter."
+    from prism_service.services import task_runner as _tr
+
+    claim = _tr._claim_service(project)
+    claim_id = None
+    if claim is not None:
+        claim_id = claim.acquire(task_id, holder_id=SEAT,
+                                 ttl_s=_tr._step_timeout_s(job["step"]))
+        if claim_id is None:
+            holder = claim.holder_of(task_id) or "another driver"
+            return _no_advance(f"already driving: held by {holder}",
+                               step=job["step"])
+
     from prism_service.inference import claude_cli
     try:
         result = claude_cli.invoke(
@@ -218,6 +237,8 @@ def dispatch_once(project: str, task_id: str) -> dict:
             allowed_tools=BUILD_TOOLS, project=project,
             purpose=f"resume-actuator@{job['step']}#{task_id[:8]}")
     except Exception as exc:
+        if claim is not None:
+            claim.release(claim_id)
         return _no_advance(f"claude_cli invocation failed: {exc}",
                            step=job["step"])
 
@@ -229,6 +250,9 @@ def dispatch_once(project: str, task_id: str) -> dict:
     else:
         outcome = {"ok": False,
                    "reason": f"exit={result.exit_code}, no usable output"}
+
+    if claim is not None:
+        claim.release(claim_id)
 
     usage = getattr(result, "usage", None)
     usage = dict(usage) if isinstance(usage, dict) and usage else None
