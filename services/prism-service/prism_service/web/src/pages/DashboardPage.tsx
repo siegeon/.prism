@@ -26,7 +26,11 @@ type Recent = { q: string; n_results: number; latency_ms: number; ts: string };
 type Activity = {
   days: string[];
   series: { searches: number[]; indexing: number[]; workflow: number[] };
-  queries: { per_day: number[]; latency: (number | null)[]; recent: Recent[]; total: number; zero: number; avg_results: number; avg_latency: number | null };
+  queries: {
+    recent_zero?: number;
+    recent_total?: number;
+    recent_rate?: number | null;
+    recent_days?: number; per_day: number[]; latency: (number | null)[]; recent: Recent[]; total: number; zero: number; avg_results: number; avg_latency: number | null };
   flow: { created: number[]; completed: number[]; events_by_action: Record<string, number>; gate_passed: number; gate_failed: number; cycle_days: number | null };
   tokens: { per_day: number[]; total: number; sessions: number; avg_session: number; window_total: number };
 };
@@ -446,7 +450,17 @@ export default function DashboardPage() {
               <Stat label="queries" value={nf(q?.total ?? 0)} />
               <Stat label="avg latency" value={q?.avg_latency != null ? `${q.avg_latency} ms` : "—"} />
               <Stat label="avg results" value={q ? String(q.avg_results) : "—"} tone={q && q.avg_results < 1 ? TONE.rose : undefined} />
-              <Stat label="zero-result" value={`${zeroPct}%`} tone={zeroPct > 50 ? TONE.rose : undefined} />
+              <Stat label="zero-result · all time" value={`${zeroPct}%`} tone={zeroPct > 50 ? TONE.rose : undefined} />
+              {/* Task a91976ec: the figure to its left counts EVERY search ever
+                  recorded, so a fixed outage keeps reading as a live one. This
+                  names the recent window beside it. A dash, never 0%, when the
+                  window holds nothing -- an unmeasured period must not render
+                  as perfect health. */}
+              <Stat
+                label={`zero-result · last ${q?.recent_days ?? 2}d`}
+                value={q?.recent_rate == null ? "—" : `${Math.round(q.recent_rate * 100)}%`}
+                tone={q?.recent_rate != null && q.recent_rate > 0.5 ? TONE.rose : undefined}
+              />
             </div>
           )}
           {qChart && <PlotFigure options={qChart} className="w-full mb-3" />}

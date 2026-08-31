@@ -127,6 +127,51 @@ def state(project: str = Query("default")) -> dict:
     }
 
 
+# Recent-window search health (task a91976ec). The panel counted
+# n_results = 0 with NO window clause, so it showed a LIFETIME figure
+# labelled as though it described a period -- 1086 of 3090 measured on
+# 2026-08-31, which is every search ever recorded. Search had recovered on
+# 2026-08-29, so the panel told a reader that memory search was broken when
+# it was not.
+#
+# This computes a RECENT rate from the same rows, filtered on ts, and it
+# sits BESIDE the lifetime figure rather than replacing it. Replacing it
+# would hide a long-running problem instead of revealing a recovered one.
+RECENT_WINDOW_DAYS = 2
+
+
+def recent_zero_rate(brain_db, days=RECENT_WINDOW_DAYS):
+    """Zero-result rate over the last `days` of searches.
+
+    Returns rate=None on an EMPTY window rather than 0.0. A zero-row window
+    reporting 0.0 renders as perfect health when nothing was measured at
+    all, which is the second trap this task names: a window short enough
+    that silence reads as success.
+    """
+    from datetime import datetime, timezone
+
+    cutoff = (datetime.now(timezone.utc)
+              - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d %H:%M:%S")
+    total = 0
+    zero = 0
+    try:
+        conn = sqlite_db.connect(brain_db, timeout=5.0)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*), "
+                "COALESCE(SUM(CASE WHEN n_results = 0 THEN 1 ELSE 0 END), 0) "
+                "FROM searches WHERE ts >= ?", (cutoff,)).fetchone()
+            if row:
+                total = int(row[0] or 0)
+                zero = int(row[1] or 0)
+        finally:
+            conn.close()
+    except Exception:
+        return {"days": int(days), "total": 0, "zero": 0, "rate": None}
+    return {"days": int(days), "total": total, "zero": zero,
+            "rate": (zero / total) if total else None}
+
+
 @router.get("/activity")
 def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
     """Change-over-time series for the dashboard pulse + interaction and
@@ -159,6 +204,7 @@ def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
         avg_results = _float(brain, "SELECT AVG(n_results) FROM searches")
         avg_latency = _float(brain, "SELECT AVG(latency_ms) FROM searches")
         zero_results = _count(brain, "SELECT COUNT(*) FROM searches WHERE n_results = 0")
+        _recent = recent_zero_rate(str(root / "brain.db"))
 
         # Token usage is recorded per work SESSION (scores.db), not per task —
         # so we report it as usage-over-time, which is what's actually tracked.
@@ -187,6 +233,11 @@ def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
             "recent": recent,
             "total": q_total,
             "zero": zero_results,
+            # BESIDE the lifetime figure, never instead of it.
+            "recent_zero": _recent["zero"],
+            "recent_total": _recent["total"],
+            "recent_rate": _recent["rate"],
+            "recent_days": _recent["days"],
             "avg_results": round(avg_results, 2) if avg_results is not None else 0,
             "avg_latency": round(avg_latency) if avg_latency is not None else None,
         },
