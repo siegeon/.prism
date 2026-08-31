@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.220"
+PRISM_VERSION = "7.13.221"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8108,4 +8108,18 @@ PRISM_VERSION_NOTES += (
     "roll-up. A duplicate trigger is safe because every driver takes the per-task "
     "lease. The interval timers stay for now as the reconciler, because a dropped "
     "handoff with no backstop strands a task, which is worse than a slow sweep. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.221 - the handoff wakes a driver, so a step no longer waits for a sweep. "
+    "7.13.220 wired the dispatcher but only acted on task COMPLETION, and returned "
+    "quietly for an ordinary step advance, so the task still sat until the task "
+    "runner's 900 s tick found it. That is the whole latency the handoff exists to "
+    "remove, because the next owner is known the instant the step advances. "
+    "after_step now drives an in_progress task on an AGENT step immediately, off the "
+    "request thread. It leaves a GATE alone, because a gate belongs to a distinct "
+    "seat and waking the runner there would hand the task back to its own producer. "
+    "A finished task still hands outward to whatever it unblocked and to its parent "
+    "when the last child lands. Firing twice is safe: every driver takes the per-task "
+    "lease, so a duplicate loses the race. "
 )

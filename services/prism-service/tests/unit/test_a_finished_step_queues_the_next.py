@@ -205,3 +205,50 @@ def test_the_dispatcher_makes_no_model_call():
     assert "claude_cli" not in src and "inference" not in src, (
         "the dispatcher must not reach a model -- the handoff is the phase "
         "this exists to make free")
+
+
+# ----------------------------------------------------------------------
+# Step to step: the advance must WAKE a driver, not just return
+# ----------------------------------------------------------------------
+
+def test_a_step_completion_enqueues_the_next_step(monkeypatch):
+    """An advance must hand the task to a driver NOW.
+
+    The first cut of this dispatcher handled task COMPLETION and returned
+    quietly for an ordinary step advance -- so the task still sat until
+    task_runner's 900s tick found it. That is the polling latency the whole
+    handoff exists to remove: the next owner is already known the instant
+    the step advances.
+    """
+    woken = []
+    monkeypatch.setattr(dispatch, "_drive_now",
+                        lambda tid, project: woken.append(tid))
+
+    svc = _Svc([_Task("t", status="in_progress", step="implement_tasks")])
+    monkeypatch.setattr(dispatch, "_task_svc_for", lambda project: svc)
+
+    dispatch.after_step("t", "proj")
+
+    assert woken == ["t"], (
+        "an in-progress task on an agent step must be driven immediately, "
+        "not left for the next sweep")
+
+
+def test_a_task_parked_on_a_gate_is_not_driven():
+    """A gate belongs to a distinct seat, never to the driver that just
+    reported. Waking the runner on a gate step would hand a task back to
+    its own producer."""
+    assert not dispatch._is_agent_step("green_gate")
+    assert dispatch._is_agent_step("implement_tasks")
+
+
+def test_a_finished_task_is_never_driven_again(monkeypatch):
+    woken = []
+    monkeypatch.setattr(dispatch, "_drive_now",
+                        lambda tid, project: woken.append(tid))
+    svc = _Svc([_Task("t", status="done", step="green_gate")])
+    monkeypatch.setattr(dispatch, "_task_svc_for", lambda project: svc)
+
+    dispatch.after_step("t", "proj")
+
+    assert woken == []

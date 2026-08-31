@@ -43,6 +43,55 @@ from __future__ import annotations
 from typing import Optional
 
 
+
+def _task_svc_for(project: str):
+    """The task service for `project`. Seam so a test can inject one."""
+    from prism_service.project_context import get_project
+
+    return get_project(project).task_svc
+
+
+def _is_agent_step(step_id: str) -> bool:
+    """Is `step_id` a step a DRIVER owns?
+
+    A gate belongs to a distinct seat, never to the driver that just
+    reported -- waking the runner on a gate would hand a task straight back
+    to its own producer, which the no-self-review rule exists to prevent.
+    """
+    try:
+        from prism_service.services.conductor_service import ConductorService
+
+        step = ConductorService._step_by_id(step_id)
+        return bool(step) and step.get("type") == "agent"
+    except Exception:
+        return False
+
+
+def _drive_now(task_id: str, project: str) -> None:
+    """Drive `task_id`'s current step immediately, off the request thread.
+
+    This is the latency the handoff exists to remove: the next owner is
+    known the instant the step advances, and without this the task sits
+    until task_runner's interval finds it (900 s on this instance).
+
+    The driver takes the per-task lease, so firing this while another seat
+    is mid-step loses the race and returns -- it cannot reproduce the
+    two-drivers-one-worktree incident of 2026-08-30.
+    """
+    import threading
+
+    def _run() -> None:
+        try:
+            from prism_service.services import task_runner
+
+            task_runner._run_one_step(project, task_id)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True,
+                     name=f"handoff-{task_id[:8]}").start()
+
+
 def unblocked_by(task_id: str, task_svc) -> list[str]:
     """Ids of the PENDING tasks that `task_id` completing has just freed.
 
@@ -149,12 +198,21 @@ def after_step(task_id: str, project: str) -> dict:
     continues outward to whatever that completion unblocked.
     """
     try:
-        from prism_service.project_context import get_project
-
-        t = get_project(project).task_svc.get(task_id)
+        t = _task_svc_for(project).get(task_id)
     except Exception:
         return {"kind": "conductor.handoff", "from": task_id, "started": []}
-    if t is not None and getattr(t, "status", "") == "done":
+    if t is None:
+        return {"kind": "conductor.handoff", "from": task_id, "started": []}
+    if getattr(t, "status", "") == "done":
         return after_task_done(task_id, project)
+
+    # On an AGENT step: wake a driver now rather than leaving it for the
+    # next sweep. On a GATE: leave it -- a gate belongs to a distinct seat,
+    # and waking the runner would hand the task back to its own producer.
+    step = str(getattr(t, "workflow_step", "") or "")
+    if getattr(t, "status", "") == "in_progress" and _is_agent_step(step):
+        _drive_now(task_id, project)
+        return {"kind": "conductor.handoff", "from": task_id,
+                "started": [task_id], "step": step, "drove": True}
     return {"kind": "conductor.handoff", "from": task_id, "started": [],
-            "step": getattr(t, "workflow_step", "") if t else ""}
+            "step": step, "drove": False}
