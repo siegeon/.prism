@@ -49,6 +49,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_claims_active_task
 """
 
 
+# No caller may hold a task longer than this. A lease that expires is not
+# enough on its own -- it has to expire on a timescale a person is willing
+# to wait. On 2026-08-30 an external driver acquired with ttl_s=7200 and
+# died without releasing; the task sat locked with 99 minutes still on the
+# clock and task_runner was shut out of it the whole time. A seat that
+# genuinely needs longer re-acquires to extend, which also proves it is
+# still alive -- the exact signal a long TTL throws away.
+MAX_LEASE_S = 3600.0
+
+
 class ClaimService:
     """Dispenses tasks as leased ``Claim`` rows, scoped to one project's
     ``TaskService`` and the shared cross-project ``WorkspaceService``.
@@ -182,7 +192,7 @@ class ClaimService:
             # Guard only against zero/negative, never impose a floor: a
             # caller may legitimately want a short lease, and a floor
             # would silently extend it past what the caller asked for.
-            ttl_s=max(0.01, float(ttl_s)),
+            ttl_s=min(MAX_LEASE_S, max(0.01, float(ttl_s))),
         )
 
     def release(self, claim_id: Optional[str]) -> None:
@@ -197,6 +207,41 @@ class ClaimService:
             conn.commit()
         except Exception:
             pass
+
+    def seconds_remaining(self, task_id: str) -> float:
+        """Seconds left on the live lease for `task_id`, or 0.0 when free."""
+        try:
+            row = self._db.execute(
+                "SELECT expires_at FROM claims WHERE task_id=? "
+                "AND released_at IS NULL ORDER BY leased_at DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        except Exception:
+            return 0.0
+        return max(0.0, float(row[0]) - time.time()) if row else 0.0
+
+    def reclaim(self, task_id: str, reason: str = "") -> Optional[str]:
+        """Free a task whose holder is gone. Returns the holder freed, or None.
+
+        A named operation because the alternative is what actually happened
+        on 2026-08-30: an operator wrote an ad-hoc sqlite UPDATE to release a
+        dead agent's lease. A manual step like that belongs in the system,
+        where it can be audited, rather than in somebody's shell history.
+
+        This does NOT check liveness -- the caller asserts the holder is
+        gone. Use it when the process is provably dead; otherwise wait for
+        the lease to expire, which it always will.
+        """
+        try:
+            row = self._db.execute(
+                "SELECT id, holder_id FROM claims WHERE task_id=? "
+                "AND released_at IS NULL LIMIT 1", (task_id,)).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        self.release(row[0])
+        return row[1]
 
     def holder_of(self, task_id: str) -> Optional[str]:
         """Who holds a live lease on `task_id`, or None when it is free.

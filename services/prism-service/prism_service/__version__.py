@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.216"
+PRISM_VERSION = "7.13.217"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8037,4 +8037,21 @@ PRISM_VERSION_NOTES += (
     "the last TWO ids, an exact count of post-land nodes, so any further terminal "
     "node broke them. Each was retired in place and re-expressed as the invariant it "
     "really encodes: reap is last, and land precedes every post-land node. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.217 - a dead holder no longer locks a task for its whole lease. The "
+    "per-task lease shipped in 7.13.212 with no ceiling on ttl_s. On 2026-08-30 an "
+    "external driver acquired with 7200 s and died without releasing, so the task "
+    "sat locked with 99 minutes still on the clock and task_runner was shut out of "
+    "it. A lease that expires is not enough on its own. It has to expire on a "
+    "timescale a person is willing to wait. MAX_LEASE_S caps every acquire at one "
+    "hour, and a seat that genuinely needs longer re-acquires to extend, which also "
+    "proves it is still alive. That is the signal a long TTL throws away. reclaim() "
+    "frees a task whose holder is provably gone and returns the holder it freed. It "
+    "exists because the alternative already happened: an operator wrote an ad-hoc "
+    "sqlite UPDATE to release a dead agent's lease, and a manual step like that "
+    "belongs in the system where it can be audited. seconds_remaining reports how "
+    "long a live lease has left. task_runner is unaffected, because its own TTL is "
+    "the step timeout and it releases on every exit path. "
 )

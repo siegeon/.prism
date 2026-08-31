@@ -137,3 +137,45 @@ def test_a_refused_lease_skips_the_task_without_failing_it():
     run = inspect.getsource(task_runner._run_one_step)
     assert "already driving" in run or "held by" in run, (
         "a refused claim must say who holds the task")
+
+
+# ----------------------------------------------------------------------
+# A dead holder must not lock the task for its whole TTL
+# ----------------------------------------------------------------------
+
+def test_a_lease_cannot_outlast_the_maximum(tmp_path):
+    """No caller may hold a task for an arbitrary length of time.
+
+    INCIDENT 2026-08-30: an external driver acquired with ttl_s=7200 and
+    died without releasing. The task sat locked with 99 minutes still on
+    the clock, and `task_runner` was shut out of it the whole time. The
+    lease expiring is not enough on its own -- it has to expire on a
+    timescale a person is willing to wait.
+    """
+    from prism_service.services.claim_service import MAX_LEASE_S
+
+    svc = _svc(tmp_path)
+    svc.acquire("task-cap", holder_id="greedy", ttl_s=7200)
+
+    assert svc.seconds_remaining("task-cap") <= MAX_LEASE_S
+
+
+def test_a_dead_holders_lease_can_be_reclaimed(tmp_path):
+    """Reclaiming a stale lease is a named operation, not a hand-written script.
+
+    I released one by hand tonight with an ad-hoc sqlite UPDATE. That is
+    exactly the kind of manual step that should live in the system.
+    """
+    svc = _svc(tmp_path)
+    svc.acquire("task-dead", holder_id="crashed-agent", ttl_s=1800)
+
+    assert svc.acquire("task-dead", holder_id="next", ttl_s=60) is None
+    freed = svc.reclaim("task-dead", reason="holder process is gone")
+
+    assert freed == "crashed-agent"
+    assert svc.holder_of("task-dead") is None
+    assert svc.acquire("task-dead", holder_id="next", ttl_s=60)
+
+
+def test_reclaiming_a_free_task_is_harmless(tmp_path):
+    assert _svc(tmp_path).reclaim("never-held", reason="nothing to do") is None
