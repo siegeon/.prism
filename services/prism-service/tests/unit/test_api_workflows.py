@@ -1639,11 +1639,22 @@ def test_land_is_ordered_last_in_bot_json_so_it_renders_as_the_terminal_step():
     # The INVARIANT the assertion actually encodes is unchanged and still
     # pinned: display order follows behaviorIds order, so the two terminal
     # behaviors must be the last two, land before reap.
-    assert ids[-2:] == ["land", "reap"], (
-        f"'land' then 'reap' must be the LAST entries so they render as "
-        f"conductor's terminal steps, in that order: {ids}")
+    # SUPERSEDED again 2026-08-30 (task 013c5197): `brain-health` now sits
+    # between land and reap, so the terminal group is three, not two. The
+    # assertion pinned an exact COUNT of post-land nodes, which breaks on
+    # any further terminal node even though adding one is the intended
+    # direction. The invariant it really encodes -- display order follows
+    # behaviorIds order, reap is last because it destroys the worktree, and
+    # land precedes every post-land node -- is pinned below instead.
+    assert ids[-1] == "reap", (
+        f"'reap' must be LAST: it deletes the worktree, so nothing may run "
+        f"after it: {ids}")
+    assert ids.index("land") < ids.index("brain-health") < ids.index("reap"), (
+        f"terminal order must be land -> brain-health -> reap so the "
+        f"knowledge is indexed before the workspace is destroyed: {ids}")
     assert ids.count("land") == 1
     assert ids.count("reap") == 1
+    assert ids.count("brain-health") == 1
 
 
 def test_write_failing_tests_loop_forbids_uncaught_exception_red():

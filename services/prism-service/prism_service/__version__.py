@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.215"
+PRISM_VERSION = "7.13.216"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8021,4 +8021,20 @@ PRISM_VERSION_NOTES += (
     "total-wipe case, skipping when zero source files are reachable, but that guard "
     "protects the whole index and not one domain whose paths are synthetic by "
     "design. Recorded as memory mx-99a37c. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.216 - the brain-health node reaches the flow. 7.13.215 shipped the node "
+    "and its behaviour JSON, but bot.json never listed it and no route served the "
+    "callback the JSON declared, so it rendered nowhere. That is the built-but-"
+    "unwired fault this node exists to catch, reproduced by the node itself. It now "
+    "registers in bot.json and nests through _CONDUCTOR_LINKED_BEHAVIOR_IDS, and "
+    "POST /api/workflows/steps/brain-health serves the declared callback by calling "
+    "the same index_finished_play that ship_worker calls, so the route and the seat "
+    "cannot disagree. Terminal order is land, then brain-health, then reap. reap "
+    "stays last because it deletes the worktree, so the knowledge is indexed before "
+    "the workspace disappears. Three neighbouring assertions pinned land and reap as "
+    "the last TWO ids, an exact count of post-land nodes, so any further terminal "
+    "node broke them. Each was retired in place and re-expressed as the invariant it "
+    "really encodes: reap is last, and land precedes every post-land node. "
 )

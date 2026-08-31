@@ -67,7 +67,12 @@ _DELIBERATELY_UNLINKED_PIPELINE_IDS = frozenset({
 # prism/ws/<task_id> branch once the work is really on origin/main — and it
 # nests through the SAME mechanism for the same reason, so the constant is
 # now the pair. `land` alone is no longer the last pipeline node.
-_TERMINAL_PIPELINE_IDS = frozenset({"land", "reap"})
+# SUPERSEDED again 2026-08-30 (task 013c5197): `brain-health` is the
+# knowledge-side counterpart to reap and sits between land and reap, so
+# the terminal set is three. The invariant is unchanged -- these ids are
+# deliberate pipeline nodes with no WORKFLOW_STEPS entry, because
+# green_gate is the structurally-terminal step.
+_TERMINAL_PIPELINE_IDS = frozenset({"land", "brain-health", "reap"})
 _TERMINAL_PIPELINE_ID = "land"
 
 

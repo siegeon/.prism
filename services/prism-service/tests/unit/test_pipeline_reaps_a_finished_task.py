@@ -239,7 +239,14 @@ def _behavior(name: str) -> dict:
 def test_reap_is_the_conductors_terminal_node_after_land() -> None:
     bot = _behavior("bot")
     ids = bot["fsms"][0]["behaviorIds"]
-    assert ids[-2:] == ["land", "reap"], ids
+    # SUPERSEDED 2026-08-30 by task 013c5197, which inserted the codified
+    # `brain-health` node between land and reap. The old assertion pinned the
+    # last two ids as adjacent, i.e. a fixed COUNT of post-land nodes, so any
+    # further terminal node broke it. The real invariants are kept below:
+    # reap is LAST (it deletes the worktree, so nothing may run after it),
+    # and land precedes every post-land node.
+    assert ids[-1] == "reap", ids
+    assert "land" in ids and ids.index("land") < ids.index("reap"), ids
 
     reap = _behavior("reap")
     assert reap["fsmId"] == "pipeline" and reap["botId"] == "conductor"

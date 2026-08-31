@@ -1335,6 +1335,19 @@ def get_workflows(project: str = Query("default")) -> dict:
         # -terminal WORKFLOW_STEPS entry, so there is no step to hang a
         # linked_workflow_id on, and models/workflow.py is read by
         # conductor_service.py (a control_plane.POLICY_FILES entry).
+        # "brain-health" (task 013c5197): the knowledge-side counterpart to
+        # reap. reap cleans the repository a finished play leaves behind;
+        # this one cleans the knowledge -- it indexes what the play wrote
+        # and fails when coverage falls below its floor. It nests here for
+        # the same structural reason land and reap do: green_gate is the
+        # terminal WORKFLOW_STEPS entry, so there is no step to hang a
+        # linked_workflow_id on. Without this the behaviour JSON exists and
+        # renders nowhere, which is the built-but-unwired fault this node
+        # was created to catch -- four such mechanisms shipped on
+        # 2026-08-30 with no caller at all.
+        "brain-health",
+        # reap stays LAST: it deletes the worktree, so the knowledge-side
+        # node must run before the workspace is destroyed.
         "reap",
     )
     for entry in conductor_behaviors:
@@ -2710,6 +2723,43 @@ def workflow_node_status(
 class ReapRequest(BaseModel):
     task_id: str = Field(min_length=1)
     mode: str = Field(default="reap", pattern="^(reap|survey)$")
+
+
+class BrainHealthRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+@router.post("/steps/brain-health")
+def workflow_step_brain_health(
+    body: BrainHealthRequest, project: str = Query(...),
+) -> dict:
+    """Index what a finished play wrote, then check knowledge coverage.
+
+    CODIFIED (task 013c5197). Deterministic Python, no model call -- the
+    knowledge-side counterpart to /steps/reap, which cleans the repository
+    a finished play leaves behind while this cleans the knowledge.
+
+    Always HTTP 200, the same contract /steps/reap and /steps/green-gate-
+    check use: a coverage FALL is a reported fact, never a callback
+    failure, so the behaviour reaches its next step and the reason reaches
+    a person. `ship_worker._brain_health_after_land` calls the same
+    `index_finished_play` on the same trigger, so this route and the seat
+    can never disagree about what the node does -- one implementation, two
+    entry points.
+    """
+    from prism_service.services import brain_health
+
+    try:
+        verdict = brain_health.index_finished_play(
+            body.task_id, project=project)
+        return {"kind": "conductor.brain_health", "ok": True, **verdict}
+    except brain_health.CoverageBelowFloor as below:
+        # The whole point of the node: a fall is REPORTED, never swallowed.
+        return {"kind": "conductor.brain_health", "ok": False,
+                "reason": str(below)}
+    except Exception as exc:
+        return {"kind": "conductor.brain_health", "ok": False,
+                "reason": f"brain-health could not run: {exc}"}
 
 
 @router.post("/steps/reap")
