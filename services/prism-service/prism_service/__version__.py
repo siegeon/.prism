@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.223"
+PRISM_VERSION = "7.13.224"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8151,4 +8151,22 @@ PRISM_VERSION_NOTES += (
     "advance. The interval reconciler retries on its own schedule, which is what "
     "that schedule is for. This is the cost of turning a poll into a trigger: the "
     "poll's slowness was also its back-off. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.224 - search health names its window. The Interactions panel counted "
+    "n_results = 0 with NO window clause, so it showed a LIFETIME figure labelled as "
+    "though it described a period. Measured at base: zero 1086 of total 3090, which "
+    "is every search ever recorded. Search recovered on 2026-08-29, so the panel "
+    "reported a fixed problem as a live one and the owner read it that way. "
+    "recent_zero_rate computes a two-day rate from the same rows, filtered on ts, "
+    "and the response carries it BESIDE the untouched lifetime figure. Replacing "
+    "that figure would hide a long-running problem instead of revealing a recovered "
+    "one. An empty window returns None and the panel prints a dash, because a "
+    "zero-row window reporting 0.0 renders as perfect health when nothing was "
+    "measured. Both stats are now NAMED, all time and last two days, since an "
+    "unlabelled number is how this defect happened. A neighbouring suite caught a "
+    "regression on the way: the helper opened its own sqlite connection, and "
+    "activity guarantees one connection per db per request. It now reuses the "
+    "caller's. "
 )

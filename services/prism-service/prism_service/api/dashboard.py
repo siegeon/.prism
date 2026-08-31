@@ -140,7 +140,7 @@ def state(project: str = Query("default")) -> dict:
 RECENT_WINDOW_DAYS = 2
 
 
-def recent_zero_rate(brain_db, days=RECENT_WINDOW_DAYS):
+def recent_zero_rate(brain_db, days=RECENT_WINDOW_DAYS, conn=None):
     """Zero-result rate over the last `days` of searches.
 
     Returns rate=None on an EMPTY window rather than 0.0. A zero-row window
@@ -154,18 +154,26 @@ def recent_zero_rate(brain_db, days=RECENT_WINDOW_DAYS):
               - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d %H:%M:%S")
     total = 0
     zero = 0
+    sql = ("SELECT COUNT(*), "
+           "COALESCE(SUM(CASE WHEN n_results = 0 THEN 1 ELSE 0 END), 0) "
+           "FROM searches WHERE ts >= ?")
+    # REUSE the caller's connection when it has one. `activity` opens ONE
+    # connection per db for the whole request (18 opens -> 3), and
+    # test_dashboard_connection_reuse pins that: on a slow disk every extra
+    # open is its own seek and fsync round trip. Opening a second one here
+    # would quietly undo a measured performance fix.
+    own = conn is None
     try:
-        conn = sqlite_db.connect(brain_db, timeout=5.0)
+        if own:
+            conn = sqlite_db.connect(brain_db, timeout=5.0)
         try:
-            row = conn.execute(
-                "SELECT COUNT(*), "
-                "COALESCE(SUM(CASE WHEN n_results = 0 THEN 1 ELSE 0 END), 0) "
-                "FROM searches WHERE ts >= ?", (cutoff,)).fetchone()
+            row = conn.execute(sql, (cutoff,)).fetchone()
             if row:
                 total = int(row[0] or 0)
                 zero = int(row[1] or 0)
         finally:
-            conn.close()
+            if own and conn is not None:
+                conn.close()
     except Exception:
         return {"days": int(days), "total": 0, "zero": 0, "rate": None}
     return {"days": int(days), "total": total, "zero": zero,
@@ -204,7 +212,7 @@ def activity(project: str = Query("default"), days: int = Query(14)) -> dict:
         avg_results = _float(brain, "SELECT AVG(n_results) FROM searches")
         avg_latency = _float(brain, "SELECT AVG(latency_ms) FROM searches")
         zero_results = _count(brain, "SELECT COUNT(*) FROM searches WHERE n_results = 0")
-        _recent = recent_zero_rate(str(root / "brain.db"))
+        _recent = recent_zero_rate(str(root / "brain.db"), conn=brain)
 
         # Token usage is recorded per work SESSION (scores.db), not per task —
         # so we report it as usage-over-time, which is what's actually tracked.
