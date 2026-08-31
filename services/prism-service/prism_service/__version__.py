@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.219"
+PRISM_VERSION = "7.13.220"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8088,4 +8088,24 @@ PRISM_VERSION_NOTES += (
     "test_no_bare_connect was ALREADY red on the older of those two call sites, so a "
     "newly added violation hid inside an existing failure. Both now route through "
     "the chokepoint and the rule is green. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.220 - a finished step hands off, so a task can carry itself forward. Both "
+    "handoffs were already computed and then dropped. advance_task says it in its "
+    "own docstring, Move a task to the next entry in WORKFLOW_STEPS, and then "
+    "returned without telling anyone, so four pollers rediscovered on timers a fact "
+    "known at that instant. And dependencies was only a filter on a pull that nothing "
+    "performed on completion, while eligible_task scans in_progress alone, so a "
+    "pending dependent never started by itself. Epic 4c9b39e5 proved it: three slices "
+    "carried real dependency edges and an operator hand-launched every one. "
+    "services/dispatch.py is codified, makes no model call, and fires from "
+    "conductor_flow after the advance. unblocked_by returns a dependent only when "
+    "EVERY edge is closed, because closing one edge would launch a slice whose "
+    "sibling is still running. parent_ready_to_assemble hands the parent back when "
+    "its last child lands, which is the sew half of slice then shuffle back together, "
+    "and it hands the parent back for its OWN oracle rather than closing it on a "
+    "roll-up. A duplicate trigger is safe because every driver takes the per-task "
+    "lease. The interval timers stay for now as the reconciler, because a dropped "
+    "handoff with no backstop strands a task, which is worse than a slow sweep. "
 )

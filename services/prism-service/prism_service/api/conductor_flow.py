@@ -913,5 +913,19 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
     except Exception:
         pass
 
+    # HAND OFF (task cdb8e365). The next owner is already known -- the FSM
+    # names it -- and until now this function computed the advance and told
+    # nobody, so four pollers rediscovered it on their own timers. When the
+    # task itself finished, the handoff continues outward to whatever that
+    # completion unblocked, and to the parent when the last child lands.
+    # Best-effort by design: a handoff that fails must never fail the report
+    # that triggered it, and the existing intervals remain the reconciler.
+    try:
+        from prism_service.services import dispatch
+
+        dispatch.after_step(body.task_id, project)
+    except Exception:
+        pass
+
     return {"ok": res.get("ok", False), "advanced": res,
             "next_job": _job(nxt)}
