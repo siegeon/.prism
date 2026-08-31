@@ -10,6 +10,7 @@ claude_cli.invoke(). Allowed-tools is empty so claude doesn't run a
 subagent loop — single-shot Q&A.
 """
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -33,6 +34,30 @@ def _svc(project: str):
 @router.get("/status")
 def status(project: str = Query("default")) -> dict:
     return _svc(project).status()
+
+
+@router.get("/health")
+def health(project: str = Query("default")) -> dict:
+    """Memory coverage: how many curated memories the Brain really holds.
+
+    `indexed` counts DISTINCT memories, so a memory split into several
+    chunk rows counts once. Read-only — it never triggers a reindex.
+    """
+    try:
+        ctx = get_project(project)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"unknown project: {project}: {exc}")
+    entries = sum(
+        len(list(ctx.memory_svc.list_entries(d)))
+        for d in ctx.memory_svc.list_domains()
+    )
+    indexed = ctx.brain_svc.expertise_coverage()
+    return {
+        "entries": entries,
+        "indexed": indexed,
+        "ratio": (indexed / entries) if entries else 0.0,
+        "measured_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/search")

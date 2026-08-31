@@ -75,6 +75,8 @@ function Row({ label, v, bad }: { label: string; v: number; bad: boolean }) {
   );
 }
 
+type Coverage = { entries: number; indexed: number; ratio: number; measured_at: string };
+
 type Drift = { understand?: boolean; graph?: boolean; brain?: boolean };
 
 // Drift / staleness card: shows which source-derived indexes have fallen
@@ -174,6 +176,10 @@ export default function DashboardPage() {
   const [actLoaded, setActLoaded] = useState(false);
   const [stranded, setStranded] = useState<StrandedRow[]>([]);
   const [strandedLoaded, setStrandedLoaded] = useState(false);
+  // Memory coverage (task 1edee95c): DISTINCT memories the Brain holds over
+  // memories on file. The server counts them; this page never derives it.
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [coverageLoaded, setCoverageLoaded] = useState(false);
 
   const load = useCallback(() => {
     api.get<State>(`/api/dashboard/state?project=${project}`)
@@ -182,6 +188,9 @@ export default function DashboardPage() {
     api.get<Activity>(`/api/dashboard/activity?project=${project}&days=14`)
       .then(setAct).catch(() => setAct(null))
       .finally(() => setActLoaded(true));
+    api.get<Coverage>(`/api/brain/health?project=${project}`)
+      .then(setCoverage).catch(() => setCoverage(null))
+      .finally(() => setCoverageLoaded(true));
   }, [project]);
 
   // Unshipped-done scan (task b22576bb): "done" that never merged to main.
@@ -436,6 +445,14 @@ export default function DashboardPage() {
               <Row label="Stuck tasks" v={health.stuck_tasks} bad={health.stuck_tasks > 0} />
               <Row label="Stale brain docs" v={health.stale_brain_docs} bad={health.stale_brain_docs > 0} />
               <Row label="Domains near cap" v={health.domains_near_cap.length} bad={health.domains_near_cap.length > 0} />
+              {!coverageLoaded ? <Skeleton className="h-[20px] w-full" /> : coverage ? (
+                <div className="flex items-center justify-between">
+                  <span className="opacity-80">Memory coverage</span>
+                  <Lozenge tone={coverage.ratio < 1 ? "warn" : "ok"} className="tabular-nums">
+                    {`${coverage.indexed} / ${coverage.entries} (${Math.round(coverage.ratio * 100)}%)`}
+                  </Lozenge>
+                </div>
+              ) : null}
               {health.last_governance_run && (
                 <div className="text-2xs uppercase tracking-wider opacity-50 pt-2">Last run: {health.last_governance_run}</div>
               )}
