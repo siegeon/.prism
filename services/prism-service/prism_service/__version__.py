@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.214"
+PRISM_VERSION = "7.13.215"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8003,4 +8003,22 @@ PRISM_VERSION_NOTES += (
     "regression test now pins it. The suite carries a positive control, because the "
     "check answers permissively when git lists no candidate files, so a fixture that "
     "is not a real repository passes every negative case while proving nothing. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.215 - a finished play indexes what it wrote. A codified brain-health node "
+    "joins the conductor flow in the same FSM position the reap node occupies after "
+    "land. When a play ends it indexes what that play wrote, incrementally rather "
+    "than rebuilding, then reads coverage and compares it against a floor. A fall "
+    "reports and raises, never only logs, because a number nobody fails on is how "
+    "this decay hid for weeks. The node makes no model call: brain_health.py imports "
+    "nothing under prism_service.inference, and a test asserts it. Root cause found "
+    "the same night: BrainEngine._purge_deleted removes any docs row whose "
+    "source_file is absent from disk, and memory_service indexes each entry under a "
+    "synthetic path, memory/domain/id, that never exists. So every drift reindex "
+    "deleted the whole expertise domain. A backfill took the index from 20 rows to "
+    "1031 and it fell back to 20 within hours. The purge already guards the "
+    "total-wipe case, skipping when zero source files are reachable, but that guard "
+    "protects the whole index and not one domain whose paths are synthetic by "
+    "design. Recorded as memory mx-99a37c. "
 )
