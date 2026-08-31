@@ -2,7 +2,7 @@
 
 THE DEADLOCK. A task whose plan or story rubric REFUSES cannot be moved by
 anything in the system:
-  - `task_runner.eligible_task` skips it, because its current step is a gate
+  - `task_runner.eligible_task` skips it, because its step is a gate
     (`task_runner.py:544` -- `if step is None or step["type"] == "gate"`).
   - `gate_adjudicator` withholds it rather than approving, because a
     deterministic tooth refused (`gate_adjudicator.py:221-228`).
@@ -18,9 +18,10 @@ green_gate. `ConductorService._auto_rewind` (7.13.133) fires only from
 case where NOBODY rejects: the rubric refuses, the adjudicator withholds,
 and the row simply stops.
 
-Pins the new non-policy module `services/plan_rewind.py`. The refusal source
-DIFFERS per gate, and getting that wrong ships the story half as dead code --
-see `test_the_story_gate_does_not_read_the_plan_teeth`.
+The refusal SOURCE differs per gate, and conflating them ships the story
+half as dead code -- see `test_the_story_gate_does_not_read_the_plan_teeth`.
+The conductor service is passed in rather than reached through ctx, so a
+test can hand each gate its own verdict and watch which one is consulted.
 """
 
 from __future__ import annotations
@@ -36,18 +37,44 @@ _SERVICE_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
-PLAN_REFUSAL = ("plan_checks: no acceptance criterion is shown to FAIL at "
-                "the base commit -- 8 AC(s) carry an oracle")
-STORY_REFUSAL = "story_complete: AC-3 has no oracle: marker"
+_MODULE = _SERVICE_ROOT / "prism_service" / "services" / "plan_rewind.py"
+
+# The deterministic plan teeth (plan_gate_checks). This is the real string
+# the two live wedged tasks carry, from plan_gate_checks.py:393.
+PLAN_RUBRIC = ("plan_checks: no acceptance criterion is shown to FAIL at "
+               "the base commit -- 8 AC(s) carry an oracle")
+STORY_RUBRIC = "story_complete: AC-3 has no oracle: marker"
+# A scorer that BLEW UP. `_verify_rubric_gate` answers verified=False for an
+# exception too, and reading that as a refusal is exactly the defect 7.13.190
+# records against green_rewind.
+RAISED = "the story scorer raised ValueError('boom') and could not judge"
+
+
+def _svc(*, plan_verified=True, plan_reason="",
+         story_verified=False, story_reason=STORY_RUBRIC):
+    """A stand-in conductor service, one verdict per validation kind.
+
+    Defaults: the plan RUBRIC is content, so a plan_gate rewind must come
+    from the deterministic teeth; the STORY rubric refuses, because it is
+    the only story-phase source that exists.
+    """
+    verdicts = {
+        "plan_coverage": {"verified": plan_verified, "reason": plan_reason},
+        "story_complete": {"verified": story_verified, "reason": story_reason},
+    }
+    return types.SimpleNamespace(
+        _validation_for_gate=lambda step_id: (
+            "story_complete" if step_id == "story_gate" else "plan_coverage"),
+        _verify_rubric_gate=lambda task, validation: verdicts[validation],
+    )
 
 
 def _setup(tmp_path, monkeypatch, *, step="plan_gate", gate_state="pending",
-           plan_refusal=PLAN_REFUSAL, story_verified=False,
-           story_reason=STORY_REFUSAL, budget=None):
-    """A task parked on `step`, with each gate's refusal source stubbed.
+           teeth=PLAN_RUBRIC, story_verified=False, budget=None):
+    """A task parked on `step`, with the plan TEETH stubbed to `teeth`.
 
-    The two sources are deliberately INDEPENDENT, so a test can prove the
-    module reads the right one for the gate it is standing on.
+    Returns (ctx, task, task_svc, calls). `calls` records each consultation
+    of the plan teeth, so a test can prove a story_gate never reaches them.
     """
     from prism_service.services import plan_gate_checks
     from prism_service.services import plan_rewind  # NEW module (red)
@@ -64,21 +91,18 @@ def _setup(tmp_path, monkeypatch, *, step="plan_gate", gate_state="pending",
             json.dumps({"rewind_budget": budget}), encoding="utf-8")
     monkeypatch.setattr(plan_rewind, "_source_path",
                         lambda project: str(src), raising=False)
-    monkeypatch.setattr(plan_gate_checks, "refusal",
-                        lambda task, project=None, **kw: plan_refusal)
 
-    conductor_svc = types.SimpleNamespace(
-        _validation_for_gate=lambda step_id: (
-            "story_complete" if step_id == "story_gate" else "plan_coverage"),
-        _verify_rubric_gate=lambda task, validation: {
-            "verified": bool(story_verified),
-            "reason": "" if story_verified else story_reason},
-    )
-    ctx = types.SimpleNamespace(task_svc=task_svc,
-                                conductor_svc=conductor_svc,
-                                project="testproj")
-    return ctx, task_svc.get(t.id), task_svc
+    calls = []
 
+    def _teeth(task, project=None, **kw):
+        calls.append("plan_teeth")
+        return teeth
+
+    monkeypatch.setattr(plan_gate_checks, "refusal", _teeth)
+    ctx = types.SimpleNamespace(task_svc=task_svc, project="testproj",
+                                conductor_svc=_svc(
+                                    story_verified=story_verified))
+    return ctx, task_svc.get(t.id), task_svc, calls
 
 # ----------------------------------------------------------------------
 # The refusal SOURCE differs per gate -- the review's material finding
@@ -98,8 +122,8 @@ def test_the_story_gate_does_not_read_the_plan_teeth(tmp_path, monkeypatch):
     """
     from prism_service.services import plan_rewind
 
-    ctx, task, task_svc = _setup(tmp_path, monkeypatch, step="story_gate",
-                                 plan_refusal="")
+    ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="story_gate",
+                                    teeth="")
     out = plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     assert out and out.get("ok") is True, (
@@ -115,8 +139,8 @@ def test_the_plan_gate_does_not_read_the_story_rubric(tmp_path, monkeypatch):
     """
     from prism_service.services import plan_rewind
 
-    ctx, task, task_svc = _setup(tmp_path, monkeypatch, step="plan_gate",
-                                 story_verified=True)
+    ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate",
+                                    story_verified=True)
     out = plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     assert out and out.get("ok") is True
@@ -132,7 +156,7 @@ def test_a_refused_plan_gate_rewinds_to_verify_plan(tmp_path, monkeypatch):
     from prism_service.services import plan_rewind
 
     ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate")
-    out = plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    out = plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     assert out is not None and out["ok"] is True
     assert out["from_step"] == "plan_gate"
@@ -148,7 +172,7 @@ def test_a_refused_story_gate_rewinds_to_draft_story(tmp_path, monkeypatch):
 
     ctx, task, task_svc, calls = _setup(tmp_path, monkeypatch,
                                         step="story_gate")
-    out = plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    out = plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     assert out is not None and out["ok"] is True
     assert out["to_step"] == "draft_story"
@@ -169,7 +193,7 @@ def test_the_rewind_names_the_clause_that_refused(tmp_path, monkeypatch):
 
     ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate",
                                     budget=3)
-    plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     reason = task_svc.get(task.id).gate_reason
     assert PLAN_RUBRIC in reason
@@ -184,7 +208,7 @@ def test_the_rewind_leaves_no_open_gate_on_an_agent_step(tmp_path,
     from prism_service.services.task_service import is_open_gate_step
 
     ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate")
-    plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     moved = task_svc.get(task.id)
     assert moved.gate_state == "none"
@@ -196,7 +220,7 @@ def test_each_rewind_writes_one_audited_history_row(tmp_path, monkeypatch):
     from prism_service.services import plan_rewind
 
     ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate")
-    plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    plan_rewind.maybe_rewind(ctx, task, "testproj")
 
     rows = [h for h in task_svc.history(task.id) if h.action == "rewind"]
     assert len(rows) == 1
@@ -220,21 +244,22 @@ def test_the_budget_caps_the_loop(tmp_path, monkeypatch):
     task_svc.record_history(task.id, action="rewind",
                             details="green_gate -> implement_tasks; attempt=1",
                             actor="conductor-adjudicator")
-    assert plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")["ok"] is True
+    assert plan_rewind.maybe_rewind(ctx, task, "testproj")["ok"] is True
     task = task_svc.get(task.id)
     task_svc.update(task.id, workflow_step="plan_gate", gate_state="pending")
     task = task_svc.get(task.id)
-    assert plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")["ok"] is True
+    assert plan_rewind.maybe_rewind(ctx, task, "testproj")["ok"] is True
     task_svc.update(task.id, workflow_step="plan_gate", gate_state="pending")
     task = task_svc.get(task.id)
 
-    out = plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    out = plan_rewind.maybe_rewind(ctx, task, "testproj")
     assert out["ok"] is False and out["parked"] is True
     assert "2" in out["reason"] and "budget" in out["reason"].lower()
     assert task_svc.get(task.id).workflow_step == "plan_gate"
     assert len([h for h in task_svc.history(task.id)
                 if h.action == "rewind"]) == 3
 
+@pytest.mark.parametrize("decided", ["passed", "failed"])
 def test_a_decided_gate_is_never_rewound(tmp_path, monkeypatch, decided):
     """AC-7: only gate_state="pending" is eligible. A decision an actor
     already made must never be undone."""
@@ -242,7 +267,7 @@ def test_a_decided_gate_is_never_rewound(tmp_path, monkeypatch, decided):
 
     ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate",
                                     gate_state=decided)
-    assert plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj") is None
+    assert plan_rewind.maybe_rewind(ctx, task, "testproj") is None
     assert task_svc.get(task.id).workflow_step == "plan_gate"
 
 def test_an_inconclusive_verdict_does_not_rewind(tmp_path, monkeypatch):
@@ -252,18 +277,24 @@ def test_an_inconclusive_verdict_does_not_rewind(tmp_path, monkeypatch):
     defect 7.13.190 records against green_rewind."""
     from prism_service.services import plan_rewind
 
-    ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate",
-                                    teeth="")
-    out = plan_rewind.maybe_rewind(
-        ctx, _svc(plan_verified=False, plan_reason=RAISED), task, "testproj")
+    from prism_service.services import plan_gate_checks
+
+    ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="plan_gate")
+
+    def _raises(task_arg, project=None, **kw):
+        raise ValueError("no rubric on file")
+
+    monkeypatch.setattr(plan_gate_checks, "refusal", _raises)
+    out = plan_rewind.maybe_rewind(ctx, task, "testproj")
     assert out["ok"] is False and out["inconclusive"] is True
     assert task_svc.get(task.id).workflow_step == "plan_gate"
     assert str(out["reason"]).strip()
     assert str(out["reason"]) in task_svc.get(task.id).gate_reason
 
     # Both sources silent is "nothing to rewind for", never "rewind".
-    quiet = plan_rewind.maybe_rewind(
-        ctx, _svc(plan_verified=True, plan_reason=""), task, "testproj")
+    monkeypatch.setattr(plan_gate_checks, "refusal",
+                        lambda task_arg, project=None, **kw: "")
+    quiet = plan_rewind.maybe_rewind(ctx, task, "testproj")
     assert quiet["ok"] is False and quiet["inconclusive"] is True
     assert task_svc.get(task.id).workflow_step == "plan_gate"
 
@@ -271,7 +302,7 @@ def test_a_step_that_is_not_a_rubric_gate_is_ignored(tmp_path, monkeypatch):
     """green_gate has its own rewind; this module must not touch it."""
     from prism_service.services import plan_rewind
 
-    ctx, task, task_svc = _setup(tmp_path, monkeypatch, step="green_gate")
+    ctx, task, task_svc, _ = _setup(tmp_path, monkeypatch, step="green_gate")
 
     assert plan_rewind.maybe_rewind(ctx, task, "testproj") is None
     assert task_svc.get(task.id).workflow_step == "green_gate"
@@ -296,7 +327,7 @@ def test_the_drive_seat_can_reach_the_task_again(tmp_path, monkeypatch):
     monkeypatch.setattr(task_runner, "_foreign_driver_on", lambda p, t: "")
 
     assert task_runner.eligible_task("testproj") is None
-    plan_rewind.maybe_rewind(ctx, _svc(), task, "testproj")
+    plan_rewind.maybe_rewind(ctx, task, "testproj")
     assert task_runner.eligible_task("testproj") == task.id
 
 def test_the_rewind_makes_no_model_call(tmp_path, monkeypatch):
