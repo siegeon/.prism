@@ -112,6 +112,80 @@ def _memory_ids_written_by(scores_db: str, task_id: str) -> list[str]:
         conn.close()
 
 
+
+# ----------------------------------------------------------------------
+# The coverage series (task 0ee4dc98)
+# ----------------------------------------------------------------------
+# A number on its own is not enough. This decay hid for weeks because a
+# figure existed that nobody watched, so the Dashboard draws coverage over
+# time and a sample lands every time a play ends. The sample is written
+# BEFORE the floor check, so a fall is on file exactly like a rise.
+
+_SAMPLES_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS brain_coverage_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT,
+        entries INTEGER NOT NULL,
+        indexed INTEGER NOT NULL,
+        ratio REAL NOT NULL,
+        measured_at TEXT NOT NULL
+    );
+"""
+
+
+def _samples_conn(scores_db: str):
+    import sqlite3
+
+    conn = sqlite3.connect(scores_db, timeout=30)
+    conn.executescript(_SAMPLES_SCHEMA)
+    return conn
+
+
+def _record_sample(scores_db: str, *, task_id: str, entries: int,
+                   indexed: int, ratio: float) -> None:
+    """Append one coverage sample. Best-effort: a failure here must never
+    stop a play, but it must also never silently swallow the sample -- the
+    caller's own verdict still carries the live numbers."""
+    from datetime import datetime, timezone
+
+    try:
+        conn = _samples_conn(scores_db)
+        conn.execute(
+            "INSERT INTO brain_coverage_samples "
+            "(task_id, entries, indexed, ratio, measured_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (task_id, int(entries), int(indexed), float(ratio),
+             datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def coverage_history(scores_db: str, limit: int = 60) -> list[dict]:
+    """Coverage samples OLDEST FIRST, so a chart can draw them left to right.
+
+    Never filters by value. A fall is as much a data point as a rise, and
+    dropping one would hide the exact event a person needs to act on.
+    """
+    try:
+        conn = _samples_conn(scores_db)
+        rows = conn.execute(
+            "SELECT task_id, entries, indexed, ratio, measured_at "
+            "FROM brain_coverage_samples ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    return [
+        {"task_id": r[0], "entries": r[1], "indexed": r[2],
+         "ratio": r[3], "measured_at": r[4]}
+        for r in reversed(rows)
+    ]
+
+
 def index_finished_play(
     task_id: str,
     project: str = "default",
@@ -152,6 +226,13 @@ def index_finished_play(
     )
     indexed = brain_svc.expertise_coverage()
     ratio = (indexed / entries) if entries else 0.0
+
+    # RECORD BEFORE THE RAISE. A fall must land in the series exactly like a
+    # rise does. If this sat after the raise, every sample below the floor
+    # would be swallowed and the chart would only ever show good news --
+    # which is precisely the decay this node exists to make visible.
+    _record_sample(scores_db, task_id=task_id, entries=entries,
+                   indexed=indexed, ratio=ratio)
 
     if ratio < floor:
         raise CoverageBelowFloor(entries=entries, indexed=indexed,

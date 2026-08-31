@@ -52,11 +52,23 @@ def health(project: str = Query("default")) -> dict:
         for d in ctx.memory_svc.list_domains()
     )
     indexed = ctx.brain_svc.expertise_coverage()
+    # `history` (task 0ee4dc98): the series the Dashboard chart draws. Every
+    # finished play appends one sample, and a sample below the floor is on
+    # file exactly like one above it -- never filtered by value, because
+    # dropping a fall would hide the event a person needs to act on.
+    try:
+        from prism_service.services import brain_health
+
+        history = brain_health.coverage_history(
+            str(getattr(ctx, "_data_dir", "") or "") + "/scores.db")
+    except Exception:
+        history = []
     return {
         "entries": entries,
         "indexed": indexed,
         "ratio": (indexed / entries) if entries else 0.0,
         "measured_at": datetime.now(timezone.utc).isoformat(),
+        "history": history,
     }
 
 

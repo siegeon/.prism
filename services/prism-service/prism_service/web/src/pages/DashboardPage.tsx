@@ -6,6 +6,7 @@ import { Page, Card, SectionLabel, Empty, Skeleton } from "@/components/ui";
 import { Lozenge } from "@/components/Lozenge";
 import { PlotFigure, Sparkline, TONE, plotBase } from "@/components/Chart";
 import { fmtTokens } from "@/lib/format";
+import { motion } from "motion/react";
 import ConnectExistingPrism from "@/components/ConnectExistingPrism";
 
 type State = {
@@ -75,7 +76,9 @@ function Row({ label, v, bad }: { label: string; v: number; bad: boolean }) {
   );
 }
 
-type Coverage = { entries: number; indexed: number; ratio: number; measured_at: string };
+type CoverageSample = { entries: number; indexed: number; ratio: number; measured_at: string };
+
+type Coverage = CoverageSample & { history?: CoverageSample[] };
 
 type Drift = { understand?: boolean; graph?: boolean; brain?: boolean };
 
@@ -162,6 +165,67 @@ function FreshInstallPanel() {
     </div>
   );
 }
+
+// Knowledge coverage over time (task 0ee4dc98). A number on its own was not
+// enough: this decay hid for weeks because a figure existed that nobody
+// watched. Every finished play appends a sample, and the chart animates on
+// mount and again whenever the series gains one.
+//
+// Every sample renders through ONE code path. There is no styling keyed on
+// which way the value moved, and the series is never filtered by value --
+// a dip has to read exactly as clearly as a climb, because the dip is the
+// event a person needs to act on.
+function CoverageTrend({ series }: { series: CoverageSample[] }) {
+  const w = 260;
+  const h = 56;
+  const pad = 4;
+  const pts = series.map((s, i) => {
+    const x = series.length > 1
+      ? pad + (i * (w - pad * 2)) / (series.length - 1)
+      : w / 2;
+    const y = h - pad - Math.max(0, Math.min(1, s.ratio)) * (h - pad * 2);
+    return { x, y, s };
+  });
+  const path = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+
+  return (
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} role="img"
+         aria-label="knowledge coverage over time">
+      <motion.polyline
+        points={path}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        className="text-[color:var(--accent)]"
+        initial={{ pathLength: 0, opacity: 0 }}
+        animate={{ pathLength: 1, opacity: 1 }}
+        transition={{ duration: 0.7, ease: "easeOut" }}
+      />
+      {pts.map((p, i) => (
+        <motion.circle
+          // Keyed by stable index, not by timestamp: when the series gains a
+          // sample, React must REUSE the existing nodes and animate them to
+          // their new positions. Keying by measured_at remounts every element
+          // on every render, so the chart would blink instead of moving.
+          key={`pt-${i}`}
+          r={2.5}
+          fill="currentColor"
+          className="text-[color:var(--accent)]"
+          // The POSITION is animated, not just the opacity. When a sample
+          // lands the series re-scales, and every existing point glides to
+          // its new place instead of snapping -- that movement is what makes
+          // a change legible without a page reload.
+          initial={{ cx: p.x, cy: h - pad, opacity: 0 }}
+          animate={{ cx: p.x, cy: p.y, opacity: 1 }}
+          transition={{ duration: 0.45, ease: "easeOut" }}
+        >
+          <title>{`${p.s.indexed} / ${p.s.entries} at ${p.s.measured_at}`}</title>
+        </motion.circle>
+      ))}
+    </svg>
+  );
+}
+
 
 export default function DashboardPage() {
   const [project] = useProject();
@@ -446,12 +510,17 @@ export default function DashboardPage() {
               <Row label="Stale brain docs" v={health.stale_brain_docs} bad={health.stale_brain_docs > 0} />
               <Row label="Domains near cap" v={health.domains_near_cap.length} bad={health.domains_near_cap.length > 0} />
               {!coverageLoaded ? <Skeleton className="h-[20px] w-full" /> : coverage ? (
-                <div className="flex items-center justify-between">
-                  <span className="opacity-80">Memory coverage</span>
-                  <Lozenge tone={coverage.ratio < 1 ? "warn" : "ok"} className="tabular-nums">
-                    {`${coverage.indexed} / ${coverage.entries} (${Math.round(coverage.ratio * 100)}%)`}
-                  </Lozenge>
-                </div>
+                <>
+                  <div className="flex items-center justify-between">
+                    <span className="opacity-80">Memory coverage</span>
+                    <Lozenge tone={coverage.ratio < 1 ? "warn" : "ok"} className="tabular-nums">
+                      {`${coverage.indexed} / ${coverage.entries} (${Math.round(coverage.ratio * 100)}%)`}
+                    </Lozenge>
+                  </div>
+                  {coverage.history && coverage.history.length > 1 ? (
+                    <CoverageTrend series={coverage.history} />
+                  ) : null}
+                </>
               ) : null}
               {health.last_governance_run && (
                 <div className="text-2xs uppercase tracking-wider opacity-50 pt-2">Last run: {health.last_governance_run}</div>

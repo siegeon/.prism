@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.217"
+PRISM_VERSION = "7.13.218"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8054,4 +8054,21 @@ PRISM_VERSION_NOTES += (
     "belongs in the system where it can be audited. seconds_remaining reports how "
     "long a live lease has left. task_runner is unaffected, because its own TTL is "
     "the step timeout and it releases on every exit path. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.218 - the Dashboard animates the knowledge gain. A number on its own was "
+    "not enough: this decay hid for weeks because a figure existed that nobody "
+    "watched. brain_health now appends a coverage sample every time a play ends, and "
+    "it writes that sample BEFORE the floor check, so a fall lands in the series "
+    "exactly like a rise. Recording after the raise would have swallowed every "
+    "sample below the floor and left a chart that only ever showed good news. "
+    "coverage_history reads the samples oldest first and never filters by value. "
+    "GET /api/brain/health carries them as history. The CoverageTrend component "
+    "draws them with motion, which the app already depends on, so no chart library "
+    "joined the tree. Every sample renders through ONE code path: no styling keyed "
+    "on direction, one stroke colour, and no value filter before render, so a dip "
+    "reads exactly as clearly as a climb. Points are keyed by stable index and their "
+    "POSITION is animated, so a new sample makes the existing points glide to their "
+    "new places rather than the chart remounting and blinking. "
 )
