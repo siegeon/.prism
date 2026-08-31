@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.222"
+PRISM_VERSION = "7.13.223"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8136,4 +8136,19 @@ PRISM_VERSION_NOTES += (
     "anyone reading a 200 from that route: the conductor session gate refuses a "
     "sessionless in_progress transition, so a raw PATCH can answer 200 while the "
     "status does not move. Use the MCP task_update, which links a session first. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.223 - a report that did not advance no longer re-drives its step. 7.13.221 "
+    "fired the handoff on EVERY report, advanced or not, so a step whose report "
+    "failed validation was re-driven the instant it reported and a slow retry became "
+    "a hot loop. Measured live on 2026-08-31 on task a91976ec: premise-gather ran "
+    "seven times on review_previous_notes with three concurrent claude -p processes "
+    "before an operator halted it. The step was failing premise_grounded, which is a "
+    "legitimate non-advance, and the correct response to that is to back off rather "
+    "than retry immediately. after_step now takes advanced and returns without "
+    "driving when it is false, and conductor_flow passes the real result of the "
+    "advance. The interval reconciler retries on its own schedule, which is what "
+    "that schedule is for. This is the cost of turning a poll into a trigger: the "
+    "poll's slowness was also its back-off. "
 )

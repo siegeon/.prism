@@ -190,7 +190,7 @@ def after_task_done(task_id: str, project: str) -> dict:
             "started": started, "assemble": parent}
 
 
-def after_step(task_id: str, project: str) -> dict:
+def after_step(task_id: str, project: str, advanced: bool = True) -> dict:
     """Hand a task on after one of its steps concluded.
 
     The next step's owner is deterministic -- the FSM names it -- so there
@@ -209,6 +209,17 @@ def after_step(task_id: str, project: str) -> dict:
     # On an AGENT step: wake a driver now rather than leaving it for the
     # next sweep. On a GATE: leave it -- a gate belongs to a distinct seat,
     # and waking the runner would hand the task back to its own producer.
+    # A REPORT THAT DID NOT ADVANCE MUST NOT BE RE-DRIVEN. 7.13.221 fired on
+    # every report, so a step whose report failed validation was re-driven
+    # instantly and a slow retry became a hot loop -- premise-gather ran 7
+    # times on one step with 3 concurrent claude -p processes on 2026-08-31
+    # before an operator halted it. A non-advance is a signal to back off;
+    # the interval reconciler retries on its own schedule, which is exactly
+    # what that schedule is for.
+    if not advanced:
+        return {"kind": "conductor.handoff", "from": task_id, "started": [],
+                "drove": False, "reason": "report did not advance the step"}
+
     step = str(getattr(t, "workflow_step", "") or "")
     if getattr(t, "status", "") == "in_progress" and _is_agent_step(step):
         _drive_now(task_id, project)

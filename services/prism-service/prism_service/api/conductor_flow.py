@@ -923,7 +923,8 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
     try:
         from prism_service.services import dispatch
 
-        dispatch.after_step(body.task_id, project)
+        dispatch.after_step(body.task_id, project,
+                            advanced=bool(res.get("ok")))
     except Exception:
         pass
 

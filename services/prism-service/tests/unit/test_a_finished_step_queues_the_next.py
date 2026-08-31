@@ -301,3 +301,53 @@ def test_the_update_route_starts_the_task():
     src = inspect.getsource(tasks_api.update_task)
     assert "dispatch" in src, (
         "the update route must hand a newly-started task to a driver")
+
+
+# ----------------------------------------------------------------------
+# A non-advancing report must NOT be re-driven
+# ----------------------------------------------------------------------
+
+def test_a_report_that_did_not_advance_is_not_re_driven(monkeypatch):
+    """RUNAWAY, 2026-08-31. 7.13.221 fired the handoff on every report,
+    advanced or not. A step whose report FAILED validation therefore got
+    re-driven instantly, and a slow retry became a hot loop: premise-gather
+    ran 7 times on one step with 3 concurrent claude -p processes before an
+    operator halted it.
+
+    A non-advance is a signal to back off. The interval reconciler will
+    retry it on its own schedule, which is what that schedule is for.
+    """
+    woken = []
+    monkeypatch.setattr(dispatch, "_drive_now",
+                        lambda tid, project: woken.append(tid))
+    svc = _Svc([_Task("t", status="in_progress", step="review_previous_notes")])
+    monkeypatch.setattr(dispatch, "_task_svc_for", lambda project: svc)
+
+    dispatch.after_step("t", "proj", advanced=False)
+
+    assert woken == [], (
+        "a report that did not advance the step must not re-drive it -- "
+        "that turns a failing step into a hot loop")
+
+
+def test_an_advancing_report_still_drives(monkeypatch):
+    woken = []
+    monkeypatch.setattr(dispatch, "_drive_now",
+                        lambda tid, project: woken.append(tid))
+    svc = _Svc([_Task("t", status="in_progress", step="implement_tasks")])
+    monkeypatch.setattr(dispatch, "_task_svc_for", lambda project: svc)
+
+    dispatch.after_step("t", "proj", advanced=True)
+
+    assert woken == ["t"]
+
+
+def test_the_report_path_passes_whether_it_advanced():
+    """Pin the call site: conductor_flow must tell the dispatcher."""
+    import inspect
+
+    from prism_service.api import conductor_flow
+
+    src = inspect.getsource(conductor_flow)
+    assert "advanced=" in src, (
+        "conductor_flow must tell the handoff whether the step advanced")
