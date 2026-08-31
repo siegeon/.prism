@@ -252,3 +252,52 @@ def test_a_finished_task_is_never_driven_again(monkeypatch):
     dispatch.after_step("t", "proj")
 
     assert woken == []
+
+
+# ----------------------------------------------------------------------
+# The START: a task becoming startable must be driven
+# ----------------------------------------------------------------------
+
+def test_a_task_that_becomes_in_progress_is_driven(monkeypatch):
+    """The chain had no beginning.
+
+    LIVE, 2026-08-30: a task was marked ready and sat `pending` for ten
+    minutes with nothing touching it. step-to-step and task-to-task were
+    both wired, but NOTHING fired when a task first became startable, so
+    the handoff chain had no first link and the task waited for a sweep
+    that only scans tasks already in_progress.
+    """
+    woken = []
+    monkeypatch.setattr(dispatch, "_drive_now",
+                        lambda tid, project: woken.append(tid))
+    svc = _Svc([_Task("t", status="in_progress", step="")])
+    monkeypatch.setattr(dispatch, "_task_svc_for", lambda project: svc)
+
+    dispatch.on_started("t", "proj")
+
+    assert woken == ["t"], (
+        "a task that just became in_progress must be driven, not left for "
+        "the next sweep")
+
+
+def test_a_still_pending_task_is_not_driven(monkeypatch):
+    woken = []
+    monkeypatch.setattr(dispatch, "_drive_now",
+                        lambda tid, project: woken.append(tid))
+    svc = _Svc([_Task("t", status="pending")])
+    monkeypatch.setattr(dispatch, "_task_svc_for", lambda project: svc)
+
+    dispatch.on_started("t", "proj")
+
+    assert woken == []
+
+
+def test_the_update_route_starts_the_task():
+    """Pin the CALL SITE. A start trigger nobody calls is the same hole."""
+    import inspect
+
+    from prism_service.api import tasks as tasks_api
+
+    src = inspect.getsource(tasks_api.update_task)
+    assert "dispatch" in src, (
+        "the update route must hand a newly-started task to a driver")

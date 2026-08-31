@@ -216,3 +216,25 @@ def after_step(task_id: str, project: str) -> dict:
                 "started": [task_id], "step": step, "drove": True}
     return {"kind": "conductor.handoff", "from": task_id, "started": [],
             "step": step, "drove": False}
+
+def on_started(task_id: str, project: str) -> dict:
+    """Drive a task that has just become startable.
+
+    THE CHAIN HAD NO BEGINNING. step-to-step and task-to-task were both
+    wired, but nothing fired when a task first went in_progress -- so on
+    2026-08-30 a task marked ready sat pending for ten minutes untouched,
+    because the only thing that would have found it scans tasks already
+    in_progress, on a 900 s timer.
+
+    Idempotent by construction: the driver takes the per-task lease, so
+    calling this on a task somebody is already driving loses the race.
+    """
+    try:
+        t = _task_svc_for(project).get(task_id)
+    except Exception:
+        return {"kind": "conductor.handoff", "from": task_id, "started": []}
+    if t is None or getattr(t, "status", "") != "in_progress":
+        return {"kind": "conductor.handoff", "from": task_id, "started": []}
+    _drive_now(task_id, project)
+    return {"kind": "conductor.handoff", "from": task_id,
+            "started": [task_id], "drove": True}

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.221"
+PRISM_VERSION = "7.13.222"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8122,4 +8122,18 @@ PRISM_VERSION_NOTES += (
     "A finished task still hands outward to whatever it unblocked and to its parent "
     "when the last child lands. Firing twice is safe: every driver takes the per-task "
     "lease, so a duplicate loses the race. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.222 - the handoff chain gains its first link. 7.13.220 and 7.13.221 wired "
+    "step to step and task to task, but nothing fired when a task first became "
+    "startable. Measured live on 2026-08-30: a task marked ready sat pending for ten "
+    "minutes with nothing touching it, because the only seat that would find it "
+    "scans tasks ALREADY in_progress, on a 900 s timer. So the chain had a beginning "
+    "nobody had built. dispatch.on_started drives a task the moment it goes "
+    "in_progress, and the PATCH route calls it. Idempotent by construction, because "
+    "the driver takes the per-task lease and a duplicate loses the race. Note for "
+    "anyone reading a 200 from that route: the conductor session gate refuses a "
+    "sessionless in_progress transition, so a raw PATCH can answer 200 while the "
+    "status does not move. Use the MCP task_update, which links a session first. "
 )

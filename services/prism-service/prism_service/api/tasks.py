@@ -2063,6 +2063,19 @@ def update_task(
     t = svc.update(task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")
+    # START THE CHAIN (task cdb8e365). A task marked ready used to sit
+    # untouched until a sweep noticed it -- and the only sweep that would
+    # scans tasks ALREADY in_progress, on a 900 s timer. Measured live on
+    # 2026-08-30: ten minutes pending with nothing touching it. Handing it
+    # to a driver here is the first link of the handoff chain. Best-effort,
+    # and idempotent because the driver takes the per-task lease.
+    if str(kwargs.get("status") or "") == "in_progress":
+        try:
+            from prism_service.services import dispatch
+
+            dispatch.on_started(task_id, project)
+        except Exception:
+            pass
     # STE style block (task 6e611531): svc.last_style reflects THIS write —
     # svc is the same TaskService instance that just ran svc.update above.
     return {"task": t, "history": svc.history(task_id), "style": svc.last_style}
