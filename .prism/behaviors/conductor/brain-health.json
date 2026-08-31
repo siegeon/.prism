@@ -1,0 +1,16 @@
+{
+  "id": "brain-health",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Index what the play wrote and check coverage",
+  "version": 1,
+  "steps": [
+    {
+      "id": "index-and-check",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/brain-health?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 60
+    }
+  ]
+}

@@ -41,6 +41,8 @@ import threading
 import time
 from typing import Callable, Optional
 
+from prism_service.services import brain_health
+
 SEAT_ID = "conductor-shipper"  # registered in actor_service.MACHINE_SEATS
 
 SHIP_ENV = "PRISM_SHIP_ON_APPROVE"
@@ -633,8 +635,40 @@ def ship_task(task_id: str, project: str = "default", *,
     land = on_landed or _replay_owner_approval
     replayed = land(task_svc, cond, task_id)
     _reap_after_land(task_svc, task_id, project)
+    _brain_health_after_land(task_svc, task_id, project)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
             "replayed": replayed}
+
+
+def _brain_health_after_land(task_svc, task_id: str, project: str) -> None:
+    """Runs beside `_reap_after_land`, same trigger: a successful land.
+
+    Indexes whatever memories this play wrote (brain_health.py, incremental,
+    never a full reindex) and checks coverage against the floor. A coverage
+    shortfall is RECORDED on the task's own history -- never only logged,
+    and never worded as success -- so the decay `memory_service.py`'s bare
+    `except: pass` hides stays visible where a human or the next drive can
+    actually see it. Best-effort toward the SHIP itself, same as
+    `_reap_after_land`: this never re-runs or blocks a ship that already
+    succeeded.
+    """
+    try:
+        brain_health.index_finished_play(task_id, project, task_svc=task_svc)
+    except brain_health.CoverageBelowFloor as exc:
+        if task_svc is None:
+            return
+        try:
+            task_svc.record_history(
+                task_id, action="brain_health",
+                details=(
+                    f"result=below_floor; indexed={exc.indexed}/"
+                    f"{exc.entries}={exc.ratio:.1%} < floor={exc.floor:.1%}"
+                ),
+                actor=SEAT_ID)
+        except Exception:  # noqa: BLE001 - recording the report must never
+            pass            # itself fail a completed ship
+    except Exception:  # noqa: BLE001 - indexing failures never fail a ship
+        pass
 
 
 def _reap_after_land(task_svc, task_id: str, project: str) -> None:
