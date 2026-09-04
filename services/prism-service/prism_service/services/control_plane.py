@@ -346,7 +346,22 @@ def _fresh_diff_base(workspace: Path, stale_baseline: Optional[str]) -> Optional
     origin/main flagged that unpushed, unrelated commit's own policy-file
     change as the candidate's). So the fresh point is only adopted when the
     stored baseline is its ancestor (or equal) -- i.e. it is genuinely
-    FORWARD motion, never backward."""
+    FORWARD motion, never backward.
+
+    DIVERGED LINEAGES (task ce471e06, 2026-09-04) are the third case, and
+    treating them as "backward" is what made this self-heal silently
+    no-op in exactly the situation it was written for. This repo's
+    self-dev carve-out commits to BOTH dev and main, so a workspace
+    created off the dev tip carries a baseline that is not an ancestor of
+    main -- and once ship_worker REBASES that branch onto origin/main,
+    neither commit is an ancestor of the other. The old single
+    `--is-ancestor stale fresh` probe returns non-zero for "behind" and
+    "diverged" alike (`_git` maps both to None), so the stale dev-side
+    baseline was kept, the first-parent walk then absorbed main's own
+    commits, and the candidate-controls-judge tooth blamed the candidate
+    for a `conductor_service.py` change it never made -- abstaining the
+    machine seat on a UI-only slice. Probe BOTH directions: only a fresh
+    point genuinely BEHIND the stored baseline keeps the stored one."""
     out = _git(workspace, "merge-base", "HEAD", "origin/main")
     fresh = out.strip().splitlines()[0] if out and out.strip() else None
     if not fresh:
@@ -355,8 +370,21 @@ def _fresh_diff_base(workspace: Path, stale_baseline: Optional[str]) -> Optional
         return fresh
     if fresh == stale_baseline:
         return fresh
-    ok = _git(workspace, "merge-base", "--is-ancestor", stale_baseline, fresh)
-    return fresh if ok is not None else stale_baseline
+    # Forward motion: the stored baseline is an ancestor of the fresh point.
+    if _git(workspace, "merge-base", "--is-ancestor",
+            stale_baseline, fresh) is not None:
+        return fresh
+    # Genuinely BACKWARD: the fresh point is an ancestor of the stored
+    # baseline (a worktree created off a local commit not yet pushed).
+    # Keep the stored baseline -- this is the unpushed-local guard.
+    if _git(workspace, "merge-base", "--is-ancestor",
+            fresh, stale_baseline) is not None:
+        return stale_baseline
+    # DIVERGED: neither is an ancestor of the other, so the branch was
+    # rebased onto a different lineage and the stored baseline now sits on
+    # an abandoned one. merge-base(HEAD, origin/main) is the only point
+    # that still describes "where main and I agree".
+    return fresh
 
 
 def resolve_fresh_baseline(workspace_path: str, stale_baseline: str) -> str:
