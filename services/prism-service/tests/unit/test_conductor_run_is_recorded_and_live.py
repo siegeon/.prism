@@ -312,14 +312,52 @@ def test_ac5_the_live_tile_progress_reads_no_clock():
 
 
 def test_ac5_progress_source_never_reads_a_clock(recorder):
+    """progress_source must not read a clock DIRECTLY, and must never
+    fabricate a denominator.
+
+    The `"elapsed" not in ast.unparse(fn)` half of this assertion is
+    RETIRED (2026-09-04), superseded by the owner's 2026-08-30 decision
+    recorded in progress_source's own docstring: "progress bars based on
+    historical durations against true wall time ... like a real factory
+    game". Wall time IS elapsed time, so the function has legitimately
+    returned `basis: "wall_time"` with a seconds `done` ever since; the
+    string ban only kept passing because that read sat behind the
+    `_beat_wall_time_s` helper, i.e. it was satisfied by NAMING rather
+    than by behaviour. 7.13.231 then had to measure the real step elapsed
+    (every seat writes a hardcoded elapsed_s=0, so the bar was pinned at
+    0% forever) and the accident of naming ran out.
+
+    What the AC actually protects — no FABRICATED progress, the sawtooth
+    this repo has been bitten by twice — is pinned below as behaviour
+    instead of as a forbidden substring."""
     fn = _fn(_SRC / "services" / "flow_run_recorder.py", "progress_source")
     called = _calls(fn)
     for banned in ("time", "now", "utcnow", "monotonic", "perf_counter"):
         assert banned not in called, (
             f"progress_source calls {banned}() — a counted unit never needs "
             "a clock")
-    text = ast.unparse(fn)
-    assert "elapsed" not in text and "typical" not in text
+    assert "typical" not in ast.unparse(fn), (
+        "a shared 'typical' duration across different nodes is still "
+        "banned — the denominator must be THIS node's own history")
+
+
+def test_ac5_progress_never_fabricates_a_denominator(recorder, monkeypatch):
+    """The real invariant behind AC-5: with no measured history for this
+    node there is no honest denominator, so the basis stays counted units
+    and `total` is None — never a made-up number the bar can fill."""
+    from prism_service.services import flow_run_recorder as fr
+
+    monkeypatch.setattr(fr, "historical_duration_s", lambda db, step: None)
+    monkeypatch.setattr(
+        fr, "_step_elapsed_s", lambda project, task_id: 4242.0)
+
+    got = fr.progress_source("unused.db", "t-none", "implement_tasks",
+                             project="")
+
+    assert got["basis"] == "work_units"
+    assert got["total"] is None, (
+        "no measured history for this node means no denominator — a "
+        "fabricated total is the sawtooth this AC exists to prevent")
 
 
 # ---------------------------------------------------------------------------
