@@ -44,6 +44,28 @@ def _run_lifespan(app=None) -> None:
     asyncio.run(runner())
 
 
+def _prism_threads(mock_t):
+    """Constructor calls whose target is prism_service code.
+
+    CI runners construct one extra thread during startup that a dev
+    machine does not (a dependency difference, not a worker change), so a
+    raw total is not hermetic — 14 there, 13 here, same code (task
+    a2bc8c88). Pin OUR workers by the target's defining module instead:
+    a new prism worker still moves this count, a dependency's internal
+    thread never does.
+    """
+    calls = []
+    for c in mock_t.call_args_list:
+        tgt = c.kwargs.get("target")
+        if tgt is None and c.args:
+            tgt = c.args[0]
+        tgt = getattr(tgt, "func", tgt)  # unwrap functools.partial
+        mod = getattr(tgt, "__module__", "") or ""
+        if mod.startswith("prism_service"):
+            calls.append(c)
+    return calls
+
+
 def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     assert not isolated_lock.exists()
     with patch("prism_service.main.threading.Thread") as mock_t, \
@@ -72,7 +94,7 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # patch("prism_service.main.threading.Thread") mutates the global
     # threading module, so threads started inside the indirectly-imported
     # services are also intercepted.
-    started = [c for c in mock_t.return_value.start.mock_calls]
+    started = _prism_threads(mock_t)
     # Still 10 as of v7.0.32: the green-gate machine adjudicator sweep
     # (task 1d3322a6, services/gate_adjudicator.py) ships OFF by default —
     # its thread only starts when PRISM_GATE_ADJUDICATOR_INTERVAL opts in.
@@ -100,7 +122,7 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
             patch("prism_service.main._install_stackdump_handler"):
         _run_lifespan()
 
-    started = [c for c in mock_t.return_value.start.mock_calls]
+    started = _prism_threads(mock_t)
     # Same 13 threads — see test_lifespan_starts_threads_when_no_lock.
     assert len(started) == 13  # threads started despite the stale lock
 

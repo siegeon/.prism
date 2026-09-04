@@ -25,6 +25,23 @@ import pytest
 
 from prism_service.services import task_runner
 
+from pathlib import Path
+
+# _behavior_dir's fallback is Path.home()/projects/<project>, which exists
+# only on a dev machine — on a CI runner every lookup returned None and all
+# of this file failed (task a2bc8c88). The catalog under test is the
+# COMMITTED .prism/behaviors/conductor of the checkout this test file sits
+# in, so resolve it from here: hermetic on any runner, still guarding the
+# real behavior files.
+_REPO_BEHAVIORS = (Path(__file__).resolve().parents[4]
+                   / ".prism" / "behaviors" / "conductor")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_behavior_dir(monkeypatch):
+    monkeypatch.setattr(
+        task_runner, "_behavior_dir", lambda project: _REPO_BEHAVIORS)
+
 
 # ----------------------------------------------------------------------
 # _node_plan — reads the declared plan off the behavior JSON
