@@ -29,7 +29,15 @@ PRISM_VERSION_NOTES = (
     'non-graceful failure names itself instead of masquerading as an empty '
     'report. New suite test_resume_actuator_survives_graceful_budget_stop.py '
     '(2 of its 4 tests are red at the base commit). 29 seat/budget tests '
-    'green. '
+    'green. ALSO: a parked task can now be RELEASED back to the drive - '
+    'resume_actuator.release() plus POST /api/conductor/resume/release. '
+    '_park spent the budget and wrote status=blocked, and the reset lived '
+    'only inside a successful dispatch, so a parked task stayed parked '
+    'even once its cause was fixed (flipping it to in_progress by hand let '
+    'the next 180s sweep re-park it on the same spent budget). Release is '
+    'the "cause is fixed, try again" affordance: it clears the attempts, '
+    'lifts a park-shaped block, and records who released it - and leaves a '
+    'genuine dependency block untouched. '
 )
 
 PRISM_VERSION_NOTES += (

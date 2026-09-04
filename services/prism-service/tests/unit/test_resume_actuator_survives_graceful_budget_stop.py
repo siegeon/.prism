@@ -167,6 +167,58 @@ def test_non_graceful_failure_still_fails_and_names_itself(
         "the failure must name itself non-graceful, not 'no usable output'")
 
 
+def test_release_clears_a_spent_budget_and_unparks(make_task):
+    """A parked task must be releasable. `_park` spends the budget and
+    writes status=blocked, and before this there was NO way back: the
+    reset lived only inside a successful dispatch, so flipping the task to
+    in_progress by hand let the next 180s sweep re-park it on the same
+    spent budget (ce471e06, 2026-09-04)."""
+    from prism_service.services import resume_actuator as ra
+    from prism_service.services import resume_attempts_data as rad
+
+    ctx, task, project = make_task()
+    _start(ctx, task, project)
+    scores_db = ra._scores_db_for(project)
+
+    for _ in range(3):
+        rad.record_attempt(scores_db, task.id)
+    ra._park(project, task.id, 3, 3)
+    assert ctx.task_svc.get(task.id).status == "blocked"
+    assert rad.attempt_count(scores_db, task.id) == 3
+
+    res = ra.release(project, task.id, actor="owner")
+
+    assert res["ok"] is True and res["unparked"] is True, res
+    assert res["attempts_cleared"] == 3
+    assert rad.attempt_count(scores_db, task.id) == 0, (
+        "the retry budget must be fresh, or the next sweep re-parks it")
+    updated = ctx.task_svc.get(task.id)
+    assert updated.status == "in_progress"
+    assert not (updated.blocked_reason or "")
+    rows = [str(r) for r in (ctx.task_svc.history(task.id) or [])]
+    assert any(ra.RELEASED_ACTION in r and "owner" in r for r in rows), (
+        "the release must name who released it")
+
+
+def test_release_leaves_a_real_dependency_block_alone(make_task):
+    """Releasing must lift THIS seat's park, never a genuine block put
+    there by something else — the budget is cleared either way, but the
+    status and its reason stay untouched."""
+    from prism_service.services import resume_actuator as ra
+
+    ctx, task, project = make_task()
+    _start(ctx, task, project)
+    ctx.task_svc.update(task.id, status="blocked",
+                        blocked_reason="waiting on an upstream dependency")
+
+    res = ra.release(project, task.id, actor="owner")
+
+    assert res["ok"] is True and res["unparked"] is False, res
+    updated = ctx.task_svc.get(task.id)
+    assert updated.status == "blocked"
+    assert updated.blocked_reason == "waiting on an upstream dependency"
+
+
 def test_exit_zero_still_passes_without_a_graceful_check(
         make_task, monkeypatch):
     """The ordinary success path is untouched and must not require the

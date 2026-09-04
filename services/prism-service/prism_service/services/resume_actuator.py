@@ -137,6 +137,54 @@ def _park(project: str, task_id: str, attempts: int, max_retries: int) -> dict:
     return {"ok": False, "task_id": task_id, "parked": True, "reason": reason}
 
 
+RELEASED_ACTION = "resume_actuator_released"
+
+
+def release(project: str, task_id: str, actor: str = "human") -> dict:
+    """Release a task this seat PARKED, back to the drive (task 5227a646).
+
+    `_park` spends the retry budget and writes `status=blocked`, and until
+    now NOTHING could undo that: `reset_attempts` was reachable only from
+    inside a successful dispatch, so a parked task stayed parked forever
+    even after the cause was fixed — flipping it back to `in_progress` by
+    hand just let the next 180 s sweep re-park it on the same spent
+    budget. Observed on ce471e06 (2026-09-04).
+
+    This is the human's "the cause is fixed, try again" signal, so it is
+    the one place the budget legitimately resets: clear the attempts, lift
+    a park-shaped `blocked` back to `in_progress`, and record WHO released
+    it. A task blocked for any other reason keeps its own blocked_reason
+    and is left alone — this releases the actuator's park, never a real
+    dependency block."""
+    from prism_service.project_context import get_project
+    from prism_service.services import resume_attempts_data as rad
+
+    ctx = get_project(project)
+    task = ctx.task_svc.get(task_id)
+    if task is None:
+        return {"ok": False, "task_id": task_id, "reason": "no such task"}
+
+    scores_db = _scores_db_for(project)
+    attempts = rad.attempt_count(scores_db, task_id)
+    rad.reset_attempts(scores_db, task_id)
+
+    status = getattr(task, "status", "") or ""
+    reason = getattr(task, "blocked_reason", "") or ""
+    parked_by_seat = status == "blocked" and "resume-actuator:" in reason
+    if parked_by_seat:
+        ctx.task_svc.update(task_id, status="in_progress", blocked_reason="")
+
+    ctx.task_svc.record_history(
+        task_id, action=RELEASED_ACTION,
+        details=(f"released by {actor}; retry budget reset "
+                 f"(was {attempts}); "
+                 + ("unparked to in_progress" if parked_by_seat
+                    else f"status left as {status or 'unknown'}")),
+        actor=actor)
+    return {"ok": True, "task_id": task_id, "attempts_cleared": attempts,
+            "unparked": parked_by_seat}
+
+
 def _dispatch_count(task_svc, task_id: str) -> int:
     """How many times this seat has dispatched THIS task, from durable
     history. Strictly non-decreasing and restart-safe, which is what

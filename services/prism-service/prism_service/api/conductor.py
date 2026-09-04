@@ -749,6 +749,28 @@ class FanoutBody(BaseModel):
     returned: int = 0
 
 
+@router.post("/resume/release")
+def resume_release(project: str = Query("default"),
+                   body: dict = Body(...)) -> dict:
+    """Release a task the resume actuator PARKED, back to the drive.
+
+    The actuator spends a retry budget and writes `status=blocked` when a
+    step keeps failing. Nothing could undo that (task 5227a646): the
+    budget reset lived only inside a successful dispatch, so a parked task
+    stayed parked even once the cause was fixed, and flipping it to
+    `in_progress` by hand just let the next sweep re-park it. This is the
+    "the cause is fixed, try again" affordance — the one place the budget
+    legitimately resets.
+    """
+    task_id = (body or {}).get("task_id") or ""
+    if not task_id:
+        raise HTTPException(422, "task_id required")
+    from prism_service.services import resume_actuator
+
+    actor = (body or {}).get("actor") or (body or {}).get("session_id") or "human"
+    return resume_actuator.release(project, task_id, actor=str(actor))
+
+
 @router.post("/fanout")
 def fanout(project: str = Query("default"), body: FanoutBody = Body(...)) -> dict:
     """Record per-step sub-agent fanout (dispatched vs returned) for the SPA.
