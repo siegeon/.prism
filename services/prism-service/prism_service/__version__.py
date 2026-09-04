@@ -13,10 +13,22 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.224"
+PRISM_VERSION = "7.13.225"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.225: task a2bc8c88 - PR checks pass without the live checkout. '
+    'Every pr-checks run failed since Aug 30 (8 tests, all environmental). '
+    'test_task_runner_honors_declared_node_plan.py now resolves the behavior '
+    'catalog from its own checkout via an autouse _behavior_dir monkeypatch '
+    '(the fallback Path.home()/projects/prism does not exist on a runner), '
+    'and test_lifespan_lock_recovery.py counts only threads whose target is '
+    'prism_service code (CI constructs one extra dependency thread; 14 vs '
+    '13 on identical code). Verified 22/22 green with HOME pointed at an '
+    'empty dir. Unblocks PR #2384 and the four other queued ship PRs. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.206: task f97c196d - the pipeline reaps what a finished task leaves. WORKFLOW_STEPS ended at green_gate and the behavior FSM ended at land, so every drive left its git worktree and its prism/ws/<task_id> branch behind forever: 256 worktrees and 474 branches measured on this repo, 352 of them prism/ws. New terminal node reap, the step AFTER land on the conductor bot FSM - a behavior JSON (.prism/behaviors/conductor/reap.json, 14th behaviorId in bot.json), a catalog entry nested under conductor, a canvas node in flow_run_recorder.CONDUCTOR_NODES, and the codified route POST /api/workflows/steps/reap. CODIFIED, zero model calls: services/task_reaper.py is deterministic Python plus git. The trigger is a SUCCESSFUL land (ship_worker._reap_after_land, fired after the gate replay so it never deletes the checkout the adjudicator is about to read), never status==done. SHIPPEDNESS IS THE TASK TRAILER on origin/main - it delegates to the gate own reader api.tasks._shipped_sha_on_main, because 47 of 48 branches that failed the parent-chain test on this repo had in fact shipped under a squash sha. It refuses a dirty worktree, a branch whose commits exist nowhere else, a locked worktree, the main checkout, a live drive (heartbeat under 900 s) and any task that is not done or cancelled; git worktree remove runs WITHOUT --force as a second net. New tests/unit/test_pipeline_reaps_a_finished_task.py (11 tests against real temporary git repos). Three neighbouring assertions that pinned land as the last node were retired in place with a note naming what superseded them. '
 )
 
