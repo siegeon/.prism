@@ -760,6 +760,7 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
             description=f"Split from {task_id} at step {step_id}: "
                         f"{test_id} stayed red for {STALL_ATTEMPTS} attempts.",
             priority=getattr(parent, "priority", 0) or 0,
+            channel="daemon",
             tags=list(getattr(parent, "tags", []) or []),
             parent_id=task_id, verify=[test_id], proof_type="test",
             oracle=f"pytest {test_id} passes with rc 0.")

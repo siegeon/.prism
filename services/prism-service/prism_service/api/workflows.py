@@ -700,6 +700,7 @@ def queue_workflow_fix(project: str, workflow_id: str, request: WorkflowFixReque
             "```"
         ),
         priority=10,
+        channel="daemon",
         tags=["workflow-fix", "agent-managed", step.id],
         assigned_agent="dev",
         oracle=f"The scripted {step.id} step exits successfully for workflow validation",
