@@ -268,10 +268,63 @@ def _beat_wall_time_s(beat) -> float:
     """The heartbeat's own already-measured seconds for its last recorded
     ping. Read once, HERE, outside progress_source -- a real elapsed value
     the heartbeat subsystem timed, never a fresh clock read at the read
-    path."""
+    path.
+
+    NOTE: every seat that beats currently writes a literal `elapsed_s: 0`
+    (task_runner and resume_actuator both hardcode it, because each beats
+    ONCE before starting a synchronous invoke and cannot know its own
+    elapsed at that moment). So this is 0.0 in practice, and
+    `_step_elapsed_s` below supplies the real numerator."""
     if not beat:
         return 0.0
     return float(beat.get("elapsed_s") or 0)
+
+
+def _step_elapsed_s(project: str, task_id: str) -> float:
+    """Seconds since this task ENTERED its current step, measured from the
+    server-stamped conductor transition that put it there.
+
+    THE BAR NEVER FILLED (task ce471e06, 2026-09-04). `progress_source`
+    fills an agent node with `done=_beat_wall_time_s(beat)` over the
+    node's own historical median -- a correct design -- but every writer
+    of that field hardcodes zero, so `done` was ALWAYS 0.0 and the fill
+    was structurally 0%, forever. The owner watched a 25-minute
+    verify_green_state render as "RUN 0s" with an empty tile.
+
+    This is NOT the fabricated clock the module docstring rules out: the
+    numerator is a real interval between a server-stamped history row and
+    now, and the denominator stays this node's own measured history --
+    exactly the "true wall time against historical duration" the design
+    asks for. It is a LOWER BOUND on honesty too: with no transition row
+    to measure from, it returns 0.0 and the caller falls back to the
+    indeterminate basis rather than inventing a number."""
+    if not project or not task_id:
+        return 0.0
+    try:
+        from prism_service.project_context import get_project
+
+        rows = get_project(project).task_svc.history(task_id) or []
+    except Exception:
+        return 0.0
+    started = None
+    for r in rows:
+        if str(getattr(r, "action", "") or "") not in (
+                "advance_task", "gate_decide"):
+            continue
+        raw = str(getattr(r, "timestamp", "") or "")
+        if not raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if started is None or ts > started:
+            started = ts
+    if started is None:
+        return 0.0
+    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
 
 
 def progress_source(scores_db: str, task_id: str, step: str,
@@ -306,6 +359,12 @@ def progress_source(scores_db: str, task_id: str, step: str,
     if beat is not None and str(beat.get("step") or "") == step:
         units = int(beat.get("work_units") or 0)
         done_s = _beat_wall_time_s(beat)
+    if done_s <= 0:
+        # The seats all beat with a hardcoded elapsed_s=0, which pinned
+        # every agent node's fill at 0% forever. Measure the step's real
+        # elapsed from its own server-stamped entry instead — see
+        # _step_elapsed_s.
+        done_s = _step_elapsed_s(project, task_id)
     hist_s = historical_duration_s(scores_db, step)
     if hist_s is None:
         return {"basis": "work_units", "done": units, "total": None}
