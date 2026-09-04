@@ -341,7 +341,8 @@ def test_ac5_progress_source_never_reads_a_clock(recorder):
         "banned — the denominator must be THIS node's own history")
 
 
-def test_ac5_progress_never_fabricates_a_denominator(recorder, monkeypatch):
+def test_ac5_progress_never_fabricates_a_denominator(recorder, monkeypatch,
+                                                    tmp_path):
     """The real invariant behind AC-5: with no measured history for this
     node there is no honest denominator, so the basis stays counted units
     and `total` is None — never a made-up number the bar can fill."""
@@ -351,8 +352,11 @@ def test_ac5_progress_never_fabricates_a_denominator(recorder, monkeypatch):
     monkeypatch.setattr(
         fr, "_step_elapsed_s", lambda project, task_id: 4242.0)
 
-    got = fr.progress_source("unused.db", "t-none", "implement_tasks",
-                             project="")
+    # tmp-scoped, never a bare "unused.db": _connect() creates that in
+    # the CWD, and a stray sqlite file in a task worktree trips the
+    # green_gate uncommitted-changes tooth (live on ce471e06).
+    got = fr.progress_source(str(tmp_path / "scores.db"), "t-none",
+                             "implement_tasks", project="")
 
     assert got["basis"] == "work_units"
     assert got["total"] is None, (

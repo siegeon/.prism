@@ -38,14 +38,19 @@ STEP = "verify_green_state"
 
 
 @pytest.fixture()
-def task_in_step():
+def task_in_step(tmp_path):
     from prism_service.project_context import get_project
 
     project = "progress-" + uuid.uuid4().hex[:8]
     ctx = get_project(project)
     task = ctx.task_svc.create(title="progress task")
     ctx.task_svc.update(task.id, status="in_progress", workflow_step=STEP)
-    return ctx, task.id, project
+    # A REAL path under tmp_path, never a bare "unused.db": that literal
+    # is created in the CWD by _connect(), and a stray sqlite file in a
+    # task's own worktree trips the green_gate's uncommitted-changes
+    # tooth. Observed live on ce471e06 (2026-09-04): the gate refused a
+    # shipped task over '?? services/prism-service/unused.db'.
+    return ctx, task.id, project, str(tmp_path / "scores.db")
 
 
 def _entered_step(ctx, task_id: str, seconds_ago: float) -> None:
@@ -78,7 +83,7 @@ def test_step_elapsed_measures_from_the_transition_that_entered_the_step(
         task_in_step):
     from prism_service.services import flow_run_recorder as fr
 
-    ctx, task_id, project = task_in_step
+    ctx, task_id, project, db = task_in_step
     _entered_step(ctx, task_id, 600.0)
 
     got = fr._step_elapsed_s(project, task_id)
@@ -94,7 +99,7 @@ def test_no_transition_row_measures_nothing_rather_than_inventing_it(
     of a fabricated percentage."""
     from prism_service.services import flow_run_recorder as fr
 
-    _ctx, task_id, project = task_in_step
+    _ctx, task_id, project, db = task_in_step
 
     assert fr._step_elapsed_s(project, task_id) == 0.0
 
@@ -106,7 +111,7 @@ def test_progress_source_fills_despite_a_zero_elapsed_heartbeat(
     from prism_service.services import drive_heartbeat
     from prism_service.services import flow_run_recorder as fr
 
-    ctx, task_id, project = task_in_step
+    ctx, task_id, project, db = task_in_step
     _entered_step(ctx, task_id, 300.0)
 
     monkeypatch.setattr(
@@ -115,7 +120,7 @@ def test_progress_source_fills_despite_a_zero_elapsed_heartbeat(
                          "last_tool": "claude_cli.invoke"})
     monkeypatch.setattr(fr, "historical_duration_s", lambda db, step: 900.0)
 
-    got = fr.progress_source("unused.db", task_id, STEP, project=project)
+    got = fr.progress_source(db, task_id, STEP, project=project)
 
     assert got["basis"] == "wall_time"
     assert got["total"] == 900.0
@@ -131,7 +136,7 @@ def test_a_real_measured_beat_still_wins(task_in_step, monkeypatch):
     from prism_service.services import drive_heartbeat
     from prism_service.services import flow_run_recorder as fr
 
-    ctx, task_id, project = task_in_step
+    ctx, task_id, project, db = task_in_step
     _entered_step(ctx, task_id, 300.0)
 
     monkeypatch.setattr(
@@ -140,7 +145,7 @@ def test_a_real_measured_beat_still_wins(task_in_step, monkeypatch):
                          "last_tool": "claude_cli.invoke"})
     monkeypatch.setattr(fr, "historical_duration_s", lambda db, step: 900.0)
 
-    got = fr.progress_source("unused.db", task_id, STEP, project=project)
+    got = fr.progress_source(db, task_id, STEP, project=project)
 
     assert got["done"] == 42.0
 
@@ -152,7 +157,7 @@ def test_no_history_for_this_node_stays_indeterminate(
     from prism_service.services import drive_heartbeat
     from prism_service.services import flow_run_recorder as fr
 
-    ctx, task_id, project = task_in_step
+    ctx, task_id, project, db = task_in_step
     _entered_step(ctx, task_id, 300.0)
 
     monkeypatch.setattr(
@@ -161,7 +166,7 @@ def test_no_history_for_this_node_stays_indeterminate(
                          "last_tool": "claude_cli.invoke"})
     monkeypatch.setattr(fr, "historical_duration_s", lambda db, step: None)
 
-    got = fr.progress_source("unused.db", task_id, STEP, project=project)
+    got = fr.progress_source(db, task_id, STEP, project=project)
 
     assert got["basis"] == "work_units"
     assert got["total"] is None
