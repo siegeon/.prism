@@ -13,10 +13,31 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.227"
+PRISM_VERSION = "7.13.228"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.228: the stale-baseline self-heal handles a DIVERGED lineage. '
+    'control_plane._fresh_diff_base adopted the fresh merge-base only when '
+    'the stored baseline was its ANCESTOR, via one '
+    '`merge-base --is-ancestor stale fresh` probe - and _git maps both '
+    '"behind" and "diverged" to None, so a diverged baseline silently fell '
+    'back to the stale value: the exact false positive the self-heal exists '
+    'to prevent. This repo self-devs onto BOTH dev and main, so a workspace '
+    'stamped off the dev tip diverges from main the moment ship_worker '
+    'rebases its branch there. Live: task ce471e06 (UI-only, 6 files) had '
+    'the machine gate seat ABSTAIN three times with "candidate modified '
+    'gate policy: conductor_service.py" - a file its branch never touches - '
+    'because the first-parent walk from the stale dev baseline absorbed '
+    'main own commits. Now both directions are probed: only a fresh point '
+    'genuinely BEHIND the stored baseline keeps the stored one, and '
+    'divergence adopts the merge-base. New suite '
+    'test_fresh_diff_base_handles_diverged_lineage.py pins all three '
+    'relationships (forward/backward/diverged); the diverged case is red at '
+    'the base commit. 57 control-plane/policy tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.227: task 5227a646 - the retry seat keeps a complete step report. '
     '7.13.102 taught task_runner._run_one_step to keep a report when a '
     'post-hoc --max-budget-usd/--max-turns ceiling raises the exit code '
