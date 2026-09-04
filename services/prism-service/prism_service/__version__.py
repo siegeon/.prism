@@ -13,10 +13,26 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.226"
+PRISM_VERSION = "7.13.227"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.227: task 5227a646 - the retry seat keeps a complete step report. '
+    '7.13.102 taught task_runner._run_one_step to keep a report when a '
+    'post-hoc --max-budget-usd/--max-turns ceiling raises the exit code '
+    'after the model ends its turn normally; resume_actuator.dispatch_once '
+    'never inherited it and tested exit_code==0 alone, so the RETRY seat '
+    'discarded usable proof as "no usable output" and three such retries '
+    'spent the budget and parked the task for a human (live: ce471e06 at '
+    'write_failing_tests, three identical rows). dispatch_once now reads '
+    'result.graceful_budget_stop() exactly as the drive seat does, and a '
+    'non-graceful failure names itself instead of masquerading as an empty '
+    'report. New suite test_resume_actuator_survives_graceful_budget_stop.py '
+    '(2 of its 4 tests are red at the base commit). 29 seat/budget tests '
+    'green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.226: task 9db4f4c8 - the shipped-ness tooth trusts only the '
     'task own commits. A hand commit on main that borrows a task trailer '
     'no longer closes the task while its real branch sits unlanded '
