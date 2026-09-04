@@ -13,10 +13,29 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.229"
+PRISM_VERSION = "7.13.230"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.230: a HELD DRIVE LEASE no longer spends the resume actuator '
+    'retry budget. dispatch_once takes the same lease every driver takes, '
+    'and when another driver held it the seat returned through '
+    '_no_advance - which records a retry attempt - so bouncing off a '
+    'HEALTHY driver counted exactly like a failed drive. '
+    'verify_green_state runs about 25 minutes and holds a 45 minute lease '
+    'while this seat sweeps every 180 s, so three sweeps landed inside one '
+    'legitimately-running step, each charged an attempt, and the third '
+    'PARKED the task for a human. Live on ce471e06: dispatches at '
+    '20:01:36, 20:04:36, 20:07:36, parked at 20:10:36, with the real '
+    'driver working the whole time. A held lease is evidence work IS '
+    'happening, the opposite of the stall this seat rescues, so it now '
+    'defers without charging an attempt and reports deferred=true. Every '
+    'other non-advance still charges one. New suite '
+    'test_held_lease_does_not_spend_the_retry_budget.py, red at the base '
+    'commit on its assertions. 26 actuator tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.229: a rewind reopens the stall budget, so a REJECTED GATE is '
     'workable. task_runner._stall_count counted every non-advancing '
     'runner_attempt row for the whole life of the task and never reset, '
