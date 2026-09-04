@@ -274,8 +274,19 @@ def dispatch_once(project: str, task_id: str) -> dict:
                                  ttl_s=_tr._step_timeout_s(job["step"]))
         if claim_id is None:
             holder = claim.holder_of(task_id) or "another driver"
-            return _no_advance(f"already driving: held by {holder}",
-                               step=job["step"])
+            # A HELD LEASE IS NOT A FAILED ATTEMPT (task ce471e06,
+            # 2026-09-04). Spending the retry budget here killed healthy
+            # long-running steps: verify_green_state takes ~25 min and
+            # holds a 45 min lease, while this seat sweeps every 180 s, so
+            # three bounces off a driver that was working normally spent
+            # the whole budget and PARKED the task for a human. Another
+            # driver holding the lease is evidence that work IS happening
+            # — the opposite of the stall this seat exists to rescue — so
+            # defer without charging an attempt and pick it up on a later
+            # sweep if it really does go quiet.
+            return {"ok": False, "task_id": task_id, "step": job["step"],
+                    "deferred": True,
+                    "reason": f"already driving: held by {holder}"}
 
     from prism_service.inference import claude_cli
     try:
