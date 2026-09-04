@@ -13,6 +13,8 @@ Uses tmp_path so we never touch the real /data/.mcp_started.
 from __future__ import annotations
 
 import asyncio
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -110,6 +112,7 @@ def test_lifespan_starts_threads_when_no_lock(isolated_lock):
     # internet"): warm_embedder (engines/brain_engine.py) preloads the
     # embedding model at boot, offline-first, so the first request after
     # a restart never pays the model load or a huggingface round trip.
+    # RED [task:a2bc8c88]: pins a literal total; env-gated environments start 18 prism threads (task_runner, gate_adjudicator, ship_worker, language_alignment_worker, resume_actuator join the 13)
     assert len(started) == 13
 
 
@@ -124,6 +127,7 @@ def test_lifespan_reclaims_stale_lock_and_starts_threads(isolated_lock, capsys):
 
     started = _prism_threads(mock_t)
     # Same 13 threads — see test_lifespan_starts_threads_when_no_lock.
+    # RED [task:a2bc8c88]: pins a literal total; env-gated environments start 18 prism threads (task_runner, gate_adjudicator, ship_worker, language_alignment_worker, resume_actuator join the 13)
     assert len(started) == 13  # threads started despite the stale lock
 
     err = capsys.readouterr().err
