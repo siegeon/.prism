@@ -83,6 +83,16 @@ def _interval_s() -> int:
         return DEFAULT_INTERVAL_S
 
 
+def _parallel() -> int:
+    """Tasks `sweep_once` may drive per tick (PRISM_TASK_RUNNER_PARALLEL).
+    Unset, blank, non-numeric or < 1 all mean 1 -- the owner's cost guard."""
+    raw = os.environ.get("PRISM_TASK_RUNNER_PARALLEL", "")
+    try:
+        return max(1, int(raw)) if raw.strip() else 1
+    except ValueError:
+        return 1
+
+
 def _max_turns() -> int:
     try:
         return max(1, int(os.environ.get("PRISM_TASK_RUNNER_MAX_TURNS", "30")))
@@ -504,7 +514,14 @@ def _release(task_id: str) -> None:
 
 
 def eligible_task(project: str) -> Optional[str]:
-    """The id of the one task this tick may drive in `project`, or None.
+    """The id of the first task this tick may drive in `project`, or None
+    (see `eligible_tasks`)."""
+    ids = eligible_tasks(project, 1)
+    return ids[0] if ids else None
+
+
+def eligible_tasks(project: str, limit: int) -> list[str]:
+    """Up to `limit` ids of tasks this tick may drive in `project`.
 
     Eligible == in_progress and its CURRENT step is an AGENT step — a task
     sitting at a gate (pending, passed, or failed) is never eligible; gate
@@ -522,13 +539,16 @@ def eligible_task(project: str) -> Optional[str]:
     from prism_service.services.conductor_service import ConductorService
 
     if _spend_ceiling_crossed():
-        return None
+        return []
     if _system_overloaded():
-        return None
+        return []
 
     ctx = get_project(project)
+    ids: list[str] = []
     for t in ctx.task_svc.list(status="in_progress"):
-        if t.id in _IN_FLIGHT:
+        if len(ids) >= max(0, limit):
+            break
+        if t.id in _IN_FLIGHT or t.id in ids:
             continue
         # Somebody else is demonstrably driving this task right now. Skipping
         # is not a refusal to work -- the beat goes stale within
@@ -539,12 +559,13 @@ def eligible_task(project: str) -> Optional[str]:
             _log(f"skipping {t.id[:8]}: driver {foreign!r} is live on it")
             continue
         if not t.workflow_step:
-            return t.id
+            ids.append(t.id)
+            continue
         step = ConductorService._step_by_id(t.workflow_step)
         if step is None or step["type"] == "gate":
             continue
-        return t.id
-    return None
+        ids.append(t.id)
+    return ids
 
 
 def _route_proof(task_svc, task_id: str, step_id: str, proof: str) -> None:
@@ -981,12 +1002,14 @@ def _run_one_step(project: str, task_id: str) -> dict:
 
 def sweep_once() -> Optional[dict]:
     """One pass over every project, starting from a ROTATING offset: drive
-    the first eligible task found and stop — AT MOST one task advances per
-    tick, bounding blast radius. The starting project rotates every tick
-    (module-level _rr_index) so no single project can monopolize the one
-    work slot forever just by sorting first and always having something
-    eligible. Returns the run_one_step result, or None when nothing was
-    eligible.
+    up to `_parallel()` eligible tasks (default 1) and stop -- the slot
+    count bounds blast radius per tick. The starting project rotates every
+    tick (module-level _rr_index) so no single project can monopolize the
+    work slots forever just by sorting first and always having something
+    eligible. Returns the FIRST run_one_step result dict, extended with
+    `started` (every task id driven this tick) and `results` (one dict per
+    started task), or None when nothing was eligible. Skips the whole tick
+    when the load breaker or the spend ceiling trips.
     """
     from prism_service.project_context import get_all_projects
 
@@ -1003,24 +1026,36 @@ def sweep_once() -> Optional[dict]:
         start = _rr_index % len(projects)
     ordered = projects[start:] + projects[:start]
 
+    slots = _parallel()
+    results: list[dict] = []
+    started: list[str] = []
     for pid in ordered:
         try:
-            task_id = eligible_task(pid)
+            task_ids = eligible_tasks(pid, slots - len(started))
         except Exception as exc:
             _log(f"{pid}: eligibility check failed: {exc}")
             continue
-        if task_id is None:
+        if not task_ids:
             continue
-        res = run_one_step(pid, task_id)
-        _log(f"{pid}/{task_id[:8]}: {res}")
+        for task_id in task_ids:
+            res = run_one_step(pid, task_id)
+            _log(f"{pid}/{task_id[:8]}: {res}")
+            started.append(task_id)
+            results.append(res)
         with _RR_LOCK:
             # Next tick starts AFTER this project -- the actual round-robin
             # advance. Re-index against the CURRENT `projects` list (not
             # `ordered`) so a project add/remove between ticks can't skew
             # the offset.
             _rr_index = (projects.index(pid) + 1) % len(projects)
-        return res
-    return None
+        if len(started) >= slots:
+            break
+    if not started:
+        return None
+    out = dict(results[0])
+    out["started"] = started
+    out["results"] = results
+    return out
 
 
 # A task becoming eligible (status -> in_progress, or a step/gate transition)
