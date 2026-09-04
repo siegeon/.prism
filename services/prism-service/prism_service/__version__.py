@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.231"
+PRISM_VERSION = "7.13.232"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.232: the borrowed-trailer guard is squash-safe. 7.13.226 judged whether a task own commits reached origin/main with git cherry, which compares INDIVIDUAL patch-ids. A squash merge collapses N commits into one, so not one original matches and every one reads unrepresented. The guard then refused the green_gate of a task that genuinely shipped: ce471e06 merged as 739c37ff via PullRequest 2386 and the seat still answered that origin/main does not represent its branch. Representation is now judged on CONTENT: take the files the branch changed and ask whether origin/main already holds the branch version of them. A squash-landed branch matches. A borrowed trailer does not, which is the case the guard exists to catch. New test test_a_multi_commit_squash_land_passes reproduces the live shape - the old single-commit squash test passed throughout because one cherry-picked patch DOES match by id, which is why the bug survived. 23 gate/shippedness tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.231: THE PROGRESS BAR FILLS. flow_run_recorder.progress_source '
     'fills an agent node with done=_beat_wall_time_s(beat) over that node '
     'own historical median - a correct design - but EVERY writer of '
