@@ -291,6 +291,20 @@ def sweep_once() -> list[dict]:
                             _log(f"{pid}/{tid[:8]}: green_gate rewind "
                                  f"-> {rw.get('to_step') or 'parked'}")
                             continue
+                    # task fb997b1d: a REFUSED plan/story rubric rewinds to
+                    # its producing agent step instead of parking for ever.
+                    # Without this the row is unreachable: the drive seat
+                    # skips gate steps, the adjudicator withholds a refused
+                    # rubric, and nothing else moves it -- so only a person
+                    # hand-editing plan_doc could free it.
+                    if task is not None and step in ("plan_gate",
+                                                     "story_gate"):
+                        from prism_service.services import plan_rewind
+                        pw = plan_rewind.maybe_rewind(ctx, task, pid)
+                        if pw and pw.get("ok"):
+                            _log(f"{pid}/{tid[:8]}: {step} rubric rewind "
+                                 f"-> {pw.get('to_step')}")
+                            continue
                     if task is not None:
                         _decline = _pending_decline_reason(
                             svc, task, step, pid)
