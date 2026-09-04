@@ -2959,27 +2959,52 @@ class ConductorService:
         if tip_p.returncode != 0 or not tip_p.stdout.strip():
             return ""
         tip = tip_p.stdout.strip()
+        # SQUASH MERGES DEFEAT `git cherry` (task ce471e06, 2026-09-04).
+        # cherry compares INDIVIDUAL patch-ids, and a squash merge collapses
+        # N commits into one, so not one of the originals matches and every
+        # one reads '+' — unrepresented. This guard then refused the gate of
+        # a task that had genuinely shipped: PR #2386 merged as 739c37ff and
+        # the seat still answered "origin/main does not represent" forever.
+        # The trailer check this guard wraps is squash-safe for exactly that
+        # reason, so the guard must be too.
+        #
+        # CONTENT, not commit identity: take the files the branch actually
+        # changed and ask whether origin/main already holds the branch's
+        # version of them. A squash-landed branch matches (its content IS on
+        # main). A BORROWED trailer does not (the branch's own files are
+        # nowhere on main), which is the case this guard exists to catch.
         try:
-            cherry = subprocess.run(
-                ["git", "-C", repo, "cherry", "origin/main", branch],
+            base = subprocess.run(
+                ["git", "-C", repo, "merge-base", "origin/main", branch],
                 capture_output=True, text=True, timeout=15)
         except Exception:
             return ""
-        if cherry.returncode != 0:
+        if base.returncode != 0 or not base.stdout.strip():
             return ""
-        plus = [ln.split()[1] for ln in cherry.stdout.splitlines()
-                if ln.startswith("+ ") and len(ln.split()) > 1]
-        for sha in plus:
-            try:
-                diff = subprocess.run(
-                    ["git", "-C", repo, "diff-tree", "--no-commit-id",
-                     "--name-only", "-r", sha],
-                    capture_output=True, text=True, timeout=10)
-            except Exception:
-                return tip
-            if diff.returncode == 0 and diff.stdout.strip():
-                return tip
-        return ""
+        merge_base = base.stdout.strip()
+        try:
+            names = subprocess.run(
+                ["git", "-C", repo, "diff", "--name-only",
+                 f"{merge_base}..{branch}"],
+                capture_output=True, text=True, timeout=20)
+        except Exception:
+            return ""
+        if names.returncode != 0:
+            return ""
+        files = [f for f in names.stdout.splitlines() if f.strip()]
+        if not files:
+            # The branch changed nothing of its own; nothing can strand.
+            return ""
+        try:
+            same = subprocess.run(
+                ["git", "-C", repo, "diff", "--quiet", "origin/main", branch,
+                 "--", *files],
+                capture_output=True, text=True, timeout=30)
+        except Exception:
+            return ""
+        # exit 0 => origin/main already holds this branch's version of every
+        # file it touched: landed, squashed or not.
+        return "" if same.returncode == 0 else tip
 
     def _receipt_adapter_mismatch_reason(self, task, receipt) -> Optional[str]:
         """Refuse a receipt whose ADAPTER cannot evidence what the task pins

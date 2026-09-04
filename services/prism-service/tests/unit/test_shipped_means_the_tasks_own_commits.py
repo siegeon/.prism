@@ -114,6 +114,39 @@ def test_a_merged_branch_passes(tmp_path, monkeypatch):
     assert _tooth(work, monkeypatch) == ""
 
 
+def test_a_multi_commit_squash_land_passes(tmp_path, monkeypatch):
+    """THE LIVE FAILURE (task ce471e06, 2026-09-04). A real task branch
+    carries several commits — a tests-only red commit plus its fix — and
+    GitHub squashes them into ONE commit on main. `git cherry` compares
+    individual patch-ids, so not one of the originals matches the squash
+    and every one reads '+': the guard called a genuinely shipped task
+    unrepresented and refused its green_gate forever. PR #2386 merged as
+    739c37ff and the seat still answered "origin/main does not represent".
+
+    The single-commit squash test below passed throughout, because one
+    cherry-picked patch DOES match by id — which is exactly why the bug
+    survived. Representation must be judged on CONTENT."""
+    _origin, work, branch = _repo(tmp_path)
+    # A second real commit on the branch, so the squash cannot match any
+    # single original patch-id.
+    _git(work, "checkout", "-q", branch)
+    _write(work, "more_work.txt", "the second commit's change\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", f"more work\n\n[task:{TASK_ID[:8]}]\n")
+
+    # Squash-land BOTH commits as one on main (what `gh pr merge --squash`
+    # produces): same content, a single new commit, no shared patch-ids.
+    _git(work, "checkout", "-q", "main")
+    _git(work, "merge", "--squash", branch)
+    _git(work, "commit", "-qm", f"ship: squash land [task:{TASK_ID[:8]}]\n")
+    _git(work, "push", "-q", "origin", "main")
+    _git(work, "fetch", "-q", "origin")
+
+    assert _tooth(work, monkeypatch) == "", (
+        "a multi-commit branch squashed onto main HAS landed — judging "
+        "representation by per-commit patch-id refuses a shipped task")
+
+
 def test_a_squash_represented_branch_passes(tmp_path, monkeypatch):
     """A squash-landed branch shares no ancestry with main, but its patch
     is on main — `git cherry` reads it as represented and the tooth has
