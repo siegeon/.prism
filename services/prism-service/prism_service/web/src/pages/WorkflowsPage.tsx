@@ -2271,7 +2271,7 @@ export default function WorkflowsPage() {
           <button
             type="button"
             onClick={() => setCatalogStatsOpen((open) => !open)}
-            className="absolute right-3 top-3 z-20 rounded border border-white/15 bg-[#08090b]/90 px-2 py-1 text-[10px] uppercase tracking-wide text-[color:var(--text-dim)] hover:text-white"
+            className="absolute right-3 top-3 z-20 rounded border border-white/15 bg-[#08090b]/90 px-2 py-1 text-2xs uppercase tracking-wide text-[color:var(--text-muted)] hover:text-white"
           >
             {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
           </button>
