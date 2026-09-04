@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.230"
+PRISM_VERSION = "7.13.231"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.231: THE PROGRESS BAR FILLS. flow_run_recorder.progress_source '
+    'fills an agent node with done=_beat_wall_time_s(beat) over that node '
+    'own historical median - a correct design - but EVERY writer of '
+    'elapsed_s hardcodes zero. task_runner.py and resume_actuator.py each '
+    'beat once, before starting a synchronous invoke, and cannot know '
+    'their own elapsed at that instant. So done was always 0.0 and the '
+    'fill was structurally 0 percent, forever. Owner, watching a 25 minute '
+    'verify_green_state render as "RUN 0s" on an empty tile: "where is my '
+    'progress bar". New _step_elapsed_s measures the numerator from the '
+    'step own server-stamped conductor transition (advance_task / '
+    'gate_decide), while the denominator stays the node measured history - '
+    'the true-wall-time-against-historical-duration design, with no '
+    'fabricated percentage: no transition row means 0.0 and the caller '
+    'falls back to the indeterminate basis. A seat that DOES measure its '
+    'own elapsed still wins. New suite '
+    'test_agent_node_progress_uses_real_step_elapsed.py, red at the base '
+    'commit on the assertion. 29 progress/heartbeat tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.230: a HELD DRIVE LEASE no longer spends the resume actuator '
     'retry budget. dispatch_once takes the same lease every driver takes, '
     'and when another driver held it the seat returned through '
