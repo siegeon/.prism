@@ -66,6 +66,10 @@ _PREMISE_STEP = "review_previous_notes"
 # history (action=ATTEMPT_ACTION), never in process memory.
 STALL_ATTEMPTS = 3
 ATTEMPT_ACTION = "runner_attempt"
+# A rewind (gate reject / auto-rewind) opens a NEW pass over the step it
+# lands on, so the stall budget is counted from it — see _stall_count.
+# Written by ConductorService's rewind path as this exact action name.
+REWIND_ACTION = "auto_rewind"
 _TEST_ID_RE = re.compile(r"(?m)(?:^|\s)((?:[\w./-]+)\.py::[\w\[\]./:-]+)")
 
 
@@ -563,9 +567,25 @@ def _route_proof(task_svc, task_id: str, step_id: str, proof: str) -> None:
 
 
 def _stall_count(task_svc, task_id: str, step_id: str) -> int:
-    """Non-advancing runner reports recorded on `step_id` (durable)."""
+    """Non-advancing runner reports recorded on `step_id` SINCE the most
+    recent rewind (durable).
+
+    Counting the WHOLE life of the task made every gate rejection
+    terminal (task ce471e06, 2026-09-04): a reject rewinds the task to
+    its producing step, and if that step had already spent its
+    STALL_ATTEMPTS budget on the earlier pass, the guard fired on the
+    very FIRST tick of the new pass and blocked the task again — with a
+    reason ("did not advance after 3 attempts") describing work the
+    driver had not been allowed to attempt. A reject is a fresh mandate
+    carrying new direction, so the budget starts over with it; attempts
+    within one pass still stall exactly as before."""
     marker = f"step={step_id}; advanced=false"
-    return sum(1 for h in task_svc.history(task_id)
+    rows = list(task_svc.history(task_id) or [])
+    start = 0
+    for i, h in enumerate(rows):
+        if str(getattr(h, "action", "") or "") == REWIND_ACTION:
+            start = i + 1
+    return sum(1 for h in rows[start:]
                if h.action == ATTEMPT_ACTION and marker in h.details)
 
 

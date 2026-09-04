@@ -13,10 +13,30 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.228"
+PRISM_VERSION = "7.13.229"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.229: a rewind reopens the stall budget, so a REJECTED GATE is '
+    'workable. task_runner._stall_count counted every non-advancing '
+    'runner_attempt row for the whole life of the task and never reset, '
+    'which made every gate rejection terminal: a reject rewinds the task '
+    'to its producing step, and when that step had already spent its 3 '
+    'attempts on the earlier pass the guard fired on the FIRST tick of the '
+    'new pass and re-blocked the task - the reason naming attempts the '
+    'driver was never allowed to make. Live: ce471e06 reached green_gate, '
+    'CI found a real defect in its own diff (an inline text-[<11px] size '
+    'tripping the design-system guard), the gate was rejected with that '
+    'test id, the conductor rewound to implement_tasks, and the runner '
+    're-blocked it without invoking a driver once. The count now starts at '
+    'the most recent auto_rewind: a reject carries new direction, so the '
+    'budget starts with it, while attempts WITHIN one pass stall exactly '
+    'as before. New suite test_rewind_reopens_the_stall_budget.py (red at '
+    'the base commit on the assertions, not on a missing symbol). 18 '
+    'stall/split tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.228: the stale-baseline self-heal handles a DIVERGED lineage. '
     'control_plane._fresh_diff_base adopted the fresh merge-base only when '
     'the stored baseline was its ANCESTOR, via one '
