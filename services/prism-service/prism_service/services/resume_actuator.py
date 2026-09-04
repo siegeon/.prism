@@ -244,12 +244,31 @@ def dispatch_once(project: str, task_id: str) -> dict:
 
     proof = (result.final_text() or "").strip()
     step_id = job["step"]
-    if result.exit_code == 0 and proof:
+    # GRACEFUL BUDGET STOP (7.13.102 fixed this in task_runner._run_one_step
+    # and this seat never inherited it — the retry seat therefore threw away
+    # a COMPLETE step report every time a post-hoc --max-budget-usd /
+    # --max-turns ceiling raised the exit code after the model's own turn
+    # ended normally. Three such retries spend the retry budget and park the
+    # task for a human, which is how ce471e06 blocked at write_failing_tests
+    # on 2026-09-04 with three identical "exit=1, no usable output" rows.
+    # The two seats must agree: a graceful stop with real proof PASSES, an
+    # empty proof fails, and a genuine crash/auth/mid-turn truncation still
+    # fails — and now says which of the two it was.
+    graceful = False
+    try:
+        graceful = bool(result.graceful_budget_stop())
+    except Exception:
+        graceful = False
+    if proof and (result.exit_code == 0 or graceful):
         _route_proof(task_svc, task_id, step_id, proof)
         outcome: object = "pass"
-    else:
+    elif not proof:
         outcome = {"ok": False,
                    "reason": f"exit={result.exit_code}, no usable output"}
+    else:
+        outcome = {"ok": False,
+                   "reason": f"exit={result.exit_code}, non-graceful "
+                             "failure (crash/auth/truncated mid-turn)"}
 
     if claim is not None:
         claim.release(claim_id)
