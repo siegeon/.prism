@@ -50,7 +50,11 @@ def test_no_wall_clock_sawtooth_drives_node_progress():
 
 def test_a_step_without_pacing_claims_no_progress():
     code = _strip_comments(_PAGE.read_text(encoding="utf-8"))
-    m = re.search(r"progress:\s*pacing\s*&&\s*pacing\s*>\s*0\s*\?(.*?),\s*indeterminate",
+    # Task ce471e06 (AC-7) moved the ternary inside the cap call, so the
+    # shape is now `Math.min(1, pacing && pacing > 0 ? ... : 0)`. The
+    # invariant is untouched and still pinned: with no pacing the fallback
+    # branch is a literal 0, never a wall-clock wiggle.
+    m = re.search(r"pacing\s*&&\s*pacing\s*>\s*0\s*\?(.*?)\),\s*\n?\s*indeterminate",
                   code, flags=re.DOTALL)
     assert m, "the progress ternary was not found"
     branches = m.group(1)
@@ -62,8 +66,15 @@ def test_a_step_without_pacing_claims_no_progress():
 def test_the_determinate_bar_still_maths_to_full():
     """Owner: 'we can math to full'. The real ETA bar must survive."""
     code = _strip_comments(_PAGE.read_text(encoding="utf-8"))
-    assert "Math.min(0.98, elapsedSeconds / pacing)" in code, (
+    # Superseded by task ce471e06 (AC-7). The owner's "we can math to full"
+    # is now literal: the 0.98 cap that stopped just short is gone, replaced
+    # by Math.min(1, ...) plus an explicit OVERRUN state once elapsed passes
+    # pacing. The pacing-based fill itself must still be here.
+    assert "Math.min(1, pacing && pacing > 0 ? elapsedSeconds / pacing : 0)" in code, (
         "the honest pacing-based fill was removed along with the loop")
+    assert "Math.min(0.98, elapsedSeconds / pacing)" not in code, (
+        "the 0.98 cap is back; a step past its pacing must read OVERRUN, "
+        "not park at a near-full bar")
 
 
 def test_an_indeterminate_node_paints_no_body_fill():

@@ -1812,7 +1812,13 @@ def test_the_occupied_node_reads_the_recorders_wall_time_not_a_clock():
         "workflows only")
     assert "p95StepDurationSeconds" not in sm_branch
     assert "average_duration_seconds" not in sm_branch
-    assert "progress: total && total > 0 ? Math.min(0.98, p.done / total) : 0," in sm_branch
+    # Superseded by task ce471e06 (AC-7): the 0.98 cap painted a WEDGED step
+    # (done > total) as an honest near-full bar. The cap is now Math.min(1,
+    # ...) over an explicit `ratio`, and >1 raises an OVERRUN state instead.
+    # The invariant this line has always guarded is unchanged: the fill comes
+    # from the recorder's own done/total, and no history means no percentage.
+    assert "const ratio = total && total > 0 ? p.done / total : 0;" in sm_branch
+    assert "progress: Math.min(1, ratio)," in sm_branch
     assert "indeterminate: !(total && total > 0)," in sm_branch, (
         "a node with no history yet must render indeterminate, never a "
         "fabricated percentage")
