@@ -13,10 +13,23 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.225"
+PRISM_VERSION = "7.13.226"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.226: task 9db4f4c8 - the shipped-ness tooth trusts only the '
+    'task own commits. A hand commit on main that borrows a task trailer '
+    'no longer closes the task while its real branch sits unlanded '
+    '(bitten twice: 8bcd4cb3 and a2bc8c88). When a trailer is on main, '
+    '_unshipped_gate_reason now also runs git cherry origin/main against '
+    'prism/ws/<task_id>: real unrepresented commits park the gate with '
+    'the branch tip named, and ship_worker lands the branch. Squash '
+    'lands stay recognized (patch-id). New pinned suite '
+    'test_shipped_means_the_tasks_own_commits.py; 45 neighbouring '
+    'gate/shippedness/lifespan tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.225: task a2bc8c88 - PR checks pass without the live checkout. '
     'Every pr-checks run failed since Aug 30 (8 tests, all environmental). '
     'test_task_runner_honors_declared_node_plan.py now resolves the behavior '

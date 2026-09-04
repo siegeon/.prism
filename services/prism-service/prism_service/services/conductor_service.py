@@ -2909,6 +2909,25 @@ class ConductorService:
         except Exception:
             return ""
         if shipped:
+            # BORROWED-TRAILER GUARD (task 9db4f4c8, bitten live twice:
+            # 8bcd4cb3 on 2026-08-27 and a2bc8c88 on 2026-09-04). A hand
+            # commit on main carrying this task's trailer made this tooth
+            # fail-open while the task's OWN branch — the work the receipt
+            # was actually minted on — sat local and unlanded; the close
+            # then skipped ship_worker and DONE was false. Shipped-ness
+            # means the task's own commits are REPRESENTED on origin/main
+            # (ancestry or patch-id — `git cherry` is squash-safe), not
+            # that any commit anywhere borrowed the trailer.
+            tip = self._task_branch_unrepresented_tip(repo, task_id)
+            if tip:
+                return (
+                    f"green_gate: a commit on origin/main carries this "
+                    f"task's [task:{task_id[:8]}] trailer, but the task's "
+                    f"own branch tip {tip[:12]} holds commits origin/main "
+                    "does not represent (by ancestry or patch-id) — a "
+                    "borrowed trailer is not this task's ship (task "
+                    "9db4f4c8); ship_worker lands the branch"
+                )
             return ""
         return (
             f"green_gate: this task's [task:{task_id[:8]}] commit trailer "
@@ -2916,6 +2935,51 @@ class ConductorService:
             "(mx: feedback_done_means_shipped); merge/land the branch "
             "before full_outcome_complete/status=done can be set"
         )
+
+    @staticmethod
+    def _task_branch_unrepresented_tip(repo: str, task_id: str) -> str:
+        """The task branch's tip sha when the branch holds real commits
+        that origin/main does NOT represent, else "".
+
+        Representation is `git cherry origin/main <branch>`: '-' rows are
+        patch-id-equivalent commits already on main (squash-safe), '+'
+        rows are not. A '+' commit with an EMPTY diff (e.g. a CI
+        retrigger) carries no work and does not count. Fail-open ("") on
+        any git error or when the branch does not exist — a task with no
+        branch has nothing to strand, and the trailer path above stays
+        authoritative for it."""
+        import subprocess
+        branch = f"prism/ws/{task_id}"
+        try:
+            tip_p = subprocess.run(
+                ["git", "-C", repo, "rev-parse", "--verify", "-q", branch],
+                capture_output=True, text=True, timeout=10)
+        except Exception:
+            return ""
+        if tip_p.returncode != 0 or not tip_p.stdout.strip():
+            return ""
+        tip = tip_p.stdout.strip()
+        try:
+            cherry = subprocess.run(
+                ["git", "-C", repo, "cherry", "origin/main", branch],
+                capture_output=True, text=True, timeout=15)
+        except Exception:
+            return ""
+        if cherry.returncode != 0:
+            return ""
+        plus = [ln.split()[1] for ln in cherry.stdout.splitlines()
+                if ln.startswith("+ ") and len(ln.split()) > 1]
+        for sha in plus:
+            try:
+                diff = subprocess.run(
+                    ["git", "-C", repo, "diff-tree", "--no-commit-id",
+                     "--name-only", "-r", sha],
+                    capture_output=True, text=True, timeout=10)
+            except Exception:
+                return tip
+            if diff.returncode == 0 and diff.stdout.strip():
+                return tip
+        return ""
 
     def _receipt_adapter_mismatch_reason(self, task, receipt) -> Optional[str]:
         """Refuse a receipt whose ADAPTER cannot evidence what the task pins
