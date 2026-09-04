@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
-import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict } from "@/live/workflowGraph";
+import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict, type RunView } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
 import Editor from "@monaco-editor/react";
@@ -1221,6 +1221,48 @@ export default function WorkflowsPage() {
   // ?task= param the drill-in carries, else the conductor instance the
   // canvas is attached to. With no task there is no question to answer, and
   // the canvas correctly says nothing rather than inventing a state.
+  // ONE driven task foregrounded on a catalog-wide board (task ce471e06).
+  // The path comes from the run's OWN advance_task rows -- the same history
+  // that IS the conductor's instance record -- never a guess off the step
+  // order, and the attempt count from the setback rows written during a
+  // dwell (flow_report_failure / advance_refused).
+  const [runTrace, setRunTrace] = useState<{ traversedPath: string[]; attempts: number } | null>(null);
+  const [catalogStatsOpen, setCatalogStatsOpen] = useState(false);
+  const runTraceTaskId = searchParams.get("task") ?? workflowRun?.data.conductorTask?.id ?? null;
+  useEffect(() => {
+    if (!runTraceTaskId) { setRunTrace(null); return; }
+    let cancelled = false;
+    api.get<{ history?: Array<{ action?: string; details?: string }> }>(
+      `/api/tasks/${encodeURIComponent(runTraceTaskId)}?project=${encodeURIComponent(project)}&scope=core`,
+    ).then(({ history }) => {
+      if (cancelled) return;
+      const traversedPath: string[] = [];
+      let attempts = 1;
+      for (const row of history ?? []) {
+        if (row.action === "advance_task") {
+          const from = /from=([^;]+)/.exec(row.details ?? "")?.[1]?.trim();
+          const to = /to=([^;]+)/.exec(row.details ?? "")?.[1]?.trim();
+          if (!traversedPath.length && from) traversedPath.push(from);
+          if (to) traversedPath.push(to);
+          attempts = 1;
+        } else if (row.action === "flow_report_failure" || row.action === "advance_refused") {
+          attempts += 1;
+        }
+      }
+      setRunTrace({ traversedPath, attempts });
+    }).catch(() => setRunTrace(null));
+    return () => { cancelled = true; };
+  }, [runTraceTaskId, project]);
+  // Run mode dims the rest of the catalog; the stats toggle folds it back on
+  // WITHOUT leaving the run.
+  const runView = useMemo<RunView | null>(() => (
+    runTrace ? { runMode: !catalogStatsOpen, traversedPath: runTrace.traversedPath } : null
+  ), [runTrace, catalogStatsOpen]);
+  // Seconds since THIS task's last conductor transition. Never the drive
+  // heartbeat's own signal age, which read as "RUN 0s / -4s" against 25
+  // minutes of real motion.
+  const runMotionSeconds = conductorManaged.find((t) => t.id === runTraceTaskId)?.activity?.task_motion_s ?? null;
+
   const nodeStatusTaskId = searchParams.get("task")
     ?? workflowRun?.data.conductorTask?.id
     ?? null;
@@ -1448,12 +1490,19 @@ export default function WorkflowsPage() {
         // for; conductor never went through that path's own run history).
         const p = flowRuns.progress;
         const total = p.total ?? null;
+        // done > total means the step is WEDGED past its own unit count.
+        // The old Math.min(0.98, ...) cap painted that as a near-full bar,
+        // which reads as "nearly finished"; the real ratio rides along so
+        // the node can say OVERRUN instead.
+        const ratio = total && total > 0 ? p.done / total : 0;
         activeProgress = {
           nodeId: runtime.currentStep,
-          progress: total && total > 0 ? Math.min(0.98, p.done / total) : 0,
+          progress: Math.min(1, ratio),
           indeterminate: !(total && total > 0),
-          elapsedSeconds: p.basis === "wall_time" ? p.done : 0,
+          elapsedSeconds: runMotionSeconds ?? (p.basis === "wall_time" ? p.done : 0),
           averageSeconds: total && total > 0 ? total : null,
+          overrunRatio: ratio > 1 ? ratio : null,
+          attempts: runTrace?.attempts ?? 1,
         };
       } else if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
         // A linked CHILD node (e.g. verify_green_state's "Build and test",
@@ -1496,12 +1545,12 @@ export default function WorkflowsPage() {
           // none: `indeterminate` tells the renderer to leave the body
           // unfilled, and the card's own "RUN 6m 49s" elapsed clock carries
           // the "this is running" signal, which is true.
-          progress: pacing && pacing > 0
-            ? Math.min(0.98, elapsedSeconds / pacing)
-            : 0,
+          progress: Math.min(1, pacing && pacing > 0 ? elapsedSeconds / pacing : 0),
           indeterminate: !(pacing && pacing > 0),
-          elapsedSeconds,
+          elapsedSeconds: runMotionSeconds ?? elapsedSeconds,
           averageSeconds: pacing && pacing > 0 ? pacing : null,
+          overrunRatio: pacing && pacing > 0 && elapsedSeconds > pacing ? elapsedSeconds / pacing : null,
+          attempts: runTrace?.attempts ?? 1,
         };
       } else if (testModeRef.current === "replay" && testStep !== null && selectedWorkflow) {
         const nodeId = testStep < 0
@@ -1542,12 +1591,12 @@ export default function WorkflowsPage() {
           tone,
         };
       }
-      drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, effectiveNodeVerdicts);
+      drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, effectiveNodeVerdicts, runView);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts, runView, runTrace, runMotionSeconds]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
@@ -2218,6 +2267,15 @@ export default function WorkflowsPage() {
           onWheel={onWheel}
           className={`w-full h-full touch-none ${grabbing ? "cursor-grabbing" : "cursor-pointer"}`}
         />
+        {runTrace ? (
+          <button
+            type="button"
+            onClick={() => setCatalogStatsOpen((open) => !open)}
+            className="absolute right-3 top-3 z-20 rounded border border-white/15 bg-[#08090b]/90 px-2 py-1 text-[10px] uppercase tracking-wide text-[color:var(--text-dim)] hover:text-white"
+          >
+            {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
+          </button>
+        ) : null}
         <div className="absolute bottom-0 left-0 right-0 z-10 h-10 border-t border-white/10 bg-[#08090b]">
           <div
             role="progressbar"

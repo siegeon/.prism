@@ -76,7 +76,31 @@ export type ActiveNodeProgress = {
   label?: string;
   /** Recorded outcome color for historical playback. */
   tone?: "active" | "success" | "failure" | "warning";
+  /** done/total once it passes 1. A wedged step used to paint a capped
+   * near-full bar, which reads as "nearly finished"; this carries the real
+   * ratio so the node can say OVERRUN instead. */
+  overrunRatio?: number | null;
+  /** Retried dispatches for the current dwell (1 = first try). */
+  attempts?: number;
 };
+
+/** How ONE driven task's own run is foregrounded on a catalog-wide board.
+ * `traversedPath` is the ordered step list the task actually walked (its
+ * advance_task rows), so the wires behind the piece light up. Run mode never
+ * REMOVES another lane -- it routes the rest through the same dim draw path
+ * a not-reached verdict already uses, so the whole-board picture survives. */
+export type RunView = {
+  runMode: boolean;
+  traversedPath: string[];
+};
+
+/** True when the wire is a token edge between two consecutive stops of the
+ * path this run actually walked. */
+function onTraversedPath(run: RunView | null, from: string, to: string): boolean {
+  if (!run || !run.runMode) return false;
+  const at = run.traversedPath.indexOf(from);
+  return at >= 0 && run.traversedPath[at + 1] === to;
+}
 
 /** The REAL per-node answer of a drilled-in behaviour layer, for one task,
  * as GET /api/workflows/{id}/node-status reports it.
@@ -515,6 +539,7 @@ export function drawWorkflows(
   selectedNodeId: string | null = null,
   activeProgress: ActiveNodeProgress | null = null,
   nodeVerdicts: Record<string, NodeVerdict> | null = null,
+  runView: RunView | null = null,
 ): void {
   drawGrid(ctx, w, h, g.pan, g.zoom);
   ctx.save();
@@ -529,7 +554,7 @@ export function drawWorkflows(
     drawEditableWire(ctx, {
       pts: g.route(wire),
       kind: wire.kind,
-      live: wire.live,
+      live: wire.live || onTraversedPath(runView, wire.from, wire.to),
       selected,
       waypoints: selected ? g.editor.waypointsFor(wire.key) : undefined,
     });
@@ -547,6 +572,7 @@ export function drawWorkflows(
     ctx, n, n.id === selectedNodeId,
     activeProgress?.nodeId === n.id ? activeProgress : null,
     nodeVerdicts?.[n.id] ?? null,
+    runView,
   );
 
   ctx.restore();
@@ -565,7 +591,7 @@ function drawTransitionLabel(ctx: CanvasRenderingContext2D, label: string, at: P
   ctx.textAlign = "left";
 }
 
-function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null): void {
+function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null, runView: RunView | null = null): void {
   const { x, y, w, h } = n.slot;
 
   // A live run wins: `active` is what is happening RIGHT NOW, a verdict is
@@ -573,7 +599,11 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // (no WorkflowCore run backs one), so this is an ordering rule, not a
   // conflict.
   const verdictLook = !active && verdict ? verdictPaint(verdict) : null;
-  if (verdictLook?.dim) {
+  // In runMode every lane this run did not walk drops to the SAME dim draw
+  // path a not-reached verdict already uses -- dimmed, never removed, so the
+  // catalog-wide picture survives behind the run being foregrounded.
+  const runDim = !active && !!runView?.runMode && !runView.traversedPath.includes(n.id);
+  if (verdictLook?.dim || runDim) {
     ctx.save();
     ctx.globalAlpha = 0.45;
   }
@@ -663,8 +693,12 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   ctx.fillStyle = active ? activeStroke
     : verdictLook ? verdictLook.stroke
       : selected ? PALETTE.teal : PALETTE.textLabel;
+  // done > total is a WEDGED step, not a nearly-finished one: say OVERRUN
+  // with the real ratio instead of painting a capped near-full bar.
   const runLabel = active
-    ? active.label ?? (active.averageSeconds
+    ? active.overrunRatio && active.overrunRatio > 1
+      ? `OVERRUN ${active.overrunRatio.toFixed(1)}x`
+      : active.label ?? (active.averageSeconds
       ? active.elapsedSeconds <= active.averageSeconds
         ? `RUN ${shortDuration(active.elapsedSeconds)} / ~${shortDuration(active.averageSeconds)}`
         : `RUN ${shortDuration(active.elapsedSeconds)}`
@@ -677,6 +711,14 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   ctx.font = "11px ui-sans-serif, system-ui, sans-serif";
   ctx.fillStyle = PALETTE.textDim;
   ctx.fillText(clip(ctx, n.sub, w - 20), x + 10, y + 38);
+
+  // Retried dispatches on the current dwell. Two failed attempts used to be
+  // invisible on this board; the count is the run's own setback rows.
+  if (active?.attempts && active.attempts > 1) {
+    ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+    ctx.fillStyle = "#fcd34d";
+    ctx.fillText(`ATTEMPT ${active.attempts}`, x + 10, y + 58);
+  }
 
   // The node's own measured multiplier + trailing token trend (task
   // 112dbb72). Undefined for __start__/__complete__/bot nodes, which
@@ -697,7 +739,7 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // during replay, looks like an error count rather than occupancy.
   if (n.count > 0 && !active) drawOccupancy(ctx, n);
 
-  if (verdictLook?.dim) ctx.restore();
+  if (verdictLook?.dim || runDim) ctx.restore();
 }
 
 /** A node's own measured token economics, rendered as one line —

@@ -50,12 +50,17 @@ def _code(path: Path) -> str:
     return "\n".join(kept)
 
 
-def _near(code: str, first: str, second: str, window: int = 240) -> bool:
+def _near(code: str, first: str, second: str, window: int = 240, flags: int = 0) -> bool:
     """True when the two patterns occur within `window` chars of each other,
-    in either order — a proximity check on real code, not comments."""
+    in either order — a proximity check on real code, not comments.
+
+    Case-insensitivity is passed as `flags=re.I`, never as an inline `(?i)` in
+    a caller's pattern: the halves are CONCATENATED here, so an inline global
+    flag would land mid-expression and raise re.error before any match runs.
+    """
     return bool(
-        re.search(first + r"[\s\S]{0," + str(window) + r"}" + second, code)
-        or re.search(second + r"[\s\S]{0," + str(window) + r"}" + first, code)
+        re.search(first + r"[\s\S]{0," + str(window) + r"}" + second, code, flags)
+        or re.search(second + r"[\s\S]{0," + str(window) + r"}" + first, code, flags)
     )
 
 
@@ -101,7 +106,7 @@ def test_the_selected_task_path_is_highlighted():
 
     # A visible stats toggle restores the catalog stats without leaving the
     # run (AC-5).
-    assert _near(page, r"\brunMode\b", r"(?i)stats"), (
+    assert _near(page, r"\brunMode\b", r"stats", flags=re.I), (
         "WorkflowsPage.tsx has no stats toggle seam tied to run mode — the "
         "folded catalog stats cannot be restored without leaving the run"
     )
@@ -142,7 +147,7 @@ def test_the_active_step_shows_step_elapsed_and_attempts():
         "the setback counter ignores advance_refused rows — a refused "
         "advance would not raise the attempt count"
     )
-    assert _near(page, r"flow_report_failure", r"(?i)attempt", window=2000), (
+    assert _near(page, r"flow_report_failure", r"attempt", window=2000, flags=re.I), (
         "no attempt label is rendered from the flow_report_failure-derived "
         "counter — the count is computed nowhere or shown nowhere"
     )
