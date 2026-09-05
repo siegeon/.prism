@@ -69,6 +69,22 @@ def attempt_count(scores_db: str, task_id: str) -> int:
     return int(row["attempts"]) if row is not None else 0
 
 
+def last_attempt_at(scores_db: str, task_id: str) -> str:
+    """When this seat last CHARGED an attempt against `task_id`, or "".
+
+    Read by the sweep to ask whether the task advanced SINCE that moment:
+    a budget spent on work that has since moved is stale (task 338f7810)."""
+    conn = _connect(scores_db)
+    try:
+        row = conn.execute(
+            "SELECT last_attempt_at FROM resume_attempts WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row["last_attempt_at"] or "") if row is not None else ""
+
+
 def reset_attempts(scores_db: str, task_id: str) -> None:
     """Clear the attempt budget for `task_id` -- a genuine advance resets
     it, so a later fresh stall never inherits an earlier stall's count."""
