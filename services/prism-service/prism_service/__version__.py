@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.242"
+PRISM_VERSION = "7.13.243"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8414,4 +8414,28 @@ PRISM_VERSION_NOTES += (
     "so a parked red_gate carries the reason it parked instead of an empty "
     "gate_reason a driver cannot self-diagnose. 57 green across both pinned "
     "suites and every neighbouring agent-runs, gate-reason and trace suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.243: epic 4e6e7417 and its child 3f926ef1 were BUILT and had no "
+    "evidence. Both pinned test files that never existed on main, so their "
+    "oracles could only ever return rc=4 'no tests ran' and the epic sat "
+    "rollup_blocked forever. The feature itself had shipped independently -- "
+    "source_snapshot.capture_source_snapshot/validate_source_snapshot plus the "
+    "repair boundary in api/workflows -- while the tasks' own branch targeted "
+    "an earlier draft API (record_step_validation / a SourceSnapshot model) "
+    "that was superseded and never landed. Writes both pinned suites against "
+    "what actually shipped: tests/unit/test_workflow_fix_request.py (7 tests) "
+    "pins the child's oracle -- queue_workflow_fix returns a Pydantic-validated "
+    "ConductorStepValidation with STRUCTURED failures, an evidence_uri and a "
+    "raw_output_chars count, and the queued task's description does not embed "
+    "the raw transcript -- and tests/integration/test_workflow_repair_snapshot.py "
+    "(3 tests) pins the epic's: a dirty tree is snapshotted, real work then "
+    "lands and moves HEAD, and the repair workspace still carries the recorded "
+    "snapshot's fingerprint AND its exact tracked+untracked bytes. Both cover "
+    "the refusal path: an unreconstructable commit raises 409 and materializes "
+    "no workspace, never falling back to ambient HEAD. Real git repos and real "
+    "snapshots throughout; only the separate workflow ENGINE is stubbed, with "
+    "the models' own validated wire shape. 67 green across both suites and "
+    "every neighbouring workflow/snapshot suite."
 )
