@@ -139,6 +139,49 @@ def _park(project: str, task_id: str, attempts: int, max_retries: int) -> dict:
 
 RELEASED_ACTION = "resume_actuator_released"
 
+# Conductor transitions — the only rows that mean the WORK moved. A
+# dispatch row or a heartbeat says a seat tried, never that it got
+# anywhere, so neither may clear a retry budget.
+_ADVANCE_ACTIONS = ("advance_task", "gate_decide")
+
+
+def _advanced_since(project: str, task_id: str, since_iso: str) -> bool:
+    """True when a conductor transition landed AFTER `since_iso`.
+
+    Answers "has the work moved since we last charged an attempt?" from
+    server-stamped history, so a budget spent at an earlier step cannot
+    park a task that another seat has already advanced. Fails CLOSED:
+    with no timestamp, an unparsable one, or any read error it returns
+    False and the park stands — this can only ever spare a task that
+    demonstrably moved."""
+    if not since_iso:
+        return False
+    from datetime import datetime, timezone
+
+    def _parse(raw: str):
+        try:
+            ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+    since = _parse(since_iso)
+    if since is None:
+        return False
+    try:
+        from prism_service.project_context import get_project
+
+        rows = get_project(project).task_svc.history(task_id) or []
+    except Exception:
+        return False
+    for r in rows:
+        if str(getattr(r, "action", "") or "") not in _ADVANCE_ACTIONS:
+            continue
+        ts = _parse(str(getattr(r, "timestamp", "") or ""))
+        if ts is not None and ts > since:
+            return True
+    return False
+
 
 def release(project: str, task_id: str, actor: str = "human") -> dict:
     """Release a task this seat PARKED, back to the drive (task 5227a646).
@@ -364,6 +407,19 @@ def sweep_once_for(project: str) -> Optional[dict]:
     if task_id is not None:
         attempts = rad.attempt_count(scores_db, task_id)
         if attempts >= max_retries:
+            # A BUDGET ONLY COUNTS AGAINST WORK THAT HAS NOT MOVED (task
+            # 338f7810, 2026-09-04). dispatch_once resets the count when
+            # ITS OWN report advances the task — but ANY seat may advance
+            # it, and a count left over from an earlier step then parks a
+            # task that is making progress. Live: review_previous_notes
+            # advanced at 00:05:10 and this seat parked the task 52 s
+            # later, on three attempts spent at the PREVIOUS step. Same
+            # shape as the rewind/stall-budget defect — a counter that
+            # outlives the work it was counting.
+            if _advanced_since(project, task_id,
+                               rad.last_attempt_at(scores_db, task_id)):
+                rad.reset_attempts(scores_db, task_id)
+                return dispatch_once(project, task_id)
             return _park(project, task_id, attempts, max_retries)
         return dispatch_once(project, task_id)
 

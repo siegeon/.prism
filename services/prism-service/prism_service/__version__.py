@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.232"
+PRISM_VERSION = "7.13.233"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.233: a spent retry budget no longer parks a task that ADVANCED. dispatch_once resets the attempt count when ITS OWN report advances the task, but any seat may advance it, and the leftover count then parked a task making progress. Live on 338f7810: review_previous_notes advanced at 00:05:10 and the seat parked the task at 00:06:02 on three attempts spent at the PREVIOUS step. Same shape as the rewind and stall-budget defects, a counter that outlives the work it counted. sweep_once_for now asks whether a conductor transition landed after the last charged attempt and resets instead of parking. It fails CLOSED, so only a task that demonstrably moved is spared. Also narrowed test_dispatch_path_never_calls_a_gate_outcome from a bare substring ban to a call ban: the seat must read whether a gate was decided by someone else, which is the opposite of deciding one. New suite test_retry_budget_follows_the_work.py, red at the base commit on the behaviour. 32 actuator tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.232: the borrowed-trailer guard is squash-safe. 7.13.226 judged whether a task own commits reached origin/main with git cherry, which compares INDIVIDUAL patch-ids. A squash merge collapses N commits into one, so not one original matches and every one reads unrepresented. The guard then refused the green_gate of a task that genuinely shipped: ce471e06 merged as 739c37ff via PullRequest 2386 and the seat still answered that origin/main does not represent its branch. Representation is now judged on CONTENT: take the files the branch changed and ask whether origin/main already holds the branch version of them. A squash-landed branch matches. A borrowed trailer does not, which is the case the guard exists to catch. New test test_a_multi_commit_squash_land_passes reproduces the live shape - the old single-commit squash test passed throughout because one cherry-picked patch DOES match by id, which is why the bug survived. 23 gate/shippedness tests green. '
 )
 

@@ -287,7 +287,31 @@ def test_dispatch_path_never_calls_a_gate_outcome():
     service_root = here.parent.parent.parent
     src = (service_root / "prism_service/services/resume_actuator.py").read_text(
         encoding="utf-8")
-    assert "gate_decide" not in src, (
+
+    # NARROWED 2026-09-04 (task 338f7810), from `"gate_decide" not in src`.
+    # The invariant is that this seat never DECIDES a gate. The bare
+    # substring also banned the name as DATA -- and the seat now has to
+    # read task history to ask whether a gate was decided BY SOMEONE ELSE,
+    # which is the opposite of deciding one: a retry budget must not park a
+    # task another seat has already advanced. Banning the call form keeps
+    # the real boundary; banning the word blocked reading the world.
+    import ast as _ast
+
+    tree = _ast.parse(src)
+    called = set()
+    for node in _ast.walk(tree):
+        if not isinstance(node, _ast.Call):
+            continue
+        fn = node.func
+        name = (fn.attr if isinstance(fn, _ast.Attribute)
+                else fn.id if isinstance(fn, _ast.Name) else "")
+        if name:
+            called.add(name)
+    for banned in ("gate_decide", "conductor_gate", "decide_gate"):
+        assert banned not in called, (
+            f"resume_actuator.py calls {banned}() -- gate decisions belong "
+            "to a distinct-actor seat, never the dispatching actuator")
+    assert "gate_decide(" not in src, (
         "resume_actuator.py must never call gate_decide -- gate decisions "
         "belong to a distinct-actor seat, never the dispatching actuator")
 
