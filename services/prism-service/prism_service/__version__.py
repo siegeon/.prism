@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.233"
+PRISM_VERSION = "7.13.234"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.234: two progress and gate honesty fixes. ONE, a gate node bar now counts teeth that PASSED, not teeth that answered. Every tooth answers within a second of a gate opening, so decided over total filled the bar immediately and held it full for the whole wait, and a FAILED tooth counted toward the fill. Owner watching plan_gate on 338f7810: the progress is not progression, it is still stuck at full, it should be filling up as we go, not showing full from the onset. That gate read 3 of 3 full while already_green_ac had failed and the gate was refusing. answered and failed now ride along so a caller can say why the bar stopped short. AC-6 of task 8fbd5cf0 pinned decided over total and is SUPERSEDED in place with the owner words recorded. TWO, the plan_subject tooth flags a foreign TASK, not a commit sha. It matched any bare 8 hex run in the first line, and an abbreviated sha has the same shape, so it refused three correct plans in one evening (a2bc8c88, ce471e06, 338f7810). A token counts only when the line presents it as a task: task id, task colon id, bracket task colon id, or hash id. New suites test_gate_fill_counts_passing_teeth.py and test_plan_subject_tooth_ignores_commit_shas.py. 48 progress, gate and rubric tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.233: a spent retry budget no longer parks a task that ADVANCED. dispatch_once resets the attempt count when ITS OWN report advances the task, but any seat may advance it, and the leftover count then parked a task making progress. Live on 338f7810: review_previous_notes advanced at 00:05:10 and the seat parked the task at 00:06:02 on three attempts spent at the PREVIOUS step. Same shape as the rewind and stall-budget defects, a counter that outlives the work it counted. sweep_once_for now asks whether a conductor transition landed after the last charged attempt and resets instead of parking. It fails CLOSED, so only a task that demonstrably moved is spared. Also narrowed test_dispatch_path_never_calls_a_gate_outcome from a bare substring ban to a call ban: the seat must read whether a gate was decided by someone else, which is the opposite of deciding one. New suite test_retry_budget_follows_the_work.py, red at the base commit on the behaviour. 32 actuator tests green. '
 )
 

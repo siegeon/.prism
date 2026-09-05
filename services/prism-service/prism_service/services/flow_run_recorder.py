@@ -351,7 +351,24 @@ def progress_source(scores_db: str, task_id: str, step: str,
         teeth = gate_teeth(project, task_id, step)
         answered = [t for t in teeth
                     if str(t.get("status") or "") in _DECIDED]
-        return {"basis": "teeth", "done": len(answered), "total": len(teeth)}
+        # A GATE'S BAR MEANS "HOW CLOSE TO PASSING", NOT "HOW MANY RAN"
+        # (task ce471e06 follow-up, owner 2026-09-04: "the progress is not
+        # progression, it's still stuck at full"). Counting every ANSWERED
+        # tooth filled the bar within a second of the gate opening — every
+        # tooth answers immediately — and then held it full for the whole
+        # wait. Worse, a FAILED tooth counted toward the fill: plan_gate on
+        # 338f7810 read 3/3 = full while `already_green_ac` had failed and
+        # the gate was refusing. A full bar over a refusing gate is the
+        # "reads as done" misfire.
+        #
+        # `done` is now the teeth that actually PASSED, so a gate with a
+        # failed tooth cannot read as complete, and `failed`/`answered` are
+        # reported alongside so the caller can say WHY it stopped short
+        # rather than leaving a half-full bar unexplained.
+        passing = [t for t in teeth if str(t.get("status") or "") == "passed"]
+        return {"basis": "teeth", "done": len(passing), "total": len(teeth),
+                "answered": len(answered),
+                "failed": len(answered) - len(passing)}
     from prism_service.services import drive_heartbeat
     beat = drive_heartbeat.latest(scores_db, task_id)
     units = 0
