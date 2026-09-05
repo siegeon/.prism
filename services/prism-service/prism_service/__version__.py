@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.237"
+PRISM_VERSION = "7.13.238"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.238: a landed branch stays landed when main moves on. The borrowed-trailer guard compared the branch against origin/main TIP, which asks whether main STILL holds exactly this content. That drifts to false the moment any later work touches one of the same files, and __version__.py is touched by EVERY ship. Live on 338f7810: merged as 82ec1e2a, then refused twice because main had moved to 7.13.236 and 7.13.237. The question is whether the work LANDED, so the guard now measures at the landing commit, the one carrying the task trailer, and falls back to the tip only when no landing commit is found. New test test_later_work_on_a_shared_file_does_not_unland_a_shipped_branch, red at the base commit. 24 gate and shippedness tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.237: an oscillating task hits a dispatch ceiling no reset can lift. 7.13.233 taught the sweep to reset a spent retry budget when a conductor transition landed after the last charged attempt, which is right for a task that moved on, and which removed the only backstop for a task that OSCILLATES. Regression from that fix, live on 338f7810: the drive advanced, was refused, rewound and advanced again, so every sweep saw a newer transition, reset the budget and dispatched again. 37 dispatches over 4 hours 40 minutes, never parking. The owner saw a cycle with hundreds of attempts. The per-pass budget still governs the ordinary case. A new ceiling counts every dispatch the seat ever made for the task, from durable history, and parks at 12 by default, tunable with PRISM_RESUME_ACTUATOR_MAX_TOTAL. Its park message says the task kept moving without reaching a terminal state, which is a different problem from a step that never advanced once. New suite test_dispatch_ceiling_stops_an_oscillating_task.py. 37 actuator tests green. '
 )
 

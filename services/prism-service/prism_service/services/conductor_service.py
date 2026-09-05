@@ -2995,14 +2995,29 @@ class ConductorService:
         if not files:
             # The branch changed nothing of its own; nothing can strand.
             return ""
+        # COMPARE AT THE LANDING COMMIT, NOT AT TODAY'S TIP (task 338f7810,
+        # 2026-09-05). Comparing against origin/main's tip asks "does main
+        # STILL hold exactly this content", which drifts to false the moment
+        # any later work touches one of the same files. __version__.py is
+        # the guaranteed case: every ship bumps it, so a branch that landed
+        # correctly reads as unrepresented as soon as the next task ships.
+        # 338f7810 hit exactly that — merged as 82ec1e2a, then refused twice
+        # because main had moved on to 7.13.236 and .237. The question is
+        # whether the work LANDED, so measure it where it landed.
+        try:
+            from prism_service.api.tasks import _shipped_sha_on_main
+            landed = _shipped_sha_on_main(repo, task_id)
+        except Exception:
+            landed = ""
+        against = landed or "origin/main"
         try:
             same = subprocess.run(
-                ["git", "-C", repo, "diff", "--quiet", "origin/main", branch,
+                ["git", "-C", repo, "diff", "--quiet", against, branch,
                  "--", *files],
                 capture_output=True, text=True, timeout=30)
         except Exception:
             return ""
-        # exit 0 => origin/main already holds this branch's version of every
+        # exit 0 => the landing commit holds this branch's version of every
         # file it touched: landed, squashed or not.
         return "" if same.returncode == 0 else tip
 

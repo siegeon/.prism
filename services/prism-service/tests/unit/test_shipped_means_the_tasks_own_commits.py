@@ -160,3 +160,38 @@ def test_a_squash_represented_branch_passes(tmp_path, monkeypatch):
     _git(work, "fetch", "-q", "origin")
 
     assert _tooth(work, monkeypatch) == ""
+
+
+def test_later_work_on_a_shared_file_does_not_unland_a_shipped_branch(
+        tmp_path, monkeypatch):
+    """A landed branch stays landed when main moves on (task 338f7810).
+
+    The guard compared the branch against origin/main's TIP, which asks
+    "does main STILL hold exactly this content". That drifts to false the
+    moment any later work touches one of the same files -- and
+    __version__.py is touched by EVERY ship. 338f7810 merged as 82ec1e2a
+    and was then refused twice, because main had moved to 7.13.236 and
+    .237. The question is whether the work LANDED, so it is measured at
+    the landing commit."""
+    _origin, work, branch = _repo(tmp_path)
+
+    # The branch edits a file that exists at its base, then lands (squash).
+    _git(work, "checkout", "-q", branch)
+    _write(work, "README.md", "# baseline\nthe task's edit\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", f"task edit\n\n[task:{TASK_ID[:8]}]\n")
+    _git(work, "checkout", "-q", "main")
+    _git(work, "merge", "--squash", branch)
+    _git(work, "commit", "-qm", f"ship: land [task:{TASK_ID[:8]}]\n")
+
+    # LATER, unrelated work moves the same file forward.
+    _write(work, "README.md", "# baseline\nthe NEXT ship's edit\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "next ship touches the same file")
+    _git(work, "push", "-q", "origin", "main")
+    _git(work, "fetch", "-q", "origin")
+
+    assert _tooth(work, monkeypatch) == "", (
+        "a branch that landed must stay landed when main moves on; "
+        "measuring against today's tip unlands every branch that touched "
+        "a file later work also touches")
