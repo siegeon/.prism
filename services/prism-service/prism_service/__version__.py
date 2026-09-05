@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.246"
+PRISM_VERSION = "7.13.247"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8498,4 +8498,21 @@ PRISM_VERSION_NOTES += (
     "test_task_runner_honors_declared_node_plan re-anchored in place with a note "
     "naming what replaced them. 196 green across every runner, premise, node and "
     "api-workflows suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.247: a behaviour's sub-nodes show the runs they actually did. Every "
+    "sub-node of every conductor behaviour rendered 'too few runs (0/20)' on "
+    "the Workflows canvas however often it ran, so opening the node a task was "
+    "standing in told a person nothing. The rows were never missing: measured "
+    "2026-09-05, premise-gather had 149 recorded runs and premise-citation-check "
+    "147, while the canvas showed a sample count of zero for both. get_workflows "
+    "called node_token_trend for the conductor's own ten FSM steps and nothing "
+    "else, so a behaviour's steps were built without the trend fields at all. "
+    "They are now stamped from the SAME function over the SAME scores.db, off "
+    "the path the view already resolved -- so a sub-node's number means exactly "
+    "what a conductor node's number means, and the project is still resolved "
+    "exactly once per request (test_the_view_is_project_scoped stays green). A "
+    "step with no measured runs stays honestly indeterminate rather than "
+    "claiming a fabricated 0 or 1.0. 3 new tests."
 )

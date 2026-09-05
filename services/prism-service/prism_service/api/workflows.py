@@ -926,6 +926,34 @@ def _apply_bot_tiers(catalog: list[dict]) -> None:
             step.setdefault("agentic", step.get("type") == "agent")
 
 
+def _attach_node_trend(scores_db, steps: list[dict]) -> None:
+    """Stamp each step with its own measured token trend, in place.
+
+    Takes an ALREADY-RESOLVED scores path rather than a project id: the
+    view resolves its project exactly once per request
+    (test_the_view_is_project_scoped pins that), so this must never call
+    get_project itself.
+
+    Reads the SAME node_token_trend get_workflows uses for the conductor's
+    own steps, so a behaviour sub-node's multiplier/sample count means
+    exactly what a conductor node's does. Degrades to an honest
+    indeterminate (never a fabricated 0 or 1.0) when there is no scores.db
+    -- the shape several test doubles present.
+    """
+    try:
+        trend = (node_token_trend(str(scores_db), [s["id"] for s in steps])
+                 if scores_db else {})
+    except Exception:
+        trend = {}
+    for step in steps:
+        t = trend.get(step["id"]) or {}
+        step["token_multiplier"] = t.get("multiplier")
+        step["avg_tokens"] = t.get("avg_tokens")
+        step["token_sample_count"] = t.get("sample_count", 0)
+        step["token_window"] = t.get("window", NODE_TREND_WINDOW)
+        step["token_indeterminate"] = t.get("indeterminate", True)
+
+
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
@@ -1386,6 +1414,18 @@ def get_workflows(project: str = Query("default")) -> dict:
     # the step that lights up when a task is standing at verify_green_state.
     validation["parent_id"] = "conductor"
     conductor_behaviors = _conductor_behavior_workflows(project)
+    # A BEHAVIOUR'S SUB-STEPS CARRY THEIR OWN MEASURED TREND. The trend
+    # above is computed for the conductor's ten FSM steps only, so every
+    # behaviour sub-node on the canvas read "too few runs (0/20)" however
+    # often it ran -- and these run constantly: premise-gather had 149
+    # recorded runs and premise-citation-check 147 while the canvas showed
+    # nothing for either. The rows were always there; nobody read them.
+    # Stamped HERE, off the path this view already resolved, so the project
+    # is still resolved exactly once per request.
+    for _entry in conductor_behaviors:
+        _attach_node_trend(
+            (_scores_db / "scores.db") if _scores_db is not None else None,
+            _entry.get("steps") or [])
     # Same rule as validation above: nest only the behavior(s) an actual
     # conductor state links to. story_gate now links to "story-gate-check"
     # (linked_workflow_id above). "land" nests too (owner, 2026-08-21): it
