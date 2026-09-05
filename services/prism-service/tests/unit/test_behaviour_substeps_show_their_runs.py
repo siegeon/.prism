@@ -108,3 +108,43 @@ def test_the_trend_is_keyed_by_the_ROUTE_not_the_step_id(monkeypatch, tmp_path):
     assert asked["ids"] == ["premise-gather", "premise-citation-check"], asked
     assert steps[0]["token_sample_count"] == 149, steps[0]
     assert steps[0]["token_indeterminate"] is False
+
+
+# --- tokens are the WRONG question for a codified node -------------------
+
+def test_a_codified_step_reports_how_often_it_RAN(monkeypatch, tmp_path, ):
+    """A codified node records ZERO tokens by design, so node_token_trend --
+    which averages tokens through a ceiling filter -- is empty for it
+    forever. That is why the canvas drew "too few runs (0/20)" for a step
+    that had run 149 times: the metric was wrong, not the data. run_count
+    answers the question a deterministic step can actually answer."""
+    import sqlite3
+
+    db = tmp_path / "scores.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE agent_runs (step TEXT)")
+    conn.executemany("INSERT INTO agent_runs (step) VALUES (?)",
+                     [("premise-gather",)] * 149 + [("premise-render",)] * 5)
+    conn.commit()
+    conn.close()
+
+    steps = [{"id": "gather",
+              "url": "http://x/api/workflows/steps/premise-gather?project=p"},
+             {"id": "render",
+              "url": "http://x/api/workflows/steps/premise-render?project=p"},
+             {"id": "loop",
+              "url": "http://x/api/workflows/steps/premise-judge?project=p"}]
+
+    wf._attach_node_trend(db, steps)
+
+    assert steps[0]["run_count"] == 149, steps[0]
+    assert steps[1]["run_count"] == 5, steps[1]
+    # a step that has genuinely never run says zero, not a guess
+    assert steps[2]["run_count"] == 0, steps[2]
+
+
+def test_an_unreadable_scores_db_reports_zero_never_raises(tmp_path):
+    steps = [{"id": "gather",
+              "url": "http://x/api/workflows/steps/premise-gather?project=p"}]
+    wf._attach_node_trend(tmp_path / "nope.db", steps)
+    assert steps[0]["run_count"] == 0

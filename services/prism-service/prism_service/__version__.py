@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.248"
+PRISM_VERSION = "7.13.249"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8526,4 +8526,18 @@ PRISM_VERSION_NOTES += (
     "time. Fields present and empty read exactly like no data, which is what the "
     "canvas showed with 149 real premise-gather runs on file. Now keyed off each "
     "step's own url, falling back to its id."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.249: a codified node reports how often it RAN, because tokens are the "
+    "wrong question for it. 7.13.247/248 attached node_token_trend to behaviour "
+    "sub-steps and they still read zero -- correctly: node_token_trend averages "
+    "TOKENS through a ceiling filter, and a codified step records zero tokens BY "
+    "DESIGN, so it can never have a token trend however often it runs. The "
+    "canvas drew 'too few runs (0/20)' for premise-gather with 149 real runs on "
+    "file; the metric was wrong, not the data. New node_run_counts is a plain "
+    "count with no ceiling and no averaging, exposed as run_count on every "
+    "behaviour sub-step, so a deterministic node can answer the question it "
+    "actually can: did it run, and how often. An unreadable scores.db reports "
+    "zeros and never raises."
 )

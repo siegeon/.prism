@@ -253,6 +253,37 @@ NODE_TREND_WINDOW = 20
 NODE_MIN_SAMPLES = 3
 
 
+def node_run_counts(scores_db: str, steps: list[str]) -> dict[str, int]:
+    """How many times each of `steps` has actually run.
+
+    A CODIFIED node records zero tokens by design, so node_token_trend --
+    which averages tokens through a ceiling filter -- is empty for it
+    forever, and the canvas drew "too few runs (0/20)" for steps that had
+    run 149 times. Tokens are the wrong question for a deterministic step;
+    "did it run, and how often" is the right one. Pure count, no ceiling,
+    no averaging.
+    """
+    if not steps:
+        return {}
+    out: dict[str, int] = {s: 0 for s in steps}
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(scores_db)
+        try:
+            marks = ",".join("?" for _ in steps)
+            rows = conn.execute(
+                f"SELECT step, COUNT(*) FROM agent_runs "
+                f"WHERE step IN ({marks}) GROUP BY step", tuple(steps))
+            for step, count in rows:
+                out[str(step)] = int(count)
+        finally:
+            conn.close()
+    except Exception:
+        return out           # an unreadable db reports zeros, never raises
+    return out
+
+
 def node_token_trend(
     scores_db: str, steps: list[str],
     window: int = NODE_TREND_WINDOW, min_samples: int = NODE_MIN_SAMPLES,

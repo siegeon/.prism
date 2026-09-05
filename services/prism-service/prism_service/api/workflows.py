@@ -44,6 +44,7 @@ from prism_service.services.context_builder import ROLE_CARDS, ContextBuilder
 from prism_service.services import sqlite_db
 from prism_service.services.agent_runs_data import (
     NODE_TREND_WINDOW,
+    node_run_counts,
     node_token_trend,
 )
 
@@ -953,12 +954,17 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
             return url.split("/steps/")[-1].split("?")[0]
         return step["id"]
 
+    keys = [_key(s) for s in steps]
     try:
-        trend = (node_token_trend(str(scores_db), [_key(s) for s in steps])
-                 if scores_db else {})
+        trend = node_token_trend(str(scores_db), keys) if scores_db else {}
     except Exception:
         trend = {}
+    try:
+        counts = node_run_counts(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        counts = {}
     for step in steps:
+        step["run_count"] = counts.get(_key(step), 0)
         t = trend.get(_key(step)) or {}
         step["token_multiplier"] = t.get("multiplier")
         step["avg_tokens"] = t.get("avg_tokens")
