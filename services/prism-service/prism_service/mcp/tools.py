@@ -3567,8 +3567,9 @@ def _maybe_augment_with_nudge(
     the candidate. Disabled globally by PRISM_MCP_AUGMENT_NUDGES=false.
     """
     import os as _os
-    import sqlite3 as _sq3
     from datetime import datetime, timedelta, timezone
+
+    from prism_service.services import sqlite_db as _sqldb
 
     if _os.environ.get("PRISM_MCP_AUGMENT_NUDGES", "").lower() == "false":
         return result
@@ -3588,8 +3589,7 @@ def _maybe_augment_with_nudge(
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(minutes=5)).isoformat()
 
-    conn = _sq3.connect(scores_path, timeout=5.0)
-    conn.row_factory = _sq3.Row
+    conn = _sqldb.connect(scores_path, timeout=5.0)
     try:
         # Oldest pending candidate not nudged in the last 5 min.
         row = conn.execute(
@@ -4360,8 +4360,8 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
                     if mem_id:
                         break
                 if mem_id:
-                    import sqlite3 as _sq3
-                    _c = _sq3.connect(str(ctx._data_dir / "scores.db"))
+                    from prism_service.services import sqlite_db as _sqldb
+                    _c = _sqldb.connect(str(ctx._data_dir / "scores.db"))
                     try:
                         _c.execute(
                             "INSERT OR REPLACE INTO memory_meta "
@@ -4400,10 +4400,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             return [TextContent(type="text", text=_json(response))]
 
         if name == "memory_invalidate":
-            import sqlite3 as _sq3
+            from prism_service.services import sqlite_db as _sqldb
             mem_id = arguments["memory_id"]
             reason = arguments.get("reason", "")
-            _c = _sq3.connect(str(ctx._data_dir / "scores.db"))
+            _c = _sqldb.connect(str(ctx._data_dir / "scores.db"))
             try:
                 # INSERT OR REPLACE so memories that never had a
                 # memory_meta row still get one (invalidated directly

@@ -34,6 +34,7 @@ Canonical settings (do not diverge — change them HERE):
 
 from __future__ import annotations
 
+import ast
 import os
 import sqlite3
 from pathlib import Path
@@ -67,3 +68,47 @@ def connect(path: "str | Path", *, timeout: float = 5.0, **kwargs) -> sqlite3.Co
     # Must follow journal_mode=WAL: the limit applies to the WAL file.
     conn.execute(f"PRAGMA journal_size_limit={journal_size_limit()}")
     return conn
+
+
+def find_bare_connects(root: "str | Path") -> list[str]:
+    """Return ``relpath:line`` for every sqlite3 connect under ``root``.
+
+    The funnel invariant, made checkable on an arbitrary tree. The scan
+    parses each module, so an ALIASED import (``import sqlite3 as _s`` then
+    ``_s.connect(..)``) is caught where a text match for ``sqlite3.connect(``
+    is blind, and a comment or docstring that names the call cannot trip it.
+    ``root`` itself is not filtered: the caller owns its own allowlist.
+    """
+    root = Path(root)
+    hits: list[str] = []
+    for py in sorted(root.rglob("*.py")):
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        # Bindings are collected per module, not per scope: prism_service
+        # imports sqlite3 inside function bodies, and a wide binding set
+        # only makes the scan stricter, never blinder.
+        modules: set[str] = set()
+        direct: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "sqlite3":
+                        modules.add(alias.asname or "sqlite3")
+            elif isinstance(node, ast.ImportFrom) and node.module == "sqlite3":
+                for alias in node.names:
+                    if alias.name == "connect":
+                        direct.add(alias.asname or "connect")
+        rel = py.relative_to(root).as_posix()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if (isinstance(func, ast.Attribute) and func.attr == "connect"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in modules):
+                hits.append(f"{rel}:{node.lineno}")
+            elif isinstance(func, ast.Name) and func.id in direct:
+                hits.append(f"{rel}:{node.lineno}")
+    return hits
