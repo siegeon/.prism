@@ -13,6 +13,7 @@ other.
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -48,7 +49,7 @@ def rig(tmp_path):
     workspaces.add_membership(workspace.id, member.id, "member")
     workspaces.add_membership(workspace.id, viewer.id, "viewer")
 
-    return Rig(
+    yield Rig(
         claims=claims,
         tasks=tasks,
         workspaces=workspaces,
@@ -56,6 +57,51 @@ def rig(tmp_path):
         owner_id=owner.id,
         member_id=member.id,
         viewer_id=viewer.id,
+    )
+
+    # AC-1 and AC-2: hand the store back with no live lease. This runs after
+    # `yield`, so a body that fails or raises part way through still releases
+    # what it took. It reads only this rig's own `tmp_path/claims.db` and frees
+    # each row through `ClaimService.reclaim`, the service's named release —
+    # never an ad-hoc UPDATE, and never a store a live seat holds.
+    for _holder_id, task_id, _expires_at in live_leases(tmp_path / "claims.db"):
+        claims.reclaim(task_id, reason="claim suite teardown")
+
+
+def live_leases(store_path) -> list:
+    """Rows in ONE claims store that are still held: not released, not expired.
+
+    Reads the file directly, so it observes what the store hands to the next
+    reader. It opens only the path it is given.
+    """
+    if not store_path.exists():
+        return []
+    conn = sqlite3.connect(str(store_path))
+    try:
+        return conn.execute(
+            "SELECT holder_id, task_id, expires_at FROM claims "
+            "WHERE released_at IS NULL AND expires_at > ?",
+            (time.time(),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+@pytest.fixture(autouse=True)
+def the_store_comes_back_clean(tmp_path):
+    """AC-1 and AC-2: every lease this module takes is released before the
+    test that took it ends.
+
+    This fixture is autouse, so pytest builds it BEFORE `rig` and finalises it
+    AFTER `rig`. That order is what lets it observe the state `rig` teardown
+    hands back. It reads only `tmp_path/claims.db`, the store this test's own
+    `rig` built, so it can never touch a lease that a live seat holds.
+    """
+    yield
+    left = live_leases(tmp_path / "claims.db")
+    assert left == [], (
+        "this test handed its claims store back with a live lease still in it; "
+        f"rows (holder_id, task_id, expires_at): {left}"
     )
 
 
@@ -158,3 +204,30 @@ def test_non_member_and_viewer_are_fail_closed_from_dispensing(rig):
 
     viewer_claim = rig.claims.claim_next(rig.workspace_id, rig.viewer_id, "dev", ttl_s=300)
     assert viewer_claim is None
+
+
+def test_a_body_that_raises_still_hands_the_store_back_clean(rig):
+    """AC-2: the release does not depend on the test body reaching its last
+    line. A body takes a lease and then raises. Teardown, which runs after
+    `rig`, must still find the store empty."""
+    rig.tasks.create(title="Claimed by a body that then stops")
+
+    def claim_then_raise() -> None:
+        claim = rig.claims.claim_next(rig.workspace_id, rig.member_id, "dev", ttl_s=300)
+        assert claim is not None
+        raise RuntimeError("the body stops here, the lease is still held")
+
+    with pytest.raises(RuntimeError):
+        claim_then_raise()
+
+    assert live_leases(tmp_path_of(rig)) != [], (
+        "the body must really hold a lease at this point, or this test proves nothing"
+    )
+
+
+def tmp_path_of(rig) -> object:
+    """The claims store that this rig built. `ClaimService` keeps the path it
+    opened, so the test reads the same file the fixture wrote."""
+    from pathlib import Path
+
+    return Path(rig.claims._db_path)
