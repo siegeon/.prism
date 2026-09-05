@@ -940,13 +940,26 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
     indeterminate (never a fabricated 0 or 1.0) when there is no scores.db
     -- the shape several test doubles present.
     """
+    # KEY BY THE ROUTE, NOT THE STEP ID. A behaviour step is named for its
+    # position in the flow ("gather", "render", "check") while the run it
+    # performs is recorded under the route it calls ("premise-gather",
+    # "premise-render", "premise-citation-check"). Looking the trend up by
+    # id found nothing and every sub-node stayed at 0 samples even with 149
+    # real runs on file -- the fields were present and empty, which reads
+    # exactly like no data.
+    def _key(step: dict) -> str:
+        url = step.get("url") or ""
+        if "/steps/" in url:
+            return url.split("/steps/")[-1].split("?")[0]
+        return step["id"]
+
     try:
-        trend = (node_token_trend(str(scores_db), [s["id"] for s in steps])
+        trend = (node_token_trend(str(scores_db), [_key(s) for s in steps])
                  if scores_db else {})
     except Exception:
         trend = {}
     for step in steps:
-        t = trend.get(step["id"]) or {}
+        t = trend.get(_key(step)) or {}
         step["token_multiplier"] = t.get("multiplier")
         step["avg_tokens"] = t.get("avg_tokens")
         step["token_sample_count"] = t.get("sample_count", 0)

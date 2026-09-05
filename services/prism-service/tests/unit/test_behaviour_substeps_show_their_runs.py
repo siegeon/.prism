@@ -82,3 +82,29 @@ def test_the_behaviour_builder_stamps_its_steps(monkeypatch, tmp_path):
     assert by_id["gather"]["token_sample_count"] == 149, by_id["gather"]
     assert by_id["gather"]["token_indeterminate"] is False
     assert by_id["render"]["token_indeterminate"] is True
+
+
+def test_the_trend_is_keyed_by_the_ROUTE_not_the_step_id(monkeypatch, tmp_path):
+    """A behaviour step is named for its POSITION ("gather") while the run
+    it performs is recorded under the ROUTE it calls ("premise-gather").
+    Keying by id found nothing, so every sub-node stayed at 0 samples with
+    149 real runs on file -- fields present and empty, which reads exactly
+    like no data at all."""
+    steps = [{"id": "gather",
+              "url": "http://x/api/workflows/steps/premise-gather?project=p"},
+             {"id": "check",
+              "url": "http://x/api/workflows/steps/premise-citation-check?project=p"}]
+    asked = {}
+
+    def _trend(db, ids):
+        asked["ids"] = list(ids)
+        return {"premise-gather": {"multiplier": 0.4, "avg_tokens": 900,
+                                   "sample_count": 149, "window": 20,
+                                   "indeterminate": False}}
+
+    monkeypatch.setattr(wf, "node_token_trend", _trend)
+    wf._attach_node_trend(tmp_path / "scores.db", steps)
+
+    assert asked["ids"] == ["premise-gather", "premise-citation-check"], asked
+    assert steps[0]["token_sample_count"] == 149, steps[0]
+    assert steps[0]["token_indeterminate"] is False

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.247"
+PRISM_VERSION = "7.13.248"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8515,4 +8515,15 @@ PRISM_VERSION_NOTES += (
     "exactly once per request (test_the_view_is_project_scoped stays green). A "
     "step with no measured runs stays honestly indeterminate rather than "
     "claiming a fabricated 0 or 1.0. 3 new tests."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.248: the sub-node trend is keyed by the ROUTE, not the step id. "
+    "7.13.247 attached the fields and they still read zero: a behaviour step is "
+    "named for its position in the flow ('gather', 'render', 'check') while the "
+    "run it performs is recorded under the route it calls ('premise-gather', "
+    "'premise-render', 'premise-citation-check'), so the lookup missed every "
+    "time. Fields present and empty read exactly like no data, which is what the "
+    "canvas showed with 149 real premise-gather runs on file. Now keyed off each "
+    "step's own url, falling back to its id."
 )
