@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.240"
+PRISM_VERSION = "7.13.241"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8377,4 +8377,30 @@ PRISM_VERSION_NOTES += (
     "file-against-file both sides, with the 72ccaf94 guard against splitting "
     "unrelated suites re-pinned. 6 new tests, red first as a tests-only commit; "
     "99 green across every neighbouring stall/runner suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.241: the drive worker advances SEVERAL tasks per sweep. sweep_once "
+    "drove 'the first eligible task found and stop -- AT MOST one task "
+    "advances per tick', globally across every project, so the only seat that "
+    "can move the board unattended had a concurrency of ONE. implement_tasks "
+    "alone has a ~474s median and a task needs about ten steps, so a backlog "
+    "could never drain however many gates were cleared or stalls codified -- "
+    "owner, looking at the board: 'i still see 89 open tasks'. sweep_once now "
+    "collects up to _concurrency() eligible tasks round-robin across projects "
+    "(default 4, PRISM_TASK_RUNNER_CONCURRENCY) and drives them in a thread "
+    "pool; a Barrier test proves they genuinely overlap rather than running a "
+    "faster serial loop. Every safety rail still outranks the throughput: the "
+    "host load breaker and the spend ceiling refuse the WHOLE tick before any "
+    "drive starts (pinned at concurrency 8), the count is hard-capped, and "
+    "each drive still passes through run_one_step's per-task claim lease. "
+    "eligible_task is now eligible_tasks(project, 1) rather than a second copy "
+    "of the rule, so the singular and plural readers cannot drift on the gate, "
+    "in-flight and foreign-driver skips. Round-robin now advances past the "
+    "LAST project a sweep served, and the two starvation tests are re-anchored "
+    "on the plural reader with concurrency pinned at 1 (the case where "
+    "rotation is what prevents starvation), plus a new test for the stronger "
+    "guarantee: with room for all, every eligible project is served in the "
+    "SAME sweep and none waits a tick. 9 new tests, red first; 115 green "
+    "across every neighbouring runner and stall suite."
 )

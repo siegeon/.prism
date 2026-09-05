@@ -181,11 +181,18 @@ def test_sweep_once_rotates_starting_project_so_none_can_starve(monkeypatch):
     from prism_service.services import task_runner as tr
     from prism_service import project_context
 
+    # SUPERSEDED IN PART: sweep_once now reads eligible_tasks(project, limit)
+    # and may drive several tasks per tick, so this stubs the plural reader
+    # and pins concurrency at 1 -- the case where rotation is what prevents
+    # starvation at all. The stronger case (concurrency >= project count, so
+    # every project is served in ONE sweep) is pinned by the test below.
+    monkeypatch.setenv("PRISM_TASK_RUNNER_CONCURRENCY", "1")
     monkeypatch.setattr(tr, "_rr_index", 0)
     monkeypatch.setattr(project_context, "get_all_projects",
                         lambda: ["p-alpha", "p-beta", "p-gamma"])
     # Every project is ALWAYS eligible -- the worst case for starvation.
-    monkeypatch.setattr(tr, "eligible_task", lambda pid: f"{pid}-task")
+    monkeypatch.setattr(tr, "eligible_tasks",
+                        lambda pid, limit: [f"{pid}-task"][:limit])
 
     driven = []
     monkeypatch.setattr(tr, "run_one_step",
@@ -198,19 +205,49 @@ def test_sweep_once_rotates_starting_project_so_none_can_starve(monkeypatch):
     assert driven == ["p-alpha", "p-beta", "p-gamma", "p-alpha"], driven
 
 
+def test_with_room_for_all_no_project_waits_a_tick_at_all(monkeypatch):
+    """The starvation guarantee, strengthened. Rotation exists because only
+    ONE project could be served per tick; with concurrency at or above the
+    project count every eligible project is served in the SAME sweep, so no
+    project waits its turn at all."""
+    from prism_service.services import task_runner as tr
+    from prism_service import project_context
+
+    monkeypatch.setenv("PRISM_TASK_RUNNER_CONCURRENCY", "3")
+    monkeypatch.setattr(tr, "_rr_index", 0)
+    monkeypatch.setattr(project_context, "get_all_projects",
+                        lambda: ["p-alpha", "p-beta", "p-gamma"])
+    monkeypatch.setattr(tr, "eligible_tasks",
+                        lambda pid, limit: [f"{pid}-task"][:limit])
+
+    driven = []
+    monkeypatch.setattr(tr, "run_one_step",
+                        lambda pid, task_id: driven.append(pid) or
+                        {"ok": True, "task_id": task_id})
+
+    tr.sweep_once()
+
+    assert sorted(driven) == ["p-alpha", "p-beta", "p-gamma"], driven
+
+
 def test_a_starved_project_gets_its_turn_once_the_busy_one_clears(
         monkeypatch):
     from prism_service.services import task_runner as tr
     from prism_service import project_context
 
+    # Concurrency pinned at 1 so this exercises ROTATION specifically -- with
+    # room for both, p-starved is served in the very first sweep and the
+    # rotation path is never the thing under test (see the test above).
+    monkeypatch.setenv("PRISM_TASK_RUNNER_CONCURRENCY", "1")
     monkeypatch.setattr(tr, "_rr_index", 0)
     monkeypatch.setattr(project_context, "get_all_projects",
                         lambda: ["p-busy", "p-starved"])
     # p-busy is eligible forever; p-starved is eligible from the start too
     # -- with NO rotation, p-busy would win on every single tick.
     monkeypatch.setattr(
-        tr, "eligible_task",
-        lambda pid: f"{pid}-task" if pid in ("p-busy", "p-starved") else None)
+        tr, "eligible_tasks",
+        lambda pid, limit: ([f"{pid}-task"][:limit]
+                            if pid in ("p-busy", "p-starved") else []))
 
     driven = []
     monkeypatch.setattr(tr, "run_one_step",

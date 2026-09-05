@@ -1157,7 +1157,7 @@ def sweep_once() -> Optional[dict]:
 
     limit = _concurrency()
     picked: list[tuple[str, str]] = []
-    first_pid: Optional[str] = None
+    last_pid: Optional[str] = None
     for pid in ordered:
         if len(picked) >= limit:
             break
@@ -1168,19 +1168,21 @@ def sweep_once() -> Optional[dict]:
             continue
         if not found:
             continue
-        if first_pid is None:
-            first_pid = pid
+        last_pid = pid
         picked.extend((pid, tid) for tid in found)
 
     if not picked:
         return None
 
     with _RR_LOCK:
-        # Next tick starts AFTER the first project that had work -- the
-        # actual round-robin advance. Re-index against the CURRENT `projects`
-        # list (not `ordered`) so a project add/remove between ticks can't
-        # skew the offset.
-        _rr_index = (projects.index(first_pid) + 1) % len(projects)
+        # Next tick starts AFTER the LAST project this sweep served, so the
+        # projects already drained go to the back of the queue rather than
+        # being re-offered ahead of ones that got nothing. With the slots
+        # filled from one project, that is the old one-project advance; with
+        # them spread over several, it steps past all of them. Re-index
+        # against the CURRENT `projects` list (not `ordered`) so a project
+        # add/remove between ticks can't skew the offset.
+        _rr_index = (projects.index(last_pid) + 1) % len(projects)
 
     if len(picked) == 1:
         pid, task_id = picked[0]
