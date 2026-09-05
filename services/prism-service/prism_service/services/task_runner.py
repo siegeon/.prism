@@ -263,6 +263,44 @@ def _invoke_budget(step_id: str, plan: Optional[dict]) -> dict:
     }
 
 
+def _repair_premises(proof: str, task, facts) -> str:
+    """Complete an ungrounded premise report with the RENDERED section.
+
+    A FLOOR, not a rewrite. The codified citation check already ran here and
+    was advisory only -- it recorded that the report cited nothing and let
+    the step park anyway, which is how premise_grounded refused 273 advances
+    across 141 tasks (measured 2026-09-05). The facts to satisfy it were in
+    hand the whole time.
+
+    When the report already passes, it is returned untouched: a model that
+    got it right is never overwritten. When it does not, the grounded
+    section is prepended and the model's own prose is KEPT below it, so
+    nothing it reasoned out is thrown away -- the report gains evidence, it
+    does not lose analysis.
+    """
+    try:
+        from prism_service.services import premise_gather
+
+        text = str(proof or "")
+        if premise_gather.citation_check(text).get("ok"):
+            return text
+        rendered = premise_gather.render_premises(task, facts)
+        if not rendered.strip():
+            return text          # nothing gathered: nothing honest to add
+        if not text.strip():
+            return rendered
+        # The rendered section becomes THE premises. The model's own
+        # ungrounded bullets are demoted to notes rather than merged in:
+        # its reasoning is kept and readable, but unsourced claims must not
+        # ride under a heading that asserts they are grounded, and a second
+        # "## Premises" heading would put them back in front of the tooth.
+        demoted = re.sub(r'(?im)^\s{0,3}#{1,6}\s*premises\s*$',
+                          "## Notes (model draft, ungrounded)", text)
+        return f"{rendered}\n{demoted}"
+    except Exception:
+        return str(proof or "")   # a broken repair must never halt a drive
+
+
 def _codified_preamble(project: str, task, memory_svc=None, task_svc=None,
                        brain_svc=None):
     """Resolved citations for `task`, as (preamble_text, facts).
@@ -1028,6 +1066,11 @@ def _run_one_step(project: str, task_id: str) -> dict:
     plan = _node_plan(project, job["step"])
     prompt = job["instructions"]
     run_id = str(uuid.uuid4())
+    # Bound before the branch: the citation-check/render step below reads
+    # both, and a NameError there would be swallowed as "no repair" rather
+    # than surfacing.
+    task = None
+    facts: list = []
     if plan and "premise-gather" in (plan.get("codified") or []):
         ctx = get_project(project)
         task = task_svc.get(task_id)
@@ -1089,6 +1132,20 @@ def _run_one_step(project: str, task_id: str) -> dict:
             _record_codified_run(
                 project, task_id, "premise-citation-check", run_id,
                 bool(verdict.get("ok")), str(verdict.get("reason") or ""))
+            # ADVISORY WAS NOT ENOUGH. This check already knew the report
+            # cited nothing and let the step park anyway -- premise_grounded
+            # refused 273 advances across 141 tasks that way (measured
+            # 2026-09-05), each one burning a whole drive over facts the
+            # gather had already resolved. Complete the report from those
+            # facts instead of reporting a refusal nobody acts on.
+            if not verdict.get("ok"):
+                repaired = _repair_premises(proof, task, facts)
+                if repaired != proof:
+                    proof = repaired
+                    _record_codified_run(
+                        project, task_id, "premise-render", run_id, True,
+                        "rendered the grounded premises from the codified "
+                        "gather; the model's own notes are kept below them")
         except Exception:
             pass
 

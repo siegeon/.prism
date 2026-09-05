@@ -223,3 +223,70 @@ def citation_check(notes_md: str, claims_section: str = "premises") -> dict:
               else f"citation_check: {len(failing)} of {len(claims)} claim(s) ungrounded")
     return {"ok": ok, "section_present": True, "claims_checked": len(claims),
             "failing": failing, "reason": reason}
+
+
+# ----------------------------------------------------------------------
+# Codified RENDER step
+# ----------------------------------------------------------------------
+# THE DOMINANT LOSS CONDITION, measured 2026-09-05: premise_grounded refused
+# 273 advances across 141 distinct tasks (cdb8e365 82 times, 4c9b39e5 66).
+# Every refusal burned a whole `claude -p` drive and returned the task to the
+# step it started on. The facts were in hand each time -- gather() above
+# guarantees each citation satisfies arc_governance's grounding regexes, and
+# the runner puts them in the model's prompt -- but the model was asked to
+# RETYPE them into a `## Premises` section, and when it didn't, the step
+# parked. Same shape as the red-test-ids stall: PRISM holds the fact, asks a
+# model to restate it, refuses when it doesn't.
+#
+# This renders that section instead. It is a FLOOR, never a replacement for
+# real analysis: it asserts only what was actually gathered, and it names an
+# oracle clause nothing engages as a gap rather than padding it.
+
+def render_premises(task, facts, oracle_word_min_len: int = 5,
+                    oracle_min_shared_words: int = 2) -> str:
+    """A `## Premises` section built from `facts` -- deterministic, no model.
+
+    Every bullet carries a citation that came from a real GatheredFact, so
+    the section passes premise_grounded's citation tooth by construction.
+    Each clause of `task.oracle` that the gathered text genuinely engages is
+    left to stand on that evidence; a clause nothing engages is marked
+    ``clause N: UNRESOLVED, <why>`` -- the exact marker
+    arc_governance.score_oracle_engagement names for a real gap.
+
+    Returns "" when nothing was gathered: with no facts there is nothing
+    honest to assert, and inventing claims would be worse than the stall.
+    """
+    facts = list(facts or [])
+    if not facts:
+        return ""
+
+    from prism_service.services.arc_governance import (
+        _clause_words, oracle_clauses,
+    )
+
+    lines = ["## Premises", ""]
+    for f in facts:
+        lines.append(f"- {f.text} ({f.citation})")
+
+    oracle = str(getattr(task, "oracle", "") or "").strip()
+    if oracle:
+        # Measured against the SAME words the real tooth compares, so a
+        # clause is called engaged here only when the tooth would agree.
+        gathered_text = " ".join(f"{f.text} {f.citation}" for f in facts)
+        have = _clause_words(gathered_text, oracle_word_min_len)
+        gaps = []
+        for idx, clause in enumerate(oracle_clauses(oracle), start=1):
+            words = _clause_words(clause, oracle_word_min_len)
+            if not words:
+                continue
+            needed = min(oracle_min_shared_words, len(words))
+            if len(words & have) < needed:
+                gaps.append((idx, clause))
+        if gaps:
+            lines.append("")
+            for idx, clause in gaps:
+                lines.append(
+                    f"- clause {idx}: UNRESOLVED, no gathered fact engages "
+                    f"this clause of the oracle (\"{clause[:80].strip()}\") "
+                    "-- it needs evidence this step did not have")
+    return "\n".join(lines) + "\n"

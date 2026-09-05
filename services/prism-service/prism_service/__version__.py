@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.243"
+PRISM_VERSION = "7.13.244"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8438,4 +8438,32 @@ PRISM_VERSION_NOTES += (
     "snapshots throughout; only the separate workflow ENGINE is stubbed, with "
     "the models' own validated wire shape. 67 green across both suites and "
     "every neighbouring workflow/snapshot suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.244: the premises section is RENDERED from resolved facts instead of "
+    "retyped by a model. This was the board's dominant loss condition: measured "
+    "2026-09-05, premise_grounded refused 273 advances across 141 distinct "
+    "tasks (cdb8e365 82 times, 4c9b39e5 66), and every refusal burned a whole "
+    "claude -p drive and returned the task to the step it started on. The facts "
+    "were in hand each time -- premise_gather.gather already guarantees each "
+    "citation satisfies arc_governance's grounding regexes, and the runner puts "
+    "them in the prompt -- but the model was asked to RETYPE them into a "
+    "'## Premises' section and often did not. Same shape as the red-test-ids "
+    "stall: PRISM holds the fact, asks a model to restate it, parks when it "
+    "does not. New premise_gather.render_premises builds that section "
+    "deterministically -- every bullet's citation comes from a real gathered "
+    "fact, never invented, and an oracle clause no fact engages is marked "
+    "'clause N: UNRESOLVED, <why>', the exact marker score_oracle_engagement "
+    "names for a real gap. It grades against the REAL rubric functions, so it "
+    "cannot drift from what decides. task_runner._repair_premises applies it as "
+    "a FLOOR: a report that already passes is returned untouched, and when one "
+    "fails the rendered section becomes the premises while the model's own "
+    "prose is kept below it under a 'Notes (model draft, ungrounded)' heading "
+    "-- its reasoning is preserved, but unsourced claims never ride under a "
+    "heading asserting they are grounded. The citation check that already "
+    "detected this was ADVISORY ONLY and let the step park anyway; it now acts. "
+    "With no facts gathered it renders nothing rather than inventing claims. "
+    "9 new tests, red first; 152 green across every premise, arc-governance and "
+    "runner suite."
 )
