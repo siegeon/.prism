@@ -80,6 +80,11 @@ export type WorkflowStepDef = {
   /** True when this node has too few measured runs for a real number —
    * render an honest indeterminate state, never a fabricated 0 or 1.0. */
   token_indeterminate?: boolean;
+  /** How many times this node ACTUALLY ran. A codified step records zero
+   * tokens by design, so its token trend is empty forever however often it
+   * runs — this is the question such a node can answer. Present on
+   * behaviour sub-steps; absent on an older service. */
+  run_count?: number;
 };
 
 /** A bot: a role card that drives the conductor's FSM. */

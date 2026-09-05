@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.250"
+PRISM_VERSION = "7.13.251"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8551,4 +8551,14 @@ PRISM_VERSION_NOTES += (
     "review-previous-notes-loop reads: gather 149 runs, check 147, render 5, "
     "loop 0, text-challenge 0. The zero on `loop` is the point -- that is the "
     "agentic middle, and the programmatic path has taken the work."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.251: the node card SAYS how often a codified step ran. The API served "
+    "run_count from 7.13.250 and the card still rendered the token sample count, "
+    "so the screen kept reading 'too few runs (0/20)' for steps with 149 real "
+    "runs -- delivered but invisible, which is the whole fault this chain exists "
+    "to fix. A node with no token trend but real runs now reads 'N runs - no "
+    "token cost'; one that has genuinely never run keeps the honest "
+    "indeterminate. Real npm run build green."
 )

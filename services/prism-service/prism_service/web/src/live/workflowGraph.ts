@@ -61,6 +61,10 @@ export type TokenTrend = {
   multiplier: number | null;
   avgTokens: number | null;
   sampleCount: number;
+  /** How many times this node ACTUALLY ran. A codified node records zero
+   * tokens by design, so its token trend is empty forever however often it
+   * runs -- this is the question it can answer. */
+  runCount: number;
   window: number;
   indeterminate: boolean;
 };
@@ -253,6 +257,7 @@ export class WorkflowGraph {
           multiplier: s.token_multiplier ?? null,
           avgTokens: s.avg_tokens ?? null,
           sampleCount: s.token_sample_count ?? 0,
+          runCount: s.run_count ?? 0,
           window: s.token_window ?? 20,
           indeterminate: s.token_indeterminate ?? true,
         },
@@ -751,6 +756,13 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
  * reading"). */
 function tokenTrendLabel(t: TokenTrend): string {
   if (t.indeterminate || t.multiplier == null || t.avgTokens == null) {
+    // A CODIFIED node spends no tokens BY DESIGN, so a token average is
+    // empty for it forever -- "too few runs (0/20)" read as "nothing is
+    // happening here" for steps that had run 149 times. When the node has
+    // really run, say so; the token reading is simply not its question.
+    if (t.runCount > 0) {
+      return `${t.runCount} run${t.runCount === 1 ? "" : "s"} · no token cost`;
+    }
     return `×? · too few runs (${t.sampleCount}/${t.window})`;
   }
   return `${formatMultiplier(t.multiplier)} · avg ${formatTokenCount(t.avgTokens)}/run (last ${t.window})`;
