@@ -253,7 +253,18 @@ def test_reap_is_the_conductors_terminal_node_after_land() -> None:
     assert [s["id"] for s in reap["steps"]] == ["survey", "reap"]
 
     from prism_service.services import flow_run_recorder as rec
-    assert rec.CONDUCTOR_NODES[-3:] == ("green_gate", "land", rec.REAP_NODE)
+    # SUPERSEDED 2026-09-05 by task 4c9b39e5, which put the codified
+    # `brain-health` node on the walked canvas between land and reap. The old
+    # assertion indexed a fixed COUNT of tail nodes, the same shape this file
+    # already retired for bot.json above, so it broke on the added node while
+    # pinning nothing real. The invariants it guarded are kept: reap is LAST
+    # (it deletes the worktree, so nothing may run after it), and land
+    # precedes reap.
+    assert rec.CONDUCTOR_NODES[-1] == rec.REAP_NODE, rec.CONDUCTOR_NODES
+    assert (rec.CONDUCTOR_NODES.index("land")
+            < rec.CONDUCTOR_NODES.index(rec.REAP_NODE)), rec.CONDUCTOR_NODES
+    assert (rec.CONDUCTOR_NODES.index("green_gate")
+            < rec.CONDUCTOR_NODES.index("land")), rec.CONDUCTOR_NODES
     assert rec.REAP_NODE == "reap"
     # A walk that reached reap is finished, exactly as one that reached land.
     assert rec.is_finished([{"node_id": rec.REAP_NODE}]) is True
