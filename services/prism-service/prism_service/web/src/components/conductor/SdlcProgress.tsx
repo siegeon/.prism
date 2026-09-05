@@ -62,11 +62,20 @@ export type Activity = {
   // The driver's own mid-step progress evidence (drive_heartbeat), present only
   // while fresh. Lets the pill say WHAT a driving step is doing, not just that
   // it is doing something.
-  heartbeat?: { step?: string; last_tool?: string; elapsed_s?: number | null; age_s?: number | null } | null;
+  heartbeat?: { step?: string; last_tool?: string; elapsed_s?: number | null; age_s?: number | null; driver?: string } | null;
   // Task e9625a4d + 0f090a6c additive fields (api/conductor.py
   // _with_report_signal), read only via lib/activityLabel.ts's activityLabel().
   report_signal_lost?: boolean;
   report_signal_age_s?: number | null;
+  // Task 1c6d59e9 additive fields (api/conductor.py _with_drive_seat). `beat`
+  // is the last drive_heartbeat WHATEVER its age -- `heartbeat` above stays
+  // fresh-only -- so a driver that stopped reads differently from one that
+  // never ran. `seat` is who drives the step (the beat's driver, or the seat
+  // that owns a gate with nothing beating); `dispatch_count` counts dispatches
+  // of the CURRENT step.
+  beat?: { driver?: string; step?: string; last_tool?: string; elapsed_s?: number | null; age_s?: number | null; stale?: boolean } | null;
+  seat?: string | null;
+  dispatch_count?: number | null;
 };
 
 function fmtClock(s: number): string {
@@ -213,12 +222,20 @@ export default function SdlcProgress({
   // meta.tone directly while unobservable — never mutate `meta` itself,
   // it's the shared ACTIVITY_META map object.
   const effTone = signal.lost ? signal.tone : meta.tone;
+  // Task 1c6d59e9: the three facts the owner asked the active node for —
+  // WHO is on the step, WHAT they last did, WHEN they last moved.
+  const lastBeat = activity?.beat;
+  const seat = activity?.seat || "";
+  const tries = activity?.dispatch_count ?? 0;
+  const attempt = tries > 1 ? ` · try ${tries}` : "";
   const stateLabel = signal.lost ? signal.label
     : state === "adrift" ? `driver active · last step report ${idleClock || "—"} ago`
     : state === "driving" && hb?.last_tool
-      ? `driving · ${hb.last_tool}${hb.elapsed_s != null ? ` · ${fmtClock(hb.elapsed_s)} in step` : ""}`
+      ? `${hb.driver || seat || "driving"} · ${hb.last_tool}${hb.elapsed_s != null ? ` · ${fmtClock(hb.elapsed_s)} in step` : ""}${hb.age_s != null ? ` · beat ${fmtClock(hb.age_s)} ago` : ""}${attempt}`
     : state === "stalled" ? `no active driver · idle ${idleClock || "—"}`
     : state === "paused" ? `paused · ${phase?.children_done ?? 0}/${phase?.children_total ?? 0} done`
+    : state === "awaiting_gate" && seat ? `${seat} · ${meta.label}`
+    : lastBeat ? `${lastBeat.driver || "last seat"} stopped · ${lastBeat.last_tool || "—"}${lastBeat.age_s != null ? ` · ${fmtClock(lastBeat.age_s)} ago` : ""}${attempt}`
     : meta.label;
   // "live" = the task is genuinely being DRIVEN right now — a real recent
   // conductor transition ("working"), a live linked session mid-step

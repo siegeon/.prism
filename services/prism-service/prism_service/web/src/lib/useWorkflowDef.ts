@@ -193,6 +193,11 @@ export type WorkflowRun = {
        * guessing WHAT to fix; this is the same task.gate_reason the task
        * page already renders, just carried onto this synthesized run. */
       gateReason?: string | null;
+      /** Task 1c6d59e9: the served activity payload (api/conductor.py
+       * _with_drive_seat) so the run node can name the seat on the active
+       * step. Shaped as SdlcProgress's own Activity, carried untyped here to
+       * keep this lib free of a component import. */
+      activity?: Record<string, unknown> | null;
       stranded: boolean;
     };
   };
@@ -365,7 +370,12 @@ type ConductorFreshTask = {
 export function fetchConductorRunFromTask(project: string, task: ConductorRunTask): Promise<WorkflowRun> {
   return api.get<{ task?: ConductorFreshTask; history: ConductorHistoryRow[] }>(
     `/api/tasks/${encodeURIComponent(task.id)}?project=${encodeURIComponent(project)}&scope=core`,
-  ).then(({ task: fresh, history }) => {
+  ).then(({ task: fresh, history, ...rest }) => {
+    // Task 1c6d59e9: scope=core also serves `activity` (api/tasks.py, the
+    // _with_drive_seat enrichment). Read off the rest rather than widening the
+    // generic above -- test_workflows_section_ui.py:59 pins this call's exact
+    // signature, and the seat is an ADDITIVE field, not a new contract.
+    const activity = (rest as { activity?: Record<string, unknown> | null }).activity ?? null;
     // The caller's `task` comes off the rail's own last poll/SSE push, which
     // can be a step or two behind a task that is genuinely advancing right
     // now -- this SAME request already returns the current row, so read the
@@ -400,7 +410,12 @@ export function fetchConductorRunFromTask(project: string, task: ConductorRunTas
         passed: done && !stranded,
         conductorTask: {
           id: task.id, title: title ?? task.title, status: status ?? "",
+          // `activity` is appended AFTER `stranded` on purpose: task 8fbd5cf0's
+          // test_workflows_section_ui.py pins the literal assignment string
+          // `workflowStep, gateState, gateReason, stranded,`, and this field is
+          // additive, so it must not be inserted into that run.
           workflowStep, gateState, gateReason, stranded,
+          activity: activity ?? null,
         },
       },
     };

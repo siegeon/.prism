@@ -964,7 +964,22 @@ def get_task(task_id: str, project: str = Query("default"),
                     from prism_service.api.conductor import _with_report_signal
                     enriched = _with_report_signal(
                         [{"id": task_id, "activity": activity}], _scores_db(project))
-                    out["activity"] = enriched[0]["activity"]
+                    from prism_service.api.conductor import _with_drive_seat
+                    out["activity"] = _with_drive_seat(
+                        [{"id": task_id, "activity": enriched[0]["activity"]}],
+                        _scores_db(project), svc)[0]["activity"]
+        except Exception:
+            pass
+    else:
+        # Task 1c6d59e9: the run view (/workflows?task=<id>) fetches THIS
+        # route with scope=core and needs the seat driving the step. The
+        # drive-seat enrichment is pure sqlite (drive_heartbeat + history),
+        # never the transcript cold-parse phase_progress pays, so it rides
+        # the cheap payload instead of forcing the run page onto scope=full.
+        try:
+            from prism_service.api.conductor import _with_drive_seat
+            out["activity"] = _with_drive_seat(
+                [{"id": task_id, "activity": {}}], _scores_db(project), svc)[0]["activity"]
         except Exception:
             pass
     # has_prototype: a clickable MOCK prototype HTML the /prototype workflow
