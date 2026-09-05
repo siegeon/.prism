@@ -6007,22 +6007,52 @@ class ConductorService:
         except Exception:
             return []
 
-    def _subtree_active(self, task, _depth: int = 0) -> bool:
+    def _subtree_motion_active(self, task, _depth: int = 0) -> bool:
         """True if TASK itself, or any descendant at any depth, is
-        in_progress with a step transition inside the last 120s or a live
-        drive heartbeat. Depth-bounded (6) against runaway/cyclic data, not
-        against real epic nesting — an epic-of-epics is typically 2-4 levels
-        deep in this repo (task 95474ec7)."""
+        in_progress with a step TRANSITION inside the last 120s.
+        Depth-bounded (6) against runaway/cyclic data, not against real epic
+        nesting — an epic-of-epics is typically 2-4 levels deep in this repo
+        (task 95474ec7).
+
+        The transition half of _subtree_active. Split out for task 8eba8871:
+        a boundary crossed is `working`, while a bare heartbeat is liveness
+        and must land on `driving` instead (see _subtree_beat)."""
         if _depth > 6:
             return False
         if (getattr(task, "status", "") or "") == "in_progress":
             motion = self._task_motion_s(task)
             if motion is not None and motion <= 120:
                 return True
+        return any(self._subtree_motion_active(k, _depth + 1)
+                   for k in self._children(task))
+
+    def _subtree_beat(self, task, _depth: int = 0):
+        """The freshest live drive heartbeat on TASK itself or on any
+        in_progress descendant, else None. Same depth bound and reach as
+        _subtree_motion_active, so a lane beating several levels down still
+        counts (task 8eba8871: epic fcf6b70b read adrift while child
+        31c345b7 was driving with a fresh beat)."""
+        if _depth > 6:
+            return None
+        best = None
+        if (getattr(task, "status", "") or "") == "in_progress":
             beat = drive_heartbeat.latest(self._scores_db, getattr(task, "id", ""))
             if beat is not None and beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
-                return True
-        return any(self._subtree_active(k, _depth + 1) for k in self._children(task))
+                best = beat
+        for k in self._children(task):
+            kb = self._subtree_beat(k, _depth + 1)
+            if kb is not None and (best is None or kb["age_s"] < best["age_s"]):
+                best = kb
+        return best
+
+    def _subtree_active(self, task, _depth: int = 0) -> bool:
+        """True if TASK itself, or any descendant at any depth, is
+        in_progress with a step transition inside the last 120s or a live
+        drive heartbeat — the UNION reading of "somebody is on this".
+        activity_for consults the two halves separately, because the two
+        answers earn different words (working vs driving)."""
+        return (self._subtree_motion_active(task, _depth)
+                or self._subtree_beat(task, _depth) is not None)
 
     def activity_for(self, task, phase_progress: dict) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
@@ -6072,19 +6102,23 @@ class ConductorService:
                 # epic-of-epics' real work can sit several levels down (task
                 # 95474ec7, live, 3 hops to its actual driven leaf) — a direct
                 # child's OWN motion is not enough, the whole subtree counts.
-                active = any(self._subtree_active(k) for k in kids)
+                # TRANSITIONS ONLY here: a crossed step boundary is what
+                # earns the word `working`. A bare heartbeat is liveness
+                # evidence and falls through to the `driving` rung below
+                # (task 8eba8871), which keeps the two words meaning
+                # different things on the board.
+                active = any(self._subtree_motion_active(k) for k in kids)
                 done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
                 if not driving:
                     # A child lane mid-step crosses no step boundary for
                     # most of its life; its heartbeat is the only proof it
-                    # is alive. Scoped to in_progress children only (task
-                    # 8eba8871: epic fcf6b70b read adrift while child
-                    # 31c345b7 was driving with a fresh beat).
+                    # is alive. Recursive, so a beat several levels down
+                    # still rescues the epic (task 8eba8871: epic fcf6b70b
+                    # read adrift while child 31c345b7 was driving with a
+                    # fresh beat).
                     for k in kids:
-                        if (getattr(k, "status", "") or "") != "in_progress":
-                            continue
-                        kb = drive_heartbeat.latest(self._scores_db, getattr(k, "id", ""))
-                        if kb is not None and kb["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
+                        kb = self._subtree_beat(k)
+                        if kb is not None:
                             beat, heartbeat_age, driving = kb, kb["age_s"], True
                             break
                 if active:
