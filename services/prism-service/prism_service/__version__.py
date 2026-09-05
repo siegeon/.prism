@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.238"
+PRISM_VERSION = "7.13.239"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8326,4 +8326,31 @@ PRISM_VERSION_NOTES += (
     "regression on the way: the helper opened its own sqlite connection, and "
     "activity guarantees one connection per db per request. It now reuses the "
     "caller's. "
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.239: landed five green-gate task branches that had passed their own "
+    "work but never reached origin/main, so every one of them sat refused on "
+    "shippedness alone (DONE means SHIPPED). Two were not actually finished and "
+    "are completed here. Task 8eba8871: an epic whose child lane had only a "
+    "heartbeat read 'working', because the epic rung tested the union helper "
+    "_subtree_active, which counts a beat as motion -- the task's own guard says "
+    "a beat is liveness and must read 'driving'. Split into _subtree_motion_active "
+    "(transitions, feeding 'working') and _subtree_beat (freshest live beat on any "
+    "in_progress descendant, feeding 'driving'); the child-beat scan is now "
+    "recursive, matching the reach the union helper always had, so a beat two "
+    "levels down no longer leaves the epic adrift. Task 0c396de2: the Workflows "
+    "page now shows tier-0 Bots with their agentic workflows underneath -- each "
+    "models.workflow.WORKFLOWS entry is a deterministic FSM Bot (tier 0, read off "
+    "WORKFLOWS itself so a new FSM needs no id-list edit), the conductor's "
+    "behaviours are its tier-1 children, and every step carries an 'agentic' flag "
+    "derived from what it does (type, or a behaviour step's kind and url into the "
+    "reason loop) rather than from its name. Persona cards move out of 'bots' into "
+    "their own 'roles' section: a role is a seat a step is assigned to, not an FSM "
+    "that runs. Also landed: 1c6d59e9 (the active node names the seat working it), "
+    "22ee4cb3 (seven aliased sqlite connects routed through the chokepoint) and "
+    "31106380 (gate panel receipt-row fixture). 4806 unit+integration tests pass; "
+    "the 5 remaining failures (C# call graph, wheel packaging) reproduce "
+    "identically on untouched origin/main and are environmental to this checkout. "
+    "A real npm run build is green."
 )

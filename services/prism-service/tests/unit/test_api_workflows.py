@@ -345,21 +345,36 @@ def test_green_gate_authority_names_the_human_only_demo_rule(tmp_path, monkeypat
 
 
 def test_the_four_bots_are_served_with_their_role_cards(tmp_path, monkeypatch):
-    """A workflow IS a bot in PRISM. The canvas draws four actors, each
-    named and briefed off the EXISTING ROLE_CARDS — no new roster."""
+    """The canvas draws four actors, each named off the EXISTING ROLE_CARDS
+    roster — no new vocabulary.
+
+    SUPERSEDED IN PART by task 0c396de2: the CARD no longer rides on the
+    `bots` entry. A Bot in PRISM is an FSM (a models.workflow.WORKFLOWS
+    entry, served with tier 0); a persona is a ROLE a step is assigned to,
+    and its card now lives under the response's own `roles` section, which
+    is where the Workflows page renders it. The card assertion moves there
+    verbatim rather than dying — it is still ROLE_CARDS or nothing.
+    `architect` keeps its persona label here (steps still name it) but owns
+    no WORKFLOW_STEPS step, so it is not one of the three SDLC roles."""
     from prism_service.services.context_builder import ROLE_CARDS
 
     client = _client(_Svc([]), monkeypatch, tmp_path / "data")
-    bots = client.get("/api/workflows?project=prism").json()["bots"]
+    body = client.get("/api/workflows?project=prism").json()
+    bots = body["bots"]
 
     assert [b["id"] for b in bots] == ["sm", "qa", "dev", "architect"]
     labels = {b["id"]: b["persona_label"] for b in bots}
     assert labels == {"sm": "Steward", "qa": "Verifier", "dev": "Builder",
                       "architect": "Architect"}, (
         f"bot labels must match the SPA's persona vocabulary: {labels}")
-    for b in bots:
-        assert b["card"] == ROLE_CARDS[b["id"]], (
-            f"bot {b['id']}'s card must BE the existing ROLE_CARDS entry, "
+    assert all("card" not in b for b in bots), (
+        "a card is a role's brief, not a Bot's — task 0c396de2")
+
+    roles = body["roles"]
+    assert [r["id"] for r in roles] == ["sm", "qa", "dev"]
+    for r in roles:
+        assert r["card"] == ROLE_CARDS[r["id"]], (
+            f"role {r['id']}'s card must BE the existing ROLE_CARDS entry, "
             "not a paraphrase that can drift")
 
 
