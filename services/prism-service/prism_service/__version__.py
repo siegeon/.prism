@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.243"
+PRISM_VERSION = "7.13.244"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.244: the corpus-median snapshot refreshes when another connection writes. phase_progress reads every advance_task row once and holds the grouped result, and the instance-local invalidation only fires for writes made through the SAME TaskService. A reader-only service, a viewer or the adjudicator, therefore held a snapshot that predated every foreign advance and served a stale median and ETA for the life of the process. The snapshot is now keyed on PRAGMA data_version, sqlite own change counter, which moves when another connection commits and reads no table, so the key follows the WRITE and costs neither a second task_history statement nor the corpus scan it exists to skip. The child-count read stays scoped by parent_id, so EXPLAIN QUERY PLAN reports SEARCH tasks USING INDEX idx_tasks_parent. New suite test_phase_progress_uses_parent_index.py. 29 pinned and 147 neighbouring tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.238: a landed branch stays landed when main moves on. The borrowed-trailer guard compared the branch against origin/main TIP, which asks whether main STILL holds exactly this content. That drifts to false the moment any later work touches one of the same files, and __version__.py is touched by EVERY ship. Live on 338f7810: merged as 82ec1e2a, then refused twice because main had moved to 7.13.236 and 7.13.237. The question is whether the work LANDED, so the guard now measures at the landing commit, the one carrying the task trailer, and falls back to the tip only when no landing commit is found. New test test_later_work_on_a_shared_file_does_not_unland_a_shipped_branch, red at the base commit. 24 gate and shippedness tests green. '
 )
 
