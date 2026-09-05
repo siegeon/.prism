@@ -13,11 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.244"
+PRISM_VERSION = "7.13.246"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    '7.13.244: the corpus-median snapshot refreshes when another connection writes. phase_progress reads every advance_task row once and holds the grouped result, and the instance-local invalidation only fires for writes made through the SAME TaskService. A reader-only service, a viewer or the adjudicator, therefore held a snapshot that predated every foreign advance and served a stale median and ETA for the life of the process. The snapshot is now keyed on PRAGMA data_version, sqlite own change counter, which moves when another connection commits and reads no table, so the key follows the WRITE and costs neither a second task_history statement nor the corpus scan it exists to skip. The child-count read stays scoped by parent_id, so EXPLAIN QUERY PLAN reports SEARCH tasks USING INDEX idx_tasks_parent. New suite test_phase_progress_uses_parent_index.py. 29 pinned and 147 neighbouring tests green. '
+    '7.13.246: the corpus-median snapshot refreshes when another connection writes. phase_progress reads every advance_task row once and holds the grouped result, and the instance-local invalidation only fires for writes made through the SAME TaskService. A reader-only service, a viewer or the adjudicator, therefore held a snapshot that predated every foreign advance and served a stale median and ETA for the life of the process. The snapshot is now keyed on PRAGMA data_version, sqlite own change counter, which moves when another connection commits and reads no table, so the key follows the WRITE and costs neither a second task_history statement nor the corpus scan it exists to skip. The child-count read stays scoped by parent_id, so EXPLAIN QUERY PLAN reports SEARCH tasks USING INDEX idx_tasks_parent. New suite test_phase_progress_uses_parent_index.py. 29 pinned and 147 neighbouring tests green. '
 )
 
 PRISM_VERSION_NOTES += (
@@ -8442,4 +8442,60 @@ PRISM_VERSION_NOTES += (
     "snapshots throughout; only the separate workflow ENGINE is stubbed, with "
     "the models' own validated wire shape. 67 green across both suites and "
     "every neighbouring workflow/snapshot suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.244: the premises section is RENDERED from resolved facts instead of "
+    "retyped by a model. This was the board's dominant loss condition: measured "
+    "2026-09-05, premise_grounded refused 273 advances across 141 distinct "
+    "tasks (cdb8e365 82 times, 4c9b39e5 66), and every refusal burned a whole "
+    "claude -p drive and returned the task to the step it started on. The facts "
+    "were in hand each time -- premise_gather.gather already guarantees each "
+    "citation satisfies arc_governance's grounding regexes, and the runner puts "
+    "them in the prompt -- but the model was asked to RETYPE them into a "
+    "'## Premises' section and often did not. Same shape as the red-test-ids "
+    "stall: PRISM holds the fact, asks a model to restate it, parks when it "
+    "does not. New premise_gather.render_premises builds that section "
+    "deterministically -- every bullet's citation comes from a real gathered "
+    "fact, never invented, and an oracle clause no fact engages is marked "
+    "'clause N: UNRESOLVED, <why>', the exact marker score_oracle_engagement "
+    "names for a real gap. It grades against the REAL rubric functions, so it "
+    "cannot drift from what decides. task_runner._repair_premises applies it as "
+    "a FLOOR: a report that already passes is returned untouched, and when one "
+    "fails the rendered section becomes the premises while the model's own "
+    "prose is kept below it under a 'Notes (model draft, ungrounded)' heading "
+    "-- its reasoning is preserved, but unsourced claims never ride under a "
+    "heading asserting they are grounded. The citation check that already "
+    "detected this was ADVISORY ONLY and let the step park anyway; it now acts. "
+    "With no facts gathered it renders nothing rather than inventing claims. "
+    "9 new tests, red first; 152 green across every premise, arc-governance and "
+    "runner suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.245: review_previous_notes now resolves with NO model call. The node "
+    "declares a bounded middle (premise-judge, haiku, 2 turns, 0.50 usd, no "
+    "tools) because gather already resolved every citation it needs; the runner "
+    "sent the WHOLE step brief at 30 turns with the full tool set instead. Two "
+    "consequences, one cause: a step the node sizes at about two minutes ran for "
+    "an hour or more (durations recorded live: 7334463 ms, 6003890 ms, 4123014 "
+    "ms), which the canvas drew as OVERRUN 3956.2x; and the declared chain never "
+    "executed AS STEPS, so every sub-node on the Workflows canvas read 'too few "
+    "runs (0/20)' -- real work, entirely invisible, which is why the board could "
+    "not say what was happening. Now the deterministic chain runs FIRST: gather "
+    "resolves the citations, render builds the Premises section, and when that "
+    "section satisfies the SAME two teeth the gate scores (the citation tooth "
+    "and score_oracle_engagement, checked against arc_governance's own "
+    "functions) the step finishes there -- zero tokens, no claude -p at all -- "
+    "and records premise-render and premise-citation-check as real runs so the "
+    "canvas shows them. The model is the FALLBACK for the case the chain cannot "
+    "answer (nothing gathered), and even then it gets the node's narrow prompt "
+    "with the caps written for it and no tools, never the old monolith. "
+    "_invoke_batch's rule is kept exactly: the declared caps are adopted ONLY "
+    "alongside the declared prompt, never alone -- the negative case (task "
+    "6a7105f9 blocked three times when 2 turns met the full brief) is pinned. "
+    "15 new tests; two superseded contracts in "
+    "test_task_runner_honors_declared_node_plan re-anchored in place with a note "
+    "naming what replaced them. 196 green across every runner, premise, node and "
+    "api-workflows suite."
 )

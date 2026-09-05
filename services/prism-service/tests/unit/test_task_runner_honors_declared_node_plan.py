@@ -286,8 +286,14 @@ class _Result:
         return False
 
 
-def _drive_once(monkeypatch, step, tmp_path):
-    """Run _run_one_step for `step`, returning the invoke kwargs it used."""
+def _drive_once(monkeypatch, step, tmp_path, facts=None):
+    """Run _run_one_step for `step`, returning the invoke kwargs it used.
+
+    `facts=[]` makes the codified gather come up empty, which is the case
+    where the deterministic path cannot answer and the MODEL is reached --
+    the only way to exercise the invoke for review_previous_notes now that
+    gather -> render -> check resolves it without one.
+    """
     from prism_service.api import conductor_flow as flow
     from prism_service.inference import claude_cli
     from prism_service.services import task_workspace, premise_gather
@@ -303,10 +309,12 @@ def _drive_once(monkeypatch, step, tmp_path):
                         lambda tid: {"path": str(tmp_path)})
     monkeypatch.setattr(task_runner, "_stall_count", lambda *a, **k: 0)
     monkeypatch.setattr(task_runner, "_route_proof", lambda *a, **k: None)
-    monkeypatch.setattr(premise_gather, "gather", lambda *a, **k: [
+    _facts = [
         premise_gather.GatheredFact(
             kind="memory", text="The declared plan was ignored.",
-            citation="services/task_runner.py:656")])
+            citation="services/task_runner.py:656")
+    ] if facts is None else facts
+    monkeypatch.setattr(premise_gather, "gather", lambda *a, **k: _facts)
 
     def _fake_invoke(prompt, **kwargs):
         seen["prompt"] = prompt
@@ -318,25 +326,33 @@ def _drive_once(monkeypatch, step, tmp_path):
     return seen
 
 
-def test_run_one_step_applies_the_declared_model(monkeypatch, tmp_path):
-    """review_previous_notes reaches claude_cli on haiku, with full turns.
+def test_the_premise_step_reaches_no_model_when_the_facts_answer_it(
+        monkeypatch, tmp_path):
+    """SUPERSEDES the two tests that asserted this step reaches claude_cli.
 
-    The declared model is the saving that is safe to take; the declared
-    2-turn cap is not (see test_a_declared_plan_never_shrinks_the_turn_
-    budget).
+    gather -> render -> check is a complete deterministic chain, so with
+    facts in hand the step finishes with NO model call at all -- the point
+    of the node (owner: the model is the last resort, not the route). The
+    invoke contract below still holds for the case the chain cannot answer.
     """
     seen = _drive_once(monkeypatch, "review_previous_notes", tmp_path)
 
+    assert seen == {}, f"no model may be invoked when the facts answer it: {seen}"
+
+
+def test_the_declared_model_and_caps_apply_when_the_model_IS_reached(
+        monkeypatch, tmp_path):
+    """With nothing gathered the deterministic path cannot answer, so the
+    node's declared middle runs -- its narrow prompt WITH the caps written
+    for it, and no tools. (The old contract took the declared model but
+    kept the runner's 30 turns, because the full brief was still being
+    sent; adopting the prompt is what makes the caps valid.)"""
+    seen = _drive_once(monkeypatch, "review_previous_notes", tmp_path, facts=[])
+
     assert seen["model"] == "haiku"
-    assert seen["max_turns"] == task_runner._max_turns()
-
-
-def test_run_one_step_prepends_the_codified_facts(monkeypatch, tmp_path):
-    """The judge is handed resolved citations instead of grepping cold."""
-    seen = _drive_once(monkeypatch, "review_previous_notes", tmp_path)
-
-    assert "services/task_runner.py:656" in seen["prompt"]
-    assert seen["prompt"].endswith("DO THE STEP")
+    assert seen["max_turns"] == task_runner._max_turns(), (
+        "with nothing gathered there is no narrow prompt either, so the "
+        "runner's own turn budget must still govern")
 
 
 def test_run_one_step_leaves_a_build_step_alone(monkeypatch, tmp_path):

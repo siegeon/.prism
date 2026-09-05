@@ -2036,6 +2036,72 @@ def workflow_step_premise_citation_check(
             reason=result["reason"])
 
 
+class PremiseRenderRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    notes_md: str = ""
+
+
+class PremiseRenderResponse(BaseModel):
+    premises_md: str = ""
+    facts_used: int = 0
+    repaired: bool = False
+    reason: str = ""
+
+
+@router.post("/steps/premise-render")
+def workflow_step_premise_render(
+    body: PremiseRenderRequest, project: str = Query(...),
+) -> PremiseRenderResponse:
+    """CODIFIED. Builds the Premises section from the facts `gather` already
+    resolved, so this node stops depending on a model to retype them.
+
+    THE LOSS CONDITION THIS CLOSES: premise_grounded refused 273 advances
+    across 141 tasks (measured 2026-09-05), each burning a whole drive over
+    facts PRISM already held. `premise-citation-check` only REPORTED that --
+    it is advisory, so the step parked anyway. This node produces the
+    section instead of naming its absence.
+
+    Honest by construction: every citation comes from a real GatheredFact
+    and none is invented; an oracle clause no fact engages is marked
+    `clause N: UNRESOLVED, <why>`, the marker arc_governance's own
+    oracle-engagement tooth names for a real gap. With nothing gathered it
+    returns empty rather than asserting claims with no source. A report that
+    already grounds every claim is returned untouched with repaired=false --
+    a model that got it right is never overwritten. Never calls a model."""
+    with _tracer.start_as_current_span("workflow.step.premise_render") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return PremiseRenderResponse(reason=f"no such task: {body.task_id}")
+
+        from prism_service.services import premise_gather as pg
+
+        notes_md = body.notes_md
+        if not notes_md.strip():
+            notes_md = getattr(task, "premise_notes", "") or ""
+        if notes_md.strip() and pg.citation_check(notes_md).get("ok"):
+            return PremiseRenderResponse(
+                premises_md=notes_md, repaired=False,
+                reason="the report already grounds every claim; left untouched")
+
+        facts = pg.gather(
+            task, memory_svc=getattr(ctx, "memory_svc", None),
+            task_svc=ctx.task_svc, brain_svc=getattr(ctx, "brain_svc", None))
+        rendered = pg.render_premises(task, facts)
+        if not rendered.strip():
+            return PremiseRenderResponse(
+                facts_used=0, repaired=False,
+                reason="nothing gathered for this task -- refusing to assert "
+                       "claims that have no source")
+        return PremiseRenderResponse(
+            premises_md=rendered, facts_used=len(facts), repaired=True,
+            reason=f"rendered {len(facts)} grounded premise(s) from the "
+                   "codified gather")
+
+
 # ----------------------------------------------------------------------
 # CHALLENGE THE TEXT A NODE JUST WROTE (task d7947eb6)
 # ----------------------------------------------------------------------
