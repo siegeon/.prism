@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.239"
+PRISM_VERSION = "7.13.240"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8353,4 +8353,28 @@ PRISM_VERSION_NOTES += (
     "the 5 remaining failures (C# call graph, wheel packaging) reproduce "
     "identically on untouched origin/main and are environmental to this checkout. "
     "A real npm run build is green."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.240: a stall now reads the CODIFIED red test ids before it parks a "
+    "human. Task 404ef4ce shipped workflow_step_red_test_ids -- a node whose "
+    "whole purpose is to name a task's red test ids from data PRISM already "
+    "persists (task.verify, _red_step_sha, fresh_red_receipt) rather than from "
+    "model prose -- and it went green with no caller on the one path that "
+    "needed it. task_runner._handle_stall still grepped only the agentic step's "
+    "report, so a task whose pinned ids and red receipt were sitting in the "
+    "database still blocked with 'no red test id was named in the last proof'. "
+    "Observed live 2026-09-05 on 6a7105f9 and 0b5dd37c. The splitter now "
+    "consults the deterministic read when, and only when, the prose names "
+    "nothing; an empty codified read still parks the task but carries the "
+    "node's own reason (no anchor, no fresh receipt, not pytest-backed) so the "
+    "next action is named, keeping the canonical opening phrase that only a "
+    "KILL may replace. Also fixes a real bug the wiring exposed: the ownership "
+    "filter compared a test id's FILE basename against the pinned entry's FULL "
+    "basename, so any task whose verify pins 'path.py::test_name' node ids had "
+    "EVERY id filtered out and parked with nothing to split on however well its "
+    "proof named them (live shape: cdb8e365 pins five ::-qualified ids). Now "
+    "file-against-file both sides, with the 72ccaf94 guard against splitting "
+    "unrelated suites re-pinned. 6 new tests, red first as a tests-only commit; "
+    "99 green across every neighbouring stall/runner suite."
 )
