@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.236"
+PRISM_VERSION = "7.13.237"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.237: an oscillating task hits a dispatch ceiling no reset can lift. 7.13.233 taught the sweep to reset a spent retry budget when a conductor transition landed after the last charged attempt, which is right for a task that moved on, and which removed the only backstop for a task that OSCILLATES. Regression from that fix, live on 338f7810: the drive advanced, was refused, rewound and advanced again, so every sweep saw a newer transition, reset the budget and dispatched again. 37 dispatches over 4 hours 40 minutes, never parking. The owner saw a cycle with hundreds of attempts. The per-pass budget still governs the ordinary case. A new ceiling counts every dispatch the seat ever made for the task, from durable history, and parks at 12 by default, tunable with PRISM_RESUME_ACTUATOR_MAX_TOTAL. Its park message says the task kept moving without reaching a terminal state, which is a different problem from a step that never advanced once. New suite test_dispatch_ceiling_stops_an_oscillating_task.py. 37 actuator tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.236: the pytest oracle runs where CI runs. _run_pytest_ids ran from the workspace ROOT while pr-checks.yml runs the suite with working-directory services/prism-service, the directory holding pyproject.toml pytest config. Different rootdir, different conftest resolution, opposite verdicts. Live on task 338f7810: its pinned pair passed 39 of 39 the way CI runs it and failed 1 of 39 the way the oracle ran it, so green_gate refused work CI was happy with and the adjudicator rewound a task that had ALREADY landed on main as 82ec1e2a. A verdict that does not predict CI is not evidence. When every pinned id sits under one subdirectory carrying its own pyproject.toml, the oracle now runs there with ids relative to it. Ids spanning two projects, an absolute id, or a flat repo keep today behaviour. New suite test_pytest_oracle_runs_where_ci_runs.py, red at the base commit. 179 oracle, verifier and adjudicator tests green. '
 )
 

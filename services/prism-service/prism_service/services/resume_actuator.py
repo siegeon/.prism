@@ -38,6 +38,28 @@ PARKED_ACTION = "resume_actuator_parked"
 
 DEFAULT_MAX_RETRIES = 3
 
+# ABSOLUTE CEILING ON DISPATCHES PER TASK, which no reset can lift.
+# 7.13.233 taught the sweep to reset a spent budget when a conductor
+# transition landed after the last charged attempt — right for a task
+# that genuinely moved on, but it removed the only backstop for a task
+# that OSCILLATES. Live on 338f7810 (2026-09-05): the drive advanced,
+# was refused, rewound and advanced again, so transitions never stopped,
+# the budget reset every sweep, and the seat dispatched 37 times over
+# 4h40m without ever parking. The owner saw it as "stuck in some type of
+# cycle" with "hundreds of attempts".
+# The per-pass budget still governs the normal case. This counts every
+# dispatch this seat has EVER made for the task, from durable history, so
+# an oscillating task stops even while it keeps producing transitions.
+DEFAULT_MAX_TOTAL_DISPATCHES = 12
+
+
+def _max_total_dispatches() -> int:
+    raw = os.environ.get("PRISM_RESUME_ACTUATOR_MAX_TOTAL", "")
+    try:
+        return max(1, int(raw)) if raw.strip() else DEFAULT_MAX_TOTAL_DISPATCHES
+    except ValueError:
+        return DEFAULT_MAX_TOTAL_DISPATCHES
+
 
 def _interval_s() -> int:
     raw = os.environ.get("PRISM_RESUME_ACTUATOR_INTERVAL", "")
@@ -228,6 +250,42 @@ def release(project: str, task_id: str, actor: str = "human") -> dict:
             "unparked": parked_by_seat}
 
 
+def _total_dispatches(project: str, task_id: str) -> int:
+    """Every dispatch this seat has EVER made for `task_id`, from durable
+    history. Survives a daemon restart, and no budget reset can lower it —
+    that is the point: it is the backstop for a task that oscillates."""
+    try:
+        from prism_service.project_context import get_project
+
+        rows = get_project(project).task_svc.history(task_id) or []
+    except Exception:
+        return 0
+    return sum(1 for r in rows
+               if str(getattr(r, "action", "") or "") == DISPATCH_ACTION)
+
+
+def _park_looping(project: str, task_id: str, total: int,
+                  ceiling: int) -> dict:
+    """Park a task this seat has re-driven past its absolute ceiling.
+
+    Distinct from _park's spent-budget message on purpose: a person
+    reading this needs to know the task kept MOVING and still never
+    finished, which is a different problem from a step that never
+    advanced once."""
+    from prism_service.project_context import get_project
+
+    ctx = get_project(project)
+    reason = (f"resume-actuator: {total} dispatches for this task, at the "
+              f"ceiling of {ceiling}. The task kept changing step without "
+              "reaching a terminal state, so re-driving it is not making "
+              "progress. Parked for a person.")
+    ctx.task_svc.update(task_id, status="blocked", blocked_reason=reason)
+    ctx.task_svc.record_history(task_id, action=PARKED_ACTION,
+                                details=reason, actor=SEAT)
+    return {"ok": False, "task_id": task_id, "parked": True,
+            "looping": True, "reason": reason}
+
+
 def _dispatch_count(task_svc, task_id: str) -> int:
     """How many times this seat has dispatched THIS task, from durable
     history. Strictly non-decreasing and restart-safe, which is what
@@ -405,6 +463,14 @@ def sweep_once_for(project: str) -> Optional[dict]:
 
     task_id = _open_retry_task_id(project)
     if task_id is not None:
+        # THE CEILING NO RESET CAN LIFT. Checked BEFORE the per-pass
+        # budget, because that budget resets on every transition and an
+        # oscillating task never stops producing them (338f7810: 37
+        # dispatches over 4h40m, advancing and rewinding the whole time).
+        total = _total_dispatches(project, task_id)
+        ceiling = _max_total_dispatches()
+        if total >= ceiling:
+            return _park_looping(project, task_id, total, ceiling)
         attempts = rad.attempt_count(scores_db, task_id)
         if attempts >= max_retries:
             # A BUDGET ONLY COUNTS AGAINST WORK THAT HAS NOT MOVED (task
