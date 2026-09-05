@@ -235,3 +235,61 @@ def test_the_node_makes_no_model_call(tmp_path):
         assert banned not in src, (
             f"{banned!r} in brain_health.py -- the node must not run a "
             "thread, a timer or a polling loop")
+
+
+# ---------------------------------------------------------------------------
+# Task 4c9b39e5 -- "The flow keeps the brain healthy as it changes", AC-1.
+#
+# TRACE. The node below is BUILT and it EXECUTES: ship_worker.py:638,643-662
+# calls it after land, api/workflows.py:2813-2836 exposes
+# POST /steps/brain-health, and api/workflows.py:1415-1428 nests it under
+# conductor on the Workflows rail. The canvas the flow WALKS does not hold it.
+# `CONDUCTOR_NODES` (flow_run_recorder.py:58-59) is built from WORKFLOW_STEPS
+# plus SHIPPED_NODE and REAP_NODE only, so the node runs and the canvas stays
+# silent about it -- the built-but-unwired fault this node exists to catch.
+#
+#   RED AT THE BASE COMMIT cec813dfc99a, measured in this worktree on
+#   2026-09-05: run from services/prism-service,
+#     python -c "from prism_service.services.flow_run_recorder import \
+#       CONDUCTOR_NODES as n; i=n.index('brain-health')"
+#   exits rc=1 with `ValueError: tuple.index(x): x not in tuple`, and the
+#   printed tuple ends ('green_gate', 'land', 'reap').
+#   FIX LANDS IN: prism_service/services/flow_run_recorder.py -- import
+#   HEALTH_NODE from the service that OWNS the Behavior (the shape REAP_NODE
+#   already uses at line 56) and build the tuple as
+#   [step ids] + [SHIPPED_NODE, HEALTH_NODE, REAP_NODE].
+# ---------------------------------------------------------------------------
+
+def test_the_walked_flow_holds_brain_health_between_land_and_reap() -> None:
+    """AC-1, plus the task's third stop_if line.
+
+    The node sits AFTER land, because it indexes what the play wrote, and
+    BEFORE reap, because reap deletes the workspace the play wrote from.
+    It reaches the canvas through the node list, never through the
+    WORKFLOW_STEPS enum -- models/workflow.py is read by conductor_service.py,
+    a control_plane.POLICY_FILES entry, so a feature task that edits it fails
+    its own candidate-controls-judge tooth.
+    """
+    from prism_service.models.workflow import WORKFLOW_STEPS
+    from prism_service.services import brain_health
+    from prism_service.services import flow_run_recorder as rec
+
+    nodes = list(rec.CONDUCTOR_NODES)
+    assert brain_health.HEALTH_NODE == "brain-health"
+    assert brain_health.HEALTH_NODE in nodes, (
+        "the brain-health node executes after every land but the flow the "
+        f"canvas walks does not hold it: {nodes}")
+
+    i = nodes.index(brain_health.HEALTH_NODE)
+    assert nodes[i - 1] == "land", (
+        f"brain-health must follow land, not {nodes[i - 1]!r}: {nodes}")
+    assert nodes[i + 1] == rec.REAP_NODE, (
+        "reap deletes the workspace, so brain-health must run before it, "
+        f"not after {nodes[i + 1]!r}: {nodes}")
+    assert nodes[-1] == rec.REAP_NODE, nodes
+
+    fsm_ids = {str(s["id"]) for s in WORKFLOW_STEPS}
+    assert brain_health.HEALTH_NODE not in fsm_ids, (
+        "brain-health was added to WORKFLOW_STEPS -- that edits a module "
+        "conductor_service.py reads, and conductor_service.py is a "
+        "control_plane.POLICY_FILES entry")

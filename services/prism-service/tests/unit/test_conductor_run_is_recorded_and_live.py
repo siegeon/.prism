@@ -224,8 +224,15 @@ def test_ac3b_the_canvas_flow_ends_on_land_without_touching_the_fsm_enum(
     # prism/ws/<task_id> branch. The invariant this test really guards is
     # untouched and still pinned below: the canvas grows terminal nodes
     # WITHOUT editing the WORKFLOW_STEPS enum.
-    assert nodes[-2:] == ["land", "reap"]
-    assert nodes.index("green_gate") < nodes.index("land")
+    # SUPERSEDED AGAIN 2026-09-05 by task 4c9b39e5, which put the codified
+    # `brain-health` node between land and reap. `nodes[-2:]` pinned a fixed
+    # COUNT of post-land nodes, so it broke on every further terminal node.
+    # The invariant this test really guards -- the canvas grows terminal
+    # nodes WITHOUT editing the WORKFLOW_STEPS enum -- is untouched and is
+    # still pinned by the loop and the fsm_ids check below.
+    assert nodes[-1] == "reap", nodes
+    assert nodes.index("green_gate") < nodes.index("land") < nodes.index(
+        "reap"), nodes
     for step in WORKFLOW_STEPS:
         assert step["id"] in nodes, step["id"]
 
