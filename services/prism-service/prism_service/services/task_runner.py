@@ -507,6 +507,67 @@ def _release(task_id: str) -> None:
         _IN_FLIGHT.discard(task_id)
 
 
+def _concurrency() -> int:
+    """How many tasks one sweep may drive at the same time.
+
+    This seat used to drive exactly ONE task per tick, globally, across every
+    project -- so the only actor that can move the board unattended advanced
+    one step at a time while ~90 tasks sat open (owner, 2026-09-05: "i still
+    see 89 open tasks"). implement_tasks alone has a ~474s median, so a serial
+    seat could never finish a real backlog however many gates were cleared.
+
+    The bound stays REAL, and it is not the only one: the host load breaker
+    (_system_overloaded) and the spend ceiling (_spend_ceiling_crossed) still
+    refuse an entire tick before any of these start, and run_one_step's own
+    claim lease still makes driving one task twice at once impossible.
+    """
+    try:
+        return max(1, int(os.environ.get("PRISM_TASK_RUNNER_CONCURRENCY", "4")))
+    except ValueError:
+        return 4
+
+
+def eligible_tasks(project: str, limit: int = 1) -> list[str]:
+    """Up to `limit` task ids this tick may drive in `project`.
+
+    THE one eligibility rule -- `eligible_task` is this function with
+    limit=1, never a second copy that can drift away from it.
+    """
+    from prism_service.project_context import get_project
+    from prism_service.services.conductor_service import ConductorService
+
+    if limit <= 0:
+        return []
+    if _spend_ceiling_crossed():
+        return []
+    if _system_overloaded():
+        return []
+
+    out: list[str] = []
+    ctx = get_project(project)
+    for t in ctx.task_svc.list(status="in_progress"):
+        if t.id in _IN_FLIGHT:
+            continue
+        # Somebody else is demonstrably driving this task right now. Skipping
+        # is not a refusal to work -- the beat goes stale within
+        # HEARTBEAT_WINDOW_S of that driver stopping, and the task becomes
+        # eligible again on a later tick.
+        foreign = _foreign_driver_on(project, t.id)
+        if foreign:
+            _log(f"skipping {t.id[:8]}: driver {foreign!r} is live on it")
+            continue
+        if not t.workflow_step:
+            out.append(t.id)
+        else:
+            step = ConductorService._step_by_id(t.workflow_step)
+            if step is None or step["type"] == "gate":
+                continue
+            out.append(t.id)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def eligible_task(project: str) -> Optional[str]:
     """The id of the one task this tick may drive in `project`, or None.
 
@@ -522,33 +583,8 @@ def eligible_task(project: str) -> Optional[str]:
     never eligible under any check that requires it non-empty first (epic
     3baadd19's own oracle: set in_progress and touch nothing else).
     """
-    from prism_service.project_context import get_project
-    from prism_service.services.conductor_service import ConductorService
-
-    if _spend_ceiling_crossed():
-        return None
-    if _system_overloaded():
-        return None
-
-    ctx = get_project(project)
-    for t in ctx.task_svc.list(status="in_progress"):
-        if t.id in _IN_FLIGHT:
-            continue
-        # Somebody else is demonstrably driving this task right now. Skipping
-        # is not a refusal to work -- the beat goes stale within
-        # HEARTBEAT_WINDOW_S of that driver stopping, and the task becomes
-        # eligible again on a later tick.
-        foreign = _foreign_driver_on(project, t.id)
-        if foreign:
-            _log(f"skipping {t.id[:8]}: driver {foreign!r} is live on it")
-            continue
-        if not t.workflow_step:
-            return t.id
-        step = ConductorService._step_by_id(t.workflow_step)
-        if step is None or step["type"] == "gate":
-            continue
-        return t.id
-    return None
+    found = eligible_tasks(project, 1)
+    return found[0] if found else None
 
 
 def _route_proof(task_svc, task_id: str, step_id: str, proof: str) -> None:
@@ -1088,12 +1124,21 @@ def _run_one_step(project: str, task_id: str) -> dict:
 
 def sweep_once() -> Optional[dict]:
     """One pass over every project, starting from a ROTATING offset: drive
-    the first eligible task found and stop — AT MOST one task advances per
-    tick, bounding blast radius. The starting project rotates every tick
-    (module-level _rr_index) so no single project can monopolize the one
-    work slot forever just by sorting first and always having something
-    eligible. Returns the run_one_step result, or None when nothing was
-    eligible.
+    up to `_concurrency()` eligible tasks AT THE SAME TIME, then stop.
+
+    This used to drive the first eligible task found and return -- at most
+    one task per tick, globally. That bounded blast radius and also bounded
+    THROUGHPUT to one step at a time for the only seat that can move the
+    board unattended, which is why a ~90-task backlog stayed a ~90-task
+    backlog. The blast radius is still bounded, just not at one: the host
+    load breaker and the spend ceiling refuse the whole tick before anything
+    starts, the count is capped by PRISM_TASK_RUNNER_CONCURRENCY, and every
+    drive still goes through run_one_step's per-task claim lease.
+
+    The starting project rotates every tick (module-level _rr_index) so no
+    single project can monopolize the work slots forever just by sorting
+    first and always having something eligible. Returns the first drive's
+    result, or None when nothing was eligible.
     """
     from prism_service.project_context import get_all_projects
 
@@ -1110,24 +1155,59 @@ def sweep_once() -> Optional[dict]:
         start = _rr_index % len(projects)
     ordered = projects[start:] + projects[:start]
 
+    limit = _concurrency()
+    picked: list[tuple[str, str]] = []
+    first_pid: Optional[str] = None
     for pid in ordered:
+        if len(picked) >= limit:
+            break
         try:
-            task_id = eligible_task(pid)
+            found = eligible_tasks(pid, limit - len(picked))
         except Exception as exc:
             _log(f"{pid}: eligibility check failed: {exc}")
             continue
-        if task_id is None:
+        if not found:
             continue
+        if first_pid is None:
+            first_pid = pid
+        picked.extend((pid, tid) for tid in found)
+
+    if not picked:
+        return None
+
+    with _RR_LOCK:
+        # Next tick starts AFTER the first project that had work -- the
+        # actual round-robin advance. Re-index against the CURRENT `projects`
+        # list (not `ordered`) so a project add/remove between ticks can't
+        # skew the offset.
+        _rr_index = (projects.index(first_pid) + 1) % len(projects)
+
+    if len(picked) == 1:
+        pid, task_id = picked[0]
         res = run_one_step(pid, task_id)
         _log(f"{pid}/{task_id[:8]}: {res}")
-        with _RR_LOCK:
-            # Next tick starts AFTER this project -- the actual round-robin
-            # advance. Re-index against the CURRENT `projects` list (not
-            # `ordered`) so a project add/remove between ticks can't skew
-            # the offset.
-            _rr_index = (projects.index(pid) + 1) % len(projects)
         return res
-    return None
+
+    # DRIVEN AT THE SAME TIME, not merely in a tighter serial loop: each of
+    # these blocks for minutes inside claude_cli, so overlapping them is the
+    # whole point. Each still goes through run_one_step, so the per-task claim
+    # lease, the worktree, and every gate tooth behave exactly as they do for
+    # a single drive.
+    from concurrent.futures import ThreadPoolExecutor
+
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=len(picked),
+                            thread_name_prefix="prism-drive") as pool:
+        futures = [(pid, tid, pool.submit(run_one_step, pid, tid))
+                   for pid, tid in picked]
+        for pid, tid, fut in futures:
+            try:
+                res = fut.result()
+            except Exception as exc:                  # never kill the tick
+                res = {"ok": False, "task_id": tid, "reason": str(exc)}
+            _log(f"{pid}/{tid[:8]}: {res}")
+            results.append(res)
+    return results[0] if results else None
 
 
 # A task becoming eligible (status -> in_progress, or a step/gate transition)
