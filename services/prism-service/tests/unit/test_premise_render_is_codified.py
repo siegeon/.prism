@@ -163,3 +163,44 @@ def test_a_report_that_already_passes_is_left_alone():
 
     good = premise_gather.render_premises(_task(""), _facts())
     assert tr._repair_premises(good, _task(""), _facts()) == good
+
+
+# --- AC-5: the NODE itself declares the codified render -----------------
+
+def test_the_review_notes_node_declares_a_codified_render_step():
+    """The upgrade is to the WORKFLOW NODE, not just the driver: the
+    behaviour JSON the engine executes must carry the render as a real
+    http-callback step, positioned AFTER the agentic loop (the model gets
+    its chance first) and BEFORE check (so check grades a section that can
+    actually pass)."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    node = json.loads(
+        (root / ".prism/behaviors/conductor/review-previous-notes-loop.json")
+        .read_text(encoding="utf-8"))
+    ids = [s["id"] for s in node["steps"]]
+
+    assert "render" in ids, ids
+    assert ids.index("loop") < ids.index("render") < ids.index("check"), ids
+
+    render = node["steps"][ids.index("render")]
+    assert render["kind"] == "http-callback"
+    assert "/api/workflows/steps/premise-render" in render["url"], render["url"]
+
+    # Only the judge stays agentic; everything else is deterministic.
+    agentic = [s["id"] for s in node["steps"] if "premise-judge" in s.get("url", "")]
+    assert agentic == ["loop"], agentic
+
+
+def test_the_render_endpoint_exists_and_is_codified():
+    """The node's url must resolve to a real route that never calls a
+    model -- a node step pointing at nothing is the built-but-unwired
+    fault this whole change exists to stop repeating."""
+    from prism_service.api import workflows as wf
+
+    assert hasattr(wf, "workflow_step_premise_render")
+    doc = wf.workflow_step_premise_render.__doc__ or ""
+    assert "CODIFIED" in doc
+    assert "Never calls a model" in doc

@@ -445,12 +445,23 @@ def test_review_previous_notes_behavior_is_three_steps_agentic_only_in_the_middl
     # the judge in the middle -- is asserted below against the model
     # payload rather than against a fixed step count, so a further
     # codified step cannot break it again.
-    assert ids[:3] == ["gather", "loop", "check"]
-    assert "/steps/premise-gather" in steps[0]["url"]
-    assert "/steps/premise-judge" in steps[1]["url"]
-    assert "/steps/premise-citation-check" in steps[2]["url"]
-    assert ids[3:] == ["text-challenge"]
-    assert "/steps/text-challenge" in steps[3]["url"]
+    # SUPERSEDED AGAIN (premise-render): a codified `render` step now sits
+    # between the judge and the check, so the section the check grades is
+    # BUILT from the facts `gather` resolved instead of depending on the
+    # model to retype them -- premise_grounded had refused 273 advances
+    # across 141 tasks that way. As this test's own note above predicted,
+    # the fixed sequence is what keeps breaking, so the ORDER that actually
+    # matters is asserted by position-of rather than by index.
+    by_id = {s["id"]: s for s in steps}
+    for expected in ("gather", "loop", "render", "check", "text-challenge"):
+        assert expected in by_id, ids
+    assert ids.index("gather") < ids.index("loop") < ids.index("render") \
+        < ids.index("check") < ids.index("text-challenge"), ids
+    assert "/steps/premise-gather" in by_id["gather"]["url"]
+    assert "/steps/premise-judge" in by_id["loop"]["url"]
+    assert "/steps/premise-render" in by_id["render"]["url"]
+    assert "/steps/premise-citation-check" in by_id["check"]["url"]
+    assert "/steps/text-challenge" in by_id["text-challenge"]["url"]
     # the judge is the ONLY step carrying a model -- every other step is a
     # pure http-callback with no reasoning payload at all
     agentic = [s["id"] for s in steps if "model" in s["body"]]

@@ -2,8 +2,8 @@
   "id": "review-previous-notes-loop",
   "fsmId": "pipeline",
   "botId": "conductor",
-  "name": "Review previous notes (Gather-Judge-Check, task cd33263f)",
-  "version": 3,
+  "name": "Review previous notes (Gather-Judge-Render-Check, task cd33263f)",
+  "version": 4,
   "steps": [
     {
       "id": "gather",
@@ -18,6 +18,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/premise-judge?project=${project}",
       "body": "{\"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 2, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
+    },
+    {
+      "id": "render",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/premise-render?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
     },
     {
       "id": "check",
