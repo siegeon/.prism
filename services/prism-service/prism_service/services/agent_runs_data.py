@@ -163,6 +163,20 @@ def _has_llm_turn_signature(row: dict) -> bool:
         return False
 
 
+# Attribution for a step whose driver named no model. A seat that reports
+# nothing must still be attributed BY NAME: a null model paints a blank cell
+# on the Trace tab, which reads as "PRISM lost the attribution" when the true
+# statement is "the driver did not say" (task 67b4b2f6). Applied at the
+# conductor write seam and again on read, so rows written before this landed
+# also render an honest name instead of an empty one.
+UNREPORTED_MODEL = "unreported"
+
+
+def model_or_unreported(model: object) -> str:
+    """The model name to attribute a step to, never empty."""
+    return str(model).strip() if str(model or "").strip() else UNREPORTED_MODEL
+
+
 # Per-model max context window (tokens the model can hold in one turn).
 # Mirrors PRICING's shape and sourcing discipline (the claude-api skill's
 # current model table) but for a CEILING, not a $ rate. Every Claude 4.x/5
@@ -461,6 +475,14 @@ def upsert_agent_run(scores_db: str, row: dict) -> dict:
             "step": (row or {}).get("step"),
         }
 
+    # A seat that named no model is still attributed BY NAME (task 67b4b2f6).
+    # A NULL model paints a blank cell on the Trace tab, and a reader takes a
+    # blank as lost attribution when the true statement is "the driver did not
+    # report one". Normalised here, at the one seam every writer goes through.
+    if not str(row.get("model") or "").strip():
+        row = dict(row)
+        row["model"] = UNREPORTED_MODEL
+
     vals = []
     for c in _COLS:
         v = row.get(c)
@@ -747,7 +769,7 @@ def build_task_trace(
         sess["steps"].append({
             "step": r["step"],
             "role": r["role"],
-            "model": r["model"],
+            "model": model_or_unreported(r["model"]),
             "tokens": tok,
             "cost_usd": cost,
             "gate_state": r["gate_state"],
