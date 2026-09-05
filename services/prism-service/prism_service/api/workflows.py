@@ -949,7 +949,10 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
     # real runs on file -- the fields were present and empty, which reads
     # exactly like no data.
     def _key(step: dict) -> str:
-        url = step.get("url") or ""
+        route = step.get("route")
+        if route:
+            return str(route)
+        url = step.get("url") or step.get("action") or ""
         if "/steps/" in url:
             return url.split("/steps/")[-1].split("?")[0]
         return step["id"]
@@ -1038,6 +1041,8 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                 kind = step.get("kind") or step.get("Kind") or "shell"
                 command = step.get("command") or step.get("Command") or ""
                 url = step.get("url") or step.get("Url") or ""
+                route = (url.split("/steps/")[-1].split("?")[0]
+                         if "/steps/" in url else "")
                 steps.append({
                     "id": step_id,
                     "agent": "conductor",
@@ -1049,6 +1054,15 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                     # reason loop is agentic; "call-llm" running a shell
                     # command is not.
                     "agentic": _step_is_agentic(kind, url),
+                    # The PRISM route this step calls. A behaviour step is
+                    # named for its position in the flow ("gather"), while
+                    # its runs are recorded under the route ("premise
+                    # -gather") -- keeping the route here is what lets the
+                    # canvas find them. The url itself is not carried on the
+                    # built step (it becomes `action`), so without this the
+                    # lookup silently fell back to the id and every node
+                    # read zero.
+                    "route": route,
                     "validation": "exit_code == 0",
                     "persona": "conductor",
                     "persona_label": "Conductor",

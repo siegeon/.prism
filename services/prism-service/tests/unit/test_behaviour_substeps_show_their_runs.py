@@ -69,9 +69,11 @@ def test_the_behaviour_builder_stamps_its_steps(monkeypatch, tmp_path):
                           "behaviorIds": ["review-previous-notes-loop"]}]}
 
     monkeypatch.setattr(wf, "_workflow_engine_json", _engine)
+    # keyed by the ROUTE the step calls, not its position name
     monkeypatch.setattr(wf, "node_token_trend", lambda db, ids: {
-        "gather": {"multiplier": 0.5, "avg_tokens": 800, "sample_count": 149,
-                   "window": 20, "indeterminate": False}})
+        "premise-gather": {"multiplier": 0.5, "avg_tokens": 800,
+                           "sample_count": 149, "window": 20,
+                           "indeterminate": False}})
 
     entries = wf._conductor_behavior_workflows("prism")
     for e in entries:
@@ -148,3 +150,22 @@ def test_an_unreadable_scores_db_reports_zero_never_raises(tmp_path):
               "url": "http://x/api/workflows/steps/premise-gather?project=p"}]
     wf._attach_node_trend(tmp_path / "nope.db", steps)
     assert steps[0]["run_count"] == 0
+
+
+def test_the_built_step_records_the_route_it_calls(monkeypatch):
+    """The built catalog step does NOT carry `url` -- the engine's url
+    becomes `action` -- so the route has to be recorded explicitly at build
+    time. Without it every lookup fell back to the step id and read zero,
+    which is exactly what the canvas showed."""
+    def _engine(path, **_kw):
+        if "/behaviors/" in path:
+            return {"id": "b", "steps": [
+                {"id": "gather", "kind": "http-callback",
+                 "url": "http://x/api/workflows/steps/premise-gather?project=p"}]}
+        return {"fsms": [{"fsmId": "pipeline", "behaviorIds": ["b"]}]}
+
+    monkeypatch.setattr(wf, "_workflow_engine_json", _engine)
+    entries = wf._conductor_behavior_workflows("prism")
+
+    step = entries[0]["steps"][0]
+    assert step["route"] == "premise-gather", step
