@@ -663,7 +663,63 @@ def _green_gate_ever_passed(task_svc, task_id: str) -> bool:
     return False
 
 
-def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
+def _codified_red_test_ids(project: str, task_id: str) -> tuple[list[str], str]:
+    """This task's red test ids, read off data PRISM already persists.
+
+    THE DETERMINISTIC HALF of the stall splitter. task.verify names the
+    pinned targets, ConductorService._red_step_sha resolves the red anchor,
+    and oracle_spec.fresh_red_receipt records whether a trusted run actually
+    demonstrated red there -- three facts a model should never have to
+    retype into its prose for the runner to find them.
+
+    Mirrors api.workflows.workflow_step_red_test_ids (the codified node task
+    404ef4ce shipped) rather than re-deciding anything: same OracleSpec, same
+    anchor, same receipt. PURE READS -- never runs pytest, never invokes a
+    model, never takes a repo or worktree lock. Returns (ids, reason); an
+    empty list always carries the reason it is empty, so a parked task can
+    say WHY the deterministic read found nothing instead of blaming a proof
+    that was never the authority.
+    """
+    try:
+        from prism_service.services import oracle_spec as osp
+        from prism_service import project_context as _pc
+
+        # Resolved through the module global when a caller has replaced it
+        # (the rest of this module imports get_project lazily to dodge an
+        # import cycle, so there is no module-level name to patch).
+        _get_project = globals().get("get_project", _pc.get_project)
+
+        ctx = _get_project(project)
+        task = ctx.task_svc.get(task_id)
+        if task is None:
+            return [], f"no such task: {task_id}"
+
+        spec = osp.OracleSpec.from_task(task)
+        if spec.adapter != osp.ADAPTER_PYTEST:
+            return [], ("task's derived oracle spec is not pytest-backed "
+                        f"(adapter={spec.adapter}) -- no pytest node ids to name")
+
+        pinned = [t for t in spec.target.split() if t]
+        if not pinned:
+            return [], "task.verify names no pytest node ids or test paths"
+
+        red_sha = ctx.conductor_svc._red_step_sha(task_id)
+        if not red_sha:
+            return [], ("no red-step commit resolved yet -- "
+                        "write_failing_tests hasn't landed a tests-only commit")
+
+        fresh = osp.fresh_red_receipt(project, task_id, red_sha, spec.spec_hash())
+        if fresh is None:
+            return [], ("no fresh red receipt for the current red-step commit "
+                        f"({red_sha[:12]}) -- nothing observed failing there yet")
+
+        return pinned, f"red demonstrated at {red_sha[:12]}: {fresh.reason}"
+    except Exception as exc:                                   # never wedge a stall
+        return [], f"codified red-test-id read failed: {exc}"
+
+
+def _handle_stall(task_svc, task_id: str, step_id: str,
+                  project: str = "") -> dict:
     """Fourth tick on a stalled step: close if shipped, else decompose or
     block, never invoke.
 
@@ -755,11 +811,32 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
         # retire a contract this change has no quarrel with.
         if not pinned:
             return True
+        # FILE against FILE on BOTH sides. `pinned` entries are whatever
+        # task.verify holds, which is routinely a `path.py::test_name` node
+        # id -- comparing a bare file basename against that full string never
+        # matched, so every id was filtered out and the splitter parked a task
+        # that had named its red tests perfectly well. Live shape: task
+        # cdb8e365 pins five ::-qualified ids.
         f = test_id.split("::", 1)[0].split("/")[-1]
-        return any(f == p.split("/")[-1] for p in pinned)
+        return any(f == p.split("::", 1)[0].split("/")[-1] for p in pinned)
 
     ids = [i for i in red_test_ids(getattr(parent, "completion_proof", "") or "")
            if _is_ours(i)]
+    # THE PROSE IS NOT THE AUTHORITY. When the agentic step's report happens
+    # not to retype a pytest node id, fall back to the CODIFIED read: the
+    # pinned ids this task already declares, confirmed red by a fresh receipt
+    # at its own anchor. Without this, a task with everything it needs sitting
+    # in the database still parked for a human -- 6a7105f9 and 0b5dd37c were
+    # both blocked that way on 2026-09-05, and task 404ef4ce built the node
+    # that answers it (owner: "making maximum codified nodes from agentic
+    # blocks so we can not stall"). Consulted ONLY when the prose names
+    # nothing, so the existing path keeps its behaviour unchanged.
+    codified_reason = ""
+    if not ids and project:
+        # No project => nothing to read; stay a strict no-op so the
+        # pre-existing message and behaviour are untouched.
+        _codified, codified_reason = _codified_red_test_ids(project, task_id)
+        ids = [i for i in _codified if _is_ours(i)]
     # IDEMPOTENT. A stall that fires twice must not double the board: skip any
     # test id an OPEN child already covers. 72ccaf94 reached 30 children as
     # three identical sets of ten before this existed.
@@ -802,6 +879,15 @@ def _handle_stall(task_svc, task_id: str, step_id: str) -> dict:
                    f"{int(_step_timeout_s(step_id))}s budget. Raise "
                    f"PRISM_TASK_RUNNER_STEP_TIMEOUT_S, or narrow what this "
                    f"step has to run")
+    elif codified_reason:
+        # Says what the DETERMINISTIC read found, not just what the prose
+        # lacked -- the real answer is one of the codified node's own reasons
+        # (no anchor yet, no fresh receipt, not pytest-backed), which names
+        # the next action. Keeps the canonical opening phrase verbatim: it is
+        # this stall's stable, asserted-on wording, and only a KILL is
+        # allowed to replace it (see _last_outcome_was_a_kill above).
+        reason += ("no red test id was named in the last proof, and the "
+                   f"codified read found none either: {codified_reason}")
     else:
         reason += "no red test id was named in the last proof"
     task_svc.update(task_id, status="blocked", blocked_reason=reason)
@@ -861,7 +947,7 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 "reason": "no eligible agent job (gate or terminal)"}
 
     if _stall_count(task_svc, task_id, job["step"]) >= STALL_ATTEMPTS:
-        return _handle_stall(task_svc, task_id, job["step"])
+        return _handle_stall(task_svc, task_id, job["step"], project=project)
 
     ws = task_workspace.workspace_for(task_id) or {}
     work_dir = ws.get("path")

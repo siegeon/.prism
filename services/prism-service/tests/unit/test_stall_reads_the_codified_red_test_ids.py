@@ -154,6 +154,46 @@ def test_an_empty_codified_read_parks_with_the_nodes_own_reason(
     assert "no fresh red receipt" in reason, reason
 
 
+def test_a_task_pinning_node_ids_can_still_be_split(runner, monkeypatch):
+    """AC-5 (regression). The ownership filter compared a test id's FILE
+    basename against the pinned entry's FULL basename, so a task whose
+    `verify` pins `path.py::test_name` node ids -- rather than bare files --
+    had EVERY id filtered out and parked with nothing to split on, however
+    well its proof named them. Live shape: task cdb8e365 pins five
+    ::-qualified ids."""
+    node_id = "services/prism-service/tests/unit/test_queue.py::test_one_item"
+    parent = _Task("t-5", verify=[node_id], completion_proof=f"still red: {node_id}")
+    svc = _TaskSvc(parent)
+
+    monkeypatch.setattr(
+        runner, "_codified_red_test_ids",
+        lambda project, task_id: ([], "should not be needed"), raising=False)
+
+    out = runner._handle_stall(svc, "t-5", "implement_tasks", project="prism")
+
+    assert out["stalled"]["action"] == "decomposed", _blocked_reason(svc)
+    assert [c["verify"] for c in svc.created] == [[node_id]]
+
+
+def test_an_unrelated_test_id_is_still_refused(runner, monkeypatch):
+    """AC-6. Widening the match must NOT reopen the 72ccaf94 hole, where a
+    proof naming ten unrelated suites produced ten junk children. A test id
+    whose FILE is not one this task pins is still not ours."""
+    parent = _Task(
+        "t-6", verify=["services/prism-service/tests/unit/test_queue.py::test_one"],
+        completion_proof="also failing: services/prism-service/tests/unit/test_other.py::test_x")
+    svc = _TaskSvc(parent)
+
+    monkeypatch.setattr(
+        runner, "_codified_red_test_ids",
+        lambda project, task_id: ([], "no fresh red receipt"), raising=False)
+
+    out = runner._handle_stall(svc, "t-6", "implement_tasks", project="prism")
+
+    assert out["stalled"]["action"] == "blocked"
+    assert svc.created == []
+
+
 def test_the_codified_read_is_real_and_pure(monkeypatch, tmp_path):
     """AC-4. _codified_red_test_ids is not a stub: against a real
     EvidenceReceipt it returns the task's pinned ids and the anchor's reason,
