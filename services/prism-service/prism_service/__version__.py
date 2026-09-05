@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.235"
+PRISM_VERSION = "7.13.236"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.236: the pytest oracle runs where CI runs. _run_pytest_ids ran from the workspace ROOT while pr-checks.yml runs the suite with working-directory services/prism-service, the directory holding pyproject.toml pytest config. Different rootdir, different conftest resolution, opposite verdicts. Live on task 338f7810: its pinned pair passed 39 of 39 the way CI runs it and failed 1 of 39 the way the oracle ran it, so green_gate refused work CI was happy with and the adjudicator rewound a task that had ALREADY landed on main as 82ec1e2a. A verdict that does not predict CI is not evidence. When every pinned id sits under one subdirectory carrying its own pyproject.toml, the oracle now runs there with ids relative to it. Ids spanning two projects, an absolute id, or a flat repo keep today behaviour. New suite test_pytest_oracle_runs_where_ci_runs.py, red at the base commit. 179 oracle, verifier and adjudicator tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.235: THE CLAIM SUITE HANDS ITS STORE BACK CLEAN (task 338f7810). tests/integration/test_claim_and_routed_dispatch.py took real leases through ClaimService.claim_next and never released one, so its own tmp_path/claims.db came back to the next reader holding live rows. The next suite then read a task as already driven and the whole integration tree failed by FILE ORDER, which blocked ce471e06 from shipping. The rig fixture now yields and, after the yield, frees every live row in that one store through ClaimService.reclaim - the named release, never an ad-hoc UPDATE - so a body that fails part way still hands the store back empty. Scoped to the rig own store, so no lease a live seat holds is ever touched. The concurrency assertion and its eight real threads stay intact. '
 )
 

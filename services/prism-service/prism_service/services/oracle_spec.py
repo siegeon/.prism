@@ -567,6 +567,53 @@ def _run_http_probe(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str,
     return observations, [], passed, (ST_PASSED if passed else ST_FAILED), reason
 
 
+def _pytest_cwd_and_ids(workspace: str, ids: list[str]) -> tuple[str, list[str]]:
+    """Run the pinned ids from the directory the PROJECT runs pytest in.
+
+    THE ORACLE MUST AGREE WITH CI (task 338f7810, 2026-09-05). This ran
+    pytest from the workspace ROOT while .github/workflows/pr-checks.yml
+    runs it with `working-directory: services/prism-service` — the
+    directory holding pyproject.toml's [tool.pytest.ini_options]. Same
+    suite, same code, different rootdir, opposite verdicts: 338f7810's
+    pinned pair passed 39/39 the way CI runs it and failed 1/39 the way
+    the oracle ran it, so green_gate refused work that CI was happy with
+    and the adjudicator rewound a task that had already landed.
+
+    A verdict that does not predict CI is not evidence. When every id
+    sits under a subdirectory that carries its own pyproject.toml, run
+    there and make the ids relative to it. Otherwise nothing changes."""
+    from pathlib import Path
+
+    root = Path(workspace)
+    common = None
+    for raw in ids:
+        path = raw.split("::", 1)[0]
+        if path.startswith("/"):
+            return str(root), ids
+        parts = Path(path).parts
+        # walk down while a pyproject.toml marks a real project root
+        depth = 0
+        for i in range(1, len(parts)):
+            if (root.joinpath(*parts[:i]) / "pyproject.toml").is_file():
+                depth = i
+        if depth == 0:
+            return str(root), ids
+        prefix = parts[:depth]
+        if common is None:
+            common = prefix
+        elif common != prefix:
+            return str(root), ids
+    if not common:
+        return str(root), ids
+    base = root.joinpath(*common)
+    if not base.is_dir():
+        return str(root), ids
+    rel = [str(Path(i.split("::", 1)[0]).relative_to(Path(*common)))
+           + ("::" + i.split("::", 1)[1] if "::" in i else "")
+           for i in ids]
+    return str(base), rel
+
+
 def _run_pytest_ids(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str, str]:
     """Run the named pytest node ids and require them to PASS. Reuses the
     project's own runner via the (dev) interpreter — the same subprocess shape
@@ -576,7 +623,7 @@ def _run_pytest_ids(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str,
         return ([], [], False, ST_ERROR,
                 "pytest_ids: no test node ids in target")
     python = ctx.get("pytest_python") or sys.executable
-    cwd = ctx.get("workspace") or "."
+    cwd, ids = _pytest_cwd_and_ids(ctx.get("workspace") or ".", ids)
     cmd = [python, "-m", "pytest", *ids, "-q", "-p", "no:cacheprovider"]
     try:
         r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
