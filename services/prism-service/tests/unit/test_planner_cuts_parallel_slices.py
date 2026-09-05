@@ -226,7 +226,7 @@ def test_the_orchestration_nodes_make_no_model_call(tmp_path, monkeypatch):
     phase this exists to make free. A stub that RAISES if it is touched must
     never fire, and the pure module must import no model client at all."""
     from prism_service.api import workflows as workflows_api
-    from prism_service.services import claude_cli
+    from prism_service.inference import claude_cli
 
     def _boom(*a, **kw):
         raise AssertionError("a codified orchestration node called a model")
