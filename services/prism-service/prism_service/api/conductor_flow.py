@@ -463,8 +463,27 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     if step["id"] == "red_gate":
         # Demo-proof tickets only (task 59ddfcbc) — same opt-in switch.
         from prism_service.services import gate_adjudicator
-        if gate_adjudicator.is_enabled():
-            return svc.adjudicate_demo_red_gate(task_id)
+        if not gate_adjudicator.is_enabled():
+            return None
+        res = svc.adjudicate_demo_red_gate(task_id)
+        if res:
+            return res
+        # PARKED — stamp the seat's own refusal NOW, the same treatment the
+        # green branch above gives (task 63c03465). The reason already exists
+        # on the latest non-passing EvidenceReceipt; without this the row
+        # holds a blank gate_reason until the next adjudicator sweep (60 s on
+        # this host), so the driver's first poll reads 'pending' + '' and has
+        # nothing to act on — the empty-reason class task e0149f1f closed.
+        try:
+            _t = svc._task_svc.get(task_id)
+            if _t is not None and getattr(_t, "gate_state", "") == "pending":
+                _reason = gate_adjudicator._pending_decline_reason(
+                    svc, _t, "red_gate", svc._project_name or "default")
+                if _reason and _reason != (
+                        getattr(_t, "gate_reason", "") or ""):
+                    svc._task_svc.update(task_id, gate_reason=_reason)
+        except Exception:
+            pass
         return None
     if step["id"] not in _AUTOCLEAR_GATES:
         return None
