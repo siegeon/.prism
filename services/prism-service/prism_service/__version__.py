@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.244"
+PRISM_VERSION = "7.13.245"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8466,4 +8466,32 @@ PRISM_VERSION_NOTES += (
     "With no facts gathered it renders nothing rather than inventing claims. "
     "9 new tests, red first; 152 green across every premise, arc-governance and "
     "runner suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.245: review_previous_notes now resolves with NO model call. The node "
+    "declares a bounded middle (premise-judge, haiku, 2 turns, 0.50 usd, no "
+    "tools) because gather already resolved every citation it needs; the runner "
+    "sent the WHOLE step brief at 30 turns with the full tool set instead. Two "
+    "consequences, one cause: a step the node sizes at about two minutes ran for "
+    "an hour or more (durations recorded live: 7334463 ms, 6003890 ms, 4123014 "
+    "ms), which the canvas drew as OVERRUN 3956.2x; and the declared chain never "
+    "executed AS STEPS, so every sub-node on the Workflows canvas read 'too few "
+    "runs (0/20)' -- real work, entirely invisible, which is why the board could "
+    "not say what was happening. Now the deterministic chain runs FIRST: gather "
+    "resolves the citations, render builds the Premises section, and when that "
+    "section satisfies the SAME two teeth the gate scores (the citation tooth "
+    "and score_oracle_engagement, checked against arc_governance's own "
+    "functions) the step finishes there -- zero tokens, no claude -p at all -- "
+    "and records premise-render and premise-citation-check as real runs so the "
+    "canvas shows them. The model is the FALLBACK for the case the chain cannot "
+    "answer (nothing gathered), and even then it gets the node's narrow prompt "
+    "with the caps written for it and no tools, never the old monolith. "
+    "_invoke_batch's rule is kept exactly: the declared caps are adopted ONLY "
+    "alongside the declared prompt, never alone -- the negative case (task "
+    "6a7105f9 blocked three times when 2 turns met the full brief) is pinned. "
+    "15 new tests; two superseded contracts in "
+    "test_task_runner_honors_declared_node_plan re-anchored in place with a note "
+    "naming what replaced them. 196 green across every runner, premise, node and "
+    "api-workflows suite."
 )

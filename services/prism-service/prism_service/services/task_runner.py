@@ -202,6 +202,7 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
         return None
 
     codified: list[str] = []
+    agentic: Optional[str] = None
     model: Optional[str] = None
     max_turns: Optional[int] = None
     budget: Optional[float] = None
@@ -213,6 +214,7 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
         if route not in _AGENTIC_ROUTES:
             codified.append(route)
             continue
+        agentic = route
         # The agentic middle carries the budget, as a JSON string body.
         try:
             body = json.loads(step.get("body") or "{}")
@@ -224,10 +226,106 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
         if isinstance(body.get("max_budget_usd"), (int, float)):
             budget = float(body["max_budget_usd"])
     return {"model": model, "max_turns": max_turns,
-            "max_budget_usd": budget, "codified": codified}
+            "max_budget_usd": budget, "codified": codified,
+            "agentic": agentic}
 
 
-def _invoke_budget(step_id: str, plan: Optional[dict]) -> dict:
+class _CodifiedResult:
+    """A claude_cli-shaped result for a step resolved with NO model call.
+
+    Lets the deterministic path reuse every downstream branch (usage,
+    proof routing, flow_report) unchanged, while reporting honestly that
+    it cost nothing: exit 0, no usage, and the rendered text as its
+    output."""
+
+    __slots__ = ("_text", "exit_code", "usage", "run_id", "structured_output")
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.exit_code = 0
+        self.usage = None            # genuinely zero tokens, not "unknown"
+        self.run_id = ""
+        self.structured_output = None
+
+    def final_text(self) -> str:
+        return self._text
+
+    def graceful_budget_stop(self) -> bool:
+        return False
+
+
+def _codified_step_proof(step_id: str, task, facts) -> str:
+    """This step's report, built WITHOUT a model, or "" if that is not
+    honestly possible.
+
+    Returns a section only when it satisfies the SAME two teeth the gate
+    scores -- the citation tooth and oracle engagement -- checked against
+    arc_governance's own functions rather than a local copy. Anything less
+    falls through to the model, so the programmatic path can never advance
+    a step on evidence the rubric would have refused.
+    """
+    if step_id != _PREMISE_STEP or not facts:
+        return ""
+    try:
+        from prism_service.services import arc_governance as gov
+        from prism_service.services import premise_gather as pg
+
+        rendered = pg.render_premises(task, facts)
+        if not rendered.strip():
+            return ""
+        rubric = gov.load_rubrics().get("premise_grounded") or {}
+        section = rubric.get("claims_section", "premises")
+        if not pg.citation_check(rendered, claims_section=section).get("ok"):
+            return ""
+        verdict = gov.score_oracle_engagement(
+            str(getattr(task, "oracle", "") or ""), rendered, rubric)
+        if not verdict.get("ok"):
+            return ""
+        return rendered
+    except Exception:
+        return ""            # a broken shortcut must fall back, never halt
+
+
+def _declared_agentic_prompt(step_id: str, task, facts) -> str:
+    """The NARROW prompt the node's agentic middle is written for, or "".
+
+    THE OVERRUN THIS CLOSES. The node declares a bounded middle -- premise
+    -judge, haiku, 2 turns, $0.50, 120s, and NO tools, because premise
+    -gather already resolved every citation it needs. This worker sent
+    job["instructions"] (the whole step brief) with 30 turns and the full
+    BUILD_TOOLS set instead, so the declared caps could not be honoured and
+    a step the node sizes at ~2 minutes ran for an hour or more. Worse, the
+    declared chain never executed as steps, so every sub-node on the
+    Workflows canvas read "too few runs (0/20)": the work was real and
+    entirely invisible.
+
+    _invoke_budget's own note set the condition -- "a future slice that
+    also adopts the declared PROMPT may then adopt the caps that were
+    written for it, never one without the other". This is that slice: the
+    prompt below is the same one /api/workflows/steps/premise-judge builds,
+    so the caps beside it are the ones it was sized for.
+
+    Returns "" when there is nothing gathered -- with no facts the narrow
+    prompt has no material and the full brief is still the honest fallback.
+    """
+    if step_id != _PREMISE_STEP or not facts:
+        return ""
+    facts_md = "\n".join(
+        f"- ({f.kind}) {f.text} \u2014 {f.citation}" for f in facts)
+    return (
+        "Material already GATHERED for you is below; every line already "
+        "carries a real citation. Decide which are load-bearing for this "
+        "task and report them as a '## Premises' markdown list, one "
+        "bullet per claim, reusing its citation VERBATIM. Never invent a "
+        "new citation. You may add a claim of your own only if you mark "
+        "it UNVERIFIED or REFUTED.\n\n"
+        f"Task: {getattr(task, 'title', '')}\n{getattr(task, 'description', '')}\n\n"
+        f"Gathered material:\n{facts_md}"
+    )
+
+
+def _invoke_budget(step_id: str, plan: Optional[dict],
+                   narrow: bool = False) -> dict:
     """claude_cli.invoke kwargs for `step_id` under `plan`.
 
     The declared plan governs the MODEL, TURN LIMIT and BUDGET -- the three
@@ -241,6 +339,15 @@ def _invoke_budget(step_id: str, plan: Optional[dict]) -> dict:
     if not plan:
         return {"model": "", "max_turns": _max_turns(),
                 "max_budget_usd": _max_budget_usd(),
+                "timeout_s": runner_timeout}
+    if narrow:
+        # The declared prompt is in play, so the declared caps are the ones
+        # it was written for -- adopt them together, never one alone.
+        return {"model": plan.get("model") or "",
+                "max_turns": plan.get("max_turns") or _max_turns(),
+                "max_budget_usd": (plan.get("max_budget_usd")
+                                   if plan.get("max_budget_usd") is not None
+                                   else _max_budget_usd()),
                 "timeout_s": runner_timeout}
     # ONLY THE MODEL IS SAFE TO ADOPT. A behavior's turn/budget caps are
     # sized for the behavior's OWN narrow prompt (premise-judge merely
@@ -1083,18 +1190,54 @@ def _run_one_step(project: str, task_id: str) -> dict:
             project, task_id, "premise-gather", run_id, bool(facts),
             f"resolved {len(facts)} grounded facts")
 
-    budget = _invoke_budget(job["step"], plan)
-    try:
-        result = claude_cli.invoke(
-            prompt, work_dir=work_dir, plugin_dir=work_dir,
-            allowed_tools=BUILD_TOOLS, project=project,
-            purpose=f"task-runner@{job['step']}#{task_id[:8]}",
-            session_id=str(uuid.uuid4()), **budget)
-    except Exception as exc:
-        if claim is not None:
-            claim.release(claim_id)
-        return {"ok": False, "task_id": task_id, "step": job["step"],
-                "reason": f"claude_cli invocation failed: {exc}"}
+    # RUN THE DECLARED MIDDLE, NOT A MONOLITH. When the node declares an
+    # agentic route and the gather produced material for it, this step runs
+    # the narrow prompt that route was written for -- with its own caps and
+    # NO tools, since every citation is already in hand. That is the whole
+    # overrun: a ~2-minute declared step was being run as a 30-turn,
+    # full-brief, full-toolset call. It is also why the canvas showed
+    # nothing -- the declared sub-step now records a run of its own.
+    # PROGRAMMATIC FIRST, THE MODEL LAST. For this node the deterministic
+    # chain is COMPLETE on its own: `gather` resolves the citations and
+    # `render` builds a Premises section that satisfies both teeth the
+    # rubric actually scores. When it does, the step is finished here --
+    # zero tokens, sub-second, and no `claude -p` at all. The model is the
+    # fallback for the case the programmatic path cannot answer (nothing
+    # gathered), not the default route.
+    codified_proof = _codified_step_proof(job["step"], task, facts)
+    if codified_proof:
+        for route in ("premise-render", "premise-citation-check"):
+            _record_codified_run(
+                project, task_id, route, run_id, True,
+                f"resolved {job['step']} programmatically from "
+                f"{len(facts)} gathered fact(s) -- no model call")
+        result = _CodifiedResult(codified_proof)
+    else:
+        # Still not the old monolith: when the node declares a narrow middle
+        # and there is material for it, run THAT prompt with the caps it was
+        # written for and no tools, rather than the whole step brief at 30
+        # turns with the full toolset.
+        narrow_prompt = _declared_agentic_prompt(job["step"], task, facts)
+        if narrow_prompt:
+            prompt = narrow_prompt
+            _record_codified_run(
+                project, task_id, str(plan.get("agentic") or "premise-judge"),
+                run_id, True,
+                f"fell back to the node's declared agentic middle over "
+                f"{len(facts)} gathered fact(s)")
+        budget = _invoke_budget(job["step"], plan, narrow=bool(narrow_prompt))
+        try:
+            result = claude_cli.invoke(
+                prompt, work_dir=work_dir, plugin_dir=work_dir,
+                allowed_tools=() if narrow_prompt else BUILD_TOOLS,
+                project=project,
+                purpose=f"task-runner@{job['step']}#{task_id[:8]}",
+                session_id=str(uuid.uuid4()), **budget)
+        except Exception as exc:
+            if claim is not None:
+                claim.release(claim_id)
+            return {"ok": False, "task_id": task_id, "step": job["step"],
+                    "reason": f"claude_cli invocation failed: {exc}"}
 
     # The run's OWN usage, straight off the `result` stream event that
     # claude_cli already parsed for us. This seat reports under a SEAT NAME,
