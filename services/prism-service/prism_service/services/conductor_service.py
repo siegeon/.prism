@@ -6074,6 +6074,19 @@ class ConductorService:
                 # child's OWN motion is not enough, the whole subtree counts.
                 active = any(self._subtree_active(k) for k in kids)
                 done = sum(1 for k in kids if (getattr(k, "status", "") or "") == "done")
+                if not driving:
+                    # A child lane mid-step crosses no step boundary for
+                    # most of its life; its heartbeat is the only proof it
+                    # is alive. Scoped to in_progress children only (task
+                    # 8eba8871: epic fcf6b70b read adrift while child
+                    # 31c345b7 was driving with a fresh beat).
+                    for k in kids:
+                        if (getattr(k, "status", "") or "") != "in_progress":
+                            continue
+                        kb = drive_heartbeat.latest(self._scores_db, getattr(k, "id", ""))
+                        if kb is not None and kb["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
+                            beat, heartbeat_age, driving = kb, kb["age_s"], True
+                            break
                 if active:
                     state = "working"
                 elif motion is not None and motion <= 120:
