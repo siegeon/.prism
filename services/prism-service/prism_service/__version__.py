@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.241"
+PRISM_VERSION = "7.13.242"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8403,4 +8403,15 @@ PRISM_VERSION_NOTES += (
     "guarantee: with room for all, every eligible project is served in the "
     "SAME sweep and none waits a tick. 9 new tests, red first; 115 green "
     "across every neighbouring runner and stall suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.242: lands two finished tasks that were complete except for being "
+    "on origin/main. Task 67b4b2f6: a Trace row named a blank model when the "
+    "driver reported none, so the role/tier attribution a person reads could "
+    "claim an unreported model; agent_runs_data now names it honestly. Task "
+    "63c03465: the entry seat stamps a DECLINED red_gate with its own refusal, "
+    "so a parked red_gate carries the reason it parked instead of an empty "
+    "gate_reason a driver cannot self-diagnose. 57 green across both pinned "
+    "suites and every neighbouring agent-runs, gate-reason and trace suite."
 )
