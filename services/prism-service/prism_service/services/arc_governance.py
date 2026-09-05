@@ -194,22 +194,38 @@ def mermaid_edges(source: str) -> list[dict]:
     return edges
 
 
-_SUBJECT_ID_RE = re.compile(r"\b[0-9a-f]{8}\b")
+# A subject line names a TASK only when it says so. The bare 8-hex form
+# is ambiguous — an abbreviated commit sha is identical in shape — and
+# this tooth flagged every one as a foreign task (task a65c66e5). Seen
+# THREE times in one evening: "SUPERSEDED by 0924ac24", and two plans
+# citing the commit they build on, each costing a gate round-trip on a
+# plan whose CONTENT was correct. Require the marker that makes a token a
+# task reference: `task <id>`, `task:<id>`, `[task:<id>]`, `#<id>`.
+_SUBJECT_TASK_REF_RE = re.compile(
+    r"(?:\btasks?[\s:/#-]+|\[task:|#)([0-9a-f]{8})\b", re.IGNORECASE)
 
 
 def _plan_subject_problems(plan: str, task_id: str) -> list[str]:
     """plan_subject tooth (task 777fbec2): only the FIRST non-empty line
     of plan_doc is read. It must not name a task id other than task_id
     (8-hex prefix compare; skipped when task_id is empty) and must not
-    call the plan a replacement for a contaminated plan."""
+    call the plan a replacement for a contaminated plan.
+
+    NARROWED 2026-09-04 (task a65c66e5): a token counts as a foreign task
+    only when the line PRESENTS it as one. A bare 8-hex run is far more
+    often a commit sha — a plan legitimately cites the commit it builds
+    on, or the one that superseded a step — and flagging those refused
+    correct plans three times in a single evening. The tooth still
+    catches what it exists for: a subject that says it is about another
+    task."""
     first = next((ln.strip() for ln in plan.splitlines() if ln.strip()), "")
     if not first:
         return []
     out: list[str] = []
     own = task_id.lower()[:8]
     if own:
-        foreign = [m for m in _SUBJECT_ID_RE.findall(first.lower())
-                   if m != own]
+        foreign = [m.lower() for m in _SUBJECT_TASK_REF_RE.findall(first)
+                   if m.lower() != own]
         if foreign:
             out.append("plan_subject: subject line names task "
                        f"{', '.join(foreign)}, not {own}")

@@ -370,8 +370,22 @@ def test_ac5_progress_never_fabricates_a_denominator(recorder, monkeypatch,
 # RED today: `grep -c work_units WorkflowsPage.tsx` = 0.
 # ---------------------------------------------------------------------------
 
-def test_ac6_a_gate_node_bar_counts_teeth_decided_over_teeth_total(
+def test_ac6_a_gate_node_bar_counts_teeth_PASSING_over_teeth_total(
         recorder, scores_db, monkeypatch):
+    """SUPERSEDED 2026-09-04: this pinned `done` = teeth DECIDED (3 of 4
+    here, counting the FAILED one). Owner, watching plan_gate on task
+    338f7810: "the progress is not progression, it's still stuck at full
+    ... it should be filling up as we go, not showing full from the
+    onset". Every tooth answers within a second of a gate opening, so
+    decided/total filled the bar immediately and held it there for the
+    whole wait — and a failed tooth counted toward the fill, so a
+    REFUSING gate rendered as complete (338f7810 read 3/3 full while
+    `already_green_ac` had failed).
+
+    A gate's bar now means how close it is to PASSING. `answered` and
+    `failed` ride along so a caller can say why it stopped short. The
+    basis stays teeth over a real total — that half of AC-6 is intact,
+    and no fabricated denominator is introduced."""
     teeth = [{"id": "rubric", "status": "passed"},
              {"id": "ac_ids", "status": "passed"},
              {"id": "diagram", "status": "failed"},
@@ -381,7 +395,10 @@ def test_ac6_a_gate_node_bar_counts_teeth_decided_over_teeth_total(
 
     got = recorder.progress_source(scores_db, "8fbd5cf0", "plan_gate",
                                    project="prism")
-    assert got == {"basis": "teeth", "done": 3, "total": 4}, got
+    assert got == {"basis": "teeth", "done": 2, "total": 4,
+                   "answered": 3, "failed": 1}, got
+    assert got["done"] < got["total"], (
+        "a gate with a failed tooth must never read as complete")
 
 
 def test_ac6_gate_teeth_come_from_the_registry_node_status_already_uses():
