@@ -101,6 +101,106 @@ def _with_report_signal(managed_tasks: list, scores_db: str) -> list:
     return out
 
 
+# The machine seat that decides a gate (gate_adjudicator.py:261). Named here
+# rather than imported so a board poll never pulls the adjudicator's whole
+# import graph in behind it.
+ADJUDICATOR_SEAT = "conductor-adjudicator"
+
+
+def _dispatch_count_for_step(task_svc, task_id: str, step: str) -> int:
+    """How many times a seat dispatched THIS step, read from the durable
+    history rows resume_actuator already writes (``seat=<seat>; step=<id>``).
+    resume_actuator._dispatch_count is TASK-WIDE and adds 1 for the pending
+    dispatch (it feeds drive_heartbeat's monotonic work_units guard), so it
+    answers a different question and is not reused here."""
+    if task_svc is None or not task_id or not step:
+        return 0
+    from prism_service.services import resume_actuator
+    try:
+        rows = task_svc.history(task_id) or []
+    except Exception:  # noqa: BLE001 - liveness is best-effort, never fatal
+        return 0
+    return sum(
+        1 for r in rows
+        if str(getattr(r, "action", "") or "") == resume_actuator.DISPATCH_ACTION
+        and str(getattr(r, "details", "") or "").rsplit("step=", 1)[-1].strip() == step)
+
+
+def _gate_seat(task_svc, task_id: str) -> str:
+    """Who owns a gate that has nothing beating: the machine seat, unless a
+    person already decided it -- then the actor on the last gate_decide row."""
+    if task_svc is None or not task_id:
+        return ADJUDICATOR_SEAT
+    try:
+        rows = task_svc.history(task_id) or []
+    except Exception:  # noqa: BLE001
+        return ADJUDICATOR_SEAT
+    for r in reversed(list(rows)):
+        if str(getattr(r, "action", "") or "") == "gate_decide":
+            return str(getattr(r, "actor", "") or "").strip() or ADJUDICATOR_SEAT
+    return ADJUDICATOR_SEAT
+
+
+def _with_drive_seat(managed_tasks: list, scores_db: str, task_svc=None) -> list:
+    """Task 1c6d59e9: the run node must say WHO drives the active step, WHAT
+    that seat last did and WHEN it last moved. All three facts are on file and
+    are dropped on two floors -- drive_heartbeat stores ``driver`` and latest()
+    selects it back out, but the served heartbeat carries only step/last_tool/
+    elapsed_s/age_s, and a beat past HEARTBEAT_WINDOW_S is emitted as None, so
+    a finished driver reads byte-identical to a task that never had one.
+
+    Additive enrichment, the sibling of _with_report_signal above: it NEVER
+    edits conductor_service.activity_for (a control_plane.POLICY_FILES entry)
+    and never rewrites ``state`` -- the ``driving`` boundary stays exactly
+    where the policy file puts it. It ADDS:
+      heartbeat["driver"]  the seat behind a fresh beat
+      beat                 the last beat whatever its age, marked ``stale``,
+                           so a stopped driver differs from one that never ran
+      seat                 the beat's driver, or the seat that owns the gate
+                           when a task is parked at one with nothing beating
+      dispatch_count       dispatches of the CURRENT step
+    """
+    out = []
+    for row in managed_tasks:
+        row = dict(row)
+        task_id = str(row.get("id") or "")
+        activity = dict(row.get("activity") or {})
+        beat = drive_heartbeat.latest(scores_db, task_id) if task_id else None
+        seat = None
+        if beat:
+            age = beat.get("age_s")
+            activity["beat"] = {
+                "driver": beat.get("driver") or "",
+                "step": beat.get("step"),
+                "last_tool": beat.get("last_tool"),
+                "elapsed_s": beat.get("elapsed_s"),
+                "age_s": age,
+                "stale": age is None or age > drive_heartbeat.HEARTBEAT_WINDOW_S,
+            }
+            seat = beat.get("driver") or None
+            hb = activity.get("heartbeat")
+            if isinstance(hb, dict):
+                hb = dict(hb)
+                hb["driver"] = beat.get("driver") or ""
+                hb.setdefault("age_s", age)
+                activity["heartbeat"] = hb
+        else:
+            activity["beat"] = None
+        step = ""
+        if task_svc is not None and task_id:
+            try:
+                step = str(getattr(task_svc.get(task_id), "workflow_step", "") or "")
+            except Exception:  # noqa: BLE001
+                step = ""
+        if seat is None and step.endswith("_gate"):
+            seat = _gate_seat(task_svc, task_id)
+        activity["seat"] = seat
+        activity["dispatch_count"] = _dispatch_count_for_step(task_svc, task_id, step)
+        row["activity"] = activity
+        out.append(row)
+    return out
+
+
 def _with_claimed(managed_tasks: list) -> list:
     """Task 2dfa94bd: a task only ever renders SDLC-drive chrome on the real
     /conductor tab if conductor_work actually claimed it (ensure_workspace
@@ -162,6 +262,9 @@ def state(project: str = Query("default"), outcomes_limit: int = Query(200, ge=1
     # Task e9625a4d: additive report-signal enrichment (see _with_report_signal
     # docstring) -- applied outside the TTL cache so staleness stays live.
     out["managed_tasks"] = _with_report_signal(out["managed_tasks"], _scores_db_of(s))
+    # Task 1c6d59e9: same seam, same reason — name the seat driving each step.
+    out["managed_tasks"] = _with_drive_seat(
+        out["managed_tasks"], _scores_db_of(s), getattr(s, "_task_svc", None))
     # Task d5465a25 (heavy-poll scoping): session_outcomes is 93% of this
     # payload (55.9 KB of a measured 60 KB) and this route is polled every
     # 5s from LiveBar.tsx + ConductorPage.tsx — neither reads it (both type

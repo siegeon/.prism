@@ -120,7 +120,16 @@ def test_stale_heartbeat_detail_is_dropped_from_activity(tmp_path):
     """The passthrough is fresh-only: a beat past HEARTBEAT_WINDOW_S says
     nothing about NOW, so activity["heartbeat"] must be None (and the state
     must not read 'driving') -- a dead drive must not keep showing its last
-    tool as if it were current."""
+    tool as if it were current.
+
+    RE-SCOPED by task 1c6d59e9: this still pins a real invariant of
+    conductor_service.activity_for -- ``heartbeat`` stays fresh-only and the
+    ``driving`` boundary does not move. The stale detail is no longer thrown
+    away, though: api/conductor.py::_with_drive_seat carries it one floor up
+    on the SERVED payload under activity["beat"], marked ``stale``, so a
+    driver that stopped reads differently from one that never ran. Assert the
+    served contract in tests/unit/test_active_node_names_its_seat.py, not
+    here."""
     from prism_service.services import drive_heartbeat
 
     cond, task_svc, scores_db = _cond(tmp_path)

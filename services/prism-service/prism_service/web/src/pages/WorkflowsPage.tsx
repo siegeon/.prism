@@ -691,8 +691,17 @@ export default function WorkflowsPage() {
   const conductorLiveActivity = useMemo<Activity | null>(() => {
     const t = conductorLivePhase && workflowRun?.data.conductorTask;
     if (!t) return null;
+    // Task 1c6d59e9: the node used to be fed ONE input (gateState), so it
+    // could not name a seat however good the payload got. The served activity
+    // rides through now; `state` stays derived from the gate here, because on
+    // this synthesized run the gate is what the canvas is highlighting.
+    const a = (t.activity ?? {}) as Activity;
     return {
-      state: t.gateState === "pending" ? "awaiting_gate" : t.gateState === "failed" ? "blocked" : "working",
+      state: t.gateState === "pending" ? "awaiting_gate" : t.gateState === "failed" ? "blocked" : (a.state || "working"),
+      heartbeat: a.heartbeat ?? null,
+      beat: a.beat ?? null,
+      seat: a.seat ?? null,
+      dispatch_count: a.dispatch_count ?? null,
     };
   }, [conductorLivePhase, workflowRun]);
   const selectedStepResult = selectedStep?.id === "test"
