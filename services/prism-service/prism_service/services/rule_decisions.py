@@ -459,10 +459,11 @@ def decide(project: str, signal: Signal, action: str, reason: str,
 
         title = f"Fix: {_rule_title_now(project, rule_name)}"
         description = signal.aligned_body or signal.body
-        # channel is left blank: the fix task is the owner's, not a row
-        # that arrived on the "ontology" channel the way the signal did.
+        # The channel records HOW the row arrived, not who owns it — the fix
+        # task arrives from the signal's own queue (task 02264017).
         task = get_project(project).task_svc.create(
             title=title, description=description,
+            channel=signal.channel,
             channel_ref=signal.channel_ref, workflow="triage",
             tags=["queue", "ontology"],
         )

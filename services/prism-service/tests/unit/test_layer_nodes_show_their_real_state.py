@@ -82,9 +82,15 @@ def test_the_canvas_is_handed_the_verdicts():
     # invariant -- verdicts reach drawWorkflows and the draw effect re-runs
     # when they change -- is asserted against the merged value instead.
     src = _PAGE.read_text(encoding="utf-8")
-    assert "activeProgress, effectiveNodeVerdicts)" in src, (
+    # Task ce471e06 appended a `runView` argument after the verdicts, so the
+    # call no longer ends there. The invariant is unchanged: the verdicts are
+    # handed to drawWorkflows, positionally after activeProgress.
+    assert "activeProgress, effectiveNodeVerdicts" in src, (
         "the verdicts never reach drawWorkflows, so nothing is painted")
-    assert "workflows, effectiveNodeVerdicts]" in src, (
+    # ce471e06 added runView/runTrace/runMotionSeconds after it in the same
+    # dep array, so it is no longer the last entry. The invariant is
+    # unchanged: the verdicts are a dependency of the draw effect.
+    assert "workflows, effectiveNodeVerdicts" in src, (
         "the draw effect does not re-run when the verdicts arrive")
     assert "...(nodeVerdicts ?? {}) }" in src, (
         "the drilled-in-layer node-status verdicts this test's sibling "
