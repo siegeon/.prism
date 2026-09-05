@@ -49,7 +49,7 @@ def rig(tmp_path):
     workspaces.add_membership(workspace.id, member.id, "member")
     workspaces.add_membership(workspace.id, viewer.id, "viewer")
 
-    return Rig(
+    yield Rig(
         claims=claims,
         tasks=tasks,
         workspaces=workspaces,
@@ -58,6 +58,14 @@ def rig(tmp_path):
         member_id=member.id,
         viewer_id=viewer.id,
     )
+
+    # AC-1 and AC-2: hand the store back with no live lease. This runs after
+    # `yield`, so a body that fails or raises part way through still releases
+    # what it took. It reads only this rig's own `tmp_path/claims.db` and frees
+    # each row through `ClaimService.reclaim`, the service's named release —
+    # never an ad-hoc UPDATE, and never a store a live seat holds.
+    for _holder_id, task_id, _expires_at in live_leases(tmp_path / "claims.db"):
+        claims.reclaim(task_id, reason="claim suite teardown")
 
 
 def live_leases(store_path) -> list:

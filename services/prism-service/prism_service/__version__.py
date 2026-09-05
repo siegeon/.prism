@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.234"
+PRISM_VERSION = "7.13.235"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.235: THE CLAIM SUITE HANDS ITS STORE BACK CLEAN (task 338f7810). tests/integration/test_claim_and_routed_dispatch.py took real leases through ClaimService.claim_next and never released one, so its own tmp_path/claims.db came back to the next reader holding live rows. The next suite then read a task as already driven and the whole integration tree failed by FILE ORDER, which blocked ce471e06 from shipping. The rig fixture now yields and, after the yield, frees every live row in that one store through ClaimService.reclaim - the named release, never an ad-hoc UPDATE - so a body that fails part way still hands the store back empty. Scoped to the rig own store, so no lease a live seat holds is ever touched. The concurrency assertion and its eight real threads stay intact. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.234: two progress and gate honesty fixes. ONE, a gate node bar now counts teeth that PASSED, not teeth that answered. Every tooth answers within a second of a gate opening, so decided over total filled the bar immediately and held it full for the whole wait, and a FAILED tooth counted toward the fill. Owner watching plan_gate on 338f7810: the progress is not progression, it is still stuck at full, it should be filling up as we go, not showing full from the onset. That gate read 3 of 3 full while already_green_ac had failed and the gate was refusing. answered and failed now ride along so a caller can say why the bar stopped short. AC-6 of task 8fbd5cf0 pinned decided over total and is SUPERSEDED in place with the owner words recorded. TWO, the plan_subject tooth flags a foreign TASK, not a commit sha. It matched any bare 8 hex run in the first line, and an abbreviated sha has the same shape, so it refused three correct plans in one evening (a2bc8c88, ce471e06, 338f7810). A token counts only when the line presents it as a task: task id, task colon id, bracket task colon id, or hash id. New suites test_gate_fill_counts_passing_teeth.py and test_plan_subject_tooth_ignores_commit_shas.py. 48 progress, gate and rubric tests green. '
 )
 
