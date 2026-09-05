@@ -363,7 +363,11 @@ class TaskService:
         # it on EVERY phase_progress render, and the underlying rows only
         # change on an advance_task transition — so serve the same grouped
         # dict until _record_history sees one (task 9974d407).
-        self._advance_rows_cache: Optional[dict] = None
+        # Held as (data_version stamp, grouped rows): instance-local
+        # invalidation cannot see a FOREIGN connection writing an
+        # advance_task row to the same db file, so the stamp is what makes
+        # the snapshot honest for a reader-only service (task dee931c6).
+        self._advance_rows_cache: Optional[tuple[int, dict]] = None
         # STE style report (task 36283d72): the STYLE BLOCK from the most
         # recent create/update call. A plain attribute, not a model field —
         # a sibling slice reads it right after the call that set it. Empty
@@ -1417,10 +1421,21 @@ class TaskService:
         extra queries per render, ~470 SQL round trips to answer a question
         that does not even depend on which task is being viewed. The filter
         rides in SQL so the rows that never mattered are never deserialized.
+
+        The snapshot is keyed on `PRAGMA data_version`, never on a TTL: the
+        key follows the WRITE, so it can never serve a stale median or ETA
+        while it waits for a clock. The instance-local invalidation at
+        :546/:576 stays load-bearing for this connection's OWN writes (which
+        data_version deliberately does not report) — but it is blind to a
+        write made by a DIFFERENT TaskService on the same db file, so a
+        reader-only service (a viewer, the adjudicator) held a snapshot that
+        predated every foreign advance and served a stale median and ETA for
+        the life of the process (task dee931c6).
         """
+        stamp = self._db_change_stamp()
         cached = self._advance_rows_cache
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
         rows = self._db.execute(
             "SELECT task_id, timestamp, details FROM task_history "
             "WHERE action = 'advance_task' ORDER BY task_id, timestamp ASC"
@@ -1429,8 +1444,18 @@ class TaskService:
         for r in rows:
             out.setdefault(r["task_id"], []).append(
                 (r["timestamp"] or "", r["details"] or ""))
-        self._advance_rows_cache = out
+        self._advance_rows_cache = (stamp, out)
         return out
+
+    def _db_change_stamp(self) -> int:
+        """sqlite's own change counter for this connection: `PRAGMA
+        data_version` moves whenever ANOTHER connection commits to the same
+        file, and stays put for our own commits (which :546/:576 already
+        invalidate). It reads no table, so keying the snapshot on it costs
+        neither a second task_history statement nor the corpus scan it
+        exists to skip."""
+        row = self._db.execute("PRAGMA data_version").fetchone()
+        return int((row[0] if row else 0) or 0)
 
     # ------------------------------------------------------------------
     # Task <-> session association (LL — activates task_sessions)
