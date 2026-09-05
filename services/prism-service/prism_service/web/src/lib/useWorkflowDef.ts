@@ -45,6 +45,10 @@ export type WorkflowStepDef = {
    * Lets the SPA stop claiming "awaiting review" (a human-owed decision)
    * for a gate that is unconditionally machine-adjudicated. */
   machine_only_gate?: boolean;
+  /** True when this node hands its work to a model. Derived server-side
+   * from what the step DOES -- its type, or for a behaviour step its kind
+   * and url -- never from its id (task 0c396de2). */
+  agentic?: boolean;
   execution: "connected" | "scripted" | "definition_only";
   linked_workflow_id?: string | null;
   linked_workflow_step_count?: number;
@@ -79,7 +83,12 @@ export type WorkflowStepDef = {
 };
 
 /** A bot: a role card that drives the conductor's FSM. */
-export type WorkflowBot = { id: string; persona_label: string; card: string };
+export type WorkflowBot = { id: string; persona_label: string; card?: string };
+
+/** A ROLE: a seat a step is assigned to, with the card describing how
+ * whoever sits there should think. Not a Bot -- a Bot is an FSM that runs
+ * (task 0c396de2). Absent only for an older service. */
+export type WorkflowRole = { id: string; persona_label: string; card: string };
 
 export type WorkflowDef = {
   steps: WorkflowStepDef[];
@@ -88,6 +97,8 @@ export type WorkflowDef = {
   occupancy: Record<string, number>;
   /** Selectable project workflows. Absent only for an older service. */
   workflows?: WorkflowCatalogEntry[];
+  /** The SDLC roles (Steward, Verifier, Builder) and their cards. */
+  roles?: WorkflowRole[];
 };
 
 /** One ingestion path's hit count in services.language_alignment's
@@ -140,6 +151,15 @@ export type WorkflowCatalogEntry = Omit<WorkflowDef, "workflows"> & {
    * knowledge_health catalog entry. Absent for every other entry and for
    * an older service. */
   metrics?: WorkflowMetrics;
+  /** 0 for a Bot (a models.workflow.WORKFLOWS FSM), 1 for an agentic
+   * behaviour that Bot's states call. Absent for an entry outside the Bot
+   * tree entirely -- a live read such as knowledge_health, or a behaviour
+   * no conductor state links to (task 0c396de2). */
+  tier?: 0 | 1;
+  /** The WORKFLOWS key this entry renders. Tier-0 entries only. */
+  fsm_id?: string;
+  /** The tier-0 header the directory prints above a Bot. */
+  bot_header?: string;
 };
 
 export type WorkflowStepResult = {

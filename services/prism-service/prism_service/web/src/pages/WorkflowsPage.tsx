@@ -4,7 +4,7 @@ import { useReducedMotion } from "motion/react";
 import { useProject } from "@/lib/project";
 import { subscribeStream } from "@/lib/sharedStream";
 import { api } from "@/lib/api";
-import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
+import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowDef, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict, type RunView } from "@/live/workflowGraph";
@@ -261,6 +261,17 @@ function workflowForGraph(workflow: WorkflowCatalogEntry): WorkflowCatalogEntry 
   return graphWorkflow.id === "validation" ? { ...graphWorkflow, bots: [] } : graphWorkflow;
 }
 
+/** Does this node hand its work to a model, or run a fixed command?
+ *
+ * Read straight off the service's own derived `agentic` flag (task
+ * 0c396de2), which it computes from what the step DOES -- its type, or
+ * for a behaviour step its kind and url. Never from a hardcoded list of
+ * step ids: such a list drifts silently the moment a step changes what it
+ * does, and a step's NAME never decided this. */
+function stepExecutionKind(step: WorkflowStepDef): string {
+  return step.agentic ? "agentic" : "deterministic";
+}
+
 function connectWorkflowCatalog(catalog: WorkflowCatalogEntry[]): WorkflowCatalogEntry[] {
   const byId = new Map(catalog.map((workflow) => [workflow.id, workflow]));
   return catalog.map((workflow) => ({
@@ -378,6 +389,10 @@ export default function WorkflowsPage() {
   });
   const directoryResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>([]);
+  // The whole /api/workflows payload, kept so the Roles section below
+  // can render the persona cards the catalog itself no longer carries
+  // (task 0c396de2).
+  const [data, setData] = useState<WorkflowDef | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
     () => searchParams.get("workflow") || "conductor",
   );
@@ -496,6 +511,7 @@ export default function WorkflowsPage() {
           failures = 0;
           setConnectionInterrupted(false);
           setReconnectAttempt(0);
+          setData(def);
           const catalog = connectWorkflowCatalog(def.workflows ?? [{
             id: "conductor", name: "Conductor", description: "PRISM delivery workflow",
             steps: def.steps, bots: def.bots, occupancy: def.occupancy,
@@ -1938,6 +1954,14 @@ export default function WorkflowsPage() {
                 const expanded = expandedDirectoryIds.has(workflow.id) || childSelected;
                 return (
                   <div key={workflow.id}>
+                    {workflow.tier === 0 && (
+                      <div
+                        data-bot-header={workflow.fsm_id}
+                        className="px-2 pt-3 pb-1 text-2xs font-mono uppercase tracking-widest text-[color:var(--nav-text)] opacity-60"
+                      >
+                        {workflow.bot_header}
+                      </div>
+                    )}
                     <button
                       data-workflow-id={workflow.id}
                       type="button"
@@ -2090,6 +2114,30 @@ export default function WorkflowsPage() {
                 );
               })}
             </nav>
+          )}
+          {/* ROLES ARE NOT BOTS (task 0c396de2). A Bot is an FSM — it has
+              states and it runs. A role is a seat a step is assigned to,
+              and the card describes how whoever sits there should think.
+              Keeping the cards inside the Bot tree read as though the
+              Steward were itself a workflow, so they live under their own
+              heading, below the tree and outside it. */}
+          {directoryOpen && data && (data.roles ?? []).length > 0 && (
+            <section
+              aria-label="Roles"
+              className="border-t border-[color:var(--nav-line)] px-2 py-3"
+            >
+              <h2 className="px-1 pb-2 text-2xs uppercase tracking-widest text-[color:var(--nav-text)] opacity-70">Roles</h2>
+              {(data.roles ?? []).map((role) => (
+                <div key={role.id} className="px-1 pb-2">
+                  <div className="text-2xs uppercase tracking-wider text-[color:var(--nav-text-hi)]">
+                    {role.persona_label}
+                  </div>
+                  <p className="mt-0.5 text-2xs leading-snug text-[color:var(--nav-text)] opacity-70">
+                    {role.card}
+                  </p>
+                </div>
+              ))}
+            </section>
           )}
         </aside>
         <div
@@ -2479,6 +2527,7 @@ export default function WorkflowsPage() {
                       ["Directory", selectedStep.working_directory],
                       ["Depends", selectedStep.depends_on?.join(", ") || "None"],
                       ["Owner", selectedStep.persona_label],
+                      ["Execution", stepExecutionKind(selectedStep)],
                     ].map(([label, value]) => (
                       <div key={label} className="min-w-0 bg-[color:var(--surface-2)] p-3">
                         <dt className="text-2xs uppercase tracking-wider text-[color:var(--text-muted)]">{label}</dt>

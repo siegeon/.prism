@@ -21,10 +21,22 @@ import pytest
 from prism_service.api import workflows as workflows_api
 from prism_service.models.workflow import WORKFLOWS
 
+# Captured at import, BEFORE the `body` fixture monkeypatches the module
+# attribute with a stub. AC-3's second half grades the real engine->step
+# derivation, which the stub would otherwise stand in for.
+_REAL_BEHAVIOR_WORKFLOWS = workflows_api._conductor_behavior_workflows
+
 TSX = Path(__file__).resolve().parents[2] / "prism_service" / "web" / "src" / "pages" / "WorkflowsPage.tsx"
 BOT_HEADER = "BOT · TIER 0 · deterministic FSM"
+# Every WORKFLOWS key, mapped to the catalog entry that renders it. Only
+# "implement" is named differently ("conductor"); the rest name their own
+# entry. "quickfix" joined WORKFLOWS after this task's oracle was written
+# (task 811fcce0) -- it is an FSM, so it is a tier-0 Bot on exactly the
+# same terms, and listing it here is what keeps AC-1's real invariant
+# honest: tier follows from WORKFLOWS, never from a hand-kept id list.
 FSM_TO_ENTRY = {"implement": "conductor", "triage": "triage",
-                "align_language": "align_language", "promote_to_law": "promote_to_law"}
+                "align_language": "align_language",
+                "promote_to_law": "promote_to_law", "quickfix": "quickfix"}
 
 
 class _Svc:
@@ -102,7 +114,7 @@ def test_step_agentic_flag_derives_from_step_kind(body, monkeypatch):
     monkeypatch.setattr(workflows_api, "get_project",
                         lambda p: types.SimpleNamespace(task_svc=_Svc(), root=Path("/tmp")),
                         raising=False)
-    entries = workflows_api._conductor_behavior_workflows("prism")
+    entries = _REAL_BEHAVIOR_WORKFLOWS("prism")
     flags = {s["id"]: s["agentic"] for s in entries[0]["steps"]}
     assert flags["run-check"] is False
     assert flags["call-llm"] is True

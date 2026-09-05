@@ -868,6 +868,63 @@ _BEHAVIOR_TRIGGER = {
 }
 _DEFAULT_BEHAVIOR_TRIGGER = "Runs when the conductor bot's own FSM calls this behavior."
 
+# --- Bot tiers (task 0c396de2, owner 2026-08-27, mx-7df790) -----------------
+# Each models.workflow.WORKFLOWS entry is a TIER-0 Bot: a deterministic
+# finite state machine. The behaviours its states call are its TIER-1
+# agentic children. Nothing else carries a tier -- a live read such as
+# knowledge_health, or a behaviour no conductor state links to, is not in
+# the Bot tree at all.
+BOT_HEADER = "BOT · TIER 0 · deterministic FSM"
+
+# The catalog entry id that renders each FSM, where the two names differ.
+# Every other WORKFLOWS key names its own entry.
+_FSM_ENTRY_ID = {"implement": "conductor"}
+
+# An http step whose url enters the reason loop hands the work to a model.
+_REASON_LOOP = "reason-loop"
+
+
+def _step_is_agentic(kind: str, url: str) -> bool:
+    """True when a behaviour step hands its work to a model.
+
+    Derived from WHAT THE STEP DOES -- an http call into the reason loop --
+    never from the step's id. A step named "run-tests" that posts to the
+    reason loop is agentic; one named "call-llm" that runs a shell command
+    is not (task 0c396de2's likely_misfire)."""
+    return (kind or "").lower() == "http" and _REASON_LOOP in (url or "")
+
+
+def _fsm_entry_ids() -> dict[str, str]:
+    """{catalog entry id: fsm id} for every WORKFLOWS FSM.
+
+    Read off WORKFLOWS itself so a new FSM becomes a tier-0 Bot by being
+    added there and nowhere else -- the id list this replaces was the
+    misfire the task names."""
+    from prism_service.models.workflow import WORKFLOWS
+
+    return {_FSM_ENTRY_ID.get(key, key): key for key in WORKFLOWS}
+
+
+def _apply_bot_tiers(catalog: list[dict]) -> None:
+    """Stamp tier/fsm_id/bot_header on the FSM Bots, tier 1 on the
+    conductor's own behaviours, and an `agentic` flag on every step.
+
+    Entries that are neither an FSM nor a conductor child get NO tier and
+    NO parent_id, so they stay outside the Bot tree (AC-8)."""
+    fsm_ids = _fsm_entry_ids()
+    for entry in catalog:
+        fsm_id = fsm_ids.get(entry.get("id"))
+        if fsm_id is not None:
+            entry["tier"] = 0
+            entry["fsm_id"] = fsm_id
+            entry["bot_header"] = BOT_HEADER
+        elif entry.get("parent_id") == "conductor":
+            entry["tier"] = 1
+        for step in entry.get("steps") or []:
+            # A behaviour step already decided this from its kind+url above;
+            # an FSM step is agentic when its declared type is "agent".
+            step.setdefault("agentic", step.get("type") == "agent")
+
 
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
@@ -938,6 +995,13 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
                     "id": step_id,
                     "agent": "conductor",
                     "type": "behavior",
+                    # A step is agentic from WHAT IT DOES, never from what
+                    # it is called (task 0c396de2). A shell step runs a
+                    # fixed command; an http step INTO the reason-loop
+                    # hands the work to a model. "run-tests" reaching the
+                    # reason loop is agentic; "call-llm" running a shell
+                    # command is not.
+                    "agentic": _step_is_agentic(kind, url),
                     "validation": "exit_code == 0",
                     "persona": "conductor",
                     "persona_label": "Conductor",
@@ -1255,9 +1319,21 @@ def get_workflows(project: str = Query("default")) -> dict:
             ),
         })
 
+    # A persona is a ROLE a step is assigned to, never a Bot -- a Bot is an
+    # FSM (task 0c396de2). The cards move to the response's own `roles`
+    # section below; what stays on a workflow is the bare persona label of
+    # whoever stands at its steps.
     bots = [
-        {"id": bid, "persona_label": _persona_label(bid), "card": ROLE_CARDS[bid]}
+        {"id": bid, "persona_label": _persona_label(bid)}
         for bid in BOT_IDS
+    ]
+    # The three SDLC roles PRISM assigns steps to (Steward, Verifier,
+    # Builder). "architect" stays in BOT_IDS for the per-workflow persona
+    # labels above; it owns no WORKFLOW_STEPS step, so it is not a role a
+    # person can be standing in.
+    role_cards = [
+        {"id": rid, "persona_label": _persona_label(rid), "card": ROLE_CARDS[rid]}
+        for rid in ("sm", "qa", "dev")
     ]
 
     # Resolve the project ONCE for this view: test_the_view_is_project_scoped
@@ -1380,10 +1456,14 @@ def get_workflows(project: str = Query("default")) -> dict:
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
     for entry in catalog:
         entry["task_count"] = _counts.get(entry["id"], 0)
+    # Tier the catalog LAST, once every entry (and every parent_id) is on
+    # it -- see _apply_bot_tiers.
+    _apply_bot_tiers(catalog)
 
     return {
         "steps": steps,
         "bots": bots,
+        "roles": role_cards,
         "occupancy": occupancy,
         "workflows": catalog,
     }
