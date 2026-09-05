@@ -465,12 +465,12 @@ def _derive_community_summary(
             structural += " Hubs: " + ", ".join(top_entities[:3]) + "."
         return structural[:max_chars].strip()
 
-    import sqlite3 as _sq
     import re as _re
     snippets: list[str] = []
     try:
-        conn = _sq.connect(brain_db_path)
-        conn.row_factory = _sq.Row
+        # Through the ONE funnel: brain.db needs recursive_triggers=ON so an
+        # INSERT OR REPLACE fires docs_fts_ad (task 72ccaf94).
+        conn = sqlite_db.connect(brain_db_path)
         try:
             for ename in top_entities[:4]:
                 if not ename:
@@ -711,7 +711,7 @@ class GraphService:
                      "stale": False, "reasons": [],
                      "drifted": [], "drift_checked": False}
         try:
-            b = _sq3.connect(brain_db_path); b.row_factory = _sq3.Row
+            b = sqlite_db.connect(brain_db_path)
             out["docs"] = b.execute("SELECT COUNT(*) FROM docs").fetchone()[0]
             # Issue #41: multi-granular chunking emits N rows per
             # source_file (::win_N, ::__file__, ::__module__, ::EntName).
@@ -737,7 +737,7 @@ class GraphService:
         except OSError:
             pass
         try:
-            g = _sq3.connect(self._graph_db); g.row_factory = _sq3.Row
+            g = sqlite_db.connect(self._graph_db)
             out["entities"] = g.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
             try:
                 out["entities_with_graphify_id"] = g.execute(
@@ -783,7 +783,7 @@ class GraphService:
             out["drift_checked"] = True
             stored: dict[str, str] = {}
             try:
-                b = _sq3.connect(brain_db_path); b.row_factory = _sq3.Row
+                b = sqlite_db.connect(brain_db_path)
                 for r in b.execute(
                     "SELECT source_file, content_hash FROM docs "
                     "WHERE content_hash IS NOT NULL"
