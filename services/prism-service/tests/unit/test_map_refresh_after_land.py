@@ -10,6 +10,7 @@ an honest report of what the redraw is actually worth.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -249,6 +250,28 @@ def test_a_broken_diff_never_loses_the_redraw(monkeypatch):
     out = map_refresh.refresh_maps("prism", kinds=["code"])
     assert out["refreshed"][0]["components"] == 3  # the redraw still counts
     assert out["refreshed"][0]["diff_error"] == "compare refused"
+
+
+def test_no_map_puts_a_clock_in_a_field_the_diff_reads(monkeypatch):
+    """A timestamp in the drawing makes EVERY publish report a change.
+
+    The concepts map carried "read <date> <hh:mm> UTC" in its subtitle, so
+    each publish diffed as one changed fact even when nothing in the
+    architecture had moved — noise that would teach a reader to ignore the
+    number. Build time reaches the reader through meta.json instead.
+    """
+    from prism_service.services.archify_maps import BUILDERS
+
+    for kind, module in BUILDERS.items():
+        if kind == "task":
+            continue  # needs a real task id
+        try:
+            meta = module.build("default").get("meta", {})
+        except Exception:  # noqa: BLE001 - a store this test cannot reach
+            continue
+        text = f"{meta.get('title', '')} {meta.get('subtitle', '')}"
+        assert not re.search(r"\d{4}-\d{2}-\d{2}|\d{2}:\d{2}", text), (
+            f"{kind} map writes a clock into a field the diff compares: {text}")
 
 
 # ------------------------------------------- one implementation, two seats

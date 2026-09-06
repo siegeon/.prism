@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
 
 from prism_service.project_context import get_project
 from prism_service.services.okf_host import OkfHost
@@ -188,9 +187,13 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         "diagram_type": "architecture",
         "meta": {
             "title": "PRISM Concept Map",
+            # NO TIMESTAMP HERE. Each publish diffs the redrawn map against
+            # the one it replaced, and a clock in the subtitle makes every
+            # publish report a change even when the architecture did not
+            # move. The build time already reaches the reader through
+            # meta.json, which the Maps panel renders as "built <time>".
             "subtitle": (
-                f"{len(kept_ids)} concepts across {len(top_domains)} domains, "
-                f"read {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"
+                f"{len(kept_ids)} concepts across {len(top_domains)} domains"
             ),
             "visual_preset": "blueprint",
             "animation": "none",
