@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { Empty } from "@/components/ui";
+import { currentTheme } from "@/lib/theme";
 
 // Archify Maps — a rendered architecture/workflow map embedded as a sandboxed
 // iframe, backed by GET/POST /api/archify/maps/<kind> (see the Archify x
@@ -93,9 +94,11 @@ export default function ArchifyMaps({
       .finally(() => setBuilding(false));
   };
 
+  // The map follows the APP's theme, never a fixed one: a dark diagram inside
+  // a light page reads as a broken embed.
   const iframeSrc = useMemo(() => {
     if (!meta?.html_url) return null;
-    const base = `${meta.html_url}&theme=dark`;
+    const base = `${meta.html_url}&theme=${currentTheme()}`;
     const slug = kind === "concepts" && focusId ? slugForFocus(focusId) : null;
     return slug ? `${base}#focus=${slug}` : base;
   }, [meta, kind, focusId]);
