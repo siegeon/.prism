@@ -138,12 +138,19 @@ def test_the_brain_section_does_not_restate_the_symbol_index(resolved_symbol, mo
     section directly above it — the reader saw the same names twice."""
     class _Noisy(_Brain):
         def search(self, q, limit=8):
+            # These are the shapes the LIVE index returns: a code row has
+            # title=None and an entity_kind, and its domain is the language
+            # ("py") as often as the generic "code".
             return [
-                {"title": "_svc", "domain": "code", "source_file": "a.py"},
-                {"title": "_svc", "domain": "code", "source_file": "b.py"},
-                {"title": "why the conductor exists", "domain": "architecture",
+                {"title": None, "domain": "code", "entity_kind": "function",
+                 "source_file": "tests/test_a.py"},
+                {"title": "_services", "domain": "py", "entity_kind": "function",
+                 "source_file": "b.py"},
+                {"title": "ConductorService", "domain": "py",
+                 "entity_kind": "class", "source_file": "c.py"},
+                {"title": "why the conductor exists", "domain": "md",
                  "source_file": "docs/conductor.md"},
-                {"title": "why the conductor exists", "domain": "architecture",
+                {"title": "why the conductor exists", "domain": "md",
                  "source_file": "docs/conductor.md"},
             ]
 
@@ -157,12 +164,17 @@ def test_no_prose_is_reported_honestly(resolved_symbol, monkeypatch):
     rather than listing function names as if they were documentation."""
     class _CodeOnly(_Brain):
         def search(self, q, limit=8):
-            return [{"title": "_svc", "domain": "code", "source_file": "a.py"}]
+            return [
+                {"title": None, "domain": "code", "entity_kind": "function",
+                 "source_file": "a.py"},
+                {"title": "_svc", "domain": "py", "entity_kind": "function",
+                 "source_file": "b.py"},
+            ]
 
     monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
     br = ed.dossier("X", "prism", brain_svc=_CodeOnly(), graph_svc=_Graph())["brain"]
     assert br["ok"] is True and br["mentions"] == []
-    assert br["searched"] == 1
+    assert br["searched"] == 2
 
 
 def test_an_unresolvable_token_still_returns_every_section(monkeypatch):

@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 # a graph, not scrolled.
 _LIMIT = 8
 
+# Domains that name CODE rather than writing. brain.search labels a row with
+# either the generic "code" or the language ("py", "ts"), so both forms have
+# to be named here — filtering only "code" let every "py" row through.
+_CODE_DOMAINS = frozenset({
+    "code", "py", "ts", "tsx", "js", "jsx", "go", "rs", "java", "cs", "sql",
+})
+
 
 def _section(source: str, **payload: Any) -> dict:
     return {"ok": True, "source": source, "reason": "", **payload}
@@ -152,15 +159,21 @@ def _brain(brain_svc, token: str) -> dict:
     mentions: list[dict] = []
     seen: set[str] = set()
     for h in hits:
-        domain = str(h.get("domain") or "")
-        if domain == "code":
-            continue  # the SYMBOLS section already says this, better
-        title = str(h.get("title") or h.get("entity_name") or "")
-        path = str(h.get("source_file") or h.get("path") or "")
-        key = title or path
-        if not key or key in seen:
+        # A DOCUMENT OR MEMORY HAS A TITLE; A CODE ENTITY DOES NOT. Live rows
+        # show `title: null` with an `entity_kind` for code, so falling back
+        # to entity_name was what smuggled function names in here. The domain
+        # is a second filter, not the only one: it is the language ("py",
+        # "ts") as often as it is "code".
+        title = str(h.get("title") or "").strip()
+        if not title or h.get("entity_kind"):
             continue
-        seen.add(key)
+        domain = str(h.get("domain") or "")
+        if domain in _CODE_DOMAINS:
+            continue  # the SYMBOLS section already says this, and better
+        path = str(h.get("source_file") or h.get("path") or "")
+        if title in seen:
+            continue
+        seen.add(title)
         mentions.append({"title": title, "path": path, "domain": domain})
         if len(mentions) >= _LIMIT:
             break
