@@ -13,6 +13,21 @@ import shutil
 
 import pytest
 
+# The tests below reload prism_service.config to repoint DATA_DIR at a tmp
+# dir. A reload mutates the module for the WHOLE session, and monkeypatch
+# cannot undo it — that leaked the tmp dir into every later test and turned
+# test_data_dir_isolation and the packaging/promotion suites red. This runs
+# first, so its teardown runs LAST: after monkeypatch restores the ambient
+# PRISM_DATA_DIR the conftest pinned, reload config once more so the module
+# agrees with the environment again.
+@pytest.fixture(autouse=True)
+def _restore_config_module_after_reload():
+    yield
+    import importlib
+    from prism_service import config as _cfg
+    importlib.reload(_cfg)
+
+
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node is not on PATH"
 )
