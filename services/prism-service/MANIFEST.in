@@ -15,3 +15,6 @@ include prism_service/py.typed
 # (issue #214: the sdist file-finder dropped the two .md assets because
 # no directive named this dir; mirror package-data's "assets/*").
 recursive-include prism_service/assets *
+
+# Vendored archify renderer (MIT licensed, zero runtime deps).
+recursive-include prism_service/vendor *

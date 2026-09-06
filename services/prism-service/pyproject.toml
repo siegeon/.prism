@@ -112,6 +112,8 @@ version = { attr = "prism_service.__version__.PRISM_VERSION" }
   # this task's own tests) read the file straight off the source tree, so
   # this package-data entry is what a built WHEEL needs.
   "ontology/*.ttl",
+  # Vendored archify renderer (MIT licensed, zero runtime deps).
+  "vendor/**/*",
 ]
 
 [tool.ruff]
