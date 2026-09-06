@@ -403,12 +403,32 @@ def test_sweep_once_ships_machine_track_when_no_human_track_pending(
 
 import inspect
 import time
+import uuid
 
 
-def _pid_is_gone(pid: int) -> bool:
+def _pid_is_gone(pid: int, marker: str = "") -> bool:
     """True when `pid` is dead: no such process, or a zombie (reparented to a
     non-reaping PID 1 in a container). A zombie holds no socket, so it is dead
-    for the oracle's purpose."""
+    for the oracle's purpose.
+
+    IDENTITY, NOT NUMBER (2026-09-06): a bare pid is not a process. The unit
+    job runs 4227 tests and spawns subprocesses continuously, so the kernel
+    recycles a freed pid within the poll window; os.kill(pid, 0) then answers
+    for a STRANGER and the dead grandchild reads as alive. That is why this
+    test failed CI-only, on 2 runs of 3, and why the earlier widening of the
+    deadline did not help -- a longer window makes reuse MORE likely, not
+    less. `marker` is a string unique to this grandchild's command line: when
+    /proc/<pid>/cmdline no longer holds it, the original process is gone
+    whoever owns the number now.
+    """
+    if marker and not sys.platform.startswith("win"):
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().decode(
+                "utf-8", "replace")
+        except OSError:
+            return True
+        if marker not in cmdline:
+            return True
     if sys.platform.startswith("win"):
         try:
             import psutil  # type: ignore
@@ -428,9 +448,13 @@ def _pid_is_gone(pid: int) -> bool:
         return False
 
 
+# sys.argv[2] is a marker unique to this run, carried on the GRANDCHILD's own
+# command line so the poll below can tell the real grandchild from whatever
+# process inherits its pid next. See _pid_is_gone.
 _CHILD_THAT_SPAWNS_A_GRANDCHILD = (
     "import os, subprocess, sys, time\n"
-    "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+    "g = subprocess.Popen([sys.executable, '-c',\n"
+    "                      'import sys, time; time.sleep(60)', sys.argv[2]])\n"
     "pgid = os.getpgid(0) if hasattr(os, 'getpgid') else -1\n"
     "open(sys.argv[1], 'w').write(f'{g.pid} {pgid}')\n"
     "time.sleep(60)\n"
@@ -453,7 +477,9 @@ def test_default_runner_kills_orphaned_grandchild_on_timeout(tmp_path, monkeypat
 
     monkeypatch.setattr(ship_worker, "RUN_TIMEOUT_S", 5, raising=False)
     pids = tmp_path / "pids"
-    argv = [sys.executable, "-c", _CHILD_THAT_SPAWNS_A_GRANDCHILD, str(pids)]
+    marker = f"orphan-probe-{uuid.uuid4().hex}"
+    argv = [sys.executable, "-c", _CHILD_THAT_SPAWNS_A_GRANDCHILD, str(pids),
+            marker]
 
     started = time.monotonic()
     rc, out, err = ship_worker._run(ship_worker._default_runner, argv)
@@ -479,10 +505,11 @@ def test_default_runner_kills_orphaned_grandchild_on_timeout(tmp_path, monkeypat
 
     # AC-1: the grandchild is dead within 10s of the runner returning.
     deadline = time.monotonic() + 10
-    while not _pid_is_gone(grandchild_pid) and time.monotonic() < deadline:
+    while (not _pid_is_gone(grandchild_pid, marker)
+           and time.monotonic() < deadline):
         time.sleep(0.1)
     try:
-        assert _pid_is_gone(grandchild_pid), (
+        assert _pid_is_gone(grandchild_pid, marker), (
             f"grandchild {grandchild_pid} survived the timeout: only the direct "
             "child was killed, the helper process was orphaned")
     finally:
