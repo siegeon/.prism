@@ -133,6 +133,38 @@ def test_the_brain_reading_lists_what_was_written(resolved_symbol, monkeypatch):
     assert br["mentions"][0]["title"] == "why the conductor exists"
 
 
+def test_the_brain_section_does_not_restate_the_symbol_index(resolved_symbol, monkeypatch):
+    """A plain search returns mostly code rows, which repeated the SYMBOLS
+    section directly above it — the reader saw the same names twice."""
+    class _Noisy(_Brain):
+        def search(self, q, limit=8):
+            return [
+                {"title": "_svc", "domain": "code", "source_file": "a.py"},
+                {"title": "_svc", "domain": "code", "source_file": "b.py"},
+                {"title": "why the conductor exists", "domain": "architecture",
+                 "source_file": "docs/conductor.md"},
+                {"title": "why the conductor exists", "domain": "architecture",
+                 "source_file": "docs/conductor.md"},
+            ]
+
+    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
+    br = ed.dossier("X", "prism", brain_svc=_Noisy(), graph_svc=_Graph())["brain"]
+    assert [m["title"] for m in br["mentions"]] == ["why the conductor exists"]
+
+
+def test_no_prose_is_reported_honestly(resolved_symbol, monkeypatch):
+    """Code-only results mean nothing has been WRITTEN, and the panel says so
+    rather than listing function names as if they were documentation."""
+    class _CodeOnly(_Brain):
+        def search(self, q, limit=8):
+            return [{"title": "_svc", "domain": "code", "source_file": "a.py"}]
+
+    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
+    br = ed.dossier("X", "prism", brain_svc=_CodeOnly(), graph_svc=_Graph())["brain"]
+    assert br["ok"] is True and br["mentions"] == []
+    assert br["searched"] == 1
+
+
 def test_an_unresolvable_token_still_returns_every_section(monkeypatch):
     monkeypatch.setattr(
         "prism_service.api.xref.resolve_token",

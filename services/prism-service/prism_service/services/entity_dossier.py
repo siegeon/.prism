@@ -133,23 +133,40 @@ def _symbols(brain_svc, name: str) -> dict:
 
 
 def _brain(brain_svc, token: str) -> dict:
-    """brain.db docs + curated memory: what has been WRITTEN about it."""
+    """What has been WRITTEN about the entity — prose, not more code.
+
+    A plain search returns mostly `domain="code"` rows, which restated the
+    symbol index sitting directly above this section: a reader saw the same
+    function names twice and learned nothing new. The SYMBOLS section owns
+    code. This one keeps the documents and curated memory that say WHY the
+    thing exists, and reports honestly when there are none.
+    """
     source = "brain.db documents and memory"
     if brain_svc is None or not token:
         return _unavailable(source, "no token to search for")
     try:
-        hits = brain_svc.search(token, limit=_LIMIT) or []
+        hits = brain_svc.search(token, limit=_LIMIT * 4) or []
     except Exception as exc:  # noqa: BLE001
         return _unavailable(source, f"search failed: {exc}")
-    return _section(
-        source,
-        mentions=[
-            {"title": str(h.get("title") or h.get("entity_name") or ""),
-             "path": str(h.get("source_file") or h.get("path") or ""),
-             "domain": str(h.get("domain") or "")}
-            for h in hits[:_LIMIT]
-        ],
-    )
+
+    mentions: list[dict] = []
+    seen: set[str] = set()
+    for h in hits:
+        domain = str(h.get("domain") or "")
+        if domain == "code":
+            continue  # the SYMBOLS section already says this, better
+        title = str(h.get("title") or h.get("entity_name") or "")
+        path = str(h.get("source_file") or h.get("path") or "")
+        key = title or path
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        mentions.append({"title": title, "path": path, "domain": domain})
+        if len(mentions) >= _LIMIT:
+            break
+
+    return _section(source, mentions=mentions,
+                    searched=len(hits), prose_only=True)
 
 
 def _ontology(project: str, ontology_class: str) -> dict:
