@@ -170,3 +170,27 @@ def test_a_section_the_rubric_would_refuse_is_NOT_taken():
 def test_other_steps_never_take_the_shortcut():
     task = types.SimpleNamespace(id="t-1", title="A task", description="", oracle="")
     assert tr._codified_step_proof("implement_tasks", task, _facts()) == ""
+
+
+# --- the formatter must not decide relevance -----------------------------
+
+def test_a_wide_fact_set_earns_the_narrow_judge():
+    """Bypassing the judge made EVERY retrieved fact a premise, which turned
+    a throughput fix into a noise generator. A set too wide to assert
+    wholesale must route through the judge instead of being rendered."""
+    task = types.SimpleNamespace(id="t-1", title="A task", description="",
+                                 oracle="")
+    wide = [GatheredFact(kind="memory", text=f"fact {i}",
+                         citation=f"services/x.py:{i}")
+            for i in range(tr._SHORTCUT_MAX_FACTS + 1)]
+
+    assert tr._codified_step_proof("review_previous_notes", task, wide) == ""
+
+
+def test_a_tight_fact_set_still_renders_at_zero_tokens():
+    task = types.SimpleNamespace(id="t-1", title="A task", description="",
+                                 oracle="")
+    tight = [GatheredFact(kind="memory", text="the runner drives one task",
+                          citation="services/x.py:1")]
+
+    assert tr._codified_step_proof("review_previous_notes", task, tight)

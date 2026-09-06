@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.252"
+PRISM_VERSION = "7.13.253"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8579,4 +8579,32 @@ PRISM_VERSION_NOTES += (
     "total run count cannot answer this: 149 runs last week reads identically to "
     "one a second ago. A row with no timestamp counts as not-recent, never as "
     "running forever. 5 new tests."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.253: premise recall asks one topical term at a time, and only a real "
+    "match counts. Owner, seeing a query read 'bot OR hands OR its OR task OR "
+    "the OR next OR flow': _gather_memories passed the whole task title as one "
+    "query, and a short generic sentence embeds into generic-workflow space -- "
+    "measured live, four unrelated tasks came back with the same five feedback-* "
+    "memories, two identical across all four, and none about the task. Since "
+    "7.13.245 made render authoritative over those facts, that noise was being "
+    "asserted as the task's own Premises: a gate that passes while saying "
+    "nothing, which is worse than the stall it replaced. Fixed in three parts. "
+    "ONE TERM AT A TIME: the corpus does hold task-specific memories -- the "
+    "single word 'planner' returns a-split-is-unsafe-until-the-planner-proves-it "
+    "where the full title never reaches it. A RELEVANCE FLOOR: a vector recall "
+    "always returns nearest neighbours, so 'vocabulary' produced "
+    "signal-loss-pill-live-verified; the term must now actually appear in the "
+    "entry, which turns 'nothing matched' into an honest empty result instead of "
+    "confident noise. A HARD CAP plus the judge: per-term querying multiplies "
+    "candidates, which is how a retrieval fix becomes a noise problem, so at "
+    "most 4 memories reach the report and a fact set wider than 4 routes through "
+    "the node's narrow judge to SELECT the load-bearing few rather than "
+    "asserting all of them -- a formatter must not decide relevance. Measured "
+    "after: 'The planner cuts slices that run in parallel' now yields three "
+    "genuinely relevant memories, and both 'One node adjudicates the vocabulary' "
+    "and 'The pipeline reaps what a finished task leaves' yield an honest empty "
+    "set. 7 new tests; 225 green across every premise, runner and workflows "
+    "suite."
 )

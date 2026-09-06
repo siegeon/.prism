@@ -25,6 +25,8 @@ field in api/workflows.py), never papered over with an invented one.
 """
 from __future__ import annotations
 
+import re as _re
+
 import re
 from dataclasses import dataclass
 
@@ -59,18 +61,98 @@ def _candidate_symbols(text: str, limit: int) -> list[str]:
     return seen
 
 
+# Words that carry no topic. A query built from a whole sentence embeds
+# into generic-workflow space and returns the same globally-popular
+# memories for every task (measured 2026-09-05: four unrelated tasks got
+# the same five feedback-* entries, two identical across all four).
+_QUERY_STOPWORDS = frozenset("""
+about after against all also always among another any anything are because
+been before being below between both call called comes could does done down
+each either else enough even ever every everything from full gets give given
+goes gone have here into itself just keep kept known leave leaves left less
+like made make makes many more most much must never next none only onto open
+other over própria same shall should show shows since some something still
+such take taken than that the their them themselves then there these they
+thing things this those through thus together under until upon used uses
+using very what when where which while whose will with within without would
+your yours localhost http https task node runs step steps
+""".split())
+
+_MEMORY_TERM_LIMIT = 4          # how many topical terms we ask about
+_MEMORY_PER_TERM = 3            # how many candidates each term may offer
+_MEMORY_KEEP_LIMIT = 4          # HARD CAP on memories that reach the report
+
+
+def _query_terms(text: str, limit: int = _MEMORY_TERM_LIMIT) -> list[str]:
+    """The distinctive topical words in `text`, longest-lived first.
+
+    Recall is asked ONE TERM AT A TIME rather than one long sentence: the
+    corpus does hold task-specific memories, but a full title/oracle embeds
+    into generic space and never reaches them, while the single word
+    "planner" returns a-split-is-unsafe-until-the-planner-proves-it
+    immediately (both measured live).
+    """
+    out: list[str] = []
+    for m in _re.finditer(r"[A-Za-z][A-Za-z0-9_]+", text or ""):
+        w = m.group(0).lower()
+        if len(w) <= 4 or w in _QUERY_STOPWORDS or w in out:
+            continue
+        out.append(w)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _term_is_present(term: str, entry) -> bool:
+    """True when the term that FOUND this memory actually appears in it.
+
+    THE RELEVANCE FLOOR. A vector recall always returns its nearest
+    neighbours, so a term with no real match still yields entries -- that
+    is how "vocabulary" produced signal-loss-pill-live-verified, and how
+    unrelated memories ended up cited as a task's own premises. Requiring
+    the term to appear turns "nothing matched" into an honest empty
+    result instead of confident noise.
+    """
+    stem = term[:-1] if term.endswith("s") and len(term) > 4 else term
+    hay = " ".join([
+        str(getattr(entry, "name", "") or ""),
+        str(getattr(entry, "summary", "") or ""),
+        str(getattr(entry, "description", "") or "")[:400],
+    ]).lower()
+    return stem in hay
+
+
 def _gather_memories(task, memory_svc, limit: int) -> list[GatheredFact]:
     if memory_svc is None:
         return []
-    query = (task.title or task.description or "").strip()
-    if not query:
+    subject = " ".join([str(getattr(task, "title", "") or ""),
+                        str(getattr(task, "oracle", "") or "")]).strip()
+    terms = _query_terms(subject) or _query_terms(
+        str(getattr(task, "description", "") or ""))
+    if not terms:
         return []
-    try:
-        entries = memory_svc.recall(query, limit=limit)
-    except Exception:
-        return []
+
+    entries, seen, query = [], set(), ""
+    for term in terms:
+        if len(entries) >= _MEMORY_KEEP_LIMIT:
+            break
+        try:
+            found = memory_svc.recall(term, limit=_MEMORY_PER_TERM)
+        except Exception:
+            continue
+        for e in found:
+            name = getattr(e, "name", "") or getattr(e, "id", "")
+            if not name or name in seen:
+                continue
+            if not _term_is_present(term, e):
+                continue        # nearest neighbour, not a real match
+            seen.add(name)
+            entries.append((term, e))
+            if len(entries) >= _MEMORY_KEEP_LIMIT:
+                break
+
     out = []
-    for e in entries:
+    for query, e in entries:
         snippet = (getattr(e, "description", "") or "").strip()
         if len(snippet) > 140:
             snippet = snippet[:140].rstrip() + "..."
@@ -82,7 +164,7 @@ def _gather_memories(task, memory_svc, limit: int) -> list[GatheredFact]:
             text=f"Memory '{name}': {snippet}" if snippet else f"Memory '{name}'",
             # backtick output form (_CLAIM_OUTPUT_RE: whitespace inside
             # backticks) — this literally reports the retrieval call made.
-            citation=f"`memory_recall(\"{query[:60]}\") -> {name}`",
+            citation=f"`memory_recall(\"{query}\") -> {name}`",
         ))
     return out
 

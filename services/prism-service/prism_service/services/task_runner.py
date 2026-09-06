@@ -59,6 +59,11 @@ BUILD_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
 # runner-produced report reads identically to a human-driven one.
 _PLAN_STEPS = ("draft_story", "verify_plan")
 _PREMISE_STEP = "review_previous_notes"
+# Above this many gathered facts the premise step routes through the node's
+# narrow judge to SELECT the load-bearing ones, rather than asserting all of
+# them. Deliberately small: the point is that a formatter must not decide
+# relevance (owner 2026-09-05, on noise making the system unusable).
+_SHORTCUT_MAX_FACTS = 4
 # Stall detection (task 82cc05ee): after this many non-advancing reports
 # on ONE step, the next tick does NOT spawn another identical attempt --
 # it splits the red test ids named in the last proof into children, or
@@ -265,6 +270,16 @@ def _codified_step_proof(step_id: str, task, facts) -> str:
     a step on evidence the rubric would have refused.
     """
     if step_id != _PREMISE_STEP or not facts:
+        return ""
+    # KEEP THE JUDGMENT WHERE JUDGMENT IS NEEDED. The gather now asks one
+    # topical term at a time and drops anything the term does not actually
+    # appear in, so what arrives is relevant -- but a wide set still needs
+    # SELECTING, and that is the one thing a formatter cannot do. Bypassing
+    # the judge entirely (7.13.245) made every retrieved fact a premise and
+    # turned a throughput fix into a noise generator. A tight set renders
+    # straight through at zero tokens; a wide one earns the narrow judge,
+    # whose whole job is picking the load-bearing few.
+    if len(facts) > _SHORTCUT_MAX_FACTS:
         return ""
     try:
         from prism_service.services import arc_governance as gov
