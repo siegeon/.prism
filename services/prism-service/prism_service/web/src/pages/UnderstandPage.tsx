@@ -9,7 +9,7 @@ import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip, GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
-import ArchifyMaps from "@/components/understand/ArchifyMaps";
+import ArchifyMaps from "@/components/maps/ArchifyMaps";
 
 // Understand — the domain-first knowledge drill (owner doctrine): Understand
 // starts at the DOMAIN layer and drills DOWN. It never opens on a concept.

@@ -27,6 +27,23 @@ def _infer_type(label: str, top_files: list[str]) -> str:
     return "backend"
 
 
+def _distinctive(label: str) -> str:
+    """The part of a community label that tells it apart.
+
+    Nearly every community here is named "prism service · <thing>", so a
+    label clipped from the front renders a grid of boxes that all read
+    "prism service ·…" and name nothing. The segment after the last
+    separator is the part a reader needs.
+    """
+    text = str(label or "").strip()
+    for sep in ("·", "/", ":"):
+        if sep in text:
+            tail = text.rsplit(sep, 1)[-1].strip()
+            if tail:
+                return tail
+    return text
+
+
 def build(project: str, *, task_id: str | None = None) -> dict:
     """Build the code architecture map from graph communities and edges."""
     try:
@@ -89,7 +106,7 @@ def build(project: str, *, task_id: str | None = None) -> dict:
     for comm in kept_communities:
         cid = slug(f"c{comm['id']}-{comm['label']}")
         ctype = _infer_type(comm["label"], comm.get("top_files", []))
-        label = clip(comm["label"], 16)
+        label = clip(_distinctive(comm["label"]), 16)
         sublabel = f"{comm['size']}"
 
         # Tag: top entity name if short

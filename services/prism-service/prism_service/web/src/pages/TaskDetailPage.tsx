@@ -13,7 +13,7 @@ import DesignPacket from "@/components/plan/DesignPacket";
 import { stepLabel } from "@/lib/workflowChips";
 import Markdown, { renderInline } from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
-import ArchifyMaps from "@/components/understand/ArchifyMaps";
+import ArchifyMaps from "@/components/maps/ArchifyMaps";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";

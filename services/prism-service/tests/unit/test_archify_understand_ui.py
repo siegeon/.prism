@@ -9,7 +9,7 @@ this kind of check before and hid a surface nobody could open.
 from pathlib import Path
 
 _WEB = Path(__file__).resolve().parents[2] / "prism_service" / "web" / "src"
-_MAPS = _WEB / "components" / "understand" / "ArchifyMaps.tsx"
+_MAPS = _WEB / "components" / "maps" / "ArchifyMaps.tsx"
 _UNDERSTAND = _WEB / "pages" / "UnderstandPage.tsx"
 _TASK_DETAIL = _WEB / "pages" / "TaskDetailPage.tsx"
 
@@ -21,7 +21,7 @@ def test_the_maps_component_exists():
 def test_understand_renders_the_maps_component():
     src = _UNDERSTAND.read_text(encoding="utf-8")
     assert "<ArchifyMaps" in src
-    assert 'from "@/components/understand/ArchifyMaps"' in src
+    assert 'from "@/components/maps/ArchifyMaps"' in src
 
 
 def test_task_page_renders_the_task_map():

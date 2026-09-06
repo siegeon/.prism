@@ -77,12 +77,15 @@ def test_ir_schema_validation():
         assert ir["meta"]["visual_preset"] == "blueprint"
         assert ir["meta"]["animation"] == "none"
 
-        # Lanes
-        assert len(ir["lanes"]) == 3
-        lane_ids = [l["id"] for l in ir["lanes"]]
+        # Lanes. The earlier assertion here demanded all three lanes always.
+        # Superseded: a lane with no node renders as an empty band that reads
+        # like a loading state, so only lanes that carry a node are declared.
+        # The step lane always has nodes; the other two depend on the task.
+        lane_ids = [lane["id"] for lane in ir["lanes"]]
         assert "flow" in lane_ids
-        assert "knowledge" in lane_ids
-        assert "work" in lane_ids
+        assert set(lane_ids) <= {"flow", "knowledge", "work"}
+        for lane_id in lane_ids:
+            assert any(n["lane"] == lane_id for n in ir["nodes"]), lane_id
 
         # mainPath and phases
         assert "mainPath" in ir

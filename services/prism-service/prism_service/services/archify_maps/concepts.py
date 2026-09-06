@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from prism_service.project_context import get_project
 from prism_service.services.okf_host import OkfHost
@@ -188,7 +188,10 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         "diagram_type": "architecture",
         "meta": {
             "title": "PRISM Concept Map",
-            "subtitle": f"Domain knowledge from memory stores (read {datetime.utcnow().isoformat()}Z)",
+            "subtitle": (
+                f"{len(kept_ids)} concepts across {len(top_domains)} domains, "
+                f"read {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC"
+            ),
             "visual_preset": "blueprint",
             "animation": "none",
         },

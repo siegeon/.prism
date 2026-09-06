@@ -58,6 +58,22 @@ _PHASE_MAP = {
 }
 
 
+def _window(steps: list, current_id, width: int) -> tuple[list, int]:
+    """The `width` steps to draw, centred on the step the task is on.
+
+    Returns (steps, index_of_first). The whole list is returned unchanged when
+    it already fits.
+    """
+    if len(steps) <= width:
+        return steps, 0
+    try:
+        here = next(i for i, s in enumerate(steps) if s.get("id") == current_id)
+    except StopIteration:
+        here = 0
+    start = max(0, min(here - width // 2, len(steps) - width))
+    return steps[start:start + width], start
+
+
 def build(project: str, *, task_id: str | None = None) -> dict:
     """Build the task workflow map: steps, concepts, and children."""
     if not task_id:
@@ -85,6 +101,13 @@ def build(project: str, *, task_id: str | None = None) -> dict:
 
     # Get child tasks
     children = task_svc.list(parent_id=task_id)
+
+    # The workflow schema allows six columns, and the implement workflow has
+    # ten steps. Show the window AROUND the step the task is on rather than
+    # the first six: a task at green_gate would otherwise render only the
+    # opening steps and hide where the work actually is.
+    _total_steps = len(steps)
+    steps, window_from = _window(steps, task.workflow_step, _MAX_COLS)
 
     # Determine layout dimensions (workflow schema limits cols to 0-5, so max 6 items per lane)
     step_count = min(len(steps), _MAX_COLS)
@@ -198,7 +221,10 @@ def build(project: str, *, task_id: str | None = None) -> dict:
             "dot": "cyan",
             "title": "Workflow",
             "items": [
-                f"{len(step_ids)} of {len(steps)} steps mapped.",
+                (f"Steps {window_from + 1} to {window_from + len(step_ids)} "
+                 f"of {_total_steps}, around the current one."
+                 if _total_steps > len(step_ids)
+                 else f"All {len(step_ids)} steps of the workflow."),
                 f"Current step: {_step_label(task.workflow_step)}" if task.workflow_step else "No step assigned.",
             ],
         },
@@ -228,10 +254,14 @@ def build(project: str, *, task_id: str | None = None) -> dict:
             "visual_preset": "blueprint",
             "animation": "none",
         },
+        # A lane with nothing in it renders as an empty band that reads like a
+        # loading state, so only lanes that carry a node are declared.
         "lanes": [
-            {"id": "flow", "label": "Workflow Steps"},
-            {"id": "knowledge", "label": "Concepts"},
-            {"id": "work", "label": "Children"},
+            lane for lane in (
+                {"id": "flow", "label": "Workflow Steps"},
+                {"id": "knowledge", "label": "Concepts"},
+                {"id": "work", "label": "Children"},
+            ) if any(n["lane"] == lane["id"] for n in nodes)
         ],
         "nodes": nodes,
         "edges": edges,
