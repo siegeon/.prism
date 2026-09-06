@@ -1408,25 +1408,11 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             ))}
           </div>
         </Card>
-        <Card className="!p-4 shrink-0">
-          <SectionLabel>Why this beats the hairball</SectionLabel>
-          <p className="mt-2 text-xs leading-relaxed text-[color:var(--text-secondary)]">
-            The old view drew 500 code-only nodes in 4 blobs. Here every entity
-            type shares one mesh: memories cite memories, code calls code, a
-            session threads through the gate it recorded, and it grows only
-            where you click. A task is one doorway in; so is a memory, a file,
-            or a session.
-          </p>
-        </Card>
-        <Card className="!p-4 shrink-0">
-          <SectionLabel>Understand stays the reading room</SectionLabel>
-          <p className="mt-2 text-xs leading-relaxed text-[color:var(--text-secondary)]">
-            The mesh never replaces the wiki. Double-click a concept diamond and
-            its Understand page opens: structured, readable, with backlinks.
-            Every concept page carries a show-in-mesh button back. Two doors,
-            one knowledge.
-          </p>
-        </Card>
+        {/* Two explainer cards stood here, arguing this view against a
+            version of itself that no longer exists ("the old view drew 500
+            code-only nodes in 4 blobs") and restating the product's own
+            architecture back at the reader. Both removed: the screen shows
+            the graph, it does not describe itself. */}
       </div>
     </div>
   );
