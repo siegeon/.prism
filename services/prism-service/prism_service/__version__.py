@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.251"
+PRISM_VERSION = "7.13.252"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8561,4 +8561,22 @@ PRISM_VERSION_NOTES += (
     "to fix. A node with no token trend but real runs now reads 'N runs - no "
     "token cost'; one that has genuinely never run keeps the honest "
     "indeterminate. Real npm run build green."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.252: a behaviour sub-node lights up when it actually runs. 'I still "
+    "do not see any activity' was literally true of the payload, not of the "
+    "work: _conductor_behavior_workflows built every behaviour entry with "
+    "occupancy = {step_id: 0} at construction time, so no sub-node could ever be "
+    "drawn live however often it fired. Nothing downstream could have fixed it "
+    "either, because _record_codified_run wrote its rows with NO started_at or "
+    "ended_at -- there was no recency in the data to read, which is also why an "
+    "earlier probe of mine reported zero runs in an hour while three drives were "
+    "live. Codified runs are now stamped (start and end the same instant, since "
+    "such a step is effectively instantaneous), node_recent_runs answers the only "
+    "question the canvas needs -- did this node run just now, inside a 180s "
+    "window -- and a behaviour's occupancy follows it instead of a constant. A "
+    "total run count cannot answer this: 149 runs last week reads identically to "
+    "one a second ago. A row with no timestamp counts as not-recent, never as "
+    "running forever. 5 new tests."
 )

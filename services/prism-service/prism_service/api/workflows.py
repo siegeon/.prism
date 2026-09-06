@@ -44,6 +44,7 @@ from prism_service.services.context_builder import ROLE_CARDS, ContextBuilder
 from prism_service.services import sqlite_db
 from prism_service.services.agent_runs_data import (
     NODE_TREND_WINDOW,
+    node_recent_runs,
     node_run_counts,
     node_token_trend,
 )
@@ -966,8 +967,18 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
         counts = node_run_counts(str(scores_db), keys) if scores_db else {}
     except Exception:
         counts = {}
+    # DID IT RUN JUST NOW. A behaviour's sub-steps were served with a
+    # hardcoded occupancy of 0, so the canvas could never light one up
+    # however often it fired -- "I still don't see any activity" was true
+    # of the payload, not of the work. A total count cannot answer it
+    # either: 149 runs last week reads the same as one a second ago.
+    try:
+        recent = node_recent_runs(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        recent = {}
     for step in steps:
         step["run_count"] = counts.get(_key(step), 0)
+        step["running_now"] = bool(recent.get(_key(step), 0))
         t = trend.get(_key(step)) or {}
         step["token_multiplier"] = t.get("multiplier")
         step["avg_tokens"] = t.get("avg_tokens")
@@ -1456,9 +1467,15 @@ def get_workflows(project: str = Query("default")) -> dict:
     # Stamped HERE, off the path this view already resolved, so the project
     # is still resolved exactly once per request.
     for _entry in conductor_behaviors:
+        _steps = _entry.get("steps") or []
         _attach_node_trend(
             (_scores_db / "scores.db") if _scores_db is not None else None,
-            _entry.get("steps") or [])
+            _steps)
+        # The canvas reads `occupancy` to decide what is live. It was a
+        # dict of zeros built at construction time, which is why a node
+        # that had just run still drew as idle.
+        _entry["occupancy"] = {
+            s["id"]: (1 if s.get("running_now") else 0) for s in _steps}
     # Same rule as validation above: nest only the behavior(s) an actual
     # conductor state links to. story_gate now links to "story-gate-check"
     # (linked_workflow_id above). "land" nests too (owner, 2026-08-21): it

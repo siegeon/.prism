@@ -450,11 +450,20 @@ def _record_codified_run(project: str, task_id: str, route: str,
     try:
         from prism_service.services import agent_runs_data
 
+        # STAMP THE TIME. Without started_at/ended_at these rows carry no
+        # recency at all, so nothing downstream can say "this node is
+        # running now" -- the Workflows canvas showed no activity on a
+        # behaviour's sub-steps however often they fired, and a plain
+        # count cannot distinguish 149 runs last week from one a second
+        # ago. A codified step is effectively instantaneous, so start and
+        # end are the same instant rather than a fabricated span.
+        _now = time.time()
         agent_runs_data.upsert_agent_run(_scores_db_for(project), {
             "run_id": run_id, "workflow_name": "implement",
             "task_id": task_id, "agent_id": SEAT_ID, "role": "sm",
             "step": route, "model": "codified", "tokens": 0,
             "cost_usd": 0.0, "ok": 1 if ok else 0,
+            "started_at": _now, "ended_at": _now, "duration_ms": 0,
             "verdict_summary": summary[:500],
         })
     except Exception:

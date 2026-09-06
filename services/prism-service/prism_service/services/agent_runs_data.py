@@ -253,6 +253,49 @@ NODE_TREND_WINDOW = 20
 NODE_MIN_SAMPLES = 3
 
 
+def node_recent_runs(scores_db: str, steps: list[str],
+                     window_s: float = 180.0) -> dict[str, int]:
+    """Which of `steps` ran inside the last `window_s` seconds.
+
+    THE ACTIVITY SIGNAL. A behaviour's sub-steps were served with a
+    hardcoded occupancy of 0, so the canvas could never light one up
+    however often it fired -- "I still don't see any activity" was
+    literally true of the payload, not of the work. A total count cannot
+    answer this either: 149 runs last week and one a second ago read the
+    same. This asks the only question the canvas needs -- did this node
+    run just now.
+
+    Returns {step: 1|0}. Rows with no timestamp count as not-recent rather
+    than as running forever.
+    """
+    if not steps:
+        return {}
+    out: dict[str, int] = {s: 0 for s in steps}
+    try:
+        import sqlite3
+        import time as _t
+
+        floor = _t.time() - max(0.0, float(window_s))
+        conn = sqlite3.connect(scores_db)
+        try:
+            marks = ",".join("?" for _ in steps)
+            rows = conn.execute(
+                f"SELECT step, started_at FROM agent_runs "
+                f"WHERE step IN ({marks}) AND started_at IS NOT NULL",
+                tuple(steps))
+            for step, started in rows:
+                try:
+                    if float(started) >= floor:
+                        out[str(step)] = 1
+                except (TypeError, ValueError):
+                    continue          # an ISO-era row simply is not recent
+        finally:
+            conn.close()
+    except Exception:
+        return out
+    return out
+
+
 def node_run_counts(scores_db: str, steps: list[str]) -> dict[str, int]:
     """How many times each of `steps` has actually run.
 
