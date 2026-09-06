@@ -717,7 +717,16 @@ function OntologyStrip({
     <div className="rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)]
       px-3 py-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
       <span className="text-2xs uppercase tracking-wider text-[color:var(--text-label)]">In the ontology</span>
-      <Lozenge tone={typeLozengeTone(info.class)}>{info.class}</Lozenge>
+      {/* The class is the cross-link INTO the ontology. It rendered as a bare
+          lozenge, so the one place a concept names its class was the one
+          place you could not click through to it. */}
+      <button
+        onClick={() => navigate(`/ontology?tab=structure&class=${encodeURIComponent(info.class)}`)}
+        title={`Open ${info.class} in the ontology`}
+        className="cursor-pointer"
+      >
+        <Lozenge tone={typeLozengeTone(info.class)}>{info.class}</Lozenge>
+      </button>
       {info.domain && (
         <button
           onClick={() => navigate("/ontology?tab=structure")}

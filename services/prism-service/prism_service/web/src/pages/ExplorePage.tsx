@@ -1469,14 +1469,21 @@ function Dossier({ token, project, onOpen }: {
 }) {
   const [d, setD] = useState<DossierData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState("");
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
+    setFailed("");
     api.get<DossierData>(
       `/api/xref/entity?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}`)
       .then((r) => { if (alive) { setD(r); setLoading(false); } })
-      .catch(() => { if (alive) { setD(null); setLoading(false); } });
+      .catch((e) => {
+        if (!alive) return;
+        setD(null);
+        setLoading(false);
+        setFailed(String(e?.message || e) || "the request failed");
+      });
     return () => { alive = false; };
   }, [token, project]);
 
@@ -1485,6 +1492,22 @@ function Dossier({ token, project, onOpen }: {
       <Card className="!p-4 shrink-0">
         <SectionLabel>What the system knows</SectionLabel>
         <div className="mt-2 text-2xs opacity-50">reading the stores…</div>
+      </Card>
+    );
+  }
+  // A PANEL THAT FAILS MUST SAY SO. Rendering null here made a broken
+  // endpoint indistinguishable from a feature that was never built: the rail
+  // simply had one fewer card and nobody could tell.
+  if (failed) {
+    return (
+      <Card className="!p-4 shrink-0">
+        <SectionLabel>What the system knows</SectionLabel>
+        <div className="mt-2 text-2xs text-[color:var(--text-muted)]">
+          This could not be read: {failed}
+        </div>
+        <div className="mt-1 text-2xs opacity-50 font-mono break-all">
+          GET /api/xref/entity?token={token}
+        </div>
       </Card>
     );
   }
