@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.253"
+PRISM_VERSION = "7.13.254"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8607,4 +8607,18 @@ PRISM_VERSION_NOTES += (
     "and 'The pipeline reaps what a finished task leaves' yield an honest empty "
     "set. 7 new tests; 225 green across every premise, runner and workflows "
     "suite."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.254: Background activity shows activity, not the job archive. The "
+    "default view rendered every job the store ever finished -- 52 completed "
+    "analyzer runs back to May -- under a heading that reads as live work "
+    "(owner: we must not scare people into thinking we are using all of their "
+    "tokens). Validated while fixing it: all 16 prism rows point at result files "
+    "that no longer exist, and 4 more name a target sha the repo no longer has. "
+    "The default view now keeps every pending/in-progress job and only done "
+    "ones from the last 24h, and states how many older finished rows it hid; "
+    "the explicit completed/failed filters stay unbounded so history remains "
+    "reachable. 4 new source pins; 77 green across every SettingsPage suite; "
+    "tsc and a real npm run build clean."
 )

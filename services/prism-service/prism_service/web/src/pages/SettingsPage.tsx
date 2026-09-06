@@ -101,6 +101,8 @@ type ProjectInfo = {
 };
 
 const ZERO_QUEUE: QueueCounts = { pending: 0, in_progress: 0, completed: 0, failed: 0 };
+/** How long a finished job still counts as "activity" on the default view. */
+const RECENT_DONE_MS = 24 * 60 * 60 * 1000;
 
 async function fetchInfo(name: string): Promise<ProjectInfo> {
   const s = await api.get<{
@@ -1654,7 +1656,22 @@ function JobsPanel() {
   const { jobs: allJobs, loaded, lastLoaded, refresh } = useJobs();
   const [filter, setFilter] = useState<Job["state"] | "all">("all");
   const [now, setNow] = useState<number>(Date.now());
-  const jobs = filter === "all" ? allJobs : allJobs.filter((j) => j.state === filter);
+  // ACTIVITY, NOT AN ARCHIVE. "all" used to render every job the store
+  // ever finished -- 52 completed analyzer runs back to May, drawn under a
+  // heading that says "Background activity" as though they were running
+  // now (owner 2026-09-05: "we don't scare people into thinking we are
+  // using all of their tokens"). The default view keeps every pending /
+  // in-progress job and only the done ones from the last 24h. Picking
+  // "completed" or "failed" explicitly is asking for history, so those
+  // filters stay unbounded and nothing is lost -- it just stops posing
+  // as live work.
+  const isDone = (j: Job) => j.state === "completed" || j.state === "failed" || j.state === "cancelled";
+  const doneRecently = (j: Job) =>
+    !isDone(j) || (typeof j.completed_at === "number" && now - j.completed_at * 1000 <= RECENT_DONE_MS);
+  const jobs = filter === "all"
+    ? allJobs.filter(doneRecently)
+    : allJobs.filter((j) => j.state === filter);
+  const hiddenDone = filter === "all" ? allJobs.length - jobs.length : 0;
 
   // Tick the freshness label every second so it ages live, like Workers.
   useEffect(() => {
@@ -1677,7 +1694,7 @@ function JobsPanel() {
     <>
       <div className="flex items-center gap-3 mb-3">
         <span className="text-2xs opacity-60 font-mono">
-          {jobs.length} job{jobs.length === 1 ? "" : "s"} · {inFlight} in flight
+          {jobs.length} job{jobs.length === 1 ? "" : "s"} · {inFlight} in flight{hiddenDone > 0 ? ` · ${hiddenDone} older finished hidden` : ""}
         </span>
         <span className="text-2xs opacity-40 font-mono ml-auto">{ageLabel}</span>
         <button
