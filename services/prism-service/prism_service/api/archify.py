@@ -154,6 +154,61 @@ def get_map_html(
     )
 
 
+@router.get("/maps/{kind}/delta/html")
+def get_map_delta_html(
+    kind: str,
+    project: str = Query("default"),
+    task_id: str | None = Query(None),
+) -> HTMLResponse:
+    """The Before / Delta / After page for the last publish of this map.
+
+    Written by the `refresh-maps` step, which diffs each redrawn map against
+    the map it replaced. 404 until a publish has produced one — the first
+    draw of a map has nothing to compare against.
+    """
+    if kind not in ["code", "concepts", "language", "task"]:
+        raise HTTPException(400, f"unknown kind: {kind}")
+    if kind == "task" and not task_id:
+        raise HTTPException(400, "kind='task' requires task_id")
+    try:
+        get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+
+    html = ArchifyService(project).delta_html(kind, task_id=task_id)
+    if not html:
+        raise HTTPException(
+            404, f"no change to show for {kind}: nothing has replaced this map yet")
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-cache",
+            # No X-Frame-Options header — this must be iframe-able
+        },
+    )
+
+
+@router.get("/maps/{kind}/delta")
+def get_map_delta_receipt(
+    kind: str,
+    project: str = Query("default"),
+    task_id: str | None = Query(None),
+) -> dict:
+    """The machine receipt for the last diff: what was added, removed,
+    changed, moved and rerouted between the two maps."""
+    if kind not in ["code", "concepts", "language", "task"]:
+        raise HTTPException(400, f"unknown kind: {kind}")
+    try:
+        get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+
+    receipt = ArchifyService(project).delta_receipt(kind, task_id=task_id)
+    if receipt is None:
+        raise HTTPException(404, f"no diff receipt for {kind}")
+    return receipt
+
+
 @router.get("/maps/{kind}/ir")
 def get_map_ir(
     kind: str,

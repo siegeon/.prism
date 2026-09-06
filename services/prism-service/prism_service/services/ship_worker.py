@@ -636,26 +636,34 @@ def ship_task(task_id: str, project: str = "default", *,
     replayed = land(task_svc, cond, task_id)
     _reap_after_land(task_svc, task_id, project)
     _brain_health_after_land(task_svc, task_id, project)
+    # The last step that DOES anything: recompute the graph from the source
+    # that just landed, redraw the maps, and diff each against the map it
+    # replaced. It reads the project's own stores, never the task worktree,
+    # so it is safe beside reap.
     _refresh_maps_after_land(task_svc, task_id, project)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
             "replayed": replayed}
 
 
 def _refresh_maps_after_land(task_svc, task_id: str, project: str) -> None:
-    """Runs beside `_brain_health_after_land`, same trigger: a successful land.
+    """THE LAST STEP OF THE PUBLISH WORKFLOW, on the same trigger as its
+    siblings: a successful land.
 
-    Redraws the Understand maps so the picture a person opens matches the
-    work that just shipped. `brain_health` re-indexes what the play WROTE;
-    this redraws what a person READS.
+    Three things in this order, because the order is what makes it worth
+    running at all:
+      1. RECOMPUTE `graph.db` from the source that just landed (~8s on this
+         repo). Skipping this would redraw the graph as it already stood, so
+         the picture would never contain the code that just shipped.
+      2. REDRAW each Understand map from the recomputed stores.
+      3. DIFF each new map against the map it replaced, so a publish reports
+         WHAT MOVED in the architecture and not merely that a picture is new.
 
-    The outcome is recorded on the task's own history, never only logged,
-    and the line says what the redraw is worth: the code map is drawn from
-    `graph.db`, which no step on the land path rebuilds, so when the graph
-    is behind the source the history says exactly that rather than claiming
-    a freshness the map does not have.
+    `brain_health` re-indexes what the play WROTE; this redraws and measures
+    what a person READS. The outcome goes on the task's own history, never
+    only into a log buffer.
 
-    Best-effort toward the SHIP itself, same as its two siblings: a map is a
-    reading aid, and a ship that already succeeded is never failed by one.
+    Best-effort toward the SHIP itself, same as its siblings: a ship that
+    already succeeded is never failed by a drawing.
     """
     try:
         from prism_service.services import map_refresh

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 import tempfile
 from datetime import datetime, timezone
@@ -24,6 +25,61 @@ def _count(ir: dict, *keys: str) -> int:
         if isinstance(value, list):
             return len(value)
     return 0
+
+
+def stamp_edge_ids(ir: dict) -> dict:
+    """Give every relationship a STABLE id, in place.
+
+    Archify's compare refuses a base whose connections have no authored ids
+    ("base connections require authored stable ids for comparison") — without
+    them it cannot tell which line in the new map is which line in the old
+    one. An id derived from the endpoints is stable across rebuilds, which is
+    exactly what a diff needs, so the service guarantees it for every map
+    rather than asking each builder to remember.
+    """
+    for key in ("connections", "edges"):
+        rows = ir.get(key)
+        if not isinstance(rows, list):
+            continue
+        seen: dict[str, int] = {}
+        for row in rows:
+            if not isinstance(row, dict) or row.get("id"):
+                continue
+            base = _edge_slug(f"{row.get('from', '')}-to-{row.get('to', '')}")
+            n = seen.get(base, 0)
+            seen[base] = n + 1
+            row["id"] = base if n == 0 else f"{base}-{n + 1}"
+    return ir
+
+
+_EDGE_BAD = re.compile(r"[^a-zA-Z0-9_-]+")
+
+
+def _edge_slug(text: str) -> str:
+    s = _EDGE_BAD.sub("-", str(text)).strip("-") or "edge"
+    return s if s[0].isalpha() else f"e-{s}"
+
+
+def _changed_count(summary: dict) -> int:
+    """How many authored facts the diff reports as moved.
+
+    The receipt groups changes per collection (components, connections,
+    boundaries, presentation), each with added/removed/changed lists. A
+    count of zero means the publish did not move the architecture, which is
+    itself worth saying.
+    """
+    total = 0
+    for value in (summary or {}).values():
+        if isinstance(value, dict):
+            for bucket in ("added", "removed", "changed", "moved", "rerouted"):
+                item = value.get(bucket)
+                if isinstance(item, list):
+                    total += len(item)
+                elif isinstance(item, int):
+                    total += item
+        elif isinstance(value, int):
+            total += value
+    return total
 
 
 def _ir_title(ir: dict, kind: str) -> str:
@@ -146,6 +202,11 @@ class ArchifyService:
         html_path = map_dir / "map.html"
         receipt_path = map_dir / "receipt.json"
         meta_path = map_dir / "meta.json"
+
+        # ir.json IS the base the NEXT publish diffs against, so the stamp
+        # belongs here rather than in build(): everything this service
+        # writes must be comparable, however it was produced.
+        stamp_edge_ids(ir)
 
         try:
             # Write IR
@@ -274,6 +335,80 @@ class ArchifyService:
             html_path = self.map_dir(kind, task_id) / "map.html"
             if html_path.exists():
                 return html_path.read_text()
+        except Exception:
+            pass
+        return None
+
+    def compare(self, kind: str, base_ir: dict,
+                task_id: str | None = None) -> dict:
+        """Diff the map's CURRENT ir.json against `base_ir` (the previous one).
+
+        Writes `delta.html` and `delta.receipt.json` beside the map, so a
+        publish can show WHAT CHANGED in the architecture rather than only a
+        redrawn picture. Architecture maps only — archify's compare command
+        takes `compare architecture <base> <head>`.
+
+        Returns {"ok", "changed", "summary", "error"}. Never raises.
+        """
+        map_dir = self.map_dir(kind, task_id)
+        head_path = map_dir / "ir.json"
+        if not head_path.exists():
+            return {"ok": False, "changed": 0, "summary": {},
+                    "error": "no current map to compare against"}
+
+        base_path = map_dir / "previous.ir.json"
+        delta_path = map_dir / "delta.html"
+        receipt_path = map_dir / "delta.receipt.json"
+        try:
+            base_path.write_text(json.dumps(base_ir, indent=2))
+            result = subprocess.run(
+                [node_executable(), str(ARCHIFY_BIN), "compare", "architecture",
+                 str(base_path), str(head_path), str(delta_path),
+                 "--receipt", str(receipt_path), "--json"],
+                capture_output=True, text=True, timeout=180,
+                cwd=str(ARCHIFY_DIR),
+            )
+            try:
+                out = json.loads(result.stdout) if result.stdout else {}
+            except json.JSONDecodeError:
+                return {"ok": False, "changed": 0, "summary": {},
+                        "error": (result.stderr or result.stdout
+                                  or "compare produced no JSON")[:200]}
+            if not out.get("ok"):
+                return {"ok": False, "changed": 0, "summary": {},
+                        "error": str(out.get("error") or "compare refused")[:200]}
+            summary = out.get("summary") or {}
+            if not summary and receipt_path.exists():
+                try:
+                    summary = json.loads(
+                        receipt_path.read_text()).get("summary") or {}
+                except Exception:  # noqa: BLE001
+                    summary = {}
+            return {"ok": True, "changed": _changed_count(summary),
+                    "summary": summary, "error": ""}
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "changed": 0, "summary": {},
+                    "error": "compare timeout"}
+        except Exception as exc:  # noqa: BLE001 - a diff never fails a publish
+            return {"ok": False, "changed": 0, "summary": {},
+                    "error": str(exc)[:200]}
+
+    def delta_html(self, kind: str, task_id: str | None = None) -> str | None:
+        """The rendered Before / Delta / After page, or None. Never raises."""
+        try:
+            path = self.map_dir(kind, task_id) / "delta.html"
+            if path.exists():
+                return path.read_text()
+        except Exception:
+            pass
+        return None
+
+    def delta_receipt(self, kind: str, task_id: str | None = None) -> dict | None:
+        """The machine receipt for the last diff, or None. Never raises."""
+        try:
+            path = self.map_dir(kind, task_id) / "delta.receipt.json"
+            if path.exists():
+                return json.loads(path.read_text())
         except Exception:
             pass
         return None

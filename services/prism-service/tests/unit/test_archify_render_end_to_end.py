@@ -125,3 +125,58 @@ def test_every_registered_builder_produces_a_valid_diagram(tmp_path, monkeypatch
         diagram_type, ir = module.DIAGRAM_TYPE, module.build("default")
         out = svc.validate(diagram_type, ir)
         assert out.get("ok") is True, f"{kind} builder emitted invalid IR: {out}"
+
+
+# ------------------------------------------------- the publish-time diff
+
+def test_every_relationship_gets_a_stable_id(tmp_path, monkeypatch):
+    """Archify's compare refuses a base whose connections carry no authored
+    ids, so a map without them can be drawn but never diffed."""
+    from prism_service.services import archify_service as mod
+    ir = {"connections": [{"from": "a", "to": "b"}, {"from": "a", "to": "b"},
+                          {"from": "9x", "to": "c"}]}
+    mod.stamp_edge_ids(ir)
+    ids = [c["id"] for c in ir["connections"]]
+    assert ids[0] == "a-to-b"
+    assert ids[1] == "a-to-b-2", "a repeated pair still needs a unique id"
+    assert ids[2][0].isalpha(), "an id may not start with a digit"
+    # Stable: stamping the same shape again yields the same ids.
+    again = {"connections": [{"from": "a", "to": "b"}, {"from": "a", "to": "b"},
+                             {"from": "9x", "to": "c"}]}
+    assert [c["id"] for c in mod.stamp_edge_ids(again)["connections"]] == ids
+
+
+def test_an_authored_id_is_never_overwritten():
+    from prism_service.services import archify_service as mod
+    ir = {"connections": [{"id": "mine", "from": "a", "to": "b"}]}
+    assert mod.stamp_edge_ids(ir)["connections"][0]["id"] == "mine"
+
+
+def test_a_workflow_maps_edges_are_stamped_too():
+    from prism_service.services import archify_service as mod
+    ir = {"edges": [{"from": "s1", "to": "s2"}]}
+    assert mod.stamp_edge_ids(ir)["edges"][0]["id"] == "s1-to-s2"
+
+
+def test_the_diff_reports_what_actually_moved(tmp_path, monkeypatch):
+    """A publish must be able to say WHAT changed, not only that a new
+    picture exists."""
+    import copy
+    svc = _service(tmp_path, monkeypatch)
+    svc.render("code", "architecture", _ARCH_IR)
+    base = copy.deepcopy(svc.ir("code"))
+    base["components"][0]["label"] = "OLD NAME"
+    out = svc.compare("code", base)
+    assert out["ok"] is True, out["error"]
+    assert out["changed"] == 1
+    assert out["summary"]["components"]["changed"] == 1
+    assert "<svg" in (svc.delta_html("code") or "")
+    assert svc.delta_receipt("code") is not None
+
+
+def test_an_identical_publish_reports_zero_not_a_failure(tmp_path, monkeypatch):
+    import copy
+    svc = _service(tmp_path, monkeypatch)
+    svc.render("code", "architecture", _ARCH_IR)
+    out = svc.compare("code", copy.deepcopy(svc.ir("code")))
+    assert out["ok"] is True and out["changed"] == 0

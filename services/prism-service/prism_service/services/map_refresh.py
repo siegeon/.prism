@@ -68,51 +68,102 @@ def graph_is_stale(project: str) -> bool | None:
         return None
 
 
+def rebuild_graph(project: str) -> dict:
+    """Recompute graph.db from the project's source.
+
+    THE FIRST HALF OF THE STEP. Redrawing a map without this only redraws
+    the graph as it already stood, so the picture would never contain the
+    code that just shipped. Measured at ~8s on this repo (11,007 nodes /
+    29,197 edges), which is why it belongs in the publish path rather than
+    behind a button somebody has to remember.
+
+    Returns {"ok", "nodes", "edges", "communities", "error"}. Never raises.
+    """
+    try:
+        from prism_service.project_context import get_project
+        ctx = get_project(project)
+        result = ctx.graph_svc.rebuild(
+            brain_db_path=str(ctx._data_dir / "brain.db"))
+    except Exception as exc:  # noqa: BLE001 - a publish is never failed by this
+        return {"ok": False, "nodes": 0, "edges": 0, "communities": 0,
+                "error": str(exc)[:200]}
+    # rebuild() reports a refusal in the payload without raising.
+    error = str(result.get("error") or result.get("message") or "")
+    return {
+        "ok": not error,
+        "nodes": int(result.get("nodes") or 0),
+        "edges": int(result.get("edges") or 0),
+        "communities": int(result.get("communities") or 0),
+        "error": error[:200],
+    }
+
+
 def refresh_maps(
     project: str = "default",
     *,
     kinds: Iterable[str] | None = None,
     task_id: str | None = None,
+    rebuild_the_graph: bool = True,
 ) -> dict:
-    """Rebuild the project-level Understand maps. Best-effort per map.
+    """Recompute the graph, redraw the maps, then diff each against the map
+    it replaced. Best-effort throughout.
 
-    Returns {"ok", "refreshed": [{kind, components, connections}],
-             "failed": [{kind, reason}], "graph_stale": bool | None,
-             "task_id"}. `ok` is True only when every requested map rebuilt.
+    THE ORDER IS THE POINT. Recompute first so the drawing describes the
+    code that just shipped; diff last so a publish can say WHAT MOVED in the
+    architecture, not merely that a new picture exists.
+
+    Returns {"ok", "graph", "refreshed": [{kind, components, connections,
+    changed}], "failed": [{kind, reason}], "graph_stale", "task_id"}.
     """
     wanted = tuple(kinds) if kinds is not None else PROJECT_MAP_KINDS
     refreshed: list[dict] = []
     failed: list[dict] = []
 
+    graph = rebuild_graph(project) if rebuild_the_graph else {
+        "ok": True, "nodes": 0, "edges": 0, "communities": 0,
+        "error": "", "skipped": True}
+
     try:
         from prism_service.services.archify_service import ArchifyService
         svc = ArchifyService(project)
     except Exception as exc:  # noqa: BLE001 - the whole step is best-effort
-        return {"ok": False, "refreshed": [], "graph_stale": None,
-                "task_id": task_id or "",
+        return {"ok": False, "refreshed": [], "graph": graph,
+                "graph_stale": None, "task_id": task_id or "",
                 "failed": [{"kind": k, "reason": f"archify unavailable: {exc}"}
                            for k in wanted]}
 
     for kind in wanted:
+        # The map we are about to replace is the diff's base. Read it BEFORE
+        # the rebuild overwrites ir.json, or there is nothing to compare to.
+        previous = svc.ir(kind)
         try:
             meta = svc.build(kind)
         except Exception as exc:  # noqa: BLE001 - one bad map never stops the rest
             failed.append({"kind": kind, "reason": str(exc)[:200]})
             continue
-        if meta.get("ok"):
-            refreshed.append({
-                "kind": kind,
-                "components": meta.get("components", 0),
-                "connections": meta.get("connections", 0),
-            })
-        else:
+        if not meta.get("ok"):
             failed.append({
                 "kind": kind,
                 "reason": str(meta.get("error") or "did not validate")[:200],
             })
+            continue
+
+        row = {
+            "kind": kind,
+            "components": meta.get("components", 0),
+            "connections": meta.get("connections", 0),
+            "changed": None,  # None = no previous map, so nothing to diff
+        }
+        if previous:
+            diff = svc.compare(kind, previous)
+            row["changed"] = diff["changed"] if diff.get("ok") else None
+            if not diff.get("ok"):
+                row["diff_error"] = diff.get("error", "")
+        refreshed.append(row)
 
     return {
-        "ok": not failed,
+        "ok": not failed and graph.get("ok", False),
+        "graph": graph,
         "refreshed": refreshed,
         "failed": failed,
         "graph_stale": graph_is_stale(project),
@@ -120,23 +171,44 @@ def refresh_maps(
     }
 
 
+def _drawn(row: dict) -> str:
+    """One map, with what MOVED in it when a diff was possible."""
+    body = f"{row['kind']}({row['components']}c/{row['connections']}e"
+    changed = row.get("changed")
+    if changed is None:
+        body += ", first draw" if "diff_error" not in row else ", not diffed"
+    elif changed == 0:
+        body += ", unchanged"
+    else:
+        body += f", {changed} changed"
+    return body + ")"
+
+
 def summarise(result: dict) -> str:
     """One line for the task's own history row.
 
-    Names what was drawn AND what the drawing is worth: a code map redrawn
-    from a graph that is behind the source is reported as exactly that.
+    Says what was recomputed, what was drawn, and WHAT MOVED — a publish
+    that changed nothing in the architecture reports "unchanged" rather
+    than looking identical to one that was never measured.
     """
-    done = ", ".join(
-        f"{r['kind']}({r['components']}c/{r['connections']}e)"
-        for r in result.get("refreshed", [])
-    ) or "none"
-    line = f"maps rebuilt: {done}"
+    graph = result.get("graph") or {}
+    if graph.get("skipped"):
+        head = "graph not recomputed"
+    elif graph.get("ok"):
+        head = (f"graph rebuilt ({graph.get('nodes', 0)} nodes/"
+                f"{graph.get('edges', 0)} edges)")
+    else:
+        head = f"graph rebuild failed: {graph.get('error') or 'unknown'}"
+
+    done = ", ".join(_drawn(r) for r in result.get("refreshed", [])) or "none"
+    line = f"{head}; maps redrawn: {done}"
     for bad in result.get("failed", []):
         line += f"; {bad['kind']} failed: {bad['reason']}"
-    stale = result.get("graph_stale")
-    if stale is True:
-        line += ("; graph.db is behind the source, so the code map redrew "
-                 "the graph as it stands")
-    elif stale is None:
-        line += "; graph freshness unknown"
+    # Only meaningful when the graph was NOT recomputed in this same pass.
+    if graph.get("skipped"):
+        stale = result.get("graph_stale")
+        if stale is True:
+            line += "; graph.db is behind the source"
+        elif stale is None:
+            line += "; graph freshness unknown"
     return line

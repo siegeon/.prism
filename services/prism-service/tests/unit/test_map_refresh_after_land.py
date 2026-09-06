@@ -33,37 +33,61 @@ def test_the_step_is_a_drawn_node():
         "/api/workflows/steps/refresh-maps?project=${project}")
 
 
-def test_the_node_is_registered_in_the_pipeline():
+def test_the_node_is_the_last_real_step_of_the_workflow():
+    """Owner: 'its all a workflow, so just trigger it as the last step'.
+
+    It is the last step that DOES anything: `reap` follows it and must stay
+    terminal, because reap deletes the worktree and nothing may run after
+    that (pinned in test_api_workflows). Redrawing needs the project's own
+    stores, never the task worktree, so it sits immediately before reap.
+    """
     bot = json.loads((_BEHAVIORS / "bot.json").read_text())
     ids = bot["fsms"][0]["behaviorIds"]
-    assert "refresh-maps" in ids
-    # After the play's knowledge is indexed, and before the worktree the map
-    # may need is reaped.
+    assert ids[-1] == "reap", "reap deletes the worktree and stays last"
+    assert ids[-2] == "refresh-maps", ids[-4:]
     assert ids.index("brain-health") < ids.index("refresh-maps")
-    assert ids.index("refresh-maps") < ids.index("reap")
 
 
 # ------------------------------------------------------------- the redraw
 
 class _Svc:
-    """Stands in for ArchifyService; records which maps were rebuilt."""
+    """Stands in for ArchifyService; records what was rebuilt and diffed."""
 
-    def __init__(self, outcomes):
+    def __init__(self, outcomes, previous=None, diff=None):
         self.outcomes = outcomes
+        self.previous = previous or {}
+        self.diff = diff or {"ok": True, "changed": 0, "summary": {},
+                             "error": ""}
         self.built: list[str] = []
+        self.compared: list[str] = []
+        self.order: list[str] = []
+
+    def ir(self, kind, task_id=None):
+        self.order.append(f"read:{kind}")
+        return self.previous.get(kind)
 
     def build(self, kind, task_id=None):
         self.built.append(kind)
+        self.order.append(f"build:{kind}")
         out = self.outcomes[kind]
         if isinstance(out, Exception):
             raise out
         return out
 
+    def compare(self, kind, base_ir, task_id=None):
+        self.compared.append(kind)
+        self.order.append(f"diff:{kind}")
+        return self.diff
 
-def _patch(monkeypatch, svc, stale=False):
+
+def _patch(monkeypatch, svc, stale=False, graph=None):
     import prism_service.services.archify_service as arch
     monkeypatch.setattr(arch, "ArchifyService", lambda project: svc)
     monkeypatch.setattr(map_refresh, "graph_is_stale", lambda project: stale)
+    monkeypatch.setattr(
+        map_refresh, "rebuild_graph",
+        lambda project: graph or {"ok": True, "nodes": 11007, "edges": 29197,
+                                  "communities": 131, "error": ""})
 
 
 def _ok(n=3, e=2):
@@ -119,12 +143,12 @@ def test_an_unavailable_renderer_is_reported_never_raised(monkeypatch):
 
 # ------------------------------------------------------------- the report
 
-def test_a_stale_graph_is_said_out_loud(monkeypatch):
-    """The code map is drawn from graph.db, and no step on the land path
-    rebuilds that graph. Reporting the redraw as a refresh would overclaim."""
+def test_a_stale_graph_is_said_out_loud_when_it_was_not_recomputed(monkeypatch):
+    """Staleness only means something when this pass did NOT rebuild."""
     svc = _Svc({k: _ok() for k in map_refresh.PROJECT_MAP_KINDS})
     _patch(monkeypatch, svc, stale=True)
-    line = map_refresh.summarise(map_refresh.refresh_maps("prism"))
+    line = map_refresh.summarise(
+        map_refresh.refresh_maps("prism", rebuild_the_graph=False))
     assert "graph.db is behind the source" in line
 
 
@@ -133,7 +157,7 @@ def test_unknown_graph_freshness_never_reads_as_fresh(monkeypatch):
     _patch(monkeypatch, svc)
     monkeypatch.setattr(map_refresh, "graph_is_stale", lambda project: None)
     assert "freshness unknown" in map_refresh.summarise(
-        map_refresh.refresh_maps("prism"))
+        map_refresh.refresh_maps("prism", rebuild_the_graph=False))
 
 
 def test_the_summary_names_the_maps_and_the_failures(monkeypatch):
@@ -141,9 +165,90 @@ def test_the_summary_names_the_maps_and_the_failures(monkeypatch):
                 "language": RuntimeError("ontology locked")})
     _patch(monkeypatch, svc)
     line = map_refresh.summarise(map_refresh.refresh_maps("prism"))
-    assert "code(12c/13e)" in line
-    assert "concepts(40c/3e)" in line
+    assert "code(12c/13e" in line
+    assert "concepts(40c/3e" in line
     assert "language failed: ontology locked" in line
+
+
+# ------------------------------------------- recompute, redraw, then diff
+
+def test_the_graph_is_recomputed_before_the_maps_are_drawn(monkeypatch):
+    """Redrawing without recomputing would never contain the landed code."""
+    calls: list[str] = []
+    svc = _Svc({k: _ok() for k in map_refresh.PROJECT_MAP_KINDS})
+    import prism_service.services.archify_service as arch
+    monkeypatch.setattr(arch, "ArchifyService", lambda project: svc)
+    monkeypatch.setattr(map_refresh, "graph_is_stale", lambda p: False)
+
+    def _graph(project):
+        calls.append("graph")
+        return {"ok": True, "nodes": 11007, "edges": 29197,
+                "communities": 131, "error": ""}
+
+    monkeypatch.setattr(map_refresh, "rebuild_graph", _graph)
+    out = map_refresh.refresh_maps("prism")
+    assert calls == ["graph"]
+    assert svc.order[0].startswith("read:"), svc.order
+    assert out["graph"]["nodes"] == 11007
+    assert "graph rebuilt (11007 nodes/29197 edges)" in map_refresh.summarise(out)
+
+
+def test_each_map_is_diffed_against_the_one_it_replaced(monkeypatch):
+    svc = _Svc({k: _ok() for k in map_refresh.PROJECT_MAP_KINDS},
+               previous={k: {"components": []} for k in map_refresh.PROJECT_MAP_KINDS},
+               diff={"ok": True, "changed": 4, "summary": {}, "error": ""})
+    _patch(monkeypatch, svc)
+    out = map_refresh.refresh_maps("prism")
+    assert svc.compared == list(map_refresh.PROJECT_MAP_KINDS)
+    assert all(r["changed"] == 4 for r in out["refreshed"])
+    assert "4 changed" in map_refresh.summarise(out)
+
+
+def test_the_base_is_read_before_the_rebuild_overwrites_it(monkeypatch):
+    """ir.json IS the diff's base, and build() overwrites it."""
+    svc = _Svc({"code": _ok()}, previous={"code": {"components": []}})
+    _patch(monkeypatch, svc)
+    map_refresh.refresh_maps("prism", kinds=["code"])
+    assert svc.order == ["read:code", "build:code", "diff:code"]
+
+
+def test_a_first_draw_has_nothing_to_diff(monkeypatch):
+    svc = _Svc({"code": _ok()}, previous={})
+    _patch(monkeypatch, svc)
+    out = map_refresh.refresh_maps("prism", kinds=["code"])
+    assert svc.compared == []
+    assert out["refreshed"][0]["changed"] is None
+    assert "first draw" in map_refresh.summarise(out)
+
+
+def test_a_publish_that_moved_nothing_says_unchanged(monkeypatch):
+    """Zero change is a measurement, not a missing one."""
+    svc = _Svc({"code": _ok()}, previous={"code": {"components": []}},
+               diff={"ok": True, "changed": 0, "summary": {}, "error": ""})
+    _patch(monkeypatch, svc)
+    out = map_refresh.refresh_maps("prism", kinds=["code"])
+    assert "unchanged" in map_refresh.summarise(out)
+
+
+def test_a_failed_graph_rebuild_is_reported_not_hidden(monkeypatch):
+    svc = _Svc({k: _ok() for k in map_refresh.PROJECT_MAP_KINDS})
+    _patch(monkeypatch, svc,
+           graph={"ok": False, "nodes": 0, "edges": 0, "communities": 0,
+                  "error": "graphify produced no graph.json"})
+    out = map_refresh.refresh_maps("prism")
+    assert out["ok"] is False
+    assert "graph rebuild failed: graphify produced no graph.json" in \
+        map_refresh.summarise(out)
+
+
+def test_a_broken_diff_never_loses_the_redraw(monkeypatch):
+    svc = _Svc({"code": _ok()}, previous={"code": {"components": []}},
+               diff={"ok": False, "changed": 0, "summary": {},
+                     "error": "compare refused"})
+    _patch(monkeypatch, svc)
+    out = map_refresh.refresh_maps("prism", kinds=["code"])
+    assert out["refreshed"][0]["components"] == 3  # the redraw still counts
+    assert out["refreshed"][0]["diff_error"] == "compare refused"
 
 
 # ------------------------------------------- one implementation, two seats
