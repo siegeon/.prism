@@ -22,6 +22,23 @@ import pytest
 from prism_service.api import workflows as wf
 
 
+@pytest.fixture
+def repo_root_on_disk(monkeypatch, tmp_path):
+    """`_conductor_behavior_workflows` returns [] when the project's source
+    path is absent from disk, BEFORE it ever calls the patched engine. A CI
+    runner has no ~/projects/prism, so every test that drives the builder
+    read [] there while passing on a developer box -- 2 of the 8 failures
+    that kept main's PR checks red on 2026-09-06. Point the lookup at a real
+    temporary directory so the test observes the builder, not the host.
+    """
+    from prism_service.services import claude_transcripts as ct
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.setattr(ct, "_project_source_path", lambda project: str(root))
+    return root
+
+
 def test_substeps_carry_the_trend_fields(monkeypatch, tmp_path):
     steps = [{"id": "premise-gather"}, {"id": "premise-render"}]
     monkeypatch.setattr(wf, "node_token_trend", lambda db, ids: {
@@ -55,7 +72,8 @@ def test_a_project_without_scores_degrades_honestly():
     assert steps[0]["token_sample_count"] == 0
 
 
-def test_the_behaviour_builder_stamps_its_steps(monkeypatch, tmp_path):
+def test_the_behaviour_builder_stamps_its_steps(monkeypatch, tmp_path,
+                                               repo_root_on_disk):
     """The wiring itself: entries coming out of _conductor_behavior_workflows
     carry the fields, so the canvas has something to render."""
     def _engine(path, **_kw):
@@ -152,7 +170,8 @@ def test_an_unreadable_scores_db_reports_zero_never_raises(tmp_path):
     assert steps[0]["run_count"] == 0
 
 
-def test_the_built_step_records_the_route_it_calls(monkeypatch):
+def test_the_built_step_records_the_route_it_calls(monkeypatch,
+                                                  repo_root_on_disk):
     """The built catalog step does NOT carry `url` -- the engine's url
     becomes `action` -- so the route has to be recorded explicitly at build
     time. Without it every lookup fell back to the step id and read zero,

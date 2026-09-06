@@ -272,11 +272,10 @@ def node_recent_runs(scores_db: str, steps: list[str],
         return {}
     out: dict[str, int] = {s: 0 for s in steps}
     try:
-        import sqlite3
         import time as _t
 
         floor = _t.time() - max(0.0, float(window_s))
-        conn = sqlite3.connect(scores_db)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         try:
             marks = ",".join("?" for _ in steps)
             rows = conn.execute(
@@ -310,9 +309,7 @@ def node_run_counts(scores_db: str, steps: list[str]) -> dict[str, int]:
         return {}
     out: dict[str, int] = {s: 0 for s in steps}
     try:
-        import sqlite3
-
-        conn = sqlite3.connect(scores_db)
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
         try:
             marks = ",".join("?" for _ in steps)
             rows = conn.execute(
