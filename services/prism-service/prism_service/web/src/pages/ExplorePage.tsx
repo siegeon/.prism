@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X, RefreshCw, Map as MapIcon } from "lucide-react";
 import { api } from "@/lib/api";
@@ -1391,6 +1391,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             )}
           </Card>
         )}
+        {center && <Dossier token={center.token} project={project} onOpen={onOpen} />}
         <Card className="!p-4 shrink-0">
           <SectionLabel>Connections · {visible.length}</SectionLabel>
           <div className="mt-2 flex flex-col gap-1.5 max-h-64 overflow-y-auto pr-1">
@@ -1415,5 +1416,171 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             the graph, it does not describe itself. */}
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Dossier — WHAT EACH SUBSYSTEM SAYS about the selected entity.
+//
+// PRISM keeps what it knows in four stores, and the mesh node alone showed
+// only a degree and a class. A reader could see THAT a thing exists without
+// seeing what the code graph, the symbol index, the brain and the ontology
+// each hold on it. Every section below names the store it read, so a
+// subsystem with nothing to say reads as exactly that rather than as an
+// absence the reader has to interpret.
+// Backed by GET /api/xref/entity.
+// ─────────────────────────────────────────────────────────────────────────
+
+type DossierSection = { ok: boolean; source: string; reason: string } & Record<string, unknown>;
+type DossierData = {
+  token: string; kind: string; label: string; href: string | null;
+  code_graph: DossierSection; symbols: DossierSection;
+  brain: DossierSection; ontology: DossierSection;
+};
+
+function DRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex items-start gap-2">
+      <span className="opacity-50 uppercase tracking-wider w-[64px] shrink-0">{label}</span>
+      <span className="min-w-0 flex-1 text-[color:var(--text-secondary)]">{children}</span>
+    </div>
+  );
+}
+
+function DPart({ title, s, children }: { title: string; s: DossierSection; children?: ReactNode }) {
+  return (
+    <div className="border-t border-[color:var(--border-default)] pt-2 first:border-t-0 first:pt-0">
+      <div className="flex items-baseline gap-2">
+        <span className="text-2xs font-semibold uppercase tracking-wider">{title}</span>
+        {/* The store this section read — the whole point of the panel. */}
+        <span className="text-2xs opacity-40 truncate">{s.source}</span>
+      </div>
+      {!s.ok ? (
+        <div className="mt-1 text-2xs italic text-[color:var(--text-muted)]">{s.reason}</div>
+      ) : (
+        <div className="mt-1.5 space-y-1 text-2xs">{children}</div>
+      )}
+    </div>
+  );
+}
+
+function Dossier({ token, project, onOpen }: {
+  token: string; project: string; onOpen: (href: string) => void;
+}) {
+  const [d, setD] = useState<DossierData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    api.get<DossierData>(
+      `/api/xref/entity?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}`)
+      .then((r) => { if (alive) { setD(r); setLoading(false); } })
+      .catch(() => { if (alive) { setD(null); setLoading(false); } });
+    return () => { alive = false; };
+  }, [token, project]);
+
+  if (loading) {
+    return (
+      <Card className="!p-4 shrink-0">
+        <SectionLabel>What the system knows</SectionLabel>
+        <div className="mt-2 text-2xs opacity-50">reading the stores…</div>
+      </Card>
+    );
+  }
+  if (!d) return null;
+
+  const g = d.code_graph, sy = d.symbols, br = d.brain, on = d.ontology;
+  const rows = (k: string, s: DossierSection) => (s[k] as Record<string, string>[]) ?? [];
+
+  return (
+    <Card className="!p-4 shrink-0">
+      <SectionLabel>What the system knows</SectionLabel>
+      <div className="mt-2 space-y-3">
+        <DPart title="Code graph" s={g}>
+          <DRow label="File"><span className="font-mono break-all">{String(g.file ?? "")}</span></DRow>
+          <DRow label="Community">{String(g.community ?? "—")}</DRow>
+          <DRow label="Edges">
+            {String(g.inbound ?? 0)} in · {String(g.outbound ?? 0)} out · {String(g.entities ?? 0)} in file
+          </DRow>
+        </DPart>
+
+        <DPart title="Symbols" s={sy}>
+          {rows("definitions", sy).map((x, i) => (
+            <DRow key={i} label={i === 0 ? "Defined" : ""}>
+              <span className="font-mono">{x.name}</span>
+              <span className="opacity-50"> · {x.kind}</span>
+            </DRow>
+          ))}
+          {rows("callers", sy).length > 0 && (
+            <DRow label="Called by">
+              {rows("callers", sy).map((c, i) => (
+                <span key={i} className="block font-mono truncate"
+                  title={`${c.file} ${c.line} (${c.confidence})`}>
+                  {c.name} <span className="opacity-40">{c.line}</span>
+                </span>
+              ))}
+            </DRow>
+          )}
+          {rows("callees", sy).length > 0 && (
+            <DRow label="Calls">
+              {rows("callees", sy).slice(0, 5).map((c, i) => (
+                <span key={i} className="block font-mono truncate"
+                  title={`${c.file} ${c.line} (${c.confidence})`}>
+                  {c.name} <span className="opacity-40">{c.line}</span>
+                </span>
+              ))}
+            </DRow>
+          )}
+        </DPart>
+
+        <DPart title="Brain" s={br}>
+          {rows("mentions", br).length === 0 ? (
+            <div className="italic opacity-50">nothing written about this yet</div>
+          ) : (
+            rows("mentions", br).slice(0, 5).map((m, i) => (
+              <button key={i}
+                onClick={() => m.path && onOpen(`/artifact?focus=${encodeURIComponent(m.path)}`)}
+                className="block w-full text-left truncate hover:underline" title={m.path}>
+                {m.title || m.path}
+              </button>
+            ))
+          )}
+        </DPart>
+
+        <DPart title="Ontology" s={on}>
+          <DRow label="Class">
+            <a href={`/ontology?tab=structure&class=${encodeURIComponent(String(on.klass ?? ""))}`}
+              onClick={(ev) => {
+                ev.preventDefault();
+                onOpen(`/ontology?tab=structure&class=${encodeURIComponent(String(on.klass ?? ""))}`);
+              }}
+              className="ont-node" data-kind="class">
+              <i className="ont-glyph" />{String(on.klass ?? "")}
+            </a>
+            <span className="opacity-50"> · {String(on.instances ?? 0)} instances</span>
+          </DRow>
+          {rows("relations", on).length > 0 && (
+            <DRow label="Relates">
+              {rows("relations", on).map((r, i) => (
+                <span key={i} className="block font-mono truncate">{r.name} → {r.to}</span>
+              ))}
+            </DRow>
+          )}
+          {rows("rules", on).length > 0 && (
+            <DRow label="Rules">
+              {rows("rules", on).map((r, i) => (
+                <span key={i} className="block truncate">
+                  {r.title}
+                  {Number(r.violations) > 0 && (
+                    <span style={{ color: "var(--accent-rose-fg)" }}> · {String(r.violations)} failing</span>
+                  )}
+                </span>
+              ))}
+            </DRow>
+          )}
+        </DPart>
+      </div>
+    </Card>
   );
 }

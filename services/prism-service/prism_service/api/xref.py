@@ -1061,6 +1061,35 @@ def neighbors(
     return neighbors_for(token, p, limit=limit, hops=hops)
 
 
+@router.get("/entity")
+def entity(
+    token: str = Query(...), project: str = Query("prism"),
+) -> dict:
+    """What EVERY subsystem knows about one entity, each part attributed.
+
+    The mesh's own node carries only a label, a kind and an ontology class,
+    so a reader could see THAT a thing exists without seeing what the code
+    graph, the symbol index, the brain and the ontology each say about it.
+    This composes all four and labels every section with the store it read,
+    so an empty subsystem reads as "this one has nothing", never as absence.
+    """
+    try:
+        p = get_project(project)
+    except Exception as exc:
+        raise HTTPException(404, f"unknown project: {project}: {exc}")
+
+    from prism_service.services.entity_dossier import dossier
+
+    return dossier(
+        token, project,
+        memory_svc=getattr(p, "memory_svc", None),
+        brain_svc=getattr(p, "brain_svc", None),
+        graph_svc=getattr(p, "graph_svc", None),
+        task_svc=getattr(p, "task_svc", None),
+        conductor_svc=getattr(p, "conductor_svc", None),
+    )
+
+
 @router.post("/resolve_batch")
 def resolve_batch(payload: dict = Body(default={})) -> dict:
     """Resolve many tokens in ONE call so a rendered doc fires a single request
