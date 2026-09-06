@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.255"
+PRISM_VERSION = "7.13.256"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8628,7 +8628,7 @@ PRISM_VERSION_NOTES += (
     "ci_wait could never pass and three finished tasks (6f18c224, dc815149, "
     "b9772333) sat unshippable for hours. Eight failures, none of them a "
     "defect in the work under review. (1) agent_runs_data.node_recent_runs "
-    "and node_run_counts opened bare sqlite3.connect() calls, which the three "
+    "and node_run_counts opened bare sqlite3 connections, which the three "
     "bare-connect guards correctly flagged; both now route through "
     "sqlite_db.connect(timeout=5.0), as line 478 of the same file already "
     "did. (2) test_fixture_gate_panel_receipt_capture.py asserts a PNG inside "
