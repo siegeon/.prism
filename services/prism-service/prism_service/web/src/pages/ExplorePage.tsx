@@ -551,12 +551,22 @@ export default function ExplorePage() {
           ) : (
             <div className="px-5 pb-5"><Empty>No graph yet — rebuild on /graph.</Empty></div>
           )
-        ) : resolvingDefault ? (
-          <div className="px-5 pb-5 text-xs opacity-60">Finding somewhere to start…</div>
         ) : (
-          // The full map is a deliberate opt-in (button above), never the
-          // front door — the direction this mesh replaces a hairball with.
-          <div className="px-5 pb-5"><Empty>Search or pick an entity to explore.</Empty></div>
+          // THE FRONT DOOR IS THE ARCHITECTURE, NOT A BLANK CANVAS. The mesh
+          // needs a focus to draw anything, so before one is chosen this page
+          // showed "Finding somewhere to start…" over an empty canvas with a
+          // dash for every count — nothing to read and nothing to act on.
+          // The same code map the ARCHITECTURE toggle shows is the whole
+          // project at a glance, so it stands in until a focus exists. The
+          // Sigma hairball stays a deliberate opt-in; this is not that.
+          <div className="px-5 pb-5 min-h-0 overflow-y-auto">
+            <div className="mb-2 text-xs opacity-60">
+              {resolvingDefault
+                ? "Finding somewhere to start — the architecture in the meantime."
+                : "Search above, or click a node in the architecture, to explore it in the mesh."}
+            </div>
+            <ArchifyMaps project={project} kind="code" />
+          </div>
         )}
       </Card>
 
