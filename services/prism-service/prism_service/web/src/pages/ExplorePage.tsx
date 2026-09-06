@@ -1573,9 +1573,21 @@ function StartHere({ project, onPick, hint }: {
       `/api/tasks?project=${project}&fields=id,title,status,updated_at,parent_id`)
       .then((r) => {
         if (!alive) return;
+        // A DOORWAY IS SOMETHING WORTH OPENING. Filtering only "done" offered
+        // cancelled work, and four chips read "Remove Simulate Flow button
+        // from Workflows canvas" because retries share a title — nine chips,
+        // five real choices.
+        const dead = new Set(["done", "cancelled", "canceled", "deleted", "archived"]);
+        const seen = new Set<string>();
         const open = (r.tasks ?? [])
-          .filter((t) => t.id && (t.status ?? "").toLowerCase() !== "done")
-          .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+          .filter((t) => t.id && !dead.has((t.status ?? "").toLowerCase()))
+          .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))
+          .filter((t) => {
+            const key = (t.title ?? t.id).trim().toLowerCase();
+            if (seen.has(key)) return false;   // keep the most recent of a retried title
+            seen.add(key);
+            return true;
+          });
         setTasks(open.slice(0, 8));
       })
       .catch(() => { if (alive) setTasks([]); });
