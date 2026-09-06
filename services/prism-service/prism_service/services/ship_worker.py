@@ -636,8 +636,37 @@ def ship_task(task_id: str, project: str = "default", *,
     replayed = land(task_svc, cond, task_id)
     _reap_after_land(task_svc, task_id, project)
     _brain_health_after_land(task_svc, task_id, project)
+    _refresh_maps_after_land(task_svc, task_id, project)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
             "replayed": replayed}
+
+
+def _refresh_maps_after_land(task_svc, task_id: str, project: str) -> None:
+    """Runs beside `_brain_health_after_land`, same trigger: a successful land.
+
+    Redraws the Understand maps so the picture a person opens matches the
+    work that just shipped. `brain_health` re-indexes what the play WROTE;
+    this redraws what a person READS.
+
+    The outcome is recorded on the task's own history, never only logged,
+    and the line says what the redraw is worth: the code map is drawn from
+    `graph.db`, which no step on the land path rebuilds, so when the graph
+    is behind the source the history says exactly that rather than claiming
+    a freshness the map does not have.
+
+    Best-effort toward the SHIP itself, same as its two siblings: a map is a
+    reading aid, and a ship that already succeeded is never failed by one.
+    """
+    try:
+        from prism_service.services import map_refresh
+        result = map_refresh.refresh_maps(project, task_id=task_id)
+        if task_svc is None:
+            return
+        task_svc.record_history(
+            task_id, action="refresh_maps",
+            details=map_refresh.summarise(result), actor=SEAT_ID)
+    except Exception:  # noqa: BLE001 - redrawing a map never fails a ship
+        pass
 
 
 def _brain_health_after_land(task_svc, task_id: str, project: str) -> None:

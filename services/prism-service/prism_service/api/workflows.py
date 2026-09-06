@@ -2999,6 +2999,39 @@ def workflow_step_brain_health(
                 "reason": f"brain-health could not run: {exc}"}
 
 
+class RefreshMapsRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+@router.post("/steps/refresh-maps")
+def workflow_step_refresh_maps(
+    body: RefreshMapsRequest, project: str = Query(...),
+) -> dict:
+    """Rebuild the Understand maps once a play has landed.
+
+    CODIFIED. Deterministic Python, no model call -- the READING-side
+    counterpart to /steps/brain-health: that one re-indexes what the play
+    wrote, this one redraws the maps a person opens to see it.
+
+    Always HTTP 200, the same contract /steps/brain-health and /steps/reap
+    use: a map that did not rebuild is a reported fact, never a callback
+    failure, so the behaviour reaches its next step and the reason reaches a
+    person. `ship_worker._refresh_maps_after_land` calls the same
+    `map_refresh.refresh_maps` on the same trigger, so this route and the
+    seat can never disagree about what the node does -- one implementation,
+    two entry points.
+    """
+    from prism_service.services import map_refresh
+
+    try:
+        result = map_refresh.refresh_maps(project, task_id=body.task_id)
+        return {"kind": "conductor.refresh_maps",
+                "summary": map_refresh.summarise(result), **result}
+    except Exception as exc:  # noqa: BLE001 - a map never fails the pipeline
+        return {"kind": "conductor.refresh_maps", "ok": False,
+                "reason": f"refresh-maps could not run: {exc}"}
+
+
 @router.post("/steps/reap")
 def workflow_step_reap(
     body: ReapRequest, project: str = Query(...),

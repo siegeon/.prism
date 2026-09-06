@@ -72,7 +72,15 @@ _DELIBERATELY_UNLINKED_PIPELINE_IDS = frozenset({
 # the terminal set is three. The invariant is unchanged -- these ids are
 # deliberate pipeline nodes with no WORKFLOW_STEPS entry, because
 # green_gate is the structurally-terminal step.
-_TERMINAL_PIPELINE_IDS = frozenset({"land", "brain-health", "reap"})
+# SUPERSEDED again (the archify maps on Understand): `refresh-maps` is the
+# READING-side counterpart to brain-health -- that one re-indexes what a
+# landed play WROTE, this one redraws the maps a person opens to READ it --
+# and it sits between them for that reason. Same invariant: a deliberate
+# post-land pipeline node with no WORKFLOW_STEPS entry, because green_gate
+# is the structurally-terminal step. Recording it here IS the decision this
+# test demands.
+_TERMINAL_PIPELINE_IDS = frozenset(
+    {"land", "brain-health", "refresh-maps", "reap"})
 _TERMINAL_PIPELINE_ID = "land"
 
 

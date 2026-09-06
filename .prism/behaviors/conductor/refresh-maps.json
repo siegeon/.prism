@@ -1,0 +1,16 @@
+{
+  "id": "refresh-maps",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Redraw the Understand maps for the landed work",
+  "version": 1,
+  "steps": [
+    {
+      "id": "rebuild",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/refresh-maps?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 180
+    }
+  ]
+}
