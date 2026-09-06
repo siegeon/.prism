@@ -343,8 +343,11 @@ def _invoke_budget(step_id: str, plan: Optional[dict],
                    narrow: bool = False) -> dict:
     """claude_cli.invoke kwargs for `step_id` under `plan`.
 
-    The declared plan governs the MODEL, TURN LIMIT and BUDGET -- the three
-    caps that actually bound spend. The wall clock stays this module's:
+    The declared plan governs the MODEL ONLY. Its turn limit and budget are
+    NOT adopted -- they are sized for the behavior's own narrow prompt while
+    this worker still sends the full step brief, so honouring them starves
+    the step (task 6a7105f9; the comment below records the live incident).
+    The wall clock stays this module's:
     _step_timeout_s already encodes hard-won knowledge about which steps
     run things rather than write about them, and a timeout that is too
     small kills a drive outright while one that is too large costs nothing
