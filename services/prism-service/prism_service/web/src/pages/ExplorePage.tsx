@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X, RefreshCw, Map as MapIcon } from "lucide-react";
 import { api } from "@/lib/api";
@@ -1431,38 +1431,15 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
 // Backed by GET /api/xref/entity.
 // ─────────────────────────────────────────────────────────────────────────
 
-type DossierSection = { ok: boolean; source: string; reason: string } & Record<string, unknown>;
+type DossierRow = { label: string; text: string; href: string };
+type DossierSection = {
+  key: string; title: string; source: string;
+  ok: boolean; reason: string; rows: DossierRow[];
+};
 type DossierData = {
   token: string; kind: string; label: string; href: string | null;
-  code_graph: DossierSection; symbols: DossierSection;
-  brain: DossierSection; ontology: DossierSection;
+  sections: DossierSection[];
 };
-
-function DRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex items-start gap-2">
-      <span className="opacity-50 uppercase tracking-wider w-[64px] shrink-0">{label}</span>
-      <span className="min-w-0 flex-1 text-[color:var(--text-secondary)]">{children}</span>
-    </div>
-  );
-}
-
-function DPart({ title, s, children }: { title: string; s: DossierSection; children?: ReactNode }) {
-  return (
-    <div className="border-t border-[color:var(--border-default)] pt-2 first:border-t-0 first:pt-0">
-      <div className="flex items-baseline gap-2">
-        <span className="text-2xs font-semibold uppercase tracking-wider">{title}</span>
-        {/* The store this section read — the whole point of the panel. */}
-        <span className="text-2xs opacity-40 truncate">{s.source}</span>
-      </div>
-      {!s.ok ? (
-        <div className="mt-1 text-2xs italic text-[color:var(--text-muted)]">{s.reason}</div>
-      ) : (
-        <div className="mt-1.5 space-y-1 text-2xs">{children}</div>
-      )}
-    </div>
-  );
-}
 
 function Dossier({ token, project, onOpen }: {
   token: string; project: string; onOpen: (href: string) => void;
@@ -1480,8 +1457,7 @@ function Dossier({ token, project, onOpen }: {
       .then((r) => { if (alive) { setD(r); setLoading(false); } })
       .catch((e) => {
         if (!alive) return;
-        setD(null);
-        setLoading(false);
+        setD(null); setLoading(false);
         setFailed(String(e?.message || e) || "the request failed");
       });
     return () => { alive = false; };
@@ -1495,9 +1471,8 @@ function Dossier({ token, project, onOpen }: {
       </Card>
     );
   }
-  // A PANEL THAT FAILS MUST SAY SO. Rendering null here made a broken
-  // endpoint indistinguishable from a feature that was never built: the rail
-  // simply had one fewer card and nobody could tell.
+  // A PANEL THAT FAILS MUST SAY SO. Rendering null made a broken endpoint
+  // indistinguishable from a feature that was never built.
   if (failed) {
     return (
       <Card className="!p-4 shrink-0">
@@ -1513,96 +1488,43 @@ function Dossier({ token, project, onOpen }: {
   }
   if (!d) return null;
 
-  const g = d.code_graph, sy = d.symbols, br = d.brain, on = d.ontology;
-  const rows = (k: string, s: DossierSection) => (s[k] as Record<string, string>[]) ?? [];
-
   return (
     <Card className="!p-4 shrink-0">
       <SectionLabel>What the system knows</SectionLabel>
       <div className="mt-2 space-y-3">
-        <DPart title="Code graph" s={g}>
-          <DRow label="File"><span className="font-mono break-all">{String(g.file ?? "")}</span></DRow>
-          <DRow label="Community">{String(g.community ?? "—")}</DRow>
-          <DRow label="Edges">
-            {String(g.inbound ?? 0)} in · {String(g.outbound ?? 0)} out · {String(g.entities ?? 0)} in file
-          </DRow>
-        </DPart>
-
-        <DPart title="Symbols" s={sy}>
-          {rows("definitions", sy).map((x, i) => (
-            <DRow key={i} label={i === 0 ? "Defined" : ""}>
-              <span className="font-mono">{x.name}</span>
-              <span className="opacity-50"> · {x.kind}</span>
-            </DRow>
-          ))}
-          {rows("callers", sy).length > 0 && (
-            <DRow label="Called by">
-              {rows("callers", sy).map((c, i) => (
-                <span key={i} className="block font-mono truncate"
-                  title={`${c.file} ${c.line} (${c.confidence})`}>
-                  {c.name} <span className="opacity-40">{c.line}</span>
-                </span>
-              ))}
-            </DRow>
-          )}
-          {rows("callees", sy).length > 0 && (
-            <DRow label="Calls">
-              {rows("callees", sy).slice(0, 5).map((c, i) => (
-                <span key={i} className="block font-mono truncate"
-                  title={`${c.file} ${c.line} (${c.confidence})`}>
-                  {c.name} <span className="opacity-40">{c.line}</span>
-                </span>
-              ))}
-            </DRow>
-          )}
-        </DPart>
-
-        <DPart title="Brain" s={br}>
-          {rows("mentions", br).length === 0 ? (
-            <div className="italic opacity-50">nothing written about this yet</div>
-          ) : (
-            rows("mentions", br).slice(0, 5).map((m, i) => (
-              <button key={i}
-                onClick={() => m.path && onOpen(`/artifact?focus=${encodeURIComponent(m.path)}`)}
-                className="block w-full text-left truncate hover:underline" title={m.path}>
-                {m.title || m.path}
-              </button>
-            ))
-          )}
-        </DPart>
-
-        <DPart title="Ontology" s={on}>
-          <DRow label="Class">
-            <a href={`/ontology?tab=structure&class=${encodeURIComponent(String(on.klass ?? ""))}`}
-              onClick={(ev) => {
-                ev.preventDefault();
-                onOpen(`/ontology?tab=structure&class=${encodeURIComponent(String(on.klass ?? ""))}`);
-              }}
-              className="ont-node" data-kind="class">
-              <i className="ont-glyph" />{String(on.klass ?? "")}
-            </a>
-            <span className="opacity-50"> · {String(on.instances ?? 0)} instances</span>
-          </DRow>
-          {rows("relations", on).length > 0 && (
-            <DRow label="Relates">
-              {rows("relations", on).map((r, i) => (
-                <span key={i} className="block font-mono truncate">{r.name} → {r.to}</span>
-              ))}
-            </DRow>
-          )}
-          {rows("rules", on).length > 0 && (
-            <DRow label="Rules">
-              {rows("rules", on).map((r, i) => (
-                <span key={i} className="block truncate">
-                  {r.title}
-                  {Number(r.violations) > 0 && (
-                    <span style={{ color: "var(--accent-rose-fg)" }}> · {String(r.violations)} failing</span>
-                  )}
-                </span>
-              ))}
-            </DRow>
-          )}
-        </DPart>
+        {d.sections.map((s) => (
+          <div key={s.key}
+            className="border-t border-[color:var(--border-default)] pt-2 first:border-t-0 first:pt-0">
+            <div className="flex items-baseline gap-2">
+              <span className="text-2xs font-semibold uppercase tracking-wider">{s.title}</span>
+              {/* The store this section read — the point of the panel. */}
+              <span className="text-2xs opacity-40 truncate">{s.source}</span>
+            </div>
+            {!s.ok ? (
+              <div className="mt-1 text-2xs italic text-[color:var(--text-muted)]">{s.reason}</div>
+            ) : (
+              <div className="mt-1.5 space-y-1 text-2xs">
+                {s.rows.map((r, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <span className="opacity-50 uppercase tracking-wider w-[64px] shrink-0 truncate">
+                      {r.label}
+                    </span>
+                    <span className="min-w-0 flex-1 text-[color:var(--text-secondary)]">
+                      {r.href ? (
+                        <button onClick={() => onOpen(r.href)}
+                          className="cursor-pointer text-left hover:underline break-words">
+                          {r.text}
+                        </button>
+                      ) : (
+                        <span className="break-words">{r.text}</span>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </Card>
   );

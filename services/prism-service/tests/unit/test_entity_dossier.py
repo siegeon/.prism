@@ -1,11 +1,13 @@
-"""A dossier must say WHICH STORE each part came from, and admit gaps.
+"""A dossier must describe WHAT THE THING IS, name its sources, and admit gaps.
 
-The reason this exists: a person looking at an entity in Explore saw a
-degree, a timestamp and "unclassified" — they could see THAT a thing existed
-without seeing what the code graph, the symbol index, the brain and the
-ontology each held on it. The failure mode to guard is a section that comes
-back empty and reads as "there is nothing here" when the truth is "this
-store could not be reached".
+Two defects this pins, both found by opening the real page:
+
+  * The first cut asked only the CODE questions, so selecting a task — which
+    is what Explore opens on — produced four empty sections in a row
+    ("resolved to no source file", "no symbol to look up", ...). A task has
+    contents; they were simply never asked for.
+  * A section that cannot answer must say why. An empty success reads as
+    "there is nothing here" when the truth is "this store was unreachable".
 """
 
 from __future__ import annotations
@@ -30,8 +32,18 @@ class _Brain:
                  "call_site_location": "L30", "confidence": "INFERRED"}]
 
     def search(self, q, limit=8):
-        return [{"title": "why the conductor exists",
-                 "source_file": "docs/conductor.md", "domain": "architecture"}]
+        # A document has a title; a code entity has title=None + entity_kind,
+        # and its domain is the language as often as the generic "code".
+        return [
+            {"title": None, "domain": "code", "entity_kind": "function",
+             "source_file": "tests/test_a.py"},
+            {"title": "_services", "domain": "py", "entity_kind": "function",
+             "source_file": "b.py"},
+            {"title": "why the conductor exists", "domain": "md",
+             "source_file": "docs/conductor.md"},
+            {"title": "why the conductor exists", "domain": "md",
+             "source_file": "docs/conductor.md"},
+        ]
 
 
 class _Graph:
@@ -44,29 +56,117 @@ class _Graph:
         return {files[0]: 1}
 
 
+class _Task:
+    id = "b9772333"
+    title = "Remove Simulate Flow button"
+    status = "blocked"
+    workflow = "implement"
+    workflow_step = "green_gate"
+    gate_state = "pending"
+    parent_id = ""
+    proof_type = "test"
+    oracle = "Navigate to /workflows and see no Simulate button"
+
+
+class _TaskSvc:
+    def __init__(self, children=()):
+        self._children = list(children)
+
+    def get(self, task_id):
+        return _Task() if task_id == _Task.id else None
+
+    def list(self, parent_id=None):
+        return self._children
+
+
+def _titles(d):
+    return [s["title"] for s in d["sections"]]
+
+
+def _section(d, title):
+    return next(s for s in d["sections"] if s["title"] == title)
+
+
 @pytest.fixture()
-def resolved_symbol(monkeypatch):
+def as_symbol(monkeypatch):
     monkeypatch.setattr(
         "prism_service.api.xref.resolve_token",
         lambda token, m, b, graph_svc=None, task_svc=None, conductor_svc=None: {
             "kind": "symbol", "label": token,
             "href": f"/artifact?focus=services/conductor_service.py&symbol={token}",
         })
-
-
-# ------------------------------------------------- every part is attributed
-
-def test_every_section_names_the_store_it_read(resolved_symbol, monkeypatch):
     monkeypatch.setattr(ed, "_ontology",
-                        lambda p, k: ed._unavailable("ontology store", "locked"))
+                        lambda p, k: ed._unavailable("ontology", "Ontology",
+                                                     "ontology store", "locked"))
+
+
+@pytest.fixture()
+def as_task(monkeypatch):
+    monkeypatch.setattr(
+        "prism_service.api.xref.resolve_token",
+        lambda token, m, b, graph_svc=None, task_svc=None, conductor_svc=None: {
+            "kind": "task", "label": _Task.title, "href": f"/tasks/{token}"})
+
+
+# ------------------------------------------- the sections fit the subject
+
+def test_a_task_is_described_by_its_own_contents(as_task, monkeypatch):
+    """The defect: a task got the CODE questions and answered nothing."""
+    monkeypatch.setattr(ed, "_ontology",
+                        lambda p, k: ed._section("ontology", "Ontology",
+                                                 "ontology store",
+                                                 [ed._row("Class", k)]))
+    monkeypatch.setattr(ed, "_task_knowledge",
+                        lambda m, b, t: ed._section("knowledge", "Knowledge it pulled in",
+                                                    "curated memory (recall log)", []))
+    d = ed.dossier(_Task.id, "prism", task_svc=_TaskSvc(), brain_svc=_Brain())
+    assert _titles(d)[:3] == ["Task", "Knowledge it pulled in", "Work under it"]
+    assert "Code graph" not in _titles(d)
+    assert "Symbols" not in _titles(d)
+
+
+def test_a_task_reports_where_it_is_in_the_workflow(as_task, monkeypatch):
+    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable(
+        "ontology", "Ontology", "ontology store", "x"))
+    monkeypatch.setattr(ed, "_task_knowledge", lambda m, b, t: ed._section(
+        "knowledge", "Knowledge it pulled in", "recall log", []))
+    task = _section(ed.dossier(_Task.id, "prism", task_svc=_TaskSvc(),
+                               brain_svc=_Brain()), "Task")
+    got = {r["label"]: r["text"] for r in task["rows"]}
+    assert got["Status"] == "blocked"
+    assert got["Step"] == "green_gate"
+    assert got["Gate"] == "pending"
+
+
+def test_a_tasks_children_are_links(as_task, monkeypatch):
+    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable(
+        "ontology", "Ontology", "ontology store", "x"))
+    monkeypatch.setattr(ed, "_task_knowledge", lambda m, b, t: ed._section(
+        "knowledge", "Knowledge it pulled in", "recall log", []))
+    kid = type("K", (), {"id": "child-1", "title": "a slice", "status": "done"})()
+    work = _section(ed.dossier(_Task.id, "prism", task_svc=_TaskSvc([kid]),
+                               brain_svc=_Brain()), "Work under it")
+    assert work["rows"][0]["text"] == "a slice"
+    assert work["rows"][0]["href"] == "/tasks/child-1"
+
+
+def test_code_is_described_by_the_code_readings(as_symbol):
     d = ed.dossier("ConductorService", "prism",
                    brain_svc=_Brain(), graph_svc=_Graph())
-    for part in ("code_graph", "symbols", "brain", "ontology"):
-        assert d[part]["source"], f"{part} does not say where it came from"
+    assert "Code graph" in _titles(d) and "Symbols" in _titles(d)
+    assert "Task" not in _titles(d)
 
 
-def test_a_store_that_cannot_answer_gives_a_reason(monkeypatch, resolved_symbol):
-    """An unreachable store must never render as an empty success."""
+# ----------------------------------------------- every part is attributed
+
+def test_every_section_names_the_store_it_read(as_symbol):
+    d = ed.dossier("ConductorService", "prism",
+                   brain_svc=_Brain(), graph_svc=_Graph())
+    for s in d["sections"]:
+        assert s["source"], f"{s['title']} does not say where it came from"
+
+
+def test_a_store_that_cannot_answer_gives_a_reason(as_symbol):
     class _Locked:
         def file_detail(self, path):
             raise OSError("graph.db is locked")
@@ -74,114 +174,66 @@ def test_a_store_that_cannot_answer_gives_a_reason(monkeypatch, resolved_symbol)
         def file_communities(self, files):
             return {}
 
-    monkeypatch.setattr(ed, "_ontology",
-                        lambda p, k: ed._unavailable("ontology store", "locked"))
-    d = ed.dossier("X", "prism", brain_svc=_Brain(), graph_svc=_Locked())
-    assert d["code_graph"]["ok"] is False
-    assert "locked" in d["code_graph"]["reason"]
+    g = _section(ed.dossier("X", "prism", brain_svc=_Brain(), graph_svc=_Locked()),
+                 "Code graph")
+    assert g["ok"] is False and "locked" in g["reason"]
 
 
-def test_a_missing_subsystem_is_named_not_silently_skipped(monkeypatch, resolved_symbol):
-    monkeypatch.setattr(ed, "_ontology",
-                        lambda p, k: ed._unavailable("ontology store", "no class"))
-    d = ed.dossier("X", "prism", brain_svc=_Brain(), graph_svc=None)
-    assert d["code_graph"]["ok"] is False
-    assert "no code graph" in d["code_graph"]["reason"]
+def test_a_missing_subsystem_is_named_not_silently_skipped(as_symbol):
+    g = _section(ed.dossier("X", "prism", brain_svc=_Brain(), graph_svc=None),
+                 "Code graph")
+    assert g["ok"] is False and "no code graph" in g["reason"]
 
 
-# --------------------------------------------------------- the call chain
+# ------------------------------------------------------------ the details
 
-def test_the_call_chain_names_the_other_party_not_the_entity(resolved_symbol, monkeypatch):
-    """For callers the counterpart is `from`; for callees it is `to`. Reading
-    the wrong end produced rows whose name was blank."""
-    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
-    d = ed.dossier("ConductorService", "prism",
-                   brain_svc=_Brain(), graph_svc=_Graph())
-    sy = d["symbols"]
-    assert [c["name"] for c in sy["callers"]] == ["conductor_svc()"]
-    assert [c["name"] for c in sy["callees"]] == ["_cond()"]
-    assert all(c["name"] for c in sy["callers"] + sy["callees"])
+def test_the_call_chain_names_the_other_party_not_the_entity(as_symbol):
+    """For callers the counterpart is `from`; for callees it is `to`."""
+    sy = _section(ed.dossier("ConductorService", "prism", brain_svc=_Brain(),
+                             graph_svc=_Graph()), "Symbols")
+    text = " ".join(r["text"] for r in sy["rows"])
+    assert "conductor_svc()" in text and "_cond()" in text
+    assert "L131" in text, "a call edge carries the line a reader can check"
 
 
-def test_a_call_edge_carries_its_site_and_its_confidence(resolved_symbol, monkeypatch):
-    """These edges are INFERRED. A reader checking one wants the line, and
-    deserves to know the claim is inferred rather than proven."""
-    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
-    d = ed.dossier("ConductorService", "prism",
-                   brain_svc=_Brain(), graph_svc=_Graph())
-    caller = d["symbols"]["callers"][0]
-    assert caller["file"] == "project_context.py"
-    assert caller["line"] == "L131"
-    assert caller["confidence"] == "INFERRED"
+def test_the_brain_section_does_not_restate_the_symbol_index(as_symbol):
+    br = _section(ed.dossier("X", "prism", brain_svc=_Brain(), graph_svc=_Graph()),
+                  "Written about it")
+    assert [r["text"] for r in br["rows"]] == ["why the conductor exists"]
 
 
-# ------------------------------------------------------------ the readings
-
-def test_the_code_graph_reading_locates_and_counts(resolved_symbol, monkeypatch):
-    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
-    g = ed.dossier("ConductorService", "prism",
-                   brain_svc=_Brain(), graph_svc=_Graph())["code_graph"]
-    assert g["file"] == "services/conductor_service.py"
-    assert g["community"] == 1
-    assert g["inbound"] == 1 and g["outbound"] == 1 and g["entities"] == 3
-
-
-def test_the_brain_reading_lists_what_was_written(resolved_symbol, monkeypatch):
-    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
-    br = ed.dossier("ConductorService", "prism",
-                    brain_svc=_Brain(), graph_svc=_Graph())["brain"]
-    assert br["mentions"][0]["title"] == "why the conductor exists"
-
-
-def test_the_brain_section_does_not_restate_the_symbol_index(resolved_symbol, monkeypatch):
-    """A plain search returns mostly code rows, which repeated the SYMBOLS
-    section directly above it — the reader saw the same names twice."""
-    class _Noisy(_Brain):
-        def search(self, q, limit=8):
-            # These are the shapes the LIVE index returns: a code row has
-            # title=None and an entity_kind, and its domain is the language
-            # ("py") as often as the generic "code".
-            return [
-                {"title": None, "domain": "code", "entity_kind": "function",
-                 "source_file": "tests/test_a.py"},
-                {"title": "_services", "domain": "py", "entity_kind": "function",
-                 "source_file": "b.py"},
-                {"title": "ConductorService", "domain": "py",
-                 "entity_kind": "class", "source_file": "c.py"},
-                {"title": "why the conductor exists", "domain": "md",
-                 "source_file": "docs/conductor.md"},
-                {"title": "why the conductor exists", "domain": "md",
-                 "source_file": "docs/conductor.md"},
-            ]
-
-    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
-    br = ed.dossier("X", "prism", brain_svc=_Noisy(), graph_svc=_Graph())["brain"]
-    assert [m["title"] for m in br["mentions"]] == ["why the conductor exists"]
-
-
-def test_no_prose_is_reported_honestly(resolved_symbol, monkeypatch):
-    """Code-only results mean nothing has been WRITTEN, and the panel says so
-    rather than listing function names as if they were documentation."""
+def test_no_prose_is_reported_with_what_was_searched(as_symbol):
     class _CodeOnly(_Brain):
         def search(self, q, limit=8):
-            return [
-                {"title": None, "domain": "code", "entity_kind": "function",
-                 "source_file": "a.py"},
-                {"title": "_svc", "domain": "py", "entity_kind": "function",
-                 "source_file": "b.py"},
-            ]
+            return [{"title": None, "domain": "code", "entity_kind": "function",
+                     "source_file": "a.py"}]
 
-    monkeypatch.setattr(ed, "_ontology", lambda p, k: ed._unavailable("o", "x"))
-    br = ed.dossier("X", "prism", brain_svc=_CodeOnly(), graph_svc=_Graph())["brain"]
-    assert br["ok"] is True and br["mentions"] == []
-    assert br["searched"] == 2
+    br = _section(ed.dossier("X", "prism", brain_svc=_CodeOnly(),
+                             graph_svc=_Graph()), "Written about it")
+    assert "nothing written about this" in br["rows"][0]["text"]
+    assert "1 index rows" in br["rows"][0]["text"]
 
 
-def test_an_unresolvable_token_still_returns_every_section(monkeypatch):
+def test_a_task_carries_its_ontology_class(as_task, monkeypatch):
+    """A task reported 'carries no ontology class yet' while the ontology
+    held 924 instances of Task."""
+    seen = {}
+
+    def _spy(project, klass):
+        seen["klass"] = klass
+        return ed._section("ontology", "Ontology", "ontology store", [])
+
+    monkeypatch.setattr(ed, "_ontology", _spy)
+    monkeypatch.setattr(ed, "_task_knowledge", lambda m, b, t: ed._section(
+        "knowledge", "Knowledge it pulled in", "recall log", []))
+    ed.dossier(_Task.id, "prism", task_svc=_TaskSvc(), brain_svc=_Brain())
+    assert seen["klass"] == "Task"
+
+
+def test_an_unresolvable_token_still_returns_sections(monkeypatch):
     monkeypatch.setattr(
         "prism_service.api.xref.resolve_token",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     d = ed.dossier("nonsense", "prism")
     assert d["kind"] == "unresolved"
-    for part in ("code_graph", "symbols", "brain", "ontology"):
-        assert part in d and d[part]["source"]
+    assert d["sections"] and all(s["source"] for s in d["sections"])
