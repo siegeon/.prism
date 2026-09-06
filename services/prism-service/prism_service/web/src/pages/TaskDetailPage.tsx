@@ -13,6 +13,7 @@ import DesignPacket from "@/components/plan/DesignPacket";
 import { stepLabel } from "@/lib/workflowChips";
 import Markdown, { renderInline } from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
+import ArchifyMaps from "@/components/understand/ArchifyMaps";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
@@ -3062,6 +3063,15 @@ export default function TaskDetailPage() {
             </RelGroup>
           )}
         </RailCard>
+        {/* Map — what this task is built around, rendered by archify from the
+            task's own workflow steps, the concepts it recalled, and its
+            children. The same renderer the Understand page uses. */}
+        <Card>
+          <SectionLabel>Map</SectionLabel>
+          <div className="mt-2">
+            <ArchifyMaps project={project} kind="task" taskId={id} />
+          </div>
+        </Card>
       </aside>
 
       </div>{/* end .issue grid */}

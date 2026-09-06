@@ -9,6 +9,7 @@ import { Lozenge, type LozengeTone } from "@/components/Lozenge";
 import { EntityChip, GlyphIcon } from "@/components/EntityChip";
 import Markdown from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
+import ArchifyMaps from "@/components/understand/ArchifyMaps";
 
 // Understand — the domain-first knowledge drill (owner doctrine): Understand
 // starts at the DOMAIN layer and drills DOWN. It never opens on a concept.
@@ -86,6 +87,12 @@ export default function UnderstandPage() {
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(params.get("concept"));
   const [bump, setBump] = useState(0);
+  // The rendered archify maps (code · concepts · language). Open at LEVEL 1,
+  // where the map IS the front door; collapsed to its header on the drill
+  // levels so the reading surface keeps the room. Drilling to a concept passes
+  // that concept id down as focusId, so the Concepts map highlights the same
+  // node the reader is on.
+  const [mapsOpen, setMapsOpen] = useState(true);
 
   useEffect(() => {
     setLoaded(false);
@@ -192,6 +199,12 @@ export default function UnderstandPage() {
             { label: selectedNode?.title ?? selectedId },
           ]}
         />
+        <MapsSection
+          project={project}
+          open={mapsOpen}
+          onToggle={() => setMapsOpen((o) => !o)}
+          focusId={selectedId ?? undefined}
+        />
         <Card className="flex-1 min-h-0 overflow-y-auto max-w-[860px]">
           <DetailPanel
             path={selectedPath}
@@ -206,6 +219,11 @@ export default function UnderstandPage() {
 
   return (
     <div className="p-6 h-full flex flex-col gap-4 min-w-[720px]">
+      <MapsSection
+        project={project}
+        open={mapsOpen}
+        onToggle={() => setMapsOpen((o) => !o)}
+      />
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -227,6 +245,36 @@ export default function UnderstandPage() {
         />
       )}
     </div>
+  );
+}
+
+// MapsSection — the rendered archify maps, collapsible so the drill levels keep
+// their room. Understand is not only code: the three tabs are the code
+// structure, the domain concepts, and the language rules, each rendered from
+// the SAME PRISM stores the rest of this page reads.
+function MapsSection({
+  project, open, onToggle, focusId,
+}: { project: string; open: boolean; onToggle: () => void; focusId?: string }) {
+  return (
+    <Card className="shrink-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 text-[12px] font-semibold uppercase tracking-wide text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
+      >
+        <Network size={13} />
+        <span>Maps</span>
+        <span className="ml-auto font-normal normal-case opacity-70">
+          {open ? "hide" : "show"}
+        </span>
+      </button>
+      {open && (
+        <div className="mt-3">
+          <ArchifyMaps project={project} focusId={focusId} />
+        </div>
+      )}
+    </Card>
   );
 }
 
