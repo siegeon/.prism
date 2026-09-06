@@ -559,14 +559,15 @@ export default function ExplorePage() {
           // The same code map the ARCHITECTURE toggle shows is the whole
           // project at a glance, so it stands in until a focus exists. The
           // Sigma hairball stays a deliberate opt-in; this is not that.
-          <div className="px-5 pb-5 min-h-0 overflow-y-auto">
-            <div className="mb-2 text-xs opacity-60">
-              {resolvingDefault
-                ? "Finding somewhere to start — the architecture in the meantime."
-                : "Search above, or click a node in the architecture, to explore it in the mesh."}
-            </div>
-            <ArchifyMaps project={project} kind="code" />
-          </div>
+          <StartHere
+            project={project}
+            onPick={(token) => setFocus(token)}
+            hint={
+              resolvingDefault
+                ? "Finding somewhere to start — pick one yourself in the meantime."
+                : "Pick a task to see what it is made of, or a code cluster to explore it."
+            }
+          />
         )}
       </Card>
 
@@ -1537,5 +1538,97 @@ function Dossier({ token, project, onOpen }: {
         ))}
       </div>
     </Card>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// StartHere — THE FRONT DOOR. Explore's mesh needs a focus before it can
+// draw anything, and before one was chosen this page showed "Finding
+// somewhere to start…" over a blank canvas: nothing to read, nothing to
+// click. The page already fetched the task list in order to auto-pick ONE
+// focus silently; this shows those same doorways instead of hiding them,
+// beside the code the page exists to explore.
+//
+// Two ways in, because a person arrives wanting one or the other:
+//   TASKS — the work in flight. Clicking one centres the mesh on it, which
+//           is the "what makes up this task" view.
+//   CODE  — the architecture drawn from graph.db. Clicking a cluster
+//           centres the mesh on that cluster's most-connected symbol.
+// ─────────────────────────────────────────────────────────────────────────
+
+type DoorTask = {
+  id: string; title?: string; status?: string;
+  updated_at?: string; parent_id?: string;
+};
+
+function StartHere({ project, onPick, hint }: {
+  project: string; onPick: (token: string) => void; hint: string;
+}) {
+  const [tasks, setTasks] = useState<DoorTask[] | null>(null);
+  const [communities, setCommunities] = useState<Community[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    api.get<{ tasks: DoorTask[] }>(
+      `/api/tasks?project=${project}&fields=id,title,status,updated_at,parent_id`)
+      .then((r) => {
+        if (!alive) return;
+        const open = (r.tasks ?? [])
+          .filter((t) => t.id && (t.status ?? "").toLowerCase() !== "done")
+          .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
+        setTasks(open.slice(0, 8));
+      })
+      .catch(() => { if (alive) setTasks([]); });
+    // Clicking a cluster in the drawing has to land on a real token, and a
+    // cluster id is not one — the communities carry the symbols that are.
+    api.get<{ communities: Community[] }>(`/api/graph/communities?project=${project}`)
+      .then((r) => { if (alive) setCommunities(r.communities ?? []); })
+      .catch(() => { if (alive) setCommunities([]); });
+    return () => { alive = false; };
+  }, [project]);
+
+  // archify draws each cluster with id `c<communityId>-<slugged label>`.
+  const onMapNode = (nodeId: string) => {
+    const m = /^c(\d+)-/.exec(nodeId);
+    if (!m) return;
+    const c = communities.find((x) => String(x.id) === m[1]);
+    const token = c?.top_entities?.find((e) => e && e.trim());
+    if (token) onPick(token.replace(/\(\)$/, ""));
+  };
+
+  return (
+    <div className="px-5 pb-5 min-h-0 overflow-y-auto space-y-4">
+      <div className="text-xs opacity-60">{hint}</div>
+
+      <div>
+        <SectionLabel>Start with a task</SectionLabel>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {tasks === null ? (
+            <span className="text-2xs opacity-50">reading the board…</span>
+          ) : tasks.length === 0 ? (
+            <span className="text-2xs opacity-50">no open tasks</span>
+          ) : (
+            tasks.map((t) => (
+              <button key={t.id} onClick={() => onPick(t.id)}
+                title={`Explore what makes up ${t.title ?? t.id}`}
+                className="cursor-pointer inline-flex items-center gap-1.5 rounded-md border
+                  border-[color:var(--border-default)] bg-[color:var(--surface-2)]
+                  hover:bg-[color:var(--surface-1)] px-2 py-1 text-xs max-w-[420px]">
+                <GlyphIcon kind="task" size={10} />
+                <span className="truncate">{t.title ?? t.id.slice(0, 8)}</span>
+                <span className="opacity-50 shrink-0">· {t.status}</span>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Or the code</SectionLabel>
+        <div className="mt-2">
+          <ArchifyMaps project={project} kind="code" onNodeSelect={onMapNode} />
+        </div>
+      </div>
+    </div>
   );
 }
