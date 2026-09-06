@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { Empty } from "@/components/ui";
 import { currentTheme } from "@/lib/theme";
@@ -47,11 +47,15 @@ export default function ArchifyMaps({
   kind: fixedKind,
   taskId,
   focusId,
+  onNodeSelect,
 }: {
   project: string;
   kind?: ArchifyKind;
   taskId?: string;
   focusId?: string;
+  /** A node in the drawing was clicked. The id is the thing the node stands
+   *  for — a concept id on the concepts map, a community id on the code map. */
+  onNodeSelect?: (nodeId: string, kind: ArchifyKind) => void;
 }) {
   const tabbed = !fixedKind;
   const [activeTab, setActiveTab] = useState<ArchifyKind>("code");
@@ -104,6 +108,46 @@ export default function ArchifyMaps({
   }, [meta, kind, focusId]);
 
   const height = fixedKind === "task" ? "50vh" : "70vh";
+
+  // THE MAP IS A SURFACE, NOT A POSTER. The drawing is served from this same
+  // origin, so the page can read the document inside the frame and turn a
+  // click on a node into a selection — which is what makes the map the way
+  // you browse the concepts rather than a picture sitting beside a list.
+  // Every node archify draws carries data-node-id, and for the concepts map
+  // that id IS the concept id.
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || !onNodeSelect) return;
+    let doc: Document | null = null;
+
+    const onClick = (ev: Event) => {
+      const el = ev.target as Element | null;
+      const node = el?.closest?.("[data-node-id]");
+      const id = node?.getAttribute("data-node-id");
+      if (id) onNodeSelect(id, kind);
+    };
+    const attach = () => {
+      try {
+        doc = frame.contentDocument;
+        doc?.addEventListener("click", onClick, true);
+      } catch {
+        // A cross-origin frame cannot be read. The map still renders; it
+        // simply stops being clickable, which is why this never throws.
+      }
+    };
+
+    frame.addEventListener("load", attach);
+    if (frame.contentDocument?.readyState === "complete") attach();
+    return () => {
+      frame.removeEventListener("load", attach);
+      try {
+        doc?.removeEventListener("click", onClick, true);
+      } catch {
+        /* the frame is already gone */
+      }
+    };
+  }, [onNodeSelect, kind, iframeSrc]);
 
   return (
     <div className="space-y-3">
@@ -173,6 +217,7 @@ export default function ArchifyMaps({
           {iframeSrc && (
             <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
               <iframe
+                ref={frameRef}
                 key={kind}
                 title={`${kind} map`}
                 src={iframeSrc}

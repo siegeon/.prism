@@ -40,10 +40,35 @@ def test_the_map_reads_the_archify_api():
     assert "/api/archify/maps/" in src
 
 
-def test_the_three_project_tabs_are_offered():
-    src = _MAPS.read_text(encoding="utf-8")
-    for label in ('label: "Code"', 'label: "Concepts"', 'label: "Language"'):
-        assert label in src
+def test_a_map_is_a_reading_of_a_surface_never_a_panel_stacked_on_it():
+    """Owner: 'we are converging our intelligence, not sub dividing it.'
+
+    Each map is mounted as ONE READING of the surface that already owns its
+    subject, reached by that surface's own control — never as an extra card
+    above the surface's existing content. Understand draws the concepts it
+    already lists; Explore draws the same code graph its mesh and Sigma map
+    read. An earlier cut rendered a tabbed Maps panel above the Understand
+    domain grid, which put two views of one thing on one page.
+    """
+    understand = _UNDERSTAND.read_text(encoding="utf-8")
+    explore = (_WEB / "pages" / "ExplorePage.tsx").read_text(encoding="utf-8")
+
+    # Understand: drawn OR listed, behind one toggle — never both at once.
+    assert "const [drawn, setDrawn] = useState(true);" in understand
+    assert "{drawn ? (" in understand
+    assert '<ArchifyMaps\n          project={project}\n          kind="concepts"' in understand
+
+    # Explore: a third reading of the same graph, in the same viewer body.
+    assert "const [wantArchitecture, setWantArchitecture] = useState(false);" in explore
+    assert "{wantArchitecture ? (" in explore
+    assert '<ArchifyMaps project={project} kind="code" />' in explore
+
+
+def test_understand_never_draws_the_code_map():
+    """Understand reads what the brain knows; the code graph is Explore's."""
+    understand = _UNDERSTAND.read_text(encoding="utf-8")
+    assert 'kind="code"' not in understand
+    assert 'kind="language"' not in understand
 
 
 def test_a_person_can_build_the_map():

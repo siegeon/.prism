@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Compass, Network, Search, CornerDownLeft, ArrowRight, ArrowLeft, X, RefreshCw, Map as MapIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import ArchifyMaps from "@/components/maps/ArchifyMaps";
 import { Card, Empty, ErrorBanner, Pill, SectionLabel, toneFromLabel } from "@/components/ui";
 import { GlyphIcon, EntityChip, type EntityKind } from "@/components/EntityChip";
 import { communityColor, hexToRgba } from "@/lib/palette";
@@ -130,6 +131,12 @@ export default function ExplorePage() {
   // reach the old Sigma canvas now. Any subsequent focus (search pick, mesh
   // click, default-resolution) clears it so the mesh takes back over.
   const [wantFullMap, setWantFullMap] = useState(false);
+  // A THIRD READING OF THE SAME CODE GRAPH, not a second widget beside it.
+  // The mesh shows reach, the Sigma map shows the whole hairball, and this
+  // shows the authored architecture — all of them draw graph.db, so they
+  // belong on one surface behind one control rather than stacked as
+  // separate panels.
+  const [wantArchitecture, setWantArchitecture] = useState(false);
   const setFocus = useCallback((token: string | null, opts?: { replace?: boolean }) => {
     if (token) setWantFullMap(false);
     setSp((prev) => {
@@ -472,7 +479,9 @@ export default function ExplorePage() {
       <Card className="!p-0 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="px-5 pt-3 pb-2 flex items-center gap-2 shrink-0">
           <Network className="w-4 h-4 opacity-60" />
-          <SectionLabel>{wantFullMap ? "Graph" : "Explore"}</SectionLabel>
+          <SectionLabel>
+            {wantArchitecture ? "Architecture" : wantFullMap ? "Graph" : "Explore"}
+          </SectionLabel>
           <span className="text-xs opacity-50 ml-1">
             {focus
               ? "Freeform mesh — knowledge links knowledge, code calls code, sessions touch gates. Click a node to wander, double-click to open it."
@@ -484,8 +493,20 @@ export default function ExplorePage() {
               ? "finding somewhere to start…"
               : "search or pick an entity to explore"}
           </span>
-          {focus && (
-            <div className="ml-auto flex items-center gap-2">
+          {/* One control for the readings of this one graph. */}
+          <button
+            onClick={() => setWantArchitecture((v) => !v)}
+            title="The authored architecture drawn from this same graph"
+            className={cn(
+              "ml-auto inline-flex items-center gap-1 rounded-md border px-2 py-1 text-2xs uppercase tracking-wider transition-colors",
+              wantArchitecture
+                ? "border-[color:var(--accent-teal-fg)] bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)]"
+                : "border-[color:var(--border-default)] bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)]",
+            )}>
+            <MapIcon className="w-3 h-3" /> Architecture
+          </button>
+          {focus && !wantArchitecture && (
+            <div className="flex items-center gap-2">
               {/* Reach toggle (artifact header actions): 2 hops is primary. */}
               <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden">
                 {([1, 2] as const).map((h) => (
@@ -512,7 +533,11 @@ export default function ExplorePage() {
             </div>
           )}
         </div>
-        {focus ? (
+        {wantArchitecture ? (
+          <div className="px-5 pb-5 min-h-0 overflow-y-auto">
+            <ArchifyMaps project={project} kind="code" />
+          </div>
+        ) : focus ? (
           <Mesh token={focus} project={project} hops={hops} onFocus={setFocus}
             onOpen={(href) => navigate(href)} onCenter={setFocusLabel} />
         ) : wantFullMap ? (

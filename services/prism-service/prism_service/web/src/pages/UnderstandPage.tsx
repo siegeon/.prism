@@ -87,12 +87,6 @@ export default function UnderstandPage() {
   const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(params.get("concept"));
   const [bump, setBump] = useState(0);
-  // The rendered archify maps (code · concepts · language). Open at LEVEL 1,
-  // where the map IS the front door; collapsed to its header on the drill
-  // levels so the reading surface keeps the room. Drilling to a concept passes
-  // that concept id down as focusId, so the Concepts map highlights the same
-  // node the reader is on.
-  const [mapsOpen, setMapsOpen] = useState(true);
 
   useEffect(() => {
     setLoaded(false);
@@ -199,12 +193,6 @@ export default function UnderstandPage() {
             { label: selectedNode?.title ?? selectedId },
           ]}
         />
-        <MapsSection
-          project={project}
-          open={mapsOpen}
-          onToggle={() => setMapsOpen((o) => !o)}
-          focusId={selectedId ?? undefined}
-        />
         <Card className="flex-1 min-h-0 overflow-y-auto max-w-[860px]">
           <DetailPanel
             path={selectedPath}
@@ -219,11 +207,6 @@ export default function UnderstandPage() {
 
   return (
     <div className="p-6 h-full flex flex-col gap-4 min-w-[720px]">
-      <MapsSection
-        project={project}
-        open={mapsOpen}
-        onToggle={() => setMapsOpen((o) => !o)}
-      />
       <input
         value={query}
         onChange={(e) => setQuery(e.target.value)}
@@ -234,7 +217,18 @@ export default function UnderstandPage() {
       {query.trim() ? (
         <SearchResults matches={matches} onPick={onPickSearch} />
       ) : !selectedDomain ? (
-        <DomainOverview domains={domains} loaded={loaded} onSelect={setSelectedDomain} />
+        // LEVEL 1 — ONE surface, two readings of the SAME concepts, behind
+        // one control. Drawn: the concepts grouped into their domains, each
+        // node clickable straight through to its reading page. Listed: the
+        // same domains as counted cards. Rendering both at once stacked two
+        // views of one thing on one page, which is what this replaces.
+        <DomainLevel
+          project={project}
+          domains={domains}
+          loaded={loaded}
+          onSelectDomain={setSelectedDomain}
+          onOpenConcept={goToConcept}
+        />
       ) : (
         <DomainTable
           domain={selectedDomain}
@@ -248,35 +242,61 @@ export default function UnderstandPage() {
   );
 }
 
-// MapsSection — the rendered archify maps, collapsible so the drill levels keep
-// their room. Understand is not only code: the three tabs are the code
-// structure, the domain concepts, and the language rules, each rendered from
-// the SAME PRISM stores the rest of this page reads.
-function MapsSection({
-  project, open, onToggle, focusId,
-}: { project: string; open: boolean; onToggle: () => void; focusId?: string }) {
+// DomainLevel — LEVEL 1 as ONE surface with two readings of the same
+// concepts: DRAWN (the map, grouped by domain, each node clickable through
+// to its reading page) or LISTED (the domain cards). One control switches
+// between them, because they are the same knowledge seen two ways — not two
+// features to stack on one page.
+function DomainLevel({
+  project, domains, loaded, onSelectDomain, onOpenConcept,
+}: {
+  project: string;
+  domains: DomainCard[];
+  loaded: boolean;
+  onSelectDomain: (id: string) => void;
+  onOpenConcept: (id: string) => void;
+}) {
+  const [drawn, setDrawn] = useState(true);
   return (
-    <Card className="shrink-0">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 text-[12px] font-semibold uppercase tracking-wide text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
-      >
-        <Network size={13} />
-        <span>Maps</span>
-        <span className="ml-auto font-normal normal-case opacity-70">
-          {open ? "hide" : "show"}
-        </span>
-      </button>
-      {open && (
-        <div className="mt-3">
-          <ArchifyMaps project={project} focusId={focusId} />
+    <div className="flex flex-col gap-3 min-h-0">
+      <div className="flex items-center gap-2">
+        <div className="inline-flex rounded-md border border-[color:var(--border-default)] overflow-hidden">
+          {([["drawn", "Drawn"], ["listed", "Listed"]] as const).map(([k, label]) => {
+            const on = (k === "drawn") === drawn;
+            return (
+              <button
+                key={k}
+                onClick={() => setDrawn(k === "drawn")}
+                className={`px-2.5 py-1 text-2xs uppercase tracking-wider transition-colors ${
+                  on
+                    ? "bg-[color:var(--accent-teal-bg)] text-[color:var(--accent-teal-fg)]"
+                    : "bg-[color:var(--surface-2)] hover:bg-[color:var(--surface-1)] text-[color:var(--text-secondary)]"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
+        <span className="text-xs opacity-60">
+          {drawn
+            ? "concepts grouped by domain — click one to open it"
+            : "domains by size, with their mix of concept types"}
+        </span>
+      </div>
+      {drawn ? (
+        <ArchifyMaps
+          project={project}
+          kind="concepts"
+          onNodeSelect={(id) => onOpenConcept(id)}
+        />
+      ) : (
+        <DomainOverview domains={domains} loaded={loaded} onSelect={onSelectDomain} />
       )}
-    </Card>
+    </div>
   );
 }
+
 
 // Breadcrumb — Understand / <domain> / <concept>. Every segment except the last
 // is a button that walks back up a level.
