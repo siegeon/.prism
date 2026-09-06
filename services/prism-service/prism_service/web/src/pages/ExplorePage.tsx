@@ -1385,7 +1385,7 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             </div>
             {center.href && (
               <button onClick={() => onOpen(center.href!)}
-                className="mt-3 text-xs text-[color:var(--accent-teal-fg)] hover:underline">
+                className="mt-3 cursor-pointer text-xs text-[color:var(--accent-teal-fg)] hover:underline">
                 Open detail →
               </button>
             )}
