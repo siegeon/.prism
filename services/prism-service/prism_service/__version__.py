@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.256"
+PRISM_VERSION = "7.13.257"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8640,4 +8640,17 @@ PRISM_VERSION_NOTES += (
     "ever called; a runner has no ~/projects/prism. A new repo_root_on_disk "
     "fixture points that lookup at a temporary directory, so the tests observe "
     "the builder and not the host."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n7.13.257: the last red check on main. test_default_runner_kills_orphaned_grandchild_on_timeout identified the "
+    "grandchild by a bare pid, and the unit job runs 4227 tests that spawn "
+    "subprocesses continuously, so the kernel recycled the freed pid inside "
+    "the 10 second poll; os.kill(pid, 0) then answered for a stranger and the "
+    "dead grandchild read as alive. That is why it failed on CI only, on two "
+    "runs of three, and why the earlier widening of the deadline did not help: "
+    "a longer window makes reuse more likely, not less. The grandchild now "
+    "carries a per-run marker on its own command line, and _pid_is_gone reads "
+    "/proc/<pid>/cmdline for it, so the poll asks about identity and not about "
+    "a number. Proven directly: a live pid answers gone under a foreign marker."
 )
