@@ -378,9 +378,38 @@ def _workflow_engine_json(
 
 
 def _project_validation_workflow(project: str) -> dict:
-    definition = ProjectWorkflow.model_validate(
-        _workflow_engine_json(f"/workflows/definitions/{project}")
-    )
+    # THE ENGINE IS OPTIONAL INFRASTRUCTURE, NOT A DEPENDENCY OF THE PAGE.
+    # This entry is sourced from the AosWorkflows engine, and every other
+    # workflow on the page is built from local constants. Letting the
+    # engine's absence raise took the WHOLE endpoint down with a 503, so a
+    # machine with no engine could not read the conductor at all -- and
+    # every pull request failed, because a GitHub runner has no engine to
+    # reach. `_conductor_behavior_workflows` already degrades exactly this
+    # way (`except HTTPException: return []`); this is the same contract
+    # for its sibling: report the entry as unavailable, keep the page.
+    try:
+        definition = ProjectWorkflow.model_validate(
+            _workflow_engine_json(f"/workflows/definitions/{project}")
+        )
+    except HTTPException:
+        return {
+            "id": "validation",
+            "name": "Build and test",
+            # The trigger sentence is REQUIRED, not decoration: the
+            # skill-description-says-when SHACL rule reads this text and
+            # fires without a real "when" clause (task 408138e8).
+            "description": (
+                "The project's scripted build and test workflow. The "
+                "workflow engine is not reachable, so its steps cannot be "
+                "read right now. Runs when a developer starts it directly "
+                "or from CI."
+            ),
+            "project_type": "",
+            "steps": [],
+            "bots": [],
+            "occupancy": {},
+            "unavailable": True,
+        }
     persona_for = {"test": "qa", "build": "dev"}
     steps = []
     for scripted in definition.steps:
