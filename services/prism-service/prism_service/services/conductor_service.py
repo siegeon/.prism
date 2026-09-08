@@ -2560,12 +2560,26 @@ class ConductorService:
         return n
 
     def _auto_rewind(self, task_id, target_step, reason, evidence_ref,
-                     from_step="green_gate"):
+                     from_step="green_gate", keep_block=False):
         """AC-6: move the task back with the seat and evidence on the row;
-        the refusal text becomes the next step's work order."""
-        self._task_svc.update(task_id, workflow_step=target_step,
-                              gate_state="none", gate_reason=reason,
-                              blocked_reason="")
+        the refusal text becomes the next step's work order.
+
+        task 6f18c224: the rewind lands on a step an AGENT must work, so the
+        rewind owns the status too. A task a sweep had parked as blocked kept
+        status="blocked" with an EMPTY blocked_reason, and every sweep reads
+        only in_progress rows (task_runner.py:717, resume_actuator.py:120/140,
+        ship_worker.py:817/937) -- so nothing drove it again and no reason
+        text said why. Lift ONLY a block, and only when no reason survives:
+        keep_block=True is the caller saying the park stands.
+        """
+        fields = dict(workflow_step=target_step, gate_state="none",
+                      gate_reason=reason)
+        if not keep_block:
+            fields["blocked_reason"] = ""
+            task = self._task_svc.get(task_id)
+            if getattr(task, "status", "") == "blocked":
+                fields["status"] = "in_progress"
+        self._task_svc.update(task_id, **fields)
         self._record_seat_row(
             task_id, "auto_rewind",
             f"{from_step} -> {target_step}; {evidence_ref}; reason={reason}")
