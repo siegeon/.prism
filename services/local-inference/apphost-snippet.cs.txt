@@ -1,0 +1,16 @@
+// RAM-first local inference. Profiles are re-read on each resource restart.
+var inferenceRoot = Path.Combine(home, "projects", "prism", "services", "local-inference");
+var inferenceState = Path.Combine(home, "projects", "prism", "temp", "local-inference");
+var inference = builder.AddContainer("inference", "ghcr.io/ggml-org/llama.cpp", "server-cuda")
+    .WithImageSHA256("a292d888ae5051503309aa080ecdc08239c7a77ef8a2112e6dcbaf18c249c1d7")
+    .WithBindMount(Path.Combine(inferenceState, "models"), "/models", isReadOnly: true)
+    .WithBindMount(inferenceState, "/profiles", isReadOnly: true)
+    .WithBindMount(inferenceRoot, "/config", isReadOnly: true)
+    .WithEntrypoint("/bin/sh")
+    .WithArgs("/config/launch.sh")
+    .WithBindMount("/usr/lib/wsl", "/usr/lib/wsl", isReadOnly: true)
+    .WithEnvironment("LD_LIBRARY_PATH", "/usr/lib/wsl/lib:/usr/local/cuda/lib64:/app")
+    .WithContainerRuntimeArgs("--device", "/dev/dxg", "--memory", "40g", "--memory-swap", "40g", "--cpus", "16")
+    .WithHttpEndpoint(port: 8086, targetPort: 8080, name: "http")
+    .WithHttpHealthCheck("/health");
+
