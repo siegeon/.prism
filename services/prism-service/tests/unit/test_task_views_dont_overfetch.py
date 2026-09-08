@@ -268,10 +268,23 @@ def test_completed_tasks_page_requests_a_fields_projection():
     )
 
 
-def test_explore_page_requests_a_fields_projection():
-    m = _TASKS_FETCH_RE.search(_EXPLORE_TSX)
-    assert m, "could not find the /api/tasks fetch call in ExplorePage.tsx"
-    assert "fields=" in m.group(1), (
-        f"ExplorePage.tsx fetches the full unprojected task payload "
-        f"({m.group(1)!r}) instead of a fields= projection"
+def test_explore_page_does_not_read_the_task_board_at_all():
+    """SUPERSEDES test_explore_page_requests_a_fields_projection (7.13.260).
+
+    Explore used to fetch /api/tasks twice -- once to auto-pick a default
+    mesh focus, once for the "Start with a task" chip ladder -- and this test
+    guarded that those reads carried a fields= projection, because the
+    unprojected board ships every plan_doc/story blob (2.8MB just to choose
+    one focus id).
+
+    Both reads are gone: Explore is the code graph, and the task-centred view
+    moved to the task page (owner: "Code architecture ... is for the code
+    graph, so it does not have anything to do with tasks"). The overfetch
+    invariant is strictly stronger now -- no request at all beats a projected
+    one -- so it is asserted that way rather than deleted."""
+    assert _TASKS_FETCH_RE.search(_EXPLORE_TSX) is None, (
+        "ExplorePage.tsx reads the task board again; it is the code graph. "
+        "If that is deliberate, restore the fields= projection assertion "
+        "rather than dropping this guard -- the unprojected board carries "
+        "every plan_doc and story blob."
     )

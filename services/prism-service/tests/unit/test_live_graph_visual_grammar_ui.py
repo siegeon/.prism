@@ -1627,14 +1627,32 @@ def test_explore_page_supports_explicit_session_and_task_params():
         "generically), not stay as its own separate un-consumed param")
 
 
-def test_explore_page_default_ladder_skips_when_a_param_focus_is_present():
+def test_explore_page_never_auto_resolves_a_focus():
+    """SUPERSEDES test_explore_page_default_ladder_skips_when_a_param_focus_
+    is_present (7.13.260). That test pinned the guard
+    `if (deepLink || focus || paramFocusSeed) return;` INSIDE the
+    last-focus/newest-task/newest-session probing ladder, so that an explicit
+    ?session=/?task= deep link was not overridden by auto-probing.
+
+    The ladder itself is now gone. Explore is the CODE GRAPH (its own nav
+    label) and it was opening on whichever task moved last, so the
+    architecture flashed past on the way to a task nobody asked for (owner:
+    "i dont neeed start with a task or any of that the code arch is in the
+    graph isnt it?"). The old invariant is now satisfied by construction --
+    nothing can override a deep link because nothing probes at all -- so the
+    stronger property is asserted instead: no task-board read, and no
+    probe-and-setFocus, anywhere on this page."""
     src = _read(_EXPLORE_PAGE)
-    assert "if (deepLink || focus || paramFocusSeed) return;" in src, (
-        "the last-focus/newest-task/newest-session probing ladder must "
-        "not fire when an explicit ?session=/?task= deep link already "
-        "resolved the mesh's focus -- paramFocusSeed is a synchronous "
-        "useMemo read of the URL (like deepLink), so this guard sees it "
-        "in the very first effect pass, before any async probing starts")
+    assert "/api/tasks?" not in src, (
+        "Explore must not read the task board: it is the code graph, and "
+        "the task-centred view moved to the task page (components/Mesh.tsx)")
+    assert "MESH_FOCUS_KEY" not in src, (
+        "the persisted last-focus rung fed the probing ladder and must not "
+        "come back without a deliberate decision -- a bare /brain visit "
+        "opens on the architecture, not on wherever the reader last was")
+    assert "xref/neighbors?token=" not in src, (
+        "the richness probe belonged to the ladder; Explore no longer "
+        "auto-resolves any focus")
 
 
 def test_version_bumped_for_the_explore_hop():

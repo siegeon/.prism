@@ -26,6 +26,13 @@ import pytest
 _HERE = Path(__file__).resolve()
 _SRC = _HERE.parent.parent.parent / "prism_service" / "web" / "src"
 _EXPLORE = (_SRC / "pages" / "ExplorePage.tsx").read_text(encoding="utf-8")
+# The mesh -- and with it the Selected rail, the edge rendering and the legend
+# -- moved OUT of ExplorePage into its own component in 7.13.260. It draws
+# memory, tasks, sessions and gates, so it was never the code-graph page's
+# alone, and it now mounts on the task page too. The ontology contract below
+# is UNCHANGED in substance; the assertions simply follow the code to its new
+# home rather than being deleted.
+_MESH = (_SRC / "components" / "Mesh.tsx").read_text(encoding="utf-8")
 _ONTOLOGY = (_SRC / "pages" / "OntologyPage.tsx").read_text(encoding="utf-8")
 
 
@@ -196,22 +203,22 @@ def test_explore_page_renders_the_ontology_class_pill_linking_to_ontology():
     (data-kind="class", the square/var(--formal) glyph OntologyPage.tsx's
     own Structure tree already uses) and deep-links to
     /ontology?tab=structure&class=<cls>, bound to center.ontology_class."""
-    assert 'ontology_class' in _EXPLORE
-    assert 'className="ont-node" data-kind="class"' in _EXPLORE
-    assert "/ontology?tab=structure&class=" in _EXPLORE
-    assert "unclassified" in _EXPLORE
+    assert 'ontology_class' in _MESH
+    assert 'className="ont-node" data-kind="class"' in _MESH
+    assert "/ontology?tab=structure&class=" in _MESH
+    assert "unclassified" in _MESH
 
 
 def test_explore_page_edge_rendering_reads_ontology_property():
     """Edge tooltips/labels read ontology_property, not just the raw
     center->neighbor relation label."""
-    assert "ontology_property" in _EXPLORE
+    assert "ontology_property" in _MESH
 
 
 def test_explore_page_legend_groups_by_ontology_class():
     """The legend groups by ontology_class when Explore has classified
     something in view, falling back to the plain kind-shape key."""
-    assert "ontologyLegend" in _EXPLORE
+    assert "ontologyLegend" in _MESH
 
 
 def test_ontology_page_reads_tab_and_class_query_params():
