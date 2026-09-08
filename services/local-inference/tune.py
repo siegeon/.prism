@@ -1,13 +1,18 @@
 """Apply repeatable llama.cpp profiles and measure the Aspire-managed server."""
 import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
 import urllib.request
 
-ROOT = Path(__file__).resolve().parents[2]
-STATE = ROOT / "temp/local-inference"
+# The AppHost bind-mounts THIS directory as /profiles, and it anchors the path
+# at the main checkout. A copy of this script that runs from a git worktree
+# must still write here. A script-relative path writes into the worktree, and
+# the container then restarts on the old arguments without reporting anything.
+STATE = Path(os.environ.get("PRISM_INFERENCE_STATE",
+                            Path.home() / "projects/prism/temp/local-inference"))
 APPHOST = Path.home() / "projects/aos/apphost.cs"
 PROFILES = {
     "cpu-8": ["-ngl", "0", "--device", "none", "--no-op-offload", "-t", "8"],
@@ -31,13 +36,17 @@ def endpoint():
     return next(u["url"] for r in resources for u in r.get("urls", [])
                 if u["name"] == "http")
 
-def apply(name):
+def apply(name, ctx=40960):
+    # A conductor step carries a plan, a diff and file contents, so the
+    # context length is a real dimension of a profile. The model trains to
+    # 40960 tokens. A longer context costs KV cache RAM.
     STATE.mkdir(parents=True, exist_ok=True)
-    args = PROFILES[name] + ["-tb", "12", "-c", "8192", "-b", "512", "-ub", "128"]
+    args = PROFILES[name] + ["-tb", "12", "-c", str(ctx), "-b", "512", "-ub", "128"]
     tmp = STATE / "active.args.tmp"
     tmp.write_text("\n".join(args) + "\n")
     tmp.replace(STATE / "active.args")
-    (STATE / "profile.json").write_text(json.dumps({"profile": name, "args": args}, indent=2))
+    (STATE / "profile.json").write_text(
+        json.dumps({"profile": name, "ctx": ctx, "args": args}, indent=2))
 
 def request(url, path, body):
     req = urllib.request.Request(url + path, json.dumps(body).encode(),
@@ -73,9 +82,11 @@ def main():
     parser.add_argument("profile", choices=[*PROFILES, "current"])
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--benchmark", action="store_true")
+    parser.add_argument("--ctx", type=int, default=40960,
+                        help="context length in tokens, up to the 40960 the model trains to")
     options = parser.parse_args()
     if options.profile != "current":
-        apply(options.profile)
+        apply(options.profile, options.ctx)
         if options.prepare_only:
             return
         print(aspire("resource", "inference", "restart"), flush=True)

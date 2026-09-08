@@ -32,8 +32,21 @@ Each command writes a profile, restarts only inference through Aspire, waits
 for health, discovers its endpoint, and optionally records two measurements.
 Profiles also exist with 12 generation threads. CPU profiles disable GPU
 offload; hybrid profiles keep experts in RAM and offload attention; partial
-profiles offload 16 layers. All use an 8192-token context, one slot, 12 batch
-threads, a 512-token batch, and a 128-token microbatch.
+profiles offload 16 layers. All use one slot, 12 batch threads, a 512-token
+batch, and a 128-token microbatch.
+
+The context length defaults to 40960, the length the model trains to. Pass
+`--ctx <tokens>` to change it. RESULTS.md measures 8192, 32768 and 40960. The
+longest context is the fastest of the three. It costs about 1.9 GiB of GPU
+memory more than the shortest. A conductor step carries a plan, a diff and
+file contents, so it needs the long context.
+
+`tune.py` writes its profile to `~/projects/prism/temp/local-inference`,
+because the AppHost bind-mounts that exact directory as `/profiles`. Set
+`PRISM_INFERENCE_STATE` to point somewhere else. Do not make this path
+relative to the script. A copy of the script that runs from a linked checkout
+would then write the profile beside itself, and the container would restart on
+the old arguments and report nothing.
 
 `hybrid-8-resident` disables mmap to load experts directly into RAM.
 `hybrid-36` keeps the first 36 layers' experts on CPU and offloads the rest.
