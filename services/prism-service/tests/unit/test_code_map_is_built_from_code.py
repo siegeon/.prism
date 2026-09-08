@@ -146,3 +146,41 @@ def test_empty_graph_says_so_rather_than_drawing_nothing(monkeypatch):
                         lambda project: type("C", (), {"graph_svc": _Empty()})())
     out = code_map.build("proj")
     assert "no files" in out["meta"]["subtitle"]
+
+
+def test_x_targets_never_reaches_archify(monkeypatch, tmp_path):
+    """REGRESSION: archify's schema check refuses unknown top-level keys, and
+    it runs in build() BEFORE render(). Popping x_targets inside render() was
+    too late, so the live build failed outright with
+    `/ must NOT have additional properties {"additionalProperty":"x_targets"}`
+    while a direct render() call looked fine. The lift must happen before
+    validate, and the targets must still arrive on meta.
+    """
+    from prism_service.services import archify_service as svc_mod
+
+    seen: dict = {}
+
+    def _fake_validate(self, diagram_type, ir):
+        seen["validated_keys"] = set(ir)
+        return {"ok": True}
+
+    def _fake_render(self, kind, diagram_type, ir, task_id=None, targets=None):
+        seen["rendered_keys"] = set(ir)
+        return {"ok": True, "targets": targets or {}}
+
+    monkeypatch.setattr(svc_mod.ArchifyService, "validate", _fake_validate)
+    monkeypatch.setattr(svc_mod.ArchifyService, "render", _fake_render)
+    monkeypatch.setattr(
+        svc_mod, "build_ir",
+        lambda project, kind, task_id=None: (
+            "architecture", {"components": [], "x_targets": {"a": "src/a.py"}}),
+    )
+    monkeypatch.setattr(svc_mod, "project_data_dir", lambda project: tmp_path)
+
+    meta = svc_mod.ArchifyService("proj").build("code")
+
+    assert "x_targets" not in seen["validated_keys"], (
+        "our own key reached archify's validator and failed the build")
+    assert "x_targets" not in seen["rendered_keys"]
+    assert meta["targets"] == {"a": "src/a.py"}, (
+        "the targets must survive the lift, or every box becomes a dead click")

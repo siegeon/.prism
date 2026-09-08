@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.262"
+PRISM_VERSION = "7.13.263"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8762,4 +8762,17 @@ PRISM_VERSION_NOTES += (
     "dead click; archify_service lifts that off the IR onto meta, and Explore "
     "clicks straight through it. Verified against archify's own validator, "
     "which refused the first cut: a full path tag needed 123px in a 112px box."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.263: the code map builds again. 7.13.262 lifted our own x_targets "
+    "key off the IR inside render(), but ArchifyService.build() validates "
+    "BEFORE it renders, and archify's schema check refuses unknown top-level "
+    "properties, so the live build failed outright with '/ must NOT have "
+    "additional properties {x_targets}' while a direct render() call, which "
+    "is what had been checked, looked healthy. The lift now happens before "
+    "validate and the targets are passed through to render, so every box "
+    "keeps the real file it points at. A regression test drives the build "
+    "path itself and asserts the key reaches neither validate nor render "
+    "while the targets still arrive on meta."
 )

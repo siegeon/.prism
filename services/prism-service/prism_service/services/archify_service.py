@@ -190,7 +190,8 @@ class ArchifyService:
                 pass
 
     def render(
-        self, kind: str, diagram_type: str, ir: dict, task_id: str | None = None
+        self, kind: str, diagram_type: str, ir: dict, task_id: str | None = None,
+        targets: dict | None = None,
     ) -> dict:
         """Render an IR to map.html and return metadata.
 
@@ -203,13 +204,13 @@ class ArchifyService:
         receipt_path = map_dir / "receipt.json"
         meta_path = map_dir / "meta.json"
 
-        # A builder may attach `x_targets`: component id -> the real thing in
-        # the repository that box stands for (the code map sends a directory
-        # path), so a click on the drawing can open the code instead of
-        # landing nowhere. It is OURS, not archify's -- archify validates the
-        # IR against its own schema before delivering, so an unknown key must
-        # not reach ir.json. Lift it out here and carry it on meta instead.
-        targets = ir.pop("x_targets", None) or {}
+        # `x_targets` (component id -> the real code location that box stands
+        # for) is OURS, not archify's. build() lifts it off BEFORE validate --
+        # archify's schema check refuses unknown top-level keys outright ("/
+        # must NOT have additional properties {x_targets}"), so a pop that
+        # happens only here is too late for that path. This fallback covers a
+        # caller that renders an IR without going through build().
+        targets = targets if targets is not None else (ir.pop("x_targets", None) or {})
 
         # ir.json IS the base the NEXT publish diffs against, so the stamp
         # belongs here rather than in build(): everything this service
@@ -310,6 +311,12 @@ class ArchifyService:
         except KeyError:
             raise ArchifyBuildError(f"unknown kind: {kind}")
 
+        # Our own key must come off BEFORE archify sees the IR: its schema
+        # check refuses unknown top-level properties, so leaving x_targets on
+        # here failed the whole build with "/ must NOT have additional
+        # properties". Carried to render(), which puts it on meta.
+        targets = ir.pop("x_targets", None) or {}
+
         # Validate
         validation = self.validate(diagram_type, ir)
         if not validation.get("ok", False):
@@ -322,7 +329,7 @@ class ArchifyService:
             raise ArchifyBuildError(diagnostics)
 
         # Render
-        meta = self.render(kind, diagram_type, ir, task_id)
+        meta = self.render(kind, diagram_type, ir, task_id, targets=targets)
         return meta
 
     def meta(self, kind: str, task_id: str | None = None) -> dict | None:
