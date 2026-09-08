@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.261"
+PRISM_VERSION = "7.13.262"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8736,4 +8736,30 @@ PRISM_VERSION_NOTES += (
     "narrative follows the panel to ArtifactPage, which already renders it, "
     "and the removed behaviours are retired in place with what superseded "
     "them, re-asserted in their stronger form."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.262: the code architecture map is built from the CODE. It was built "
+    "from graph community detection: each cluster became a component, its "
+    "label was the text after the last separator and its type was a keyword "
+    "match against that label, so the boxes read brain, index, resolve, "
+    "ident, okf host, none of them carried a code location, and the subtitle "
+    "counted grid adjacencies as if they were the codebase's dependencies. "
+    "Owner: 'thats not even code archeture', 'you are not looking at the code "
+    "correctly, and you aer munging the data', 'when i click on one of the "
+    "nodes it does not take me to the skills at ale'. Archify agrees: it "
+    "compiles typed JSON that an agent produces by reading the repository, it "
+    "does not cluster for you. New GraphService.file_graph returns every file "
+    "with its entity count and every file-to-file edge in one pass; the "
+    "builder groups them by real directory, reads roles off real path "
+    "segments, excludes tests and says how many entities that dropped, and "
+    "orders the grid by real coupling so the lines that can be routed are the "
+    "ones that matter. The subtitle now reports real module dependencies and "
+    "a card says how many of them the drawing could show, because the number "
+    "of lines is a property of the layout and the number of dependencies is a "
+    "property of the code. Every box carries x_targets, its module's largest "
+    "FILE, since a directory answers kind:'unresolved' from xref and was the "
+    "dead click; archify_service lifts that off the IR onto meta, and Explore "
+    "clicks straight through it. Verified against archify's own validator, "
+    "which refused the first cut: a full path tag needed 123px in a 112px box."
 )

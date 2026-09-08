@@ -28,6 +28,9 @@ type ArchifyMeta = {
   connections: number;
   error: string;
   html_url: string;
+  // component id -> the real repository path that box stands for. The code
+  // map sends a directory; {} for maps whose builder claims no target.
+  targets?: Record<string, string>;
 };
 
 type ArchifyReceipt = {
@@ -62,7 +65,10 @@ export default function ArchifyMaps({
   fill?: boolean;
   /** A node in the drawing was clicked. The id is the thing the node stands
    *  for — a concept id on the concepts map, a community id on the code map. */
-  onNodeSelect?: (nodeId: string, kind: ArchifyKind) => void;
+  /** A node in the drawing was clicked. `target` is the REAL repository
+   *  path the box stands for when the builder named one -- a box that
+   *  cannot say what code it is is a box you cannot click through. */
+  onNodeSelect?: (nodeId: string, kind: ArchifyKind, target?: string) => void;
 }) {
   const tabbed = !fixedKind;
   const [activeTab, setActiveTab] = useState<ArchifyKind>("code");
@@ -132,7 +138,7 @@ export default function ArchifyMaps({
       const el = ev.target as Element | null;
       const node = el?.closest?.("[data-node-id]");
       const id = node?.getAttribute("data-node-id");
-      if (id) onNodeSelect(id, kind);
+      if (id) onNodeSelect(id, kind, meta?.targets?.[id]);
     };
     const attach = () => {
       try {
@@ -154,7 +160,7 @@ export default function ArchifyMaps({
         /* the frame is already gone */
       }
     };
-  }, [onNodeSelect, kind, iframeSrc]);
+  }, [onNodeSelect, kind, iframeSrc, meta]);
 
   return (
     <div className={fill ? "space-y-3 h-full min-h-0 flex flex-col" : "space-y-3"}>

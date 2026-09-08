@@ -1680,6 +1680,63 @@ class GraphService:
             for r in rows
         ]
 
+    def file_graph(self) -> dict:
+        """The WHOLE repo as files and the real edges between them.
+
+        The code architecture map used to be drawn from `communities()` --
+        statistical clusters, labelled by the text after the last separator
+        and typed by keyword-matching that label -- so its boxes were not
+        modules and its lines were whichever cluster pairs happened to land
+        next to each other on the grid. Owner: "thats not even code
+        archeture ... you are not looking at the code correctly, and you are
+        munging the data."
+
+        This is the input for drawing it from the code instead: every file
+        graph.db knows, with how many entities it defines, and every
+        file-to-file relationship with its real weight. No sampling, no
+        clustering, no top-N -- the caller decides how to group, and can be
+        held to real paths because that is all it is given.
+
+        Returns {"files": [{"file", "entities"}], "edges": [{"from", "to",
+        "weight"}]}; empty lists when graph.db has nothing yet.
+        """
+        empty: dict = {"files": [], "edges": []}
+        try:
+            conn = sqlite_db.connect(self._graph_db, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+        except sqlite3.Error:
+            return empty
+        try:
+            files = [
+                {"file": r["file"], "entities": int(r["n"])}
+                for r in conn.execute(
+                    "SELECT file, COUNT(*) AS n FROM entities "
+                    "WHERE file IS NOT NULL AND file != '' "
+                    "GROUP BY file"
+                ).fetchall()
+            ]
+            # Aggregated over the whole relationship table in one pass. The
+            # file-list variant above (edges_between_files) needs an IN clause
+            # per call, which cannot ask this question of a repo-sized graph.
+            edges = [
+                {"from": r["src"], "to": r["tgt"], "weight": int(r["weight"])}
+                for r in conn.execute(
+                    "SELECT s.file AS src, t.file AS tgt, COUNT(*) AS weight "
+                    "FROM relationships r "
+                    "JOIN entities s ON s.id = r.source_id "
+                    "JOIN entities t ON t.id = r.target_id "
+                    "WHERE s.file IS NOT NULL AND t.file IS NOT NULL "
+                    "  AND s.file != '' AND t.file != '' "
+                    "  AND s.file != t.file "
+                    "GROUP BY s.file, t.file"
+                ).fetchall()
+            ]
+        except sqlite3.Error:
+            conn.close()
+            return empty
+        conn.close()
+        return {"files": files, "edges": edges}
+
 
 def _extract_line(source_location: str) -> Optional[int]:
     """Parse 'L42' or 'L42-L50' to int 42; return None on failure."""

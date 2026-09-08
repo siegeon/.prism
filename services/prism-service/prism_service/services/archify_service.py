@@ -203,6 +203,14 @@ class ArchifyService:
         receipt_path = map_dir / "receipt.json"
         meta_path = map_dir / "meta.json"
 
+        # A builder may attach `x_targets`: component id -> the real thing in
+        # the repository that box stands for (the code map sends a directory
+        # path), so a click on the drawing can open the code instead of
+        # landing nowhere. It is OURS, not archify's -- archify validates the
+        # IR against its own schema before delivering, so an unknown key must
+        # not reach ir.json. Lift it out here and carry it on meta instead.
+        targets = ir.pop("x_targets", None) or {}
+
         # ir.json IS the base the NEXT publish diffs against, so the stamp
         # belongs here rather than in build(): everything this service
         # writes must be comparable, however it was produced.
@@ -255,6 +263,10 @@ class ArchifyService:
                 "ok": bool(receipt.get("ok", False)) and html_path.exists(),
                 "components": _count(ir, "components", "nodes"),
                 "connections": _count(ir, "connections", "edges"),
+                # component id -> the real repository path it stands for; {}
+                # for builders that do not claim one. The UI reads this to
+                # turn a click on a box into a click on the code.
+                "targets": targets,
                 "error": receipt.get("error", ""),
                 "html_url": f"/api/archify/maps/{kind}/html?project={self.project}"
                 + (f"&task_id={task_id}" if task_id else ""),

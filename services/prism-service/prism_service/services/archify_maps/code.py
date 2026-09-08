@@ -1,4 +1,27 @@
-"""Archify map builder: the code map."""
+"""Archify map builder: the code map, drawn from the CODE.
+
+WHAT THIS REPLACED, and why. The previous builder took `graph_svc.
+communities()` -- statistical clusters from community detection -- and made
+each cluster a "component": the label was the text after the last separator
+(`_distinctive`), the type was a keyword match against that label
+(`_infer_type`: "web/ui/tsx" -> frontend), and the drawn connections were
+whichever cluster pairs happened to land next to each other on the grid. So
+the boxes read `brain`, `index`, `resolve`, `ident`, `okf host` -- clipped
+cluster-label tails, not modules -- nothing carried a code location, and the
+subtitle's relationship count described the grid, not the codebase.
+
+Owner: "thats not even code archeture ... showing data that is not code",
+"it seems you still did not fix the fact you are not looking at the code
+correctly, and you aer munging the data", and the pointer to archify itself:
+"its susposed to be a skill that is run agast the code bacse".
+
+Archify's own contract agrees -- it compiles typed JSON that an agent
+produces BY READING THE REPOSITORY; it does not cluster for you. So this
+builder reads the repository's real shape out of graph.db: real directories
+as modules, real file and entity counts, and real import/call edges
+aggregated between them. Every component carries the real path it stands
+for, so a click can land on the code. Nothing is inferred from a label.
+"""
 
 from __future__ import annotations
 
@@ -7,176 +30,227 @@ from prism_service.services.archify_maps._layout import slug, clip, place_grid
 
 DIAGRAM_TYPE = "architecture"
 
-# Type inference keywords
-_TYPE_KEYWORDS = {
-    "frontend": {"web", "ui", "tsx", "react", "spa", "page", "component", "view"},
-    "backend": {"api", "server", "service", "route", "handler", "worker", "task", "engine", "core"},
-    "database": {"db", "store", "storage", "sqlite", "graph", "memory", "cache", "redis", "sql"},
-    "messagebus": {"queue", "event", "pubsub", "kafka", "stream", "broker", "bus", "mcp", "webhook"},
-    "security": {"auth", "policy", "gate", "token", "permission", "access", "rule", "governance"},
+MAX_COMPONENTS = 12
+
+# Role by REAL directory name, not by keyword-matching a cluster label. A
+# directory that matches nothing is "backend" and is not pretended otherwise.
+_ROLE_BY_SEGMENT = {
+    "web": "frontend",
+    "pages": "frontend",
+    "components": "frontend",
+    "live": "frontend",
+    "api": "backend",
+    "routes": "backend",
+    "services": "backend",
+    "engines": "backend",
+    "inference": "backend",
+    "mcp": "messagebus",
+    "models": "database",
+    "store": "database",
+    "db": "database",
+    "assets": "external",
+    "scripts": "external",
 }
 
+# Tests are real code but not runtime architecture, and by entity count they
+# would be the three largest boxes on this repo's map (4760 entities in
+# tests/unit alone), burying the system they test. Excluded, and SAID so on
+# the map rather than silently dropped.
+_TEST_MARKERS = ("/tests/", "/test/", "/__tests__/")
 
-def _infer_type(label: str, top_files: list[str]) -> str:
-    """Infer component type from community label and top files."""
-    text = (label + " " + " ".join(top_files)).lower()
 
-    for ctype, keywords in _TYPE_KEYWORDS.items():
-        if any(kw in text for kw in keywords):
-            return ctype
+def _is_test(path: str) -> bool:
+    p = "/" + path.replace("\\", "/").strip("/") + "/"
+    return any(m in p for m in _TEST_MARKERS)
+
+
+def _dir_of(path: str) -> str:
+    p = path.replace("\\", "/")
+    return p.rsplit("/", 1)[0] if "/" in p else "."
+
+
+def _role_for(directory: str) -> str:
+    segments = [s for s in directory.split("/") if s]
+    for seg in reversed(segments):
+        role = _ROLE_BY_SEGMENT.get(seg)
+        if role:
+            return role
     return "backend"
 
 
-def _distinctive(label: str) -> str:
-    """The part of a community label that tells it apart.
+def _parent_of(directory: str, label: str) -> str:
+    """The segment just above what the label already shows, e.g.
+    `.../prism_service/services` labelled "services" -> "prism_service"."""
+    segments = [s for s in directory.split("/") if s]
+    shown = len([s for s in label.split("/") if s])
+    return segments[-(shown + 1)] if len(segments) > shown else ""
 
-    Nearly every community here is named "prism service · <thing>", so a
-    label clipped from the front renders a grid of boxes that all read
-    "prism service ·…" and name nothing. The segment after the last
-    separator is the part a reader needs.
+
+def _labels_for(directories: list[str]) -> dict[str, str]:
+    """Shortest tail of each real path that is still unique among the kept
+    modules: `.../prism_service/services` becomes "services", and if another
+    kept module also ended in "services" both grow a segment until they
+    differ. Always a real path tail, never a clipped label."""
+    labels: dict[str, str] = {}
+    for d in directories:
+        segments = [s for s in d.split("/") if s] or [d]
+        chosen = d
+        for depth in range(1, len(segments) + 1):
+            candidate = "/".join(segments[-depth:])
+            clash = any(
+                other != d
+                and "/".join([s for s in other.split("/") if s][-depth:]) == candidate
+                for other in directories
+            )
+            if not clash:
+                chosen = candidate
+                break
+        labels[d] = chosen
+    return labels
+
+
+def _empty(subtitle: str, card_title: str, card_item: str) -> dict:
+    return {
+        "schema_version": 1,
+        "diagram_type": "architecture",
+        "meta": {
+            "title": "Code architecture",
+            "subtitle": subtitle,
+            "visual_preset": "blueprint",
+            "animation": "none",
+        },
+        "layout": {"mode": "grid", "cols": 2, "cellW": 170, "cellH": 76,
+                   "gapX": 28, "gapY": 34},
+        "components": [{"id": "empty", "type": "external",
+                        "label": "No data yet", "row": 0, "col": 0}],
+        "cards": [{"dot": "slate", "title": card_title, "items": [card_item]}],
+    }
+
+
+def _order_by_coupling(module_ids: list[str],
+                       weights: dict[tuple[str, str], int]) -> list[str]:
+    """Greedy seriation: start from the most-coupled module, then repeatedly
+    take whichever remaining module is most strongly tied to the one just
+    placed.
+
+    Archify refuses a route that passes through an unrelated component, and a
+    generated map cannot hand-route waypoints, so only grid-ADJACENT pairs can
+    be drawn. The old builder accepted whatever the arbitrary order happened
+    to make adjacent; this puts the strongest REAL dependencies next to each
+    other, so the lines that do get drawn are the ones that matter.
     """
-    text = str(label or "").strip()
-    for sep in ("·", "/", ":"):
-        if sep in text:
-            tail = text.rsplit(sep, 1)[-1].strip()
-            if tail:
-                return tail
-    return text
+    def tie(a: str, b: str) -> int:
+        return weights.get((a, b), 0) + weights.get((b, a), 0)
+
+    remaining = list(module_ids)
+    if not remaining:
+        return []
+    remaining.sort(key=lambda m: -sum(tie(m, o) for o in module_ids if o != m))
+    ordered = [remaining.pop(0)]
+    while remaining:
+        last = ordered[-1]
+        remaining.sort(key=lambda m: (-tie(last, m), module_ids.index(m)))
+        ordered.append(remaining.pop(0))
+    return ordered
 
 
 def build(project: str, *, task_id: str | None = None) -> dict:
-    """Build the code architecture map from graph communities and edges."""
+    """Build the code architecture map from the repository's real modules."""
     try:
-        ctx = get_project(project)
-        graph_svc = ctx.graph_svc
-        communities = graph_svc.communities()
+        graph = get_project(project).graph_svc.file_graph()
     except Exception:
-        # Empty diagram when graph_svc fails
-        return {
-            "schema_version": 1,
-            "diagram_type": "architecture",
-            "meta": {
-                "title": "Code architecture",
-                "subtitle": "graph.db has no communities. Run POST /api/graph/rebuild.",
-                "visual_preset": "blueprint",
-                "animation": "none",
-            },
-            "layout": {"mode": "grid", "cols": 2, "cellW": 170, "cellH": 76, "gapX": 28, "gapY": 34},
-            "components": [{"id": "empty", "type": "external", "label": "No data yet", "row": 0, "col": 0}],
-            "cards": [
-                {
-                    "dot": "slate",
-                    "title": "Graph empty",
-                    "items": ["graph.db has no communities. Run POST /api/graph/rebuild."],
-                }
-            ],
-        }
+        return _empty("graph.db could not be read.", "Graph unavailable",
+                      "graph.db could not be read. Run POST /api/graph/rebuild.")
 
-    if not communities:
-        return {
-            "schema_version": 1,
-            "diagram_type": "architecture",
-            "meta": {
-                "title": "Code architecture",
-                "subtitle": "No communities found.",
-                "visual_preset": "blueprint",
-                "animation": "none",
-            },
-            "layout": {"mode": "grid", "cols": 2, "cellW": 170, "cellH": 76, "gapX": 28, "gapY": 34},
-            "components": [{"id": "empty", "type": "external", "label": "No data yet", "row": 0, "col": 0}],
-            "cards": [
-                {
-                    "dot": "slate",
-                    "title": "No communities",
-                    "items": ["No code communities detected in graph.db."],
-                }
-            ],
-        }
+    files = graph.get("files") or []
+    if not files:
+        return _empty("graph.db has no files yet.", "Graph empty",
+                      "No code indexed. Run POST /api/graph/rebuild.")
 
-    # Keep top N communities by size (up to 12)
-    max_components = 12
-    kept_communities = communities[:max_components]
-    total_communities = len(communities)
-    total_entities = sum(c["size"] for c in communities)
-
-    # Build components
-    components = []
-    community_by_id = {}
-
-    for comm in kept_communities:
-        cid = slug(f"c{comm['id']}-{comm['label']}")
-        ctype = _infer_type(comm["label"], comm.get("top_files", []))
-        label = clip(_distinctive(comm["label"]), 16)
-        sublabel = f"{comm['size']}"
-
-        # Tag: top entity name if short
-        tag = None
-        if comm.get("top_entities"):
-            top_ent = comm["top_entities"][0]
-            if isinstance(top_ent, str) and len(top_ent) <= 20:
-                tag = top_ent
-
-        comp = {
-            "id": cid,
-            "type": ctype,
-            "label": label,
-            "sublabel": sublabel,
-        }
-        if tag:
-            comp["tag"] = tag
-        components.append(comp)
-        community_by_id[comm["id"]] = (cid, comm, ctype)
-
-    # Which community owns each file, across EVERY kept community. The edge
-    # query must run ONCE over the whole file set: asking it for one
-    # community's files at a time can only ever return that community's
-    # internal edges, so every cross-community edge was discarded and the map
-    # came out with no connections at all.
-    file_owner: dict[str, str] = {}
-    all_files: list[str] = []
-    for comm_id, (cid, _comm, _t) in community_by_id.items():
-        try:
-            files = graph_svc.community_files(comm_id)[:200]
-        except Exception:
+    # --- real modules: directories that actually exist ---------------------
+    entities_by_dir: dict[str, int] = {}
+    files_by_dir: dict[str, int] = {}
+    # The biggest real FILE in each module. A click has to land on something
+    # xref can resolve, and a directory is not: GET /api/xref/neighbors
+    # answers kind:"unresolved" with no neighbours for one, which is the
+    # dead-end click the owner hit ("when i click on one of the nodes it does
+    # not take me to the skills at ale"). A file resolves to kind:"code".
+    top_file_by_dir: dict[str, tuple[int, str]] = {}
+    skipped_test_entities = 0
+    for row in files:
+        path = str(row.get("file") or "")
+        if not path:
             continue
-        for f in files:
-            if f not in file_owner:
-                file_owner[f] = cid
-                all_files.append(f)
+        count = int(row.get("entities") or 0)
+        if _is_test(path):
+            skipped_test_entities += count
+            continue
+        d = _dir_of(path)
+        entities_by_dir[d] = entities_by_dir.get(d, 0) + count
+        files_by_dir[d] = files_by_dir.get(d, 0) + 1
+        if count > top_file_by_dir.get(d, (-1, ""))[0]:
+            top_file_by_dir[d] = (count, path)
 
-    edges_map: dict[tuple[str, str], int] = {}
-    try:
-        for edge in graph_svc.edges_between_files(all_files):
-            src = file_owner.get(edge["from"])
-            tgt = file_owner.get(edge["to"])
-            if not src or not tgt or src == tgt:
-                continue
-            key = (src, tgt)
-            edges_map[key] = edges_map.get(key, 0) + int(edge.get("weight", 1))
-    except Exception:
-        edges_map = {}
+    if not entities_by_dir:
+        return _empty("only test code is indexed.", "No runtime modules",
+                      "graph.db holds only test files; nothing to draw.")
 
-    # Place components in a simple grid
-    comp_ids = [c["id"] for c in components]
-    placements = place_grid([comp_ids], cols=3)
+    ranked_dirs = sorted(entities_by_dir, key=lambda d: -entities_by_dir[d])
+    kept = ranked_dirs[:MAX_COMPONENTS]
+    kept_set = set(kept)
+    dir_id = {d: slug(f"m-{d}") for d in kept}
+    labels = _labels_for(kept)
 
-    # Draw the heaviest dependencies, but only between GRID-ADJACENT
-    # components. Archify refuses a route that passes through an unrelated
-    # component, and a generated map cannot hand-route waypoints the way the
-    # authored examples do — so a long edge across the grid is not a stronger
-    # map, it is an invalid one. Adjacent pairs give short segments that
-    # always route cleanly, and the heaviest seam a pair carries is named in
-    # the card list instead of on the line.
+    # --- real edges, aggregated to those modules ---------------------------
+    module_weights: dict[tuple[str, str], int] = {}
+    total_module_deps = 0
+    for edge in graph.get("edges") or []:
+        src, tgt = str(edge.get("from") or ""), str(edge.get("to") or "")
+        if not src or not tgt or _is_test(src) or _is_test(tgt):
+            continue
+        a, b = _dir_of(src), _dir_of(tgt)
+        if a == b or a not in kept_set or b not in kept_set:
+            continue
+        key = (dir_id[a], dir_id[b])
+        if key not in module_weights:
+            total_module_deps += 1
+        module_weights[key] = module_weights.get(key, 0) + int(edge.get("weight") or 1)
+
+    # --- layout: strongest real dependencies placed adjacent ---------------
+    ordered = _order_by_coupling([dir_id[d] for d in kept], module_weights)
+    placements = place_grid([ordered], cols=3)
+
+    id_to_dir = {v: k for k, v in dir_id.items()}
+    components = []
+    for comp_id in ordered:
+        d = id_to_dir[comp_id]
+        comp = {
+            "id": comp_id,
+            "type": _role_for(d),
+            "label": clip(labels[d], 22),
+            "sublabel": f"{files_by_dir[d]} files · {entities_by_dir[d]}",
+            # The PARENT segment, not the whole path: archify validates that a
+            # tag fits its box at the 6px legible minimum, and a full path
+            # ("services/prism-service/prism_serv…") needs ~123px in a 112px
+            # box, which fails the build outright. The label is already a
+            # unique real path tail and x_targets carries the full location,
+            # so this only has to say which tree the module sits in.
+            "tag": clip(_parent_of(d, labels[d]), 18),
+        }
+        if comp_id in placements:
+            comp["row"], comp["col"] = placements[comp_id]
+        components.append(comp)
+
     def _adjacent(a: str, b: str) -> bool:
         if a not in placements or b not in placements:
             return False
         (r1, c1), (r2, c2) = placements[a], placements[b]
         return abs(r1 - r2) + abs(c1 - c2) == 1
 
-    ranked = sorted(edges_map.items(), key=lambda kv: -kv[1])
+    ranked_edges = sorted(module_weights.items(), key=lambda kv: -kv[1])
     connections = []
     drawn: set[frozenset] = set()
-    for (from_id, to_id), weight in ranked:
+    for (from_id, to_id), _weight in ranked_edges:
         pair = frozenset((from_id, to_id))
         if pair in drawn or not _adjacent(from_id, to_id):
             continue
@@ -188,52 +262,46 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         if len(connections) >= 14:
             break
 
-    # The seams worth naming, whether or not the grid let us draw them.
     heaviest = [
-        f"{a.split('-', 1)[-1][:22]} → {b.split('-', 1)[-1][:22]} ({w})"
-        for (a, b), w in ranked[:5]
+        f"{labels[id_to_dir[a]]} → {labels[id_to_dir[b]]} ({w})"
+        for (a, b), w in ranked_edges[:5]
     ]
 
-    # Apply placements
-    for comp in components:
-        if comp["id"] in placements:
-            row, col = placements[comp["id"]]
-            comp["row"] = row
-            comp["col"] = col
-
-    # Create boundaries (disabled due to routing constraints)
-    boundaries = []
-
-    # Create views
-    views = [
-        {
-            "id": "top-communities",
-            "label": "Top communities",
-            "focus": [c["id"] for c in components],
-            "note": f"{len(components)} largest code communities",
-        }
-    ]
-
-    # Create cards
-    total_connections = len(connections)
+    total_runtime_entities = sum(entities_by_dir.values())
     cards = [
         {
             "dot": "cyan",
-            "title": "Structure",
+            "title": "Modules",
             "items": [
-                f"{len(kept_communities)} of {total_communities} communities mapped.",
-                f"{total_entities} total entities across all code.",
+                f"{len(kept)} of {len(entities_by_dir)} real directories drawn.",
+                f"{total_runtime_entities} entities across runtime code.",
             ],
         },
         {
             "dot": "emerald",
             "title": "Heaviest dependencies",
-            "items": heaviest or [f"{total_connections} file dependencies."],
+            "items": heaviest or ["No dependencies between the drawn modules."],
+        },
+        {
+            # THE COUNT MUST NOT FLATTER THE PICTURE. Only grid-adjacent pairs
+            # can be routed, so the number of lines is a property of the
+            # layout; the number of dependencies is a property of the code.
+            # Saying only the first is how "13 relationships" came to describe
+            # a codebase with thousands.
+            "dot": "amber",
+            "title": "What is drawn",
+            "items": [
+                f"{len(connections)} of {total_module_deps} module dependencies drawn.",
+                "Only neighbouring modules can be routed; the rest are listed above.",
+            ],
         },
         {
             "dot": "slate",
-            "title": "Data source",
-            "items": ["graph.db, rebuilt by POST /api/graph/rebuild."],
+            "title": "Source",
+            "items": [
+                "Real directories and real call/import edges from graph.db.",
+                f"Tests excluded ({skipped_test_entities} entities).",
+            ],
         },
     ]
 
@@ -242,21 +310,29 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         "diagram_type": "architecture",
         "meta": {
             "title": "Code architecture",
-            "subtitle": f"{len(kept_communities)} communities, {total_connections} relationships",
+            "subtitle": (
+                f"{len(kept)} modules, {total_module_deps} dependencies"
+            ),
             "visual_preset": "blueprint",
             "animation": "none",
-            "views": views[:5],
+            "views": [{
+                "id": "modules",
+                "label": "Modules",
+                "focus": [c["id"] for c in components],
+                "note": f"{len(kept)} largest runtime modules",
+            }],
         },
-        "layout": {
-            "mode": "grid",
-            "cols": 3,
-            "cellW": 220,
-            "cellH": 100,
-            "gapX": 20,
-            "gapY": 20,
-        },
+        "layout": {"mode": "grid", "cols": 3, "cellW": 220, "cellH": 100,
+                   "gapX": 20, "gapY": 20},
         "components": components,
         "connections": connections,
-        "boundaries": boundaries,
+        "boundaries": [],
         "cards": cards,
+        # id -> a real, RESOLVABLE code location for the box: the module's
+        # largest file. Stripped from the IR before archify sees it
+        # (archify_service), and carried on meta for the UI instead.
+        "x_targets": {
+            cid: top_file_by_dir[id_to_dir[cid]][1]
+            for cid in ordered if id_to_dir[cid] in top_file_by_dir
+        },
     }

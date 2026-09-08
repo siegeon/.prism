@@ -34,10 +34,6 @@ import { Card, Empty, SectionLabel } from "@/components/ui";
 import Mesh from "@/components/Mesh";
 import { cn } from "@/lib/utils";
 
-// Only the fields the cluster click-through reads. The fuller Community shape
-// belonged to the ranked/subgraph panels, which no longer exist.
-type Community = { id: number; label: string; top_entities: string[] };
-
 export default function ExplorePage() {
   const [project] = useProject();
   const navigate = useNavigate();
@@ -151,24 +147,15 @@ export default function ExplorePage() {
 function StartHere({ project, onPick }: {
   project: string; onPick: (token: string) => void;
 }) {
-  const [communities, setCommunities] = useState<Community[]>([]);
-
-  useEffect(() => {
-    let alive = true;
-    // A click has to land on a real token, and a cluster id is not one.
-    api.get<{ communities: Community[] }>(`/api/graph/communities?project=${project}`)
-      .then((r) => { if (alive) setCommunities(r.communities ?? []); })
-      .catch(() => { if (alive) setCommunities([]); });
-    return () => { alive = false; };
-  }, [project]);
-
-  // archify draws each component with id `c<communityId>-<slugged label>`.
-  const onMapNode = (nodeId: string) => {
-    const m = /^c(\d+)-/.exec(nodeId);
-    if (!m) return;
-    const c = communities.find((x) => String(x.id) === m[1]);
-    const token = c?.top_entities?.find((e) => e && e.trim());
-    if (token) onPick(token.replace(/\(\)$/, ""));
+  // A click lands on the REAL directory the box stands for, which the map's
+  // own meta names (`targets`). This used to reverse-map an id of the shape
+  // `c<communityId>-<slug>` back through /api/graph/communities to a
+  // cluster's top symbol — so a box that was a statistical cluster, not a
+  // module, sent you to a symbol you had not asked for, and any id that did
+  // not match the pattern silently went nowhere at all. Owner: "when i click
+  // on one of the nodes it does not take me to the skills at ale".
+  const onMapNode = (_nodeId: string, _kind: string, target?: string) => {
+    if (target) onPick(target);
   };
 
   return (
