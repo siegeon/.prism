@@ -276,12 +276,55 @@ def _names_something_checkable(text: str) -> bool:
                 or _CITATION_BACKTICK_RE.search(text))
 
 
+# A sentence is the unit a claim lives in. Split on end punctuation that is
+# actually followed by whitespace, so `models/claim.py` and `tools.py:5208`
+# stay whole (their dots are followed by a letter, never a space).
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n")
+
+# The marker that turns a mentioned path into a CLAIM. Mirrors the narrowing
+# arc_governance._plan_subject_problems already made for task ids: a token
+# counts only when the text PRESENTS it as one.
+_CHANGE_INTENT_RE = re.compile(
+    r"\b(?:add|adds|added|adding|edit|edits|edited|editing|chang(?:e|es|ed|ing)"
+    r"|modif(?:y|ies|ied|ying)|touch(?:es|ed|ing)?|writ(?:e|es|ing)|written"
+    r"|creat(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|remov(?:e|es|ed|ing)"
+    r"|renam(?:e|es|ed|ing)|patch(?:es|ed|ing)?|updat(?:e|es|ed|ing)"
+    r"|gain(?:s|ed|ing)?|extend(?:s|ed|ing)?|replac(?:e|es|ed|ing)"
+    r"|refactor(?:s|ed|ing)?|introduc(?:e|es|ed|ing)|implement(?:s|ed|ing)?"
+    r"|new)\b", re.IGNORECASE)
+
+
 def _claimed_files(plan_doc: str) -> set:
-    """Repo-path-shaped tokens (``a/b/c.py``) the plan_doc text itself
-    names — the plan's OWN claim about what it touches, read the same way a
-    human skimming the plan would."""
-    return {m.group(0).strip("`'\",.;:()")
-            for m in _CITATION_PATH_RE.finditer(plan_doc or "")}
+    """Repo paths the plan says THIS SLICE CHANGES - the plan's OWN claim
+    about what it touches, read the same way a human skimming the plan
+    would.
+
+    NARROWED, task 98ef9d3d. This used to collect EVERY path-shaped token
+    anywhere in plan_doc, which punished a plan for the source research
+    every other rubric rewards: on task 1bcb2b24 a correct plan cited
+    ``models/claim.py``, ``services/dispatch.py``,
+    ``services/resume_actuator.py`` and ``prism_service/mcp/tools.py`` as
+    EVIDENCE (a grep result, and the module the plan explicitly declines to
+    edit), plus ``origin/main...HEAD`` inside a ``git diff`` command, which
+    is a revision range and not a file at all. All six read as scope
+    claims, scope_alignment scored 0.0, and the packet escalated to a human
+    at certainty 0.62.
+
+    Precision is the right bias here: allowed_files is ENFORCED elsewhere
+    (the worker contract, tests/integration/test_worker_contract_enforced.
+    py), so a miss costs a softer certainty signal, while a false positive
+    blocks a correct plan outright."""
+    claimed: set = set()
+    for sentence in _SENTENCE_SPLIT_RE.split(plan_doc or ""):
+        if not _CHANGE_INTENT_RE.search(sentence):
+            continue
+        for m in _CITATION_PATH_RE.finditer(sentence):
+            token = m.group(0).strip("`'\",.;:()")
+            # A revision range (origin/main...HEAD) is not a repo file.
+            if ".." in token:
+                continue
+            claimed.add(token)
+    return claimed
 
 
 def _file_in_contract(path: str, allowed_files: list) -> bool:
