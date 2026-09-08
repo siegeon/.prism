@@ -372,3 +372,142 @@ def render_premises(task, facts, oracle_word_min_len: int = 5,
                     f"this clause of the oracle (\"{clause[:80].strip()}\") "
                     "-- it needs evidence this step did not have")
     return "\n".join(lines) + "\n"
+
+
+# ----------------------------------------------------------------------
+# Codified SELECT step (task 6738006b)
+# ----------------------------------------------------------------------
+# THE REFUSAL THIS REPLACES. task_runner._codified_step_proof returned ""
+# whenever the gather resolved more than _SHORTCUT_MAX_FACTS facts, and
+# handed the step to the paid agentic judge. Its stated reason was right --
+# "a wide set still needs SELECTING, and that is the one thing a formatter
+# cannot do" -- but it refused on COUNT and never asked whether the render
+# would pass. Measured 2026-09-08 over the 10 tasks blocked at
+# review_previous_notes: 7 were refused by that cap, and 6 of the 7 render
+# a section arc_governance.score_premise_grounded ACCEPTS, at zero tokens.
+# Task 1bcb2b24 was one of them, and the judge it fell through to then
+# failed 6 dispatches and parked the task 3 times.
+#
+# So SELECT, rather than raise the cap. Raising it would only delay the
+# same refusal, and dropping it entirely is the 7.13.245 regression that
+# made every retrieved fact a premise and turned a throughput fix into a
+# noise generator. The bound stays; what changes is that the facts inside
+# it are CHOSEN.
+
+# The load-bearing few. Bounded on purpose: `gather` returns up to 15
+# facts, and a Premises section that recites all of them is the noise
+# generator above. Coverage-first ordering is what makes the bound safe --
+# the facts that carry oracle engagement are kept FIRST, so the ones this
+# drops are the ones that were adding text rather than evidence.
+DEFAULT_KEEP_MAX = 5
+
+
+@dataclass(frozen=True)
+class Selection:
+    """Which gathered facts to render, and which to leave out."""
+
+    kept: list          # list[GatheredFact], in render order
+    dropped: list       # list[GatheredFact], everything past the bound
+    reason: str         # why this split, in one line
+
+
+def _fact_words(fact, word_min_len: int) -> set:
+    """The scoring vocabulary of one fact, tokenized by the SAME function
+    the oracle tooth uses, so a word this counts is a word that tooth
+    would count."""
+    from prism_service.services.arc_governance import _clause_words
+
+    return _clause_words(f"{fact.text} {fact.citation}", word_min_len)
+
+
+def _topic_words(task, word_min_len: int) -> set:
+    """The task's own subject vocabulary -- oracle, title and description.
+
+    Relevance is measured against what the TICKET is about, never against
+    the other facts, so a tight cluster of off-topic rows cannot vote
+    itself load-bearing.
+    """
+    from prism_service.services.arc_governance import _clause_words
+
+    blob = " ".join(str(getattr(task, name, "") or "")
+                    for name in ("oracle", "title", "description"))
+    return _clause_words(blob, word_min_len)
+
+
+def select(task, facts, keep_max: int = DEFAULT_KEEP_MAX,
+           word_min_len: int = 5, min_shared_words: int = 2) -> Selection:
+    """Choose the load-bearing facts to render -- deterministic, no model.
+
+    COVERAGE FIRST. A fact earns its slot by engaging an oracle clause no
+    already-kept fact engages, measured with arc_governance's own
+    `_clause_words`/`oracle_clauses` against the same shared-word threshold
+    the real tooth applies. That is the ordering the recorded misfire asks
+    for: dropping a fact must never cost a clause the citation that was
+    engaging it, so the facts carrying engagement are taken before any
+    fact is dropped.
+
+    RELEVANCE SECOND. Once no remaining fact adds clause coverage, the
+    leftover slots go to the facts sharing the most vocabulary with the
+    ticket itself, ties broken by gather order so the result is stable.
+
+    Returns every fact when there are no more than `keep_max`: selection is
+    for the wide set, and a tight one is already the load-bearing few.
+    """
+    from prism_service.services.arc_governance import (
+        _clause_words, oracle_clauses,
+    )
+
+    facts = list(facts or [])
+    if len(facts) <= keep_max:
+        return Selection(kept=facts, dropped=[],
+                         reason=(f"{len(facts)} fact(s), at or under the "
+                                 f"bound of {keep_max}: all kept"))
+
+    topic = _topic_words(task, word_min_len)
+    words = [_fact_words(f, word_min_len) for f in facts]
+    relevance = [len(w & topic) for w in words]
+
+    clauses = [_clause_words(c, word_min_len)
+               for c in oracle_clauses(str(getattr(task, "oracle", "") or ""))]
+    clauses = [c for c in clauses if c]
+
+    remaining = set(range(len(facts)))
+    chosen: list = []
+    have: set = set()
+
+    def _uncovered() -> list:
+        return [c for c in clauses
+                if len(c & have) < min(min_shared_words, len(c))]
+
+    while len(chosen) < keep_max:
+        gaps = _uncovered()
+        if not gaps:
+            break
+        best, best_key = None, None
+        for i in sorted(remaining):
+            after = have | words[i]
+            gained = sum(1 for c in gaps
+                         if len(c & after) >= min(min_shared_words, len(c)))
+            key = (gained, relevance[i], -i)
+            if gained and (best_key is None or key > best_key):
+                best, best_key = i, key
+        if best is None:
+            break
+        chosen.append(best)
+        remaining.discard(best)
+        have |= words[best]
+
+    covering = len(chosen)
+    for i in sorted(remaining, key=lambda j: (-relevance[j], j)):
+        if len(chosen) >= keep_max:
+            break
+        chosen.append(i)
+        remaining.discard(i)
+
+    keep_idx = sorted(chosen)
+    return Selection(
+        kept=[facts[i] for i in keep_idx],
+        dropped=[facts[i] for i in sorted(remaining)],
+        reason=(f"kept {len(keep_idx)} of {len(facts)} fact(s): {covering} "
+                f"for oracle-clause coverage, {len(keep_idx) - covering} by "
+                f"topical relevance; bound is {keep_max}"))

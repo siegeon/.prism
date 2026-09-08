@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.266"
+PRISM_VERSION = "7.13.267"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8839,4 +8839,8 @@ PRISM_VERSION_NOTES += (
     'ranks the known oscillator 338f7810 last without being tuned to it. '
     'New suite test_task_score.py, 19 tests, all red at base 58c91fd8. '
     '55 score and task-API tests green, tsc clean, vite build clean. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.267: the premise node SELECTS its facts instead of refusing on count (task 6738006b). task_runner._codified_step_proof returned empty whenever the gather resolved more than four facts, so the step fell through to the paid agentic judge. The stated reason was right - a wide set needs selecting, and bypassing that entirely in 7.13.245 made every retrieved fact a premise - but the guard refused on COUNT and never asked whether the render would pass. Measured over the 10 tasks blocked at review_previous_notes: 7 were refused by that bail, and 6 of the 7 render a section arc_governance.score_premise_grounded ACCEPTS at zero tokens. Task 1bcb2b24 was one of them, and the judge it fell through to failed 6 dispatches and parked it 3 times. New premise_gather.select is coverage-first: a fact earns its slot by engaging an oracle clause no kept fact engages yet, scored with arc_governance own _clause_words and oracle_clauses at the same threshold the real tooth applies, then the leftover slots go by topical relevance against the ticket itself. The bound stays (premise_gather.DEFAULT_KEEP_MAX, now the single home for it), so a formatter still never asserts every retrieved fact. New pydantic node POST /api/workflows/steps/premise-select, wired into review-previous-notes-loop.json v5 between gather and the judge, so the chain is five codified nodes around one agentic one. Effect measured on the live board: tasks completing this step at zero tokens went 3/10 to 9/10, and ed59059b still correctly refuses, so the codified path never advances a step on evidence the rubric would reject. New suite test_premise_select.py, 8 tests. test_a_wide_fact_set_earns_the_narrow_judge is retired in place and superseded by test_a_wide_fact_set_is_bounded_rather_than_asserted_wholesale, which keeps its real invariant. 190 neighbouring tests green. '
 )

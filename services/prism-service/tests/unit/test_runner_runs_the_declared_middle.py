@@ -27,6 +27,7 @@ import types
 
 import pytest
 
+from prism_service.services import premise_gather as pg
 from prism_service.services import task_runner as tr
 from prism_service.services.premise_gather import GatheredFact
 
@@ -174,17 +175,30 @@ def test_other_steps_never_take_the_shortcut():
 
 # --- the formatter must not decide relevance -----------------------------
 
-def test_a_wide_fact_set_earns_the_narrow_judge():
-    """Bypassing the judge made EVERY retrieved fact a premise, which turned
-    a throughput fix into a noise generator. A set too wide to assert
-    wholesale must route through the judge instead of being rendered."""
+def test_a_wide_fact_set_is_bounded_rather_than_asserted_wholesale():
+    """SUPERSEDES test_a_wide_fact_set_earns_the_narrow_judge (task
+    6738006b). That test pinned the REFUSAL -- a wide set returned "" and
+    earned the paid judge. Refusing on count wedged 7 of the 10 tasks
+    blocked at this step, 6 of which render a section the real rubric
+    accepts, so the refusal is gone.
+
+    The invariant it carried is NOT gone and is what this asserts instead:
+    a formatter must never assert every retrieved fact wholesale. The wide
+    set now renders, bounded to premise_gather.DEFAULT_KEEP_MAX bullets,
+    and the facts past the bound stay out of the section.
+    """
     task = types.SimpleNamespace(id="t-1", title="A task", description="",
                                  oracle="")
     wide = [GatheredFact(kind="memory", text=f"fact {i}",
                          citation=f"services/x.py:{i}")
-            for i in range(tr._SHORTCUT_MAX_FACTS + 1)]
+            for i in range(pg.DEFAULT_KEEP_MAX + 3)]
 
-    assert tr._codified_step_proof("review_previous_notes", task, wide) == ""
+    out = tr._codified_step_proof("review_previous_notes", task, wide)
+
+    assert out, "a wide set must render, not refuse"
+    kept = [ln for ln in out.splitlines() if ln.startswith("- fact ")]
+    assert len(kept) == pg.DEFAULT_KEEP_MAX
+    assert out.count("services/x.py:") == pg.DEFAULT_KEEP_MAX
 
 
 def test_a_tight_fact_set_still_renders_at_zero_tokens():

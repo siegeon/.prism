@@ -2155,6 +2155,81 @@ def workflow_step_premise_citation_check(
             reason=result["reason"])
 
 
+class PremiseSelectRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    keep_max: int = Field(default=0, ge=0, le=50)
+
+
+class SelectedFactOut(BaseModel):
+    kind: str
+    text: str
+    citation: str
+
+
+class PremiseSelectResponse(BaseModel):
+    kept: list[SelectedFactOut] = []
+    dropped: list[SelectedFactOut] = []
+    reason: str = ""
+
+
+@router.post("/steps/premise-select")
+def workflow_step_premise_select(
+    body: PremiseSelectRequest, project: str = Query(...),
+) -> PremiseSelectResponse:
+    """CODIFIED. Chooses the load-bearing facts to assert, and names the
+    ones it leaves out. Never calls a model.
+
+    THE REFUSAL THIS REPLACES (task 6738006b). The premise chain used to
+    give up whenever `gather` resolved more than four facts and hand the
+    step to the paid judge. Its reason was sound -- a wide set needs
+    SELECTING -- but it refused on COUNT without ever asking whether the
+    render would pass. Measured 2026-09-08 over the 10 tasks blocked at
+    review_previous_notes: 7 were refused by that bail, and 6 of the 7
+    render a section arc_governance.score_premise_grounded ACCEPTS at zero
+    tokens. Task 1bcb2b24 was one of them, and the judge it fell through
+    to then failed 6 dispatches and parked the task 3 times.
+
+    COVERAGE FIRST, so the bound is safe: a fact earns its slot by
+    engaging an oracle clause no kept fact engages yet, scored with
+    arc_governance's own `_clause_words`/`oracle_clauses` against the same
+    threshold the real tooth applies. Remaining slots go to the facts
+    sharing the most vocabulary with the ticket. The bound itself stays --
+    asserting every retrieved fact is the noise generator this node exists
+    to avoid."""
+    with _tracer.start_as_current_span("workflow.step.premise_select") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return PremiseSelectResponse(
+                reason=f"no such task: {body.task_id}")
+
+        from prism_service.services import premise_gather as pg
+        facts = pg.gather(
+            task, memory_svc=getattr(ctx, "memory_svc", None),
+            task_svc=ctx.task_svc, brain_svc=getattr(ctx, "brain_svc", None))
+        if not facts:
+            return PremiseSelectResponse(
+                reason=("no memories, prior decisions, or resolvable symbols "
+                        "found for this task, so there is nothing to select"))
+
+        chosen = pg.select(
+            task, facts,
+            keep_max=body.keep_max or pg.DEFAULT_KEEP_MAX)
+        span.set_attribute("workflow.premise.kept", len(chosen.kept))
+        span.set_attribute("workflow.premise.dropped", len(chosen.dropped))
+
+        def _out(items):
+            return [SelectedFactOut(kind=f.kind, text=f.text,
+                                    citation=f.citation) for f in items]
+
+        return PremiseSelectResponse(kept=_out(chosen.kept),
+                                     dropped=_out(chosen.dropped),
+                                     reason=chosen.reason)
+
+
 class PremiseRenderRequest(BaseModel):
     task_id: str = Field(min_length=1)
     notes_md: str = ""

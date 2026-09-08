@@ -59,11 +59,13 @@ BUILD_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit", "Bash")
 # runner-produced report reads identically to a human-driven one.
 _PLAN_STEPS = ("draft_story", "verify_plan")
 _PREMISE_STEP = "review_previous_notes"
-# Above this many gathered facts the premise step routes through the node's
-# narrow judge to SELECT the load-bearing ones, rather than asserting all of
-# them. Deliberately small: the point is that a formatter must not decide
-# relevance (owner 2026-09-05, on noise making the system unusable).
-_SHORTCUT_MAX_FACTS = 4
+# SUPERSEDED by task 6738006b: the bound on how many gathered facts the
+# premise step asserts now lives in premise_gather.DEFAULT_KEEP_MAX, and it
+# SELECTS the load-bearing few rather than refusing the whole set. The
+# invariant this constant carried is unchanged and still enforced there --
+# a formatter must not assert every retrieved fact (owner 2026-09-05, on
+# noise making the system unusable) -- but the bound is a selection bound
+# now, not a bail-out threshold.
 # Stall detection (task 82cc05ee): after this many non-advancing reports
 # on ONE step, the next tick does NOT spawn another identical attempt --
 # it splits the red test ids named in the last proof into children, or
@@ -271,21 +273,23 @@ def _codified_step_proof(step_id: str, task, facts) -> str:
     """
     if step_id != _PREMISE_STEP or not facts:
         return ""
-    # KEEP THE JUDGMENT WHERE JUDGMENT IS NEEDED. The gather now asks one
-    # topical term at a time and drops anything the term does not actually
-    # appear in, so what arrives is relevant -- but a wide set still needs
-    # SELECTING, and that is the one thing a formatter cannot do. Bypassing
-    # the judge entirely (7.13.245) made every retrieved fact a premise and
-    # turned a throughput fix into a noise generator. A tight set renders
-    # straight through at zero tokens; a wide one earns the narrow judge,
-    # whose whole job is picking the load-bearing few.
-    if len(facts) > _SHORTCUT_MAX_FACTS:
-        return ""
+    # KEEP THE JUDGMENT WHERE JUDGMENT IS NEEDED -- AND CODIFY IT (task
+    # 6738006b). A wide set does still need SELECTING, and bypassing that
+    # entirely (7.13.245) made every retrieved fact a premise and turned a
+    # throughput fix into a noise generator. But refusing on COUNT was the
+    # wrong guard: measured 2026-09-08 over the 10 tasks blocked at this
+    # step, 7 were refused by the old count bail and 6 of those 7 render a
+    # section the real rubric ACCEPTS. Task 1bcb2b24 was one, and the judge
+    # it fell through to failed 6 dispatches and parked it 3 times. So
+    # select the load-bearing few HERE, deterministically, and keep the
+    # bound that made the old guard safe -- premise_gather.DEFAULT_KEEP_MAX
+    # is now that bound's single home.
     try:
         from prism_service.services import arc_governance as gov
         from prism_service.services import premise_gather as pg
 
-        rendered = pg.render_premises(task, facts)
+        chosen = pg.select(task, facts)
+        rendered = pg.render_premises(task, chosen.kept)
         if not rendered.strip():
             return ""
         rubric = gov.load_rubrics().get("premise_grounded") or {}
@@ -1230,7 +1234,8 @@ def _run_one_step(project: str, task_id: str) -> dict:
     # gathered), not the default route.
     codified_proof = _codified_step_proof(job["step"], task, facts)
     if codified_proof:
-        for route in ("premise-render", "premise-citation-check"):
+        for route in ("premise-select", "premise-render",
+                      "premise-citation-check"):
             _record_codified_run(
                 project, task_id, route, run_id, True,
                 f"resolved {job['step']} programmatically from "
