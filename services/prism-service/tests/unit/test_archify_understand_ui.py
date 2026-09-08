@@ -6,6 +6,7 @@ browser acts on, never a comment: a comment naming a component has satisfied
 this kind of check before and hid a surface nobody could open.
 """
 
+import re
 from pathlib import Path
 
 _WEB = Path(__file__).resolve().parents[2] / "prism_service" / "web" / "src"
@@ -30,9 +31,25 @@ def test_task_page_renders_the_task_map():
 
 
 def test_the_map_is_an_iframe_with_a_sandbox():
+    # RE-ANCHORED: this asserted the exact string
+    # `sandbox="allow-scripts allow-same-origin"`, which pinned the sandbox
+    # to a fixed set and broke the moment `allow-downloads` joined it
+    # (task ce767f23 — without it the artifact's own export menu, Share Card
+    # and Route/Reach cards fail silently, because archify exports through an
+    # anchor `download` plus createObjectURL).
+    #
+    # The real invariant is not the exact string: it is that the frame stays
+    # sandboxed AND keeps the two tokens the embed depends on — `allow-scripts`
+    # so the viewer runs at all, and `allow-same-origin` so the parent can read
+    # contentDocument and turn a node click into a selection. Assert those by
+    # name and let the set grow.
     src = _MAPS.read_text(encoding="utf-8")
     assert "<iframe" in src
-    assert 'sandbox="allow-scripts allow-same-origin"' in src
+    match = re.search(r'sandbox="([^"]*)"', src)
+    assert match, "the map iframe must declare a sandbox"
+    tokens = set(match.group(1).split())
+    assert "allow-scripts" in tokens, "the archify viewer cannot run without scripts"
+    assert "allow-same-origin" in tokens, "node clicks read contentDocument"
 
 
 def test_the_map_reads_the_archify_api():

@@ -134,7 +134,7 @@ class ArchifyService:
     def validate(self, diagram_type: str, ir: dict) -> dict:
         """Validate an IR against archify's validate command.
 
-        Runs: node ARCHIFY_BIN validate <type> <ir.json> --quality standard --json
+        Runs: node ARCHIFY_BIN validate <type> <ir.json> --quality showcase --json
         Returns: parsed JSON (ok/diagnostics)
         """
         # A scratch file, NEVER a map's own ir.json: validating any kind used
@@ -156,7 +156,12 @@ class ArchifyService:
                     diagram_type,
                     str(ir_path),
                     "--quality",
-                    "standard",
+                    # SHOWCASE, not standard. SKILL.md makes showcase the
+                    # default authoring bar and calls a basic receipt "never
+                    # showcase acceptance". Verified before flipping: the code,
+                    # concepts, language and task IR all validate at showcase
+                    # with 9/9 checks, 0 errors, 0 warnings.
+                    "showcase",
                     "--json",
                 ],
                 capture_output=True,
@@ -231,7 +236,12 @@ class ArchifyService:
                     str(ir_path),
                     str(html_path),
                     "--quality",
-                    "standard",
+                    # SHOWCASE, not standard. SKILL.md makes showcase the
+                    # default authoring bar and calls a basic receipt "never
+                    # showcase acceptance". Verified before flipping: the code,
+                    # concepts, language and task IR all validate at showcase
+                    # with 9/9 checks, 0 errors, 0 warnings.
+                    "showcase",
                     "--json",
                 ],
                 capture_output=True,

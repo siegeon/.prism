@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.264"
+PRISM_VERSION = "7.13.265"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8792,4 +8792,28 @@ PRISM_VERSION_NOTES += (
     "then passed end to end: the services box opens "
     "prism_service/services/conductor_service.py, its own largest file, with "
     "64 nodes and 62 edges of real code around it."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.265: Explore opens the map archify already ships. The delivered "
+    "artifact was always a complete Archify viewer -- Node Finder, Semantic "
+    "Passport, Route Probe, Semantic Lens, chapter rail, authored "
+    "reachability, export menu -- and we starved it. meta.views held ONE "
+    "chapter whose focus listed every component, and the whole chapter "
+    "machinery derives from that array, so all of it was inert. A node "
+    "click then unmounted the artifact and swapped in the Mesh, so nobody "
+    "ever reached the passport. Four slices, disjoint files, worked in "
+    "parallel: the code map now carries 5 real chapters (entry points, "
+    "conductor and services core, data and memory, web surface, support "
+    "and tooling) and a label on every connection; the embed gained "
+    "allow-downloads (without it every export, Share Card and Route/Reach "
+    "card failed silently) plus a view prop that renders the Architecture "
+    "Delta -- which already worked server-side and had NO door in the web "
+    "app at all; Explore keeps the artifact mounted on a node click and "
+    "offers the Mesh, the delta and a Code/Concepts/Language lens strip as "
+    "named controls; and concepts/language/task stopped hardcoding "
+    "visual_preset and subtitle, which SKILL.md says to omit. Validation "
+    "moved from standard to showcase after checking all four kinds pass it "
+    "with 9 checks, 0 errors, 0 warnings. The audit behind this is memory "
+    "mx-8261eb; epic e89f5ff3."
 )
