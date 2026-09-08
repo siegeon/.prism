@@ -48,11 +48,18 @@ export default function ArchifyMaps({
   taskId,
   focusId,
   onNodeSelect,
+  fill,
 }: {
   project: string;
   kind?: ArchifyKind;
   taskId?: string;
   focusId?: string;
+  /** Fill the parent's height instead of the fixed vh below. A map is a
+   *  SURFACE you read, and a fixed 70vh frame dropped into a shorter box
+   *  gets its own inner scrollbar — the drawing then shows three boxes
+   *  through a letterbox and nothing can be read. Callers that own a real
+   *  height (Explore's front door) pass this and get the whole card. */
+  fill?: boolean;
   /** A node in the drawing was clicked. The id is the thing the node stands
    *  for — a concept id on the concepts map, a community id on the code map. */
   onNodeSelect?: (nodeId: string, kind: ArchifyKind) => void;
@@ -150,7 +157,7 @@ export default function ArchifyMaps({
   }, [onNodeSelect, kind, iframeSrc]);
 
   return (
-    <div className="space-y-3">
+    <div className={fill ? "space-y-3 h-full min-h-0 flex flex-col" : "space-y-3"}>
       {tabbed && (
         <div className="flex gap-0.5 border-b border-[color:var(--border-default)]" role="tablist">
           {TABS.map((t) => (
@@ -187,8 +194,8 @@ export default function ArchifyMaps({
           </button>
         </div>
       ) : (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3 text-2xs text-[color:var(--text-muted)]">
+        <div className={fill ? "space-y-2 flex-1 min-h-0 flex flex-col" : "space-y-2"}>
+          <div className="flex items-center justify-between gap-3 text-2xs text-[color:var(--text-muted)] shrink-0">
             <span>
               built {meta.built_at ? String(meta.built_at).slice(0, 19).replace("T", " ") : "—"} ·{" "}
               {meta.components} components · {meta.connections} connections
@@ -215,15 +222,15 @@ export default function ArchifyMaps({
             </div>
           )}
           {iframeSrc && (
-            <div className="rounded-md overflow-hidden border border-[color:var(--border-default)]">
+            <div className={`rounded-md overflow-hidden border border-[color:var(--border-default)]${fill ? " flex-1 min-h-0" : ""}`}>
               <iframe
                 ref={frameRef}
                 key={kind}
                 title={`${kind} map`}
                 src={iframeSrc}
                 sandbox="allow-scripts allow-same-origin"
-                className="w-full block"
-                style={{ height, background: "var(--background-base)" }}
+                className="w-full block h-full"
+                style={{ height: fill ? "100%" : height, background: "var(--background-base)" }}
               />
             </div>
           )}

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.259"
+PRISM_VERSION = "7.13.260"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8691,4 +8691,27 @@ PRISM_VERSION_NOTES += (
     "gate was invisible. Proven on an isolated instance: one oracle edit, one "
     "re-read, the new text rendered, no reload, and the count still one after "
     "eight idle seconds."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.260: Explore is the code graph again, and the focused view moves to "
+    "the task. Explore opened on a 'Start with a task' chip ladder above a "
+    "letterboxed map, then a silent probe re-centred it on whichever task "
+    "moved last, and a permanently empty 'Context bundle' card sat below "
+    "reading 'Type a query, then pick a result' while taking half the width "
+    "and up to 32vh (owner: 'this does not belong here', 'i dont neeed start "
+    "with a task or any of that the code arch is in the graph isnt it?', 'it "
+    "seems to me you confused understand (concepts and memory) with the code "
+    "graph'). The front door is now the architecture and nothing else: no "
+    "task ladder, no auto-focus, and the drill-down strip appears only once "
+    "something has filled it. ArchifyMaps grew a `fill` mode because a fixed "
+    "70vh frame dropped into a shorter box gets its own scrollbar and shows "
+    "three boxes through a letterbox; the map measures 974px of a 1281px "
+    "viewport now. The mesh, which draws memory, tasks, sessions and gates "
+    "and so was never the code graph, is components/Mesh.tsx and mounts on "
+    "the task page as CONTENT, full width, 640px, live off the same "
+    "/sse/tasks stream. Wandering re-centres in place instead of throwing the "
+    "reader onto the code-graph page, and a live refresh keeps the camera and "
+    "the filter chips where the reader put them. The dossier is not mounted "
+    "twice: it rides the mesh's rail as it always did."
 )

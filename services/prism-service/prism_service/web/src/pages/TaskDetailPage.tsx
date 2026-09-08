@@ -14,7 +14,7 @@ import { stepLabel } from "@/lib/workflowChips";
 import Markdown, { renderInline } from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
 import ArchifyMaps from "@/components/maps/ArchifyMaps";
-import Dossier from "@/components/Dossier";
+import Mesh from "@/components/Mesh";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
@@ -1007,6 +1007,10 @@ export default function TaskDetailPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [timeline, setTimeline] = useState<Timeline | null>(null);
   const [children, setChildren] = useState<ChildTask[]>([]);
+  // Which node the Content mesh is centred on. Empty = this task, which is
+  // what it resets to whenever the page moves to a different task.
+  const [contentToken, setContentToken] = useState("");
+  useEffect(() => { setContentToken(""); }, [id]);
   // OKF concepts this task recalled (recall_log attribution) — the rail's
   // "Knowledge · Understand" group. Empty when the task recalled nothing.
   const [knowledge, setKnowledge] = useState<KnowledgeConcept[]>([]);
@@ -3000,6 +3004,55 @@ export default function TaskDetailPage() {
         </Card>
       )}
 
+      {/* CONTENT — what is actually IN this task, drawn as the task at the
+          centre of its own typed network: the sessions that drove it, the
+          tests that pin it, the code it touched, the memory around it, and a
+          rail saying what each store knows (owner: "i love this view ... make
+          that view part of the task so we can see what is in the task for
+          contents, that is the content explore").
+
+          The same component Explore focuses — imported, not copied. It gets
+          the full width and a real height here, because the whole complaint
+          about it on the old front door was that it was letterboxed into a
+          box too small to read. LIVE off the /sse/tasks subscription this
+          page already holds: the drawing AND its dossier re-read when the
+          task moves, without resetting the camera or the filter chips. */}
+      <Card className="!p-0 overflow-hidden">
+        <div className="px-5 pt-4 pb-1 flex items-baseline gap-2">
+          <SectionLabel>Content</SectionLabel>
+          <span className="text-xs opacity-50">
+            click a node to re-center · double-click opens it
+          </span>
+        </div>
+        <div className="h-[640px] flex flex-col min-h-0">
+          <Mesh
+            token={contentToken || id}
+            project={project}
+            hops={2}
+            // The live signal describes THIS task, so it only applies while
+            // the task is what is centred; wander to a neighbour and the
+            // drawing is a plain one-shot read of that neighbour.
+            revision={(contentToken || id) === id
+              ? `${task.status}|${task.workflow_step ?? ""}|${task.gate_state ?? ""}|${task.updated_at ?? ""}|${children.length}|${history.length}`
+              : undefined}
+            // Wandering stays INSIDE the task. Sending a click to
+            // /brain?focus= would drop the reader on the code-graph page
+            // looking at a task, which is the crossed wire this whole change
+            // exists to undo.
+            onFocus={(t) => setContentToken(t)}
+            onOpen={(href) => navigate(href)}
+          />
+        </div>
+        {contentToken && contentToken !== id && (
+          <div className="px-5 pb-3">
+            <button onClick={() => setContentToken("")}
+              className="text-xs text-[color:var(--accent-teal-fg)] hover:underline">
+              ← back to this task
+            </button>
+          </div>
+        )}
+      </Card>
+
       </>)}{/* end Overview tab */}
 
       </div>{/* end left doc column */}
@@ -3079,25 +3132,11 @@ export default function TaskDetailPage() {
             </RelGroup>
           )}
         </RailCard>
-        {/* What the system knows — the Explore mesh's dossier, pointed at this
-            task instead of a wandered node (owner: "its easily one of the
-            best, i think it adds more value to the task main view somewhere,
-            it should also be real time as we tie together code and memory and
-            ontology facts together to build the contents for the task").
-            Every section names the store it read — tasks.db, the recall log,
-            brain.db, the ontology — so a store with nothing on this task reads
-            as exactly that.
-
-            REAL TIME comes off the /sse/tasks subscription this page already
-            holds: `revision` is built from the fields that stream patches, so
-            the stores are re-read within ~1s of the task moving, with no
-            second connection and no poll. */}
-        <Dossier
-          token={id}
-          project={project}
-          revision={`${task.status}|${task.workflow_step ?? ""}|${task.gate_state ?? ""}|${task.updated_at ?? ""}|${children.length}|${history.length}`}
-          onOpen={(href) => navigate(href)}
-        />
+        {/* The "What the system knows" dossier is NOT mounted separately here
+            — it rides the Content mesh's own rail above, which is where it
+            lives in the view this was lifted from. Two copies on one page
+            would read the same four stores twice and disagree the moment one
+            refreshed. */}
         {/* Map — what this task is built around, rendered by archify from the
             task's own workflow steps, the concepts it recalled, and its
             children. The same renderer the Understand page uses. */}
