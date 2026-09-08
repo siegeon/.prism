@@ -114,7 +114,18 @@ def test_step_agentic_flag_derives_from_step_kind(body, monkeypatch):
     monkeypatch.setattr(workflows_api, "get_project",
                         lambda p: types.SimpleNamespace(task_svc=_Svc(), root=Path("/tmp")),
                         raising=False)
+    # _conductor_behavior_workflows resolves the repo through
+    # claude_transcripts._project_source_path (imported INSIDE the
+    # function, so patching workflows_api.get_project does not reach it)
+    # and returns [] when that path does not exist. On a CI runner
+    # ~/projects/prism does not exist, so entries[0] was an IndexError.
+    # This was invisible while the whole endpoint 503'd at fixture setup.
+    from prism_service.services import claude_transcripts as _ct
+    monkeypatch.setattr(_ct, "_project_source_path", lambda project: "/tmp")
     entries = _REAL_BEHAVIOR_WORKFLOWS("prism")
+    assert entries, (
+        "the real behaviour reader returned nothing: the project source "
+        "path did not resolve to a directory that exists")
     flags = {s["id"]: s["agentic"] for s in entries[0]["steps"]}
     assert flags["run-check"] is False
     assert flags["call-llm"] is True
