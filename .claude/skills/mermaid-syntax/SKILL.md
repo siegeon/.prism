@@ -1,6 +1,6 @@
 ---
 name: mermaid-syntax
-description: Author valid Mermaid diagram source for PRISM plan_diagram fields and plan documents. Use when synthesizing a plan_diagram (prototype/implement workflows), when a task needs a sequence/class/state/ER/flowchart/C4 diagram, or when a Mermaid diagram fails to parse in PlanView. Covers the 6 core diagram types, C4 layout science, and Hermes theming.
+description: Author valid Mermaid diagram source for PRISM plan_diagram fields and plan documents. Use when synthesizing a plan_diagram, when a task needs a sequence/class/state/ER/flowchart/C4 diagram, or when a Mermaid diagram fails to parse in PlanView.
 license: MIT
 attribution: >
   Trimmed port of syntax reference material from the mermaid-js/mermaid

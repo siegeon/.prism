@@ -1,6 +1,7 @@
 ---
 name: gauntlet-loop
-description: Turns any goal into one short, paste-ready "gauntlet loop" prompt - a prompt that makes an agent set a concrete quality bar, split the work into small judgeable pieces, run a builder and a separate harsh critic on each, compare blind against the bar, and loop until it wins. When nothing shipped exists to compare against, it interviews you into an answer key of binary checks and makes that the bar. Works for builds, writing, code, research, or design. Use whenever the user says "/gauntlet-loop", "gauntlet loop", "gauntlet this", "make a gauntlet prompt", "loop until it beats X", or wants an agent to grind against a real reference until it wins.
+description: Turn any goal into one paste-ready "gauntlet loop" prompt - an agent that sets a concrete quality bar, splits the work into judgeable pieces, runs a builder against a separate harsh critic, and loops until it wins. Use for "/gauntlet-loop", "gauntlet this", "make a gauntlet prompt", or "loop until it beats X".
+
 ---
 
 # Gauntlet Loop

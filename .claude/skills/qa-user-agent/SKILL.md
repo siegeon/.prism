@@ -1,6 +1,6 @@
 ---
 name: qa-user-agent
-description: Validate PRISM's own web UI like a real user -- walk stated acceptance criteria one at a time with fresh screenshots/console/network checks, never claim something works from source-reading or a passing test suite alone. Drives via `agent-bridge-drive` (remote assist, the owner's real live tab) by DEFAULT; falls back to this skill's own Playwright MCP browser only when unattended or no live session exists. Use when asked to "QA this", "validate as a user", "does this actually work", "test the app like a user would", or before attaching evidence to a green_gate/demo proof. For a fast single-change confirmation with no gate/evidence rigor, use the `run` skill instead.
+description: Validate PRISM's web UI like a real user - walk each acceptance criterion with fresh screenshots, console and network checks, never from source-reading or a passing test suite alone. Use for "QA this", "validate as a user", "does this actually work", or before attaching green_gate/demo evidence; drives via agent-bridge-drive, falling back to Playwright only when unattended.
 version: 1.0.0
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: agent-bridge-drive
-description: Drive a specific PRISM user's own already-open browser tab live via the agent_bridge_command MCP tool (navigate/click/fill/read/screenshot) -- never Playwright, never a separate/headless browser. Use when the user says "remote assist", "watch me work", hands you a bridge session id from Settings > Access key, or asks you to navigate/click/screenshot their live PRISM tab. Route the actual driving to a cheap/fast subagent (haiku tier) once you have a session id -- don't hand-roll this inline in the main thread every time.
+description: Drive a PRISM user's own already-open browser tab live via the agent_bridge_command MCP tool - never Playwright, never a separate or headless browser. Use for "remote assist", "watch me work", a bridge session id, or any ask to navigate/click/screenshot their live PRISM tab; route the driving to a cheap haiku subagent.
 version: 1.0.0
 ---
 

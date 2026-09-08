@@ -1,6 +1,6 @@
 ---
 name: prism-dev
-description: Launch the PRISM dev instance on this Windows host — source-run native (editable pip install), ports 8887 (MCP) / 8888 (web), Edge --app window. Use when the user says "start dev", "run our app", "hit play", "launch the dev instance", "start prism", "is dev running", or any variant. This is THE way to run PRISM locally for development — never propose docker / pipx / Tauri Rust compile as alternatives.
+description: Launch the PRISM dev instance on this Windows host - source-run native, ports 8887 (MCP) and 8888 (web), Edge --app window. Use for "start dev", "run our app", "launch the dev instance", "is dev running"; never propose docker, pipx, or a Tauri build as alternatives.
 version: 1.0.0
 ---
 
