@@ -13,6 +13,39 @@ from prism_service.services.archify_maps import build_ir
 from prism_service.vendor.archify_paths import ARCHIFY_BIN, node_executable
 
 
+class _ChapteredGraph:
+    """Ten modules spread across every real chapter role (entry, core,
+    data, web, support). tests/conftest.py pins PRISM_DATA_DIR to a fresh
+    throwaway dir for the whole suite, so `build_ir("prism", "code")`
+    against the real project sees an empty graph.db and degrades to the
+    single-box empty diagram -- this fixture supplies real multi-module
+    data the same way test_code_map_is_built_from_code.py's _FakeGraph
+    does, so the chapter/label contract has something real to check."""
+
+    def file_graph(self) -> dict:
+        files = [
+            {"file": "app/api/routes.py", "entities": 20},
+            {"file": "app/mcp/tools.py", "entities": 10},
+            {"file": "app/services/conductor.py", "entities": 30},
+            {"file": "app/engines/brain.py", "entities": 15},
+            {"file": "app/memory_ops/forget.py", "entities": 8},
+            {"file": "app/inference/queue.py", "entities": 6},
+            {"file": "app/web/pages/Home.tsx", "entities": 12},
+            {"file": "app/web/lib/api.ts", "entities": 5},
+            {"file": "app/scripts/build.py", "entities": 4},
+            {"file": "app/assets/hook.py", "entities": 3},
+        ]
+        edges = [
+            {"from": "app/services/conductor.py", "to": "app/api/routes.py",
+             "weight": 10},
+            {"from": "app/mcp/tools.py", "to": "app/api/routes.py",
+             "weight": 4},
+            {"from": "app/web/pages/Home.tsx", "to": "app/web/lib/api.ts",
+             "weight": 2},
+        ]
+        return {"files": files, "edges": edges}
+
+
 class TestCodeMapBuilder:
     """Code architecture map builder tests."""
 
@@ -31,8 +64,46 @@ class TestCodeMapBuilder:
         _, ir = build_ir("prism", "code")
         meta = ir["meta"]
         assert "title" in meta
-        assert meta.get("visual_preset") == "blueprint"
+        # SUPERSEDED (task 07afdaf2): `visual_preset` used to be pinned to
+        # "blueprint" here. SKILL.md says to omit it by default so the
+        # diagram opens in `classic`; the code map now omits the key
+        # entirely rather than setting it.
+        assert "visual_preset" not in meta
         assert meta.get("animation") == "none"
+
+    def test_views_are_curated_chapters_not_one_all_inclusive_list(self, monkeypatch):
+        """meta.views drives the Named Chapter Rail, Chapter Delta Preview,
+        Story Beat Navigator, Follow Camera, Director Strip, Story Horizon,
+        and shareable story-moment links (viewer-runtime.md). One chapter
+        whose focus lists every component makes all of that inert, so the
+        map must carry 3 to 5 real chapters, and none may be the full set."""
+        monkeypatch.setattr(
+            "prism_service.services.archify_maps.code.get_project",
+            lambda project: type("C", (), {"graph_svc": _ChapteredGraph()})(),
+        )
+        _, ir = build_ir("prism", "code")
+        views = ir["meta"]["views"]
+        assert 3 <= len(views) <= 5, views
+        comp_ids = {c["id"] for c in ir["components"]}
+        for view in views:
+            assert view["focus"], view
+            assert set(view["focus"]) != comp_ids, (
+                f"chapter {view['id']!r} lists every component"
+            )
+
+    def test_connections_carry_a_semantic_label(self, monkeypatch):
+        """SKILL.md: relationship labels are semantic data. A bare
+        {from,to} pair with no label is decoration-only and was the shape
+        this task replaced."""
+        monkeypatch.setattr(
+            "prism_service.services.archify_maps.code.get_project",
+            lambda project: type("C", (), {"graph_svc": _ChapteredGraph()})(),
+        )
+        _, ir = build_ir("prism", "code")
+        connections = ir.get("connections", [])
+        assert connections, "no connections to assert a label on"
+        for conn in connections:
+            assert conn.get("label"), conn
 
     def test_layout_grid_mode(self):
         """Layout is in grid mode with proper config."""
