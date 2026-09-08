@@ -109,14 +109,12 @@ def _labels_for(directories: list[str]) -> dict[str, str]:
     return labels
 
 
-def _empty(subtitle: str, card_title: str, card_item: str) -> dict:
+def _empty(card_title: str, card_item: str) -> dict:
     return {
         "schema_version": 1,
         "diagram_type": "architecture",
         "meta": {
             "title": "Code architecture",
-            "subtitle": subtitle,
-            "visual_preset": "blueprint",
             "animation": "none",
         },
         "layout": {"mode": "grid", "cols": 2, "cellW": 170, "cellH": 76,
@@ -125,6 +123,51 @@ def _empty(subtitle: str, card_title: str, card_item: str) -> dict:
                         "label": "No data yet", "row": 0, "col": 0}],
         "cards": [{"dot": "slate", "title": card_title, "items": [card_item]}],
     }
+
+
+# Chapter grouping: which curated chapter a module belongs to, read off its
+# own role and real path tail -- never a fixed list of ids, so the grouping
+# still makes sense against a different repository's real directories. Per
+# viewer-runtime.md, the Named Chapter Rail, Chapter Delta Preview, Story
+# Beat Navigator, Follow Camera, Director Strip, Story Horizon, and
+# shareable story-moment links all derive from meta.views, so one
+# all-inclusive chapter (the old shape) makes every one of them inert.
+_CHAPTER_BY_TAIL = {
+    "api": "entry", "routes": "entry", "mcp": "entry", "cli": "entry",
+    "services": "core", "engines": "core", "conductor": "core",
+    "workflows": "core",
+    "models": "data", "store": "data", "db": "data", "memory_ops": "data",
+    "inference": "data", "graph": "data",
+}
+_ENTRYPOINT_FILES = {"main.py", "app.py", "__main__.py", "server.py"}
+# id -> (chapter label, short note). Order here is also the reading order of
+# meta.views.
+_CHAPTER_META = {
+    "entry": ("Entry points", "Where callers reach the system: API, MCP, CLI."),
+    "core": ("Conductor & services core", "The engine that drives tasks."),
+    "data": ("Data & memory", "Where state and the graph persist."),
+    "web": ("Web surface", "The browser-facing app."),
+    "support": ("Support & tooling", "Scripts and assets, outside runtime."),
+}
+
+
+def _chapter_for(role: str, tail: str, top_file: str) -> str:
+    """Which curated chapter a module belongs to. `tail` is the module's own
+    shortest unique label segment (never the full path, so an unrelated
+    outer directory of the same name cannot hijack the grouping); `top_file`
+    is its largest real file, used only to spot a process entry point."""
+    if role == "frontend":
+        return "web"
+    if role == "external":
+        return "support"
+    if role == "database":
+        return "data"
+    hit = _CHAPTER_BY_TAIL.get(tail)
+    if hit:
+        return hit
+    if top_file.rsplit("/", 1)[-1] in _ENTRYPOINT_FILES:
+        return "entry"
+    return "core"
 
 
 def _order_by_coupling(module_ids: list[str],
@@ -159,12 +202,12 @@ def build(project: str, *, task_id: str | None = None) -> dict:
     try:
         graph = get_project(project).graph_svc.file_graph()
     except Exception:
-        return _empty("graph.db could not be read.", "Graph unavailable",
+        return _empty("Graph unavailable",
                       "graph.db could not be read. Run POST /api/graph/rebuild.")
 
     files = graph.get("files") or []
     if not files:
-        return _empty("graph.db has no files yet.", "Graph empty",
+        return _empty("Graph empty",
                       "No code indexed. Run POST /api/graph/rebuild.")
 
     # --- real modules: directories that actually exist ---------------------
@@ -192,7 +235,7 @@ def build(project: str, *, task_id: str | None = None) -> dict:
             top_file_by_dir[d] = (count, path)
 
     if not entities_by_dir:
-        return _empty("only test code is indexed.", "No runtime modules",
+        return _empty("No runtime modules",
                       "graph.db holds only test files; nothing to draw.")
 
     ranked_dirs = sorted(entities_by_dir, key=lambda d: -entities_by_dir[d])
@@ -255,7 +298,19 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         if pair in drawn or not _adjacent(from_id, to_id):
             continue
         drawn.add(pair)
-        conn = {"from": from_id, "to": to_id}
+        # SKILL.md: relationship labels are semantic data, not decoration.
+        # graph.db aggregates every relation kind (call, import, ...)
+        # between two files without keeping which, so "uses" is the honest
+        # claim -- and short enough to always clear archify's label-mask
+        # width check. Archify's default midpoint lands the label ON the
+        # source component's own box on this tight 3-col grid; nudge it
+        # toward whichever row the connection actually opens INTO (down for
+        # same-row and downward edges, up for upward edges), diagnosed via
+        # `archify validate ... --json`'s own labelDy suggestions.
+        r_from = placements.get(from_id, (0, 0))[0]
+        r_to = placements.get(to_id, (0, 0))[0]
+        label_dy = 24 if r_to >= r_from else -24
+        conn = {"from": from_id, "to": to_id, "label": "uses", "labelDy": label_dy}
         if len(connections) < 3:
             conn["variant"] = "emphasis"
         connections.append(conn)
@@ -305,22 +360,33 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         },
     ]
 
+    # --- curated chapters: real groupings, never one all-inclusive view ----
+    chapters: dict[str, list[str]] = {}
+    for comp_id in ordered:
+        d = id_to_dir[comp_id]
+        tail = labels[d].split("/")[-1]
+        top_file = top_file_by_dir.get(d, (0, ""))[1]
+        key = _chapter_for(_role_for(d), tail, top_file)
+        chapters.setdefault(key, []).append(comp_id)
+
+    views = [
+        {
+            "id": key,
+            "label": _CHAPTER_META[key][0],
+            "focus": chapters[key],
+            "note": _CHAPTER_META[key][1],
+        }
+        for key in _CHAPTER_META
+        if chapters.get(key)
+    ]
+
     return {
         "schema_version": 1,
         "diagram_type": "architecture",
         "meta": {
             "title": "Code architecture",
-            "subtitle": (
-                f"{len(kept)} modules, {total_module_deps} dependencies"
-            ),
-            "visual_preset": "blueprint",
             "animation": "none",
-            "views": [{
-                "id": "modules",
-                "label": "Modules",
-                "focus": [c["id"] for c in components],
-                "note": f"{len(kept)} largest runtime modules",
-            }],
+            "views": views,
         },
         "layout": {"mode": "grid", "cols": 3, "cellW": 220, "cellH": 100,
                    "gapX": 20, "gapY": 20},

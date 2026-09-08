@@ -93,14 +93,19 @@ def test_tests_are_excluded_and_said_so(ir):
 
 def test_counts_describe_the_code_not_the_drawing(ir):
     """THE COUNT MUST NOT FLATTER THE PICTURE. Only grid-adjacent pairs can be
-    routed, so the number of LINES is a property of the layout. The subtitle
-    reports real module dependencies, and the card says how many of them the
-    drawing managed to show."""
+    routed, so the number of LINES is a property of the layout. The card
+    says how many of the real module dependencies the drawing managed to
+    show.
+
+    SUPERSEDED (task 07afdaf2): this used to also assert
+    `ir["meta"]["subtitle"] == "3 modules, 3 dependencies"`. SKILL.md says
+    to omit `meta.subtitle` by default -- the honest count now lives only
+    on the "What is drawn" card, asserted below.
+    """
     # Three DIRECTED module pairs survive, and direction matters for a
     # dependency: services->api (conductor->routes), api->services
     # (routes->tasks), pages->api (Home->routes). The 500-weight test edge is
     # excluded with its file.
-    assert ir["meta"]["subtitle"] == "3 modules, 3 dependencies"
     drawn = _card(ir, "What is drawn")["items"][0]
     assert drawn.startswith(f"{len(ir['connections'])} of 3 module dependencies")
     assert len(ir["connections"]) <= 3
@@ -145,7 +150,13 @@ def test_empty_graph_says_so_rather_than_drawing_nothing(monkeypatch):
     monkeypatch.setattr(code_map, "get_project",
                         lambda project: type("C", (), {"graph_svc": _Empty()})())
     out = code_map.build("proj")
-    assert "no files" in out["meta"]["subtitle"]
+    # SUPERSEDED (task 07afdaf2): this used to assert
+    # `"no files" in out["meta"]["subtitle"]`. SKILL.md says to omit
+    # `meta.subtitle` by default, so the empty-graph builder now says so
+    # only on its card, never in meta.
+    assert "subtitle" not in out["meta"]
+    card = out["cards"][0]
+    assert "No code indexed" in card["items"][0]
 
 
 def test_x_targets_never_reaches_archify(monkeypatch, tmp_path):
