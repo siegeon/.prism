@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.263"
+PRISM_VERSION = "7.13.264"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8775,4 +8775,21 @@ PRISM_VERSION_NOTES += (
     "keeps the real file it points at. A regression test drives the build "
     "path itself and asserts the key reaches neither validate nor render "
     "while the targets still arrive on meta."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.264: remote assist can drive the architecture map. Asked to check "
+    "the click-through as a user, it could not: the map is an iframe served "
+    "from /api/archify, resolveSelector only searched the top document, and "
+    "every lookup answered 'no element matches selector: [data-node-id]'. "
+    "Selectors now fall back to same-origin iframes, with the top document "
+    "still winning and cross-origin frames skipped rather than aborting the "
+    "search. That surfaced the second half: .click() is an HTMLElement "
+    "method and the map is entirely SVG, so clicking a component failed with "
+    "'el.click is not a function'. A guarded fallback dispatches a real "
+    "bubbling MouseEvent, which works for any element. Both were found by "
+    "performing the journey rather than reasoning about it, and the journey "
+    "then passed end to end: the services box opens "
+    "prism_service/services/conductor_service.py, its own largest file, with "
+    "64 nodes and 62 edges of real code around it."
 )

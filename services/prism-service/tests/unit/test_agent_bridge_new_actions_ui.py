@@ -295,3 +295,43 @@ def test_accessible_name_falls_back_through_label_placeholder_title_text():
     assert "aria-labelledby" in fn_body
     assert 'label[for=' in fn_body
     assert "placeholder" in fn_body
+
+
+def test_selectors_reach_into_same_origin_iframes():
+    """Remote assist must be able to drive what a person can see, and on
+    Explore the whole surface is an iframe: the architecture map is served
+    from /api/archify/... and embedded, so every component lives in a second
+    document. Resolving only against the top document answered "no element
+    matches selector: [data-node-id]" for the one click that gets a person
+    from the architecture into the code.
+
+    Cross-origin frames throw on contentDocument and must be SKIPPED, not
+    allowed to fail the whole lookup -- so the loop needs its own try.
+    """
+    src = _SRC.read_text(encoding="utf-8")
+    body = src.split("function resolveSelector", 1)[1].split("\n}", 1)[0]
+    assert "document.querySelectorAll(\"iframe\")" in body, \
+        "resolveSelector must fall back to same-origin iframes"
+    assert "contentDocument" in body
+    assert "continue" in body, \
+        "a cross-origin frame must be skipped, never abort the search"
+    # The top document still wins: an iframe is the FALLBACK, so a selector
+    # that matches on the page itself never resolves to a frame's copy.
+    assert body.index("document.querySelector(selector)") < body.index("iframe")
+
+
+def test_click_works_on_svg_nodes_not_just_html():
+    """.click() is an HTMLElement method. The architecture map is ENTIRELY
+    SVG -- every component is a <g data-node-id> -- and calling it there
+    failed with "el.click is not a function", so the single click that opens
+    the code from the map was the one remote assist could not perform. A real
+    bubbling MouseEvent works for any element.
+    """
+    src = _SRC.read_text(encoding="utf-8")
+    click_branch = src.split('cmd.action === "click"', 1)[1].split("else if", 1)[0]
+    assert 'typeof clickable.click === "function"' in click_branch, \
+        "the HTML fast path must be guarded, not assumed"
+    assert 'new MouseEvent("click"' in click_branch, \
+        "an element without .click() must still receive a real click"
+    assert "bubbles: true" in click_branch, \
+        "the event must bubble or a delegated listener never sees it"

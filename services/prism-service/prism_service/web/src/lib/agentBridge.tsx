@@ -176,7 +176,28 @@ export function useAgentBridge(): AgentBridgeState {
 
 function resolveSelector(selector: string): Element | null {
   try {
-    return document.querySelector(selector);
+    const own = document.querySelector(selector);
+    if (own) return own;
+    // SAME-ORIGIN IFRAMES ARE PART OF THE PAGE A PERSON SEES. Explore's whole
+    // surface is one: the architecture map is served from /api/archify/… and
+    // embedded, so every box on it lives in a second document. Resolving only
+    // against the top document meant remote assist could drive the app right
+    // up to the map and then not touch it — "no element matches selector:
+    // [data-node-id]" — which is exactly the click a person makes to get from
+    // the architecture into the code. A cross-origin frame throws on
+    // contentDocument and is skipped; this reaches nothing a script already
+    // running on this page could not reach itself.
+    for (const frame of Array.from(document.querySelectorAll("iframe"))) {
+      let doc: Document | null = null;
+      try {
+        doc = (frame as HTMLIFrameElement).contentDocument;
+      } catch {
+        continue; // cross-origin: not ours to drive
+      }
+      const hit = doc?.querySelector(selector);
+      if (hit) return hit;
+    }
+    return null;
   } catch {
     return null; // an invalid selector string must fail the command, not throw
   }
@@ -639,7 +660,21 @@ export function AgentBridgeProvider({ children }: { children: ReactNode }) {
       } else if (cmd.action === "click") {
         const el = resolveSelector(cmd.selector || "");
         if (!el) throw new Error(`no element matches selector: ${cmd.selector}`);
-        (el as HTMLElement).click();
+        // .click() is an HTMLElement method. An SVG node does not have it in
+        // every engine, and the architecture map is ENTIRELY SVG — every
+        // component is a <g data-node-id>. Calling it there failed with
+        // "el.click is not a function", so the one click that gets a person
+        // from the architecture into the code was the one click remote assist
+        // could not perform. Dispatching a real bubbling MouseEvent works for
+        // any element and is closer to what a person does anyway.
+        const clickable = el as HTMLElement;
+        if (typeof clickable.click === "function") {
+          clickable.click();
+        } else {
+          el.dispatchEvent(new MouseEvent("click", {
+            bubbles: true, cancelable: true, view: window,
+          }));
+        }
       } else if (cmd.action === "fill") {
         const el = resolveSelector(cmd.selector || "");
         if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement
