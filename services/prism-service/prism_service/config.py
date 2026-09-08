@@ -25,6 +25,26 @@ PROJECT_DIR = Path(os.environ.get("PRISM_PROJECT_DIR", str(DATA_DIR)))
 UI_PORT = int(os.environ.get("PRISM_UI_PORT", "7778"))
 MCP_PORT = int(os.environ.get("PRISM_MCP_PORT", "7777"))
 
+# Inference backend — which model `claude -p` talks to. Every model call in
+# PRISM goes through claude_cli.invoke, and `claude -p` supplies the tool
+# loop, the turns, the budget and the run manifest. So this setting changes
+# the MODEL ONLY. The harness is the same on both settings.
+#   "claude" (default) — Anthropic. The child environment gets no redirect,
+#       so the default behaviour does not change at all.
+#   "local" — our own engine. claude_cli sets ANTHROPIC_BASE_URL on the child.
+# The base URL must answer the ANTHROPIC MESSAGES API. A llama.cpp or Ollama
+# server answers the OpenAI API instead, so point this at a translating proxy
+# in front of that server, never at the model server itself.
+INFERENCE_BACKEND = os.environ.get("PRISM_INFERENCE_BACKEND", "claude")
+LOCAL_INFERENCE_BASE_URL = os.environ.get(
+    "PRISM_LOCAL_INFERENCE_BASE_URL", "http://localhost:8087",
+)
+# The local engine needs no real credential, but the CLI expects a non-empty
+# token. INV-1 still strips ANTHROPIC_API_KEY, so this never becomes one.
+LOCAL_INFERENCE_AUTH_TOKEN = os.environ.get(
+    "PRISM_LOCAL_INFERENCE_AUTH_TOKEN", "local-inference",
+)
+
 # Governance
 GOVERNANCE_INTERVAL_SECONDS = int(os.environ.get("PRISM_GOVERNANCE_INTERVAL", "300"))  # 5 min
 

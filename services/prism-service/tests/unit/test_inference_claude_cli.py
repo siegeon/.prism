@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
+from prism_service import config
 from prism_service.inference import claude_cli
 
 
@@ -365,3 +366,51 @@ def test_claude_cli_result_exposes_graceful_budget_stop_method():
         parsed_events=[_result_event()],
     )
     assert res.graceful_budget_stop() is True
+
+
+def test_default_backend_adds_no_redirect(monkeypatch):
+    """The default setting must not change the child environment at all."""
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "claude")
+
+    env = claude_cli._strip_env()
+
+    assert "ANTHROPIC_BASE_URL" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+
+def test_local_backend_points_the_harness_at_our_engine(monkeypatch):
+    """The local setting redirects the harness and keeps everything else."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_AUTH_TOKEN", "local-inference")
+    monkeypatch.setenv("OTHER", "keep-me")
+
+    env = claude_cli._strip_env()
+
+    assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8087"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "local-inference"
+    assert env.get("OTHER") == "keep-me"
+
+
+def test_local_backend_still_strips_the_api_key(monkeypatch):
+    """INV-1 holds on both settings. The local engine needs no credential."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret")
+    monkeypatch.setenv("CLAUDECODE", "1")
+
+    env = claude_cli._strip_env()
+
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "CLAUDECODE" not in env
+
+
+def test_the_setting_wins_over_an_inherited_base_url(monkeypatch):
+    """An ambient redirect must not silently outrank the configured one."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://someone-elses-proxy:9999")
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+
+    env = claude_cli._strip_env()
+
+    assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8087"

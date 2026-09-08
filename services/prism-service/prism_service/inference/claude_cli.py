@@ -152,10 +152,40 @@ def _build_cmd(
     return cmd
 
 
+def _backend_env() -> dict:
+    """Return the redirect that points `claude -p` at the chosen model.
+
+    PRISM keeps the claude harness on both settings. The harness owns the
+    tool loop, the turns, the budget and the run manifest, so this changes
+    the model and nothing else.
+
+    The default backend is "claude" and returns an empty mapping, so the
+    child environment is byte-identical to the behaviour before this
+    setting existed. The "local" backend sets ANTHROPIC_BASE_URL.
+
+    This never sets ANTHROPIC_API_KEY. INV-1 strips that variable, and the
+    local engine needs no credential.
+    """
+    from prism_service import config
+
+    if (config.INFERENCE_BACKEND or "").strip().lower() != "local":
+        return {}
+    env = {"ANTHROPIC_BASE_URL": config.LOCAL_INFERENCE_BASE_URL}
+    if config.LOCAL_INFERENCE_AUTH_TOKEN:
+        env["ANTHROPIC_AUTH_TOKEN"] = config.LOCAL_INFERENCE_AUTH_TOKEN
+    return env
+
+
 def _strip_env(base_env: dict | None = None) -> dict:
-    """Return a copy of base_env (or os.environ) with INV-1 vars removed."""
+    """Return a copy of base_env (or os.environ) with INV-1 vars removed.
+
+    The configured backend redirect applies last, so the setting wins over
+    an ANTHROPIC_BASE_URL that the parent environment already carries.
+    """
     src = os.environ if base_env is None else base_env
-    return {k: v for k, v in src.items() if k not in _STRIP_VARS}
+    env = {k: v for k, v in src.items() if k not in _STRIP_VARS}
+    env.update(_backend_env())
+    return env
 
 
 _AUTH_FAIL_MARKERS = (
