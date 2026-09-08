@@ -250,8 +250,6 @@ def build(project: str, *, task_id: str | None = None) -> dict:
         "diagram_type": "workflow",
         "meta": {
             "title": f"Task {task_id[:8]}: {clip(task.title or 'Untitled', 40)}",
-            "subtitle": f"Status: {task.status}, Step: {_step_label(task.workflow_step)}",
-            "visual_preset": "blueprint",
             "animation": "none",
         },
         # A lane with nothing in it renders as an empty band that reads like a

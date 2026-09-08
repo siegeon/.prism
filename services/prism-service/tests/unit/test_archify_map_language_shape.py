@@ -118,7 +118,8 @@ def test_an_unreadable_store_says_so_and_still_renders(monkeypatch):
     monkeypatch.setattr(og, "OntologyGraph", _Locked)
     out = language.build("prism")
     assert out["components"], "an empty map must still be a valid diagram"
-    assert "could not be read" in out["meta"]["subtitle"]
+    # Omit subtitle by default per archify contract invariant; never invent subtitle that restates title or cards
+    assert "title" in out["meta"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not on PATH")

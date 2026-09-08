@@ -53,8 +53,6 @@ def _empty(reason: str) -> dict:
         "diagram_type": "architecture",
         "meta": {
             "title": "Language",
-            "subtitle": reason,
-            "visual_preset": "blueprint",
             "animation": "none",
         },
         "layout": {"mode": "grid", "cols": 1, "cellW": 170, "cellH": 76},
@@ -202,11 +200,6 @@ def build(project: str, *, task_id: str | None = None) -> dict:
 
     meta = {
         "title": "Language",
-        "subtitle": (
-            f"PRISM's ontology: {len(described)} classes, {len(properties)} "
-            f"properties, {len(holds) + len(fails)} rules"
-        ),
-        "visual_preset": "blueprint",
         "animation": "none",
     }
     if views:
