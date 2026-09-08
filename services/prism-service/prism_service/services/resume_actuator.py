@@ -35,6 +35,11 @@ SEAT = "prism-resume-actuator"  # distinct-actor identity on every report
 # transition.
 DISPATCH_ACTION = "resume_actuator_dispatch"
 PARKED_ACTION = "resume_actuator_parked"
+# What the flow_report DID. task_runner._run_one_step has always
+# written a "step=<id>; advanced=false" row; this seat never did, so a
+# refused report left only the pre-work dispatch row and the park that
+# followed named no cause at all.
+REPORT_ACTION = "resume_actuator_report"
 
 DEFAULT_MAX_RETRIES = 3
 
@@ -147,12 +152,68 @@ def _open_retry_task_id(project: str) -> Optional[str]:
     return None
 
 
+def _report_reason(report: object, outcome: object) -> str:
+    """The refusal a non-advancing report carries, as one line."""
+    reason = ""
+    if isinstance(report, dict):
+        reason = str(report.get("error") or report.get("reason") or "").strip()
+    if not reason and isinstance(outcome, dict):
+        reason = str(outcome.get("reason") or "").strip()
+    return reason or "flow_report refused and named no reason"
+
+
+def _record_report(task_svc, task_id: str, step_id: str,
+                   report: object, outcome: object) -> bool:
+    """Write what the report DID to durable history, and say so.
+
+    The seat used to keep the refusal only in its own return value, so
+    three refusals left three identical "seat=...; step=..." rows and a
+    park naming no cause -- unreadable to a person AND to a machine seat.
+    Best-effort: a history failure never breaks the dispatch.
+    """
+    advanced = bool(report.get("ok")) if isinstance(report, dict) else False
+    if advanced:
+        details = f"seat={SEAT}; step={step_id}; advanced=true"
+    else:
+        reason = _report_reason(report, outcome)[:400]
+        details = (f"seat={SEAT}; step={step_id}; advanced=false; "
+                   f"reason={reason}")
+    try:
+        task_svc.record_history(task_id, action=REPORT_ACTION,
+                                details=details, actor=SEAT)
+    except Exception:  # noqa: BLE001 - history is best-effort, never fatal
+        pass
+    return advanced
+
+
+def _last_refusal(task_svc, task_id: str) -> str:
+    """Reason on the newest non-advancing report row, or "" when none."""
+    try:
+        rows = list(task_svc.history(task_id) or [])
+    except Exception:  # noqa: BLE001 - a park must never fail on history
+        return ""
+    for row in reversed(rows):
+        if str(getattr(row, "action", "") or "") != REPORT_ACTION:
+            continue
+        details = str(getattr(row, "details", "") or "")
+        if "advanced=false" not in details:
+            continue
+        _, _, reason = details.partition("reason=")
+        return reason.strip()
+    return ""
+
+
 def _park(project: str, task_id: str, attempts: int, max_retries: int) -> dict:
     from prism_service.project_context import get_project
 
     ctx = get_project(project)
     reason = (f"resume-actuator: retry budget spent "
               f"({attempts}/{max_retries}) — parked for a human")
+    # Carry WHY the last try was refused, so the blocked task is
+    # diagnosable without reading the seat's return value.
+    _last = _last_refusal(ctx.task_svc, task_id)
+    if _last:
+        reason = f"{reason}. Last refusal: {_last}"
     ctx.task_svc.update(task_id, status="blocked", blocked_reason=reason)
     ctx.task_svc.record_history(task_id, action=PARKED_ACTION,
                                 details=reason, actor=SEAT)
@@ -440,6 +501,8 @@ def dispatch_once(project: str, task_id: str) -> dict:
         task_id=task_id, session_id=SEAT, outcome=outcome,
         expected_step=step_id, usage=usage,
         model=(usage or {}).get("model") or None), project=project)
+
+    _record_report(task_svc, task_id, step_id, report, outcome)
 
     if report.get("ok"):
         rad.reset_attempts(scores_db, task_id)

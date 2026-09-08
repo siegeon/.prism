@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.264"
+PRISM_VERSION = "7.13.265"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8792,4 +8792,23 @@ PRISM_VERSION_NOTES += (
     "then passed end to end: the services box opens "
     "prism_service/services/conductor_service.py, its own largest file, with "
     "64 nodes and 62 edges of real code around it."
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.265: the retry seat records WHAT ITS REPORT DID. '
+    'resume_actuator.dispatch_once kept a refused flow_report only in its '
+    'own return value, so the sole durable row was the pre-work '
+    'seat=...; step=... dispatch row. Three refusals therefore left three '
+    'identical rows and a park that named no cause. Live on 2026-09-05: '
+    'nine tasks blocked at review_previous_notes with only '
+    'retry budget spent (3/3) - parked for a human; the inference had '
+    'really run (6k-18k tokens, ok=True in agent_runs), so the step was '
+    'refused at REPORT time and neither a person nor a machine seat could '
+    'see why. 1bcb2b24 was released by hand and re-parked nine minutes '
+    'later. dispatch_once now writes a resume_actuator_report row '
+    '(advanced=true, or advanced=false with the reason), and _park carries '
+    'the last refusal into blocked_reason, so a parked task names its own '
+    'cause. A refusal that computed no reason says that instead of leaving '
+    'the row blank. New suite test_resume_actuator_records_its_report.py '
+    '(5 tests, all red at base b31b6344). 67 seat/actuator tests green. '
 )
