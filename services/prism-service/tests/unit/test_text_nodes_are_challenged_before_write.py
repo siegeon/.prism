@@ -367,13 +367,26 @@ def test_the_report_path_challenges_before_the_step_advances():
     from prism_service.api import conductor_flow
 
     src = inspect.getsource(conductor_flow.flow_report)
-    challenge_at = src.find("challenge_step_artifacts")
+    # RE-ANCHORED by AC-13 in this same slice. This assertion used to
+    # look for the bare literal "challenge_step_artifacts" inside
+    # flow_report. AC-13 moves that call behind
+    # conductor_flow._challenge_and_record, which binds the report and
+    # records it, so the call site in flow_report now carries the
+    # recorder's name. The ordering invariant is unchanged and is
+    # asserted here; the second half below keeps the invariant that the
+    # recorder is a wrapper around the codified node and not a second
+    # checker.
+    challenge_at = src.find("_challenge_and_record")
     advance_at = src.find("svc.advance_task(")
     assert challenge_at != -1, "flow_report never challenges the artifact"
     assert advance_at != -1
     assert challenge_at < advance_at, (
         "the challenge must run BEFORE the advance, or a gate scores "
         "text the challenge has not seen")
+    helper = inspect.getsource(conductor_flow._challenge_and_record)
+    assert "challenge_step_artifacts" in helper, (
+        "the recorder must call the codified challenge node, never a "
+        "second hand-written checker")
 
 
 def test_the_node_writes_the_repair_back_through_the_task_service():
@@ -470,3 +483,101 @@ def test_an_unrepairable_violation_is_named_not_swallowed():
     assert result["after"]["ok"] is False
     messages = [v["message"] for v in result["after"]["violations"]]
     assert any("plain English" in m for m in messages), messages
+
+
+# ----------------------------------------------------------------------
+# AC-13 -- the criterion that FAILS at the base commit cec813df.
+# conductor_flow.py:885-888 calls challenge_step_artifacts(...) as a
+# bare statement inside `except Exception: pass`. The typed report the
+# docstring promises (text_challenge.py:342-343, "every violation it
+# could not repair") is bound to nothing, and a challenge error is
+# swallowed. So a driver cannot read which rule refused which span, and
+# neither can a gate: the tooth computes a refusal reason and discards
+# it, which is the half-shipped shape Requirement 9 forbids.
+# ----------------------------------------------------------------------
+
+
+class _RecordingTaskSvc:
+    """A TaskService double that keeps what was WRITTEN and what was
+    RECORDED, so a test reads the challenge report back off the task the
+    way a driver or a gate reads it."""
+
+    def __init__(self, task):
+        self._task = task
+        self.writes: list = []
+        self.rows: list = []
+
+    def get(self, task_id):
+        return self._task
+
+    def update(self, task_id, **kw):
+        self.writes.append(kw)
+        for key, value in kw.items():
+            setattr(self._task, key, value)
+        return self._task
+
+    def record_history(self, task_id, action, details="", actor=""):
+        self.rows.append({"task_id": task_id, "action": action,
+                          "details": details, "actor": actor})
+
+
+class _StoryTask:
+    """A task whose plan_doc carries an UNREPAIRABLE violation: the
+    node refuses to substitute a lexicon synonym (text_challenge.py:45-56
+    records why -- lexicon.align once produced 'gate Task'), so
+    text-uses-canonical-terms survives the repair and must be named."""
+
+    id = "t1"
+    plan_doc = _STORY_IN
+    completion_proof = ""
+    oracle = ""
+    stop_if: list = []
+    likely_misfire = ""
+    premise_notes = ""
+
+
+def test_the_report_path_records_the_challenge_report():
+    """AC-13. The report path BINDS the challenge result and records it
+    on the task, so the rule that refused a span is readable after the
+    advance."""
+    from prism_service.api import conductor_flow
+
+    svc = _RecordingTaskSvc(_StoryTask())
+    report = conductor_flow._challenge_and_record(
+        svc, "t1", "draft_story", project="prism")
+
+    assert report is not None, "the report path discarded the challenge result"
+    assert report["unrepaired"] == [
+        {"field": "plan_doc", "name": "text-uses-canonical-terms",
+         "message": "text uses a synonym where the lexicon has a "
+                    "canonical term"}], report
+
+    named = [r for r in svc.rows if "text-challenge" in r["action"]]
+    assert len(named) == 1, svc.rows
+    details = named[0]["details"]
+    assert "text-uses-canonical-terms" in details, details
+    assert "plan_doc" in details, details
+    assert "draft_story" in details, details
+
+
+def test_a_challenge_error_is_named_not_swallowed_on_the_report_path():
+    """`except Exception: pass` reads a broken challenge as a clean
+    drive. The error must never block the advance, and it must never
+    vanish: the recorder returns a typed result that names it and
+    records the same text on the task."""
+    from prism_service.api import conductor_flow
+
+    class _Boom(_RecordingTaskSvc):
+        def get(self, task_id):
+            raise RuntimeError("shapes.ttl is unreadable")
+
+    svc = _Boom(_StoryTask())
+    report = conductor_flow._challenge_and_record(
+        svc, "t1", "draft_story", project="prism")
+
+    assert svc.writes == [], "a failed challenge must repair nothing"
+    assert report is not None, "a challenge error must still return a result"
+    assert "shapes.ttl is unreadable" in report.get("error", ""), report
+    named = [r for r in svc.rows if "text-challenge" in r["action"]]
+    assert len(named) == 1, svc.rows
+    assert "shapes.ttl is unreadable" in named[0]["details"], named

@@ -747,6 +747,58 @@ def _contract_refusal(svc, task, body: "Ident") -> Optional[dict]:
             "next_job": _job(task)}
 
 
+def _challenge_and_record(task_svc, task_id: str, step_id: str,
+                          project: str | None = None) -> dict:
+    """Run the codified text-challenge node and RECORD what it said
+    (task d7947eb6, AC-13).
+
+    The call site used to be a bare ``challenge_step_artifacts(...)``
+    statement inside ``except Exception: pass``, so the typed report the
+    node builds — every violation it could not repair, and which rule
+    refused which field — was bound to nothing, and a challenge error
+    read as a clean drive. A tooth that COMPUTES a refusal reason and
+    then discards it is half-shipped: neither a driver nor a gate can
+    read why a span was refused.
+
+    So this wrapper binds the report, writes one ``text-challenge``
+    history row naming the step, the field and the rule, and returns the
+    report. It is a recorder around the codified node, never a second
+    checker. A challenge error never blocks the advance: it is caught
+    here, named in the returned result under ``error``, and recorded on
+    the same row.
+    """
+    from prism_service.services.text_challenge import challenge_step_artifacts
+
+    try:
+        report = challenge_step_artifacts(task_svc, task_id, step_id,
+                                          project=project)
+    except Exception as exc:  # a broken challenge must never block the drive
+        report = {"step": step_id, "task_id": task_id, "fields": {},
+                  "repaired": [], "unrepaired": [],
+                  "error": f"{type(exc).__name__}: {exc}",
+                  "reason": f"the text challenge failed: {exc}"}
+
+    details = ""
+    if report.get("error"):
+        details = (f"{step_id}: the text challenge failed and repaired "
+                   f"nothing — {report['error']}")
+    elif report.get("unrepaired"):
+        named = "; ".join(
+            f"{v['field']}: {v['name']} — {v['message']}"
+            for v in report["unrepaired"])
+        details = f"{step_id}: {named}"
+    elif report.get("repaired"):
+        details = f"{step_id}: repaired " + ", ".join(report["repaired"])
+
+    if details:
+        try:
+            task_svc.record_history(task_id, action="text-challenge",
+                                    details=details, actor="text-challenge")
+        except Exception:
+            pass
+    return report
+
+
 @router.post("/report")
 def flow_report(body: Ident, project: str = Query("default")) -> dict:
     """Record the worker's outcome and let the SERVER advance the flow —
@@ -899,13 +951,11 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
         # no model call to the report path. A step that writes no text
         # artifact returns immediately. Best-effort, like the red and green
         # mints above: a challenge error never blocks the advance.
-        try:
-            from prism_service.services.text_challenge import (
-                challenge_step_artifacts)
-            challenge_step_artifacts(svc._task_svc, body.task_id, step["id"],
-                                     project=project)
-        except Exception:
-            pass
+        # The report is BOUND and RECORDED by _challenge_and_record, which
+        # owns the best-effort handling: a challenge error is named on the
+        # task, never swallowed, and never blocks the advance.
+        _challenge_and_record(svc._task_svc, body.task_id, step["id"],
+                              project=project)
         res = svc.advance_task(body.task_id, session_id=body.session_id,
                               model=body.model, usage=body.usage)
 
