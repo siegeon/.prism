@@ -3,8 +3,13 @@
 PRISM records every commit, token and gate decision for a task and gives
 it no number. This module is that number.
 
-    score = multiplier * throughput / (1 + rework)
+    score = throughput / (1 + rework)
     throughput = log10(1 + size) / (effort_tokens / 1000)
+
+The resolution multiplier is REPORTED beside the score, never folded into
+it: the card prints `score` and then `x <multiplier> <resolution>
+(advisory)`, so a reader sees the rubric without a tag edit moving a
+number a gate could read.
 
 WHERE THE EFFORT TERM COMES FROM, and where it must never come from.
 `agent_runs` carries a real task_id (agent_runs_data.py:55) and a real
@@ -46,6 +51,15 @@ RESOLUTION_MULTIPLIERS: dict[str, float] = {
 }
 DEFAULT_MULTIPLIER = 1.0
 BASE_REF = "origin/main"
+
+# History actions the rework term reads. These are the rows the conductor
+# already writes, so the score adds no new bookkeeping.
+_ADVANCE_ACTION = "advance_task"
+_DISPATCH_ACTION = "resume_actuator_dispatch"
+_FULL_REWORK_ACTIONS = ("resume_actuator_parked",)
+# A retry that bought no advance is a QUARTER of a defect, not a whole one:
+# it cost a dispatch, but it did not send the work back.
+_BARREN_DISPATCH_WEIGHT = 0.25
 
 
 def _field(task: Any, name: str, default: Any) -> Any:
@@ -90,54 +104,6 @@ def effort_tokens(scores_db: str, task_id: str) -> int:
 
     rows = get_agent_runs(scores_db, limit=100_000, task_id=task_id)
     return sum(int(r.get("tokens") or 0) for r in rows)
-
-
-def rework_points(history: Optional[list]) -> float:
-    """PSP defect drag, read off rows the conductor already writes.
-
-    A park is a whole point: the task stopped and waited for a person. A
-    gate reject is a whole point: the work was returned. A retry dispatch
-    is a QUARTER, and only when no later advance_task follows it -- a
-    dispatch that moved the task bought progress and is not drag. Task
-    338f7810 is the case this term exists to rank: 37 dispatches over
-    4h40m, advancing and rewinding the whole time.
-    """
-    rows = list(history or [])
-    points = 0.0
-    for i, row in enumerate(rows):
-        action = str(_field(row, "action", "") or "")
-        details = str(_field(row, "details", "") or "").lower()
-        if action == "resume_actuator_parked":
-            points += 1.0
-        elif action == "gate_decide" and "reject" in details:
-            points += 1.0
-        elif action == "resume_actuator_dispatch":
-            later = rows[i + 1:]
-            advanced = any(
-                str(_field(r, "action", "") or "") == "advance_task"
-                for r in later)
-            if not advanced:
-                points += 0.25
-    return points
-
-
-def resolution_of(task: Any) -> tuple[str, float]:
-    """The recorded resolution class and its multiplier, from a
-    `resolution:<class>` tag. Unset reads as unset, never as hand work."""
-    for tag in (_field(task, "tags", None) or []):
-        text = str(tag)
-        if text.startswith("resolution:"):
-            name = text.split(":", 1)[1].strip().lower()
-            if name in RESOLUTION_MULTIPLIERS:
-                return name, RESOLUTION_MULTIPLIERS[name]
-    return "unset", DEFAULT_MULTIPLIER
-
-
-# One point of drag each. A resume dispatch is weighed separately, below.
-_FULL_REWORK_ACTIONS = ("resume_actuator_parked", "rewind")
-_DISPATCH_ACTION = "resume_actuator_dispatch"
-_ADVANCE_ACTION = "advance_task"
-_BARREN_DISPATCH_WEIGHT = 0.25
 
 
 def rework_points(history: list) -> float:
@@ -232,60 +198,4 @@ def score_task(repo_root: str, scores_db: str, task: Any,
     out["reason"] = (
         f"{size} shipped lines over {tokens} agent tokens, divided by "
         f"{drag:.2f} of rework drag")
-    return out
-
-
-def score_task(repo_root: str, scores_db: str, task: Any,
-               history: Optional[list] = None,
-               base_ref: str = BASE_REF) -> dict:
-    """Score one task. Never raises, and never invents a number.
-
-    Two cases report no score rather than a misleading one:
-      * nothing reachable from `base_ref` -> score 0.0, because done means
-        shipped and unlanded work has delivered nothing yet;
-      * no measured tokens -> score None, because a ratio with no
-        denominator is not zero, it is unknown.
-    """
-    task_id = str(_field(task, "id", "") or "")
-    size = delivered_size(repo_root, task_id, base_ref)
-    tokens = effort_tokens(scores_db, task_id)
-    rework = rework_points(history)
-    resolution, multiplier = resolution_of(task)
-    shipped = size > 0
-
-    out: dict[str, Any] = {
-        "task_id": task_id,
-        "size": size,
-        "effort_tokens": tokens,
-        "rework": rework,
-        "resolution": resolution,
-        "multiplier": multiplier,
-        "advisory": True,
-        "shipped": shipped,
-        "throughput": None,
-        "lines_per_1k": None,
-        "score": None,
-        "reason": "",
-    }
-
-    if not shipped:
-        out["score"] = 0.0
-        out["reason"] = (
-            f"no commit trailered [task:{task_id[:8]}] is reachable from "
-            f"{base_ref}, so nothing has been delivered yet")
-        return out
-
-    if tokens <= 0:
-        out["reason"] = (
-            "no measured tokens on agent_runs for this task, so cost for "
-            "each delivered line cannot be computed")
-        return out
-
-    per_1k = tokens / 1000.0
-    out["throughput"] = math.log10(1 + size) / per_1k
-    out["lines_per_1k"] = size / per_1k
-    out["score"] = multiplier * out["throughput"] / (1.0 + rework)
-    out["reason"] = (
-        f"{size} delivered lines against {tokens} tokens, "
-        f"{rework} rework")
     return out
