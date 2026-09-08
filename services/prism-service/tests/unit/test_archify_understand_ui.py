@@ -58,10 +58,27 @@ def test_a_map_is_a_reading_of_a_surface_never_a_panel_stacked_on_it():
     assert "{drawn ? (" in understand
     assert '<ArchifyMaps\n          project={project}\n          kind="concepts"' in understand
 
-    # Explore: a third reading of the same graph, in the same viewer body.
-    assert "const [wantArchitecture, setWantArchitecture] = useState(false);" in explore
-    assert "{wantArchitecture ? (" in explore
-    assert '<ArchifyMaps project={project} kind="code" />' in explore
+    # Explore: the map is not A reading of the surface any more, it IS the
+    # surface (7.13.261). The wantArchitecture toggle was retired because
+    # there is no longer a competing panel to toggle against: the page was
+    # stripped to the code graph, so a bare visit draws the architecture
+    # directly (owner: "the code arch is in the graph isnt it?"). That is
+    # this test's own principle carried further, not abandoned -- one view
+    # of one thing, with no control needed to choose between two.
+    assert "const [wantArchitecture" not in explore, (
+        "the architecture toggle should stay retired: the front door IS the "
+        "architecture, so a toggle would put two views of one thing back on "
+        "one page")
+    assert 'kind="code"' in explore and "fill" in explore, (
+        "Explore must still draw the code map, filling the surface")
+    # And it must not have re-grown the brain-search furniture that made it
+    # a second Understand: no domain pills, no ranked/communities strip.
+    # Assert against CODE, not against rendered words: the strip's label read
+    # "communities" in source and was uppercased by CSS, so matching the
+    # uppercase form would never have caught it, and matching the lowercase
+    # form hits any comment that mentions the word.
+    for gone in ('"expertise"', "counts.communities", "<Stat ", "setResultsOpen"):
+        assert gone not in explore, f"Explore re-grew brain-search chrome: {gone}"
 
 
 def test_understand_never_draws_the_code_map():

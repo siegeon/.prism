@@ -11,6 +11,15 @@ Hermes-native, per memory).
 
 FAILS today because the stub is still in place and nothing renders
 sel.annotations. Goes green when the placeholder is swapped for real markup.
+
+RE-ANCHORED 7.13.261: the narrative panel no longer lives on ExplorePage.
+Explore is the code graph and was stripped back to it -- the "Ask the graph"
+search over docs/expertise/memory went with the Context bundle that rendered
+these annotations (owner: "a search bar that has nothing to do wuth the
+code"). The panel itself was NOT dropped: ArtifactPage.tsx is the surface
+that reads POST /api/brain/understand and renders each annotation's
+name/purpose/provenance, so the contract below follows it there. The
+assertions are unchanged in substance.
 """
 
 from __future__ import annotations
@@ -18,8 +27,11 @@ from __future__ import annotations
 from pathlib import Path
 
 _HERE = Path(__file__).resolve()
-_WEB = (_HERE.parent.parent.parent / "prism_service" / "web" / "src"
-        / "pages" / "ExplorePage.tsx")
+_SRC_DIR = _HERE.parent.parent.parent / "prism_service" / "web" / "src"
+_WEB = _SRC_DIR / "pages" / "ArtifactPage.tsx"
+# Explore must stay clean of it: the narrative belongs to the surface that
+# reads the brain, not to the code graph.
+_EXPLORE = _SRC_DIR / "pages" / "ExplorePage.tsx"
 
 
 def _src() -> str:
@@ -68,3 +80,17 @@ def test_annotations_typed_not_unknown():
     # real shape so name/purpose/provenance/updated_at are typed, not opaque.
     assert "annotations: unknown[]" not in src, \
         "annotations must be given a real type once rendered"
+
+
+def test_explore_does_not_render_the_narrative_panel():
+    """The other half of the re-anchoring above (7.13.261).
+
+    Explore is the code graph. The annotation narrative reads the brain --
+    docs, concepts, memory, LLM-written purpose -- which is Understand's
+    subject, and rendering it on Explore is the confusion the owner named:
+    "it seems to me you confused understand (concepts and memory) with the
+    code graph". If it comes back here, that is a regression, not a feature.
+    """
+    explore = _EXPLORE.read_text(encoding="utf-8")
+    assert ".provenance" not in explore
+    assert "/api/brain/understand" not in explore

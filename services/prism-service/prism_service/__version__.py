@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.260"
+PRISM_VERSION = "7.13.261"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8714,4 +8714,26 @@ PRISM_VERSION_NOTES += (
     "reader onto the code-graph page, and a live refresh keeps the camera and "
     "the filter chips where the reader put them. The dossier is not mounted "
     "twice: it rides the mesh's rail as it always did."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.261: Explore is stripped to the code graph. The page was still "
+    "wearing brain-understand's furniture long after its content changed: an "
+    "Ask-the-graph search over docs and expertise, py/ts/md/expertise domain "
+    "pills, Reindex/Rebuild/Enrich, and a strip reading 131 communities on "
+    "the same screen where the map read 12, two numbers for one word, with "
+    "the word Explore appearing four times. Owner: 'buttons we never asked "
+    "for in a panal we dont need showing data that is not code', 'a search "
+    "bar that has nothing to do wuth the code', 'it seems to me you confused "
+    "understand (concepts and memory) with the code graph'. ExplorePage goes "
+    "784 lines to 178: no focus draws the architecture, ?focus= draws the "
+    "mesh, Full map stays a deliberate opt-in, and searching docs, concepts "
+    "and memory is Understand's job one nav item away. The wantArchitecture "
+    "toggle retires because the front door IS the architecture. ?focus= is "
+    "read one way now, as a generic token, so the phantom kind:'file' node a "
+    "task id used to produce cannot recur. Five suites re-anchored: the "
+    "ontology assertions follow the mesh to its component, the annotation "
+    "narrative follows the panel to ArtifactPage, which already renders it, "
+    "and the removed behaviours are retired in place with what superseded "
+    "them, re-asserted in their stronger form."
 )
