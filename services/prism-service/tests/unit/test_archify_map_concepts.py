@@ -20,7 +20,7 @@ class TestConceptMapBuilder:
         assert ir["schema_version"] == 1
         assert ir["diagram_type"] == "architecture"
         assert ir["meta"]["title"]
-        assert "visual_preset" in ir["meta"]
+        # Omit visual_preset by default per archify contract invariant; every diagram opens in classic
         assert ir["layout"]["mode"] == "grid"
 
         # Must have components and layout info

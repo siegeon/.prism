@@ -73,8 +73,8 @@ def test_ir_schema_validation():
 
         # Meta fields
         assert ir["meta"]["title"]
-        assert ir["meta"]["subtitle"]
-        assert ir["meta"]["visual_preset"] == "blueprint"
+        # Omit subtitle by default per archify contract invariant; never invent subtitle that restates title or cards
+        # Omit visual_preset by default per archify contract invariant; every diagram opens in classic
         assert ir["meta"]["animation"] == "none"
 
         # Lanes. The earlier assertion here demanded all three lanes always.

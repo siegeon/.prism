@@ -192,10 +192,6 @@ def build(project: str, *, task_id: str | None = None) -> dict:
             # publish report a change even when the architecture did not
             # move. The build time already reaches the reader through
             # meta.json, which the Maps panel renders as "built <time>".
-            "subtitle": (
-                f"{len(kept_ids)} concepts across {len(top_domains)} domains"
-            ),
-            "visual_preset": "blueprint",
             "animation": "none",
         },
         "layout": {
@@ -237,8 +233,6 @@ def _empty_diagram(reason: str) -> dict:
         "diagram_type": "architecture",
         "meta": {
             "title": "PRISM Concept Map",
-            "subtitle": "Empty — no concepts yet",
-            "visual_preset": "blueprint",
             "animation": "none",
         },
         "layout": {
