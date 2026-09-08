@@ -171,8 +171,33 @@ _MERMAID_KEYWORDS = (
     "c4container", "c4component", "mindmap", "timeline",
 )
 
+# Task 98ef9d3d: this counter read FLOWCHART arrows only. A sequenceDiagram
+# uses ->> and -->> and --x and -), so an 18-message diagram counted ZERO
+# edges - design_packet.plan_gate_certainty then capped diagram_quality at
+# 0.5 and no sequence-diagram plan could ever reach the 0.90 certainty
+# threshold (0.875 was the ceiling), while the repo's own mermaid-syntax
+# skill tells plan authors to write exactly that diagram type.
+#
+# The node group also swallowed the arrow's own first hyphen: `cli-->api`
+# read as `cli-` -> `api`. A hyphen is part of a node name ONLY when what
+# follows it is neither another hyphen nor `>`.
+#
+# Deliberately still NOT read: bare `--` class associations and the ER
+# `||--o{` family. Both are far too close to ordinary prose punctuation to
+# match safely, and a phantom edge feeds compute_violations, which would
+# invent an architecture violation out of a sentence.
+_NODE = r"[A-Za-z_](?:[\w./]|-(?![->]))*"
+_ARROW = (
+    r"(?:"
+    r"-\.+->"                # -.->   dotted flowchart
+    r"|={2,}>"               # ==>    thick flowchart
+    r"|\.{2,}\|?>"           # ..>    ..|>   class diagram
+    r"|<{0,2}-{1,3}\|?>{1,2}"  # -> --> ->> -->> <--> --|> <<->>
+    r"|-{1,2}[x)]"           # -x --x -) --)  sequence diagram ends
+    r")"
+)
 _EDGE_RE = re.compile(
-    r"([A-Za-z_][\w./-]*)\s*(?:-{1,3}>|-\.+->|={2,}>)\s*([A-Za-z_][\w./-]*)")
+    r"(" + _NODE + r")\s*" + _ARROW + r"\s*(" + _NODE + r")")
 
 
 def mermaid_parses(source: str) -> bool:
