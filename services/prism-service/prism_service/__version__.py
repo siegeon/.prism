@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.265"
+PRISM_VERSION = "7.13.266"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8816,4 +8816,27 @@ PRISM_VERSION_NOTES += (
     "moved from standard to showcase after checking all four kinds pass it "
     "with 9 checks, 0 errors, 0 warnings. The audit behind this is memory "
     "mx-8261eb; epic e89f5ff3."
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.266: task e6d76007 - a task scores its delivery against its '
+    'cost. PRISM recorded every commit, token and gate decision for a task '
+    'and gave it no number, so nobody could see whether a drive was getting '
+    'cheaper. New services/task_score.py returns size, effort_tokens, '
+    'rework, throughput, lines_per_1k and score, served at '
+    'GET /api/tasks/{id}/score and rendered as a Task Score card on the '
+    'task page. SIZE is churn over commits trailered for the task and '
+    'reachable from origin/main, so unshipped work scores zero. EFFORT is '
+    'the agent_runs.tokens sum for that task_id, and NEVER the session '
+    'rollup: that path joins a table keyed by session alone, so on '
+    '2026-09-08 it read 8448748766 tokens for task 4e6e7417 and 8462721950 '
+    'for task 7a72ebcb, two unrelated tasks 0.16 percent apart, while a '
+    'task that really ran read 0. REWORK divides the score: a park or a '
+    'gate reject is a whole point, a retry dispatch that bought no advance '
+    'a quarter. Size is log-scaled so bulk cannot win. Measured over the 77 '
+    'tasks holding both shipped commits and measured tokens, throughput '
+    'runs 0.7 to 304 lines for each 1k tokens, median 8.8, and the metric '
+    'ranks the known oscillator 338f7810 last without being tuned to it. '
+    'New suite test_task_score.py, 19 tests, all red at base 58c91fd8. '
+    '55 score and task-API tests green, tsc clean, vite build clean. '
 )
