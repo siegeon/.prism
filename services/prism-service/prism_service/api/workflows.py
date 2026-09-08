@@ -1513,6 +1513,15 @@ def get_workflows(project: str = Query("default")) -> dict:
         # was created to catch -- four such mechanisms shipped on
         # 2026-08-30 with no caller at all.
         "brain-health",
+        # "plan-cut" / "plan-sew" (task dc815149): the two codified
+        # orchestration nodes of the plan phase. The cut refuses a split
+        # whose slices claim the same path, and names the files that force
+        # the overlap so the planner re-cuts instead of serialising; the
+        # sew names the assembler and what the parent must demonstrate
+        # itself. They nest here for the same structural reason land, reap
+        # and brain-health do -- green_gate is the terminal WORKFLOW_STEPS
+        # entry, so there is no step to hang a linked_workflow_id on.
+        "plan-cut", "plan-sew",
         # reap stays LAST: it deletes the worktree, so the knowledge-side
         # node must run before the workspace is destroyed.
         "reap",
@@ -2395,6 +2404,138 @@ def workflow_step_red_test_ids(
         return RedTestIdsResponse(
             red_test_ids=pinned, anchor_sha=red_sha,
             reason=f"red demonstrated at {red_sha[:12]}: {fresh.reason}")
+
+
+class SliceSpec(BaseModel):
+    id: str = Field(min_length=1)
+    title: str = ""
+    allowed_files: list[str] = []
+
+
+class PlanCutRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    parent_id: str = ""
+    slices: list[SliceSpec] = []
+
+
+class PlanCutResponse(BaseModel):
+    parallel_safe: bool = False
+    fan_out: int = 0
+    collisions: list[dict] = []
+    slice_ids: list[str] = []
+    reason: str = ""
+
+
+class PlanSewRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    parent_id: str = ""
+    assembler: str = ""
+    slices: list[SliceSpec] = []
+
+
+class PlanSewResponse(BaseModel):
+    complete: bool = False
+    assembler: str = ""
+    parent_must_demonstrate: list[str] = []
+    reason: str = ""
+
+
+# A cancelled or finished child is not a live slice: task 72ccaf94 shipped a
+# seat that read a leaf as an epic because its list of children returned rows
+# of ANY status.
+_LIVE_SLICE_STATUSES = ("pending", "in_progress", "blocked")
+
+
+def _record_node_run(project: str, task_id: str, step: str,
+                     summary: str) -> None:
+    """Report one codified node call as a ZERO-TOKEN agent_runs row.
+
+    Same shape as task_runner._record_codified_run. Without it the
+    orchestration stays invisible in the epic score and nobody can tell
+    whether planning got faster. A score write never fails a node.
+    """
+    try:
+        from prism_service.services import agent_runs_data
+
+        agent_runs_data.upsert_agent_run(
+            str(get_project(project)._data_dir / "scores.db"),
+            {"run_id": f"{step}-{task_id}", "workflow_name": "conductor",
+             "task_id": task_id, "agent_id": "conductor-planner", "role": "sm",
+             "step": step, "model": "codified", "tokens": 0, "cost_usd": 0.0,
+             "ok": 1, "verdict_summary": summary[:500]})
+    except Exception:
+        pass
+
+
+def _slices_from(body, project: str):
+    """The live slices of a cut: the body's own, or the parent's children."""
+    from prism_service.services import plan_partition as pp
+
+    if body.slices:
+        return [pp.Slice(id=s.id, title=s.title,
+                         allowed_files=list(s.allowed_files))
+                for s in body.slices]
+    if not body.parent_id:
+        return []
+    children = get_project(project).task_svc.list(parent_id=body.parent_id) or []
+    return [pp.Slice(id=c.id, title=getattr(c, "title", "") or "",
+                     allowed_files=list(getattr(c, "allowed_files", []) or []))
+            for c in children
+            if (getattr(c, "status", "") or "pending") in _LIVE_SLICE_STATUSES]
+
+
+@router.post("/steps/plan-cut")
+def workflow_step_plan_cut(
+    body: PlanCutRequest, project: str = Query(...),
+) -> PlanCutResponse:
+    """CODIFIED plan-phase node -- does this cut RUN IN PARALLEL?
+
+    A slice exists to run N agents at the same time. Two slices that claim
+    the same path cannot, so the cut is REFUSED and the files that force the
+    overlap are named, one row per shared path per pair, so the planner
+    re-cuts. It never proposes an ordering edge: `dependencies` is
+    create-time only, and serialising is the outcome this node prevents.
+
+    Pure reads. Never calls a model, never runs a subprocess, never takes a
+    worktree or repo lock inside this request handler.
+    """
+    from prism_service.services import plan_partition as pp
+
+    with _tracer.start_as_current_span("workflow.step.plan_cut") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        slices = _slices_from(body, project)
+        result = pp.partition(slices)
+        _record_node_run(project, body.task_id, "plan-cut", result.reason)
+        span.set_attribute("workflow.cut.parallel_safe", result.parallel_safe)
+        return PlanCutResponse(**result.to_dict())
+
+
+@router.post("/steps/plan-sew")
+def workflow_step_plan_sew(
+    body: PlanSewRequest, project: str = Query(...),
+) -> PlanSewResponse:
+    """CODIFIED plan-phase node -- who puts the slices back together?
+
+    A cut proved parallel-safe with nobody assembling leaves N green slices
+    and an undone parent (the 0784729f failure). This names the assembler
+    slice and the clauses the PARENT must demonstrate itself, read off the
+    parent's own oracle. Same posture as the cut: no model, no subprocess.
+    """
+    from prism_service.services import plan_partition as pp
+
+    with _tracer.start_as_current_span("workflow.step.plan_sew") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        slices = _slices_from(body, project)
+        parent = get_project(project).task_svc.get(body.task_id)
+        result = pp.fan_in(slices, body.assembler,
+                           getattr(parent, "oracle", "") or "" if parent else "")
+        _record_node_run(project, body.task_id, "plan-sew", result.reason)
+        span.set_attribute("workflow.sew.complete", result.complete)
+        return PlanSewResponse(**result.to_dict())
 
 
 class GreenGateStatusRequest(BaseModel):

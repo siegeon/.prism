@@ -1,0 +1,16 @@
+{
+  "id": "plan-sew",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Codified plan sew",
+  "version": 1,
+  "steps": [
+    {
+      "id": "sew",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-sew?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"parent_id\": \"${taskId}\", \"assembler\": \"\"}",
+      "timeoutSeconds": 30
+    }
+  ]
+}
