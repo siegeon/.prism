@@ -99,11 +99,24 @@ def delivered_size(repo_root: str, task_id: str,
 
 
 def effort_tokens(scores_db: str, task_id: str) -> int:
-    """Sum of agent_runs.tokens for THIS task id, and nothing else."""
-    from prism_service.services.agent_runs_data import get_agent_runs
+    """Sum of agent_runs.tokens for THIS task id, and nothing else.
+
+    Rows whose count cannot be true are skipped rather than summed. A run
+    cannot process more tokens than its model's context window holds, and
+    agent_runs_data._impossible_tokens_reason already decides that for the
+    writer. Rows written BEFORE that guard existed are still on disk: task
+    4e6e7417 carries one row of 2659518144 tokens, which alone is 99.999
+    percent of its apparent cost. Summing it would have made this score
+    report a 2.6 billion token task -- the very number this task exists to
+    stop reporting.
+    """
+    from prism_service.services.agent_runs_data import (
+        _impossible_tokens_reason, get_agent_runs,
+    )
 
     rows = get_agent_runs(scores_db, limit=100_000, task_id=task_id)
-    return sum(int(r.get("tokens") or 0) for r in rows)
+    return sum(int(r.get("tokens") or 0) for r in rows
+               if not _impossible_tokens_reason(r))
 
 
 def rework_points(history: list) -> float:

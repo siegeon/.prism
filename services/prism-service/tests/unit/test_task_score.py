@@ -506,3 +506,29 @@ def test_task_detail_page_states_the_honest_empty_cases():
     assert "not shipped" in src, (
         "the card has no honest empty state for a task whose commits have "
         "not reached origin/main")
+
+
+def test_an_impossible_token_row_is_not_counted_as_effort(tmp_path):
+    """A count no model could produce is a wrong number, not a big one.
+
+    Found by the live oracle walk, not by this suite: task 4e6e7417 carries
+    one agent_runs row of 2,659,518,144 tokens, written before
+    agent_runs_data._impossible_tokens_reason started refusing them. Summed
+    blind it made the score report a 2.6 billion token task -- exactly the
+    unusable cost figure this whole task exists to replace.
+    """
+    from prism_service.services.task_score import effort_tokens
+    task_id = "fc471aed-0000-0000-0000-00000000beef"
+    scores_db = tmp_path / "scores.db"
+    _seed_tokens(scores_db, task_id, 8_000, run_id="real")
+    from prism_service.services.agent_runs_data import upsert_agent_run
+    upsert_agent_run(str(scores_db), {
+        "run_id": "corrupt", "agent_id": "a", "step": "implement_tasks",
+        "task_id": task_id, "session_id": "s2", "role": "dev",
+        "model": "claude-opus-5", "started_at": "2026-09-08T13:00:00+00:00",
+        "duration_ms": 1000, "tokens": 2_659_518_144,
+    })
+
+    assert effort_tokens(str(scores_db), task_id) == 8_000, (
+        "a row above the model's own context window must be skipped, not "
+        "summed: it is a wrong number, not a large one")
