@@ -297,8 +297,12 @@ def sweep_once() -> list[dict]:
                     # skips gate steps, the adjudicator withholds a refused
                     # rubric, and nothing else moves it -- so only a person
                     # hand-editing plan_doc could free it.
+                    # red_gate joins them (task 1bcb2b24): it is the one
+                    # gate a human must never be asked to clear, so without
+                    # a rewind a refused red is unreachable from both sides.
                     if task is not None and step in ("plan_gate",
-                                                     "story_gate"):
+                                                     "story_gate",
+                                                     "red_gate"):
                         from prism_service.services import plan_rewind
                         pw = plan_rewind.maybe_rewind(ctx, task, pid)
                         if pw and pw.get("ok"):

@@ -55,6 +55,14 @@ REWIND_ACTION = "rewind"
 _STEP_BEFORE = {
     "plan_gate": "verify_plan",
     "story_gate": "draft_story",
+    # Task 1bcb2b24, 2026-09-08: red_gate had no rewind at all, and it is
+    # the ONE gate a human must never see (the owner rule that red belongs
+    # to the machine seat). So a red_gate that refused was unreachable from
+    # BOTH sides - the drive seat skips gate steps, the adjudicator
+    # withholds a refused verdict, and no human is allowed to click it. The
+    # task sat pending for ever. That is the exact trap the comment on the
+    # plan_rewind call in gate_adjudicator already describes.
+    "red_gate": "write_failing_tests",
 }
 
 
@@ -109,6 +117,18 @@ def _refusal_for(ctx, task, step: str, project: str) -> str:
         if step == "plan_gate":
             from prism_service.services import plan_gate_checks
             return str(plan_gate_checks.refusal(task, project) or "")
+        if step == "red_gate":
+            # The red seat has ALREADY measured the pinned suite and written
+            # its verdict to gate_reason ("NOT red: the spec's tests PASS at
+            # the red-step commit ..."). Re-running it here would spend a
+            # second test run to learn what the row already says.
+            #
+            # Only a REFUSAL rewinds. "NOT red" means the seat measured and
+            # judged. A reason that merely reports it could not measure is
+            # NOT a refusal, and treating the two alike is the bug
+            # green_rewind shipped in 7.13.190.
+            reason = str(getattr(task, "gate_reason", "") or "")
+            return reason if reason.lstrip().startswith("NOT red") else ""
     except Exception:  # noqa: BLE001 - a rewind never breaks the sweep
         return ""
     return ""

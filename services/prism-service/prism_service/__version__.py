@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.269"
+PRISM_VERSION = "7.13.270"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8864,4 +8864,23 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.269: a setting chooses which model the harness runs. PRISM keeps the claude harness on both settings, so claude -p still owns the tool loop, the turns, the budget and the run manifest, and PRISM_INFERENCE_BACKEND changes only the model. The default is claude and adds nothing to the child environment, so existing behaviour does not change. The local setting makes claude_cli set ANTHROPIC_BASE_URL from PRISM_LOCAL_INFERENCE_BASE_URL. INV-1 still strips ANTHROPIC_API_KEY on both settings, and the redirect never adds one, which agrees with why INV-1 exists: the CLI runs on the subscription rather than on metered API billing. The default URL is port 8087, the translating proxy, NOT the model server on 8086, because the base URL must answer the Anthropic Messages API while a llama.cpp or Ollama server answers the OpenAI API. The AOS AppHost gains that proxy as the inference-proxy resource, a pinned LiteLLM container that reads services/local-inference/litellm.yaml, takes the engine address from the inference resource, and exports OTLP so every model call becomes a span. Proven end to end: a POST to /v1/messages in Anthropic format returned content the bridge works from Qwen3 through the proxy. The config turns Qwen3 thinking off, because measured through the proxy a 64-token budget returned 64 tokens and an EMPTY content array while a 400-token budget returned the answer in 87. Four tests join the existing INV-1 suite. 26 pinned and 349 neighbouring tests green. '
+)
+
+PRISM_VERSION_NOTES += (
+    " A drive can now reach red on its own. Two seats were missing. "
+    "First, the step agent could not write in its own worktree: "
+    "task_runner spawns it as claude -p with cwd set to the task "
+    "workspace, and .claude/ is gitignored, so the repo permission file "
+    "never reached it. The agent ran with no permission config, the "
+    "harness refused its own Edit as a sensitive file, it spent the "
+    "whole USD budget and committed nothing. ensure_workspace now writes "
+    "a settings file scoped to that worktree, on the create path and on "
+    "the self-heal path, so a workspace made earlier repairs itself. "
+    "Second, a refused red_gate had no rewind. plan_rewind covered "
+    "plan_gate and story_gate, green_rewind covered green_gate, and red "
+    "had neither - while red is the one gate a human must never clear. "
+    "So a refused red was unreachable from both sides and the task sat "
+    "pending for ever. red_gate now rewinds to write_failing_tests under "
+    "the same budget, and only on a real refusal, never on a seat that "
+    "could not measure. Found by task 1bcb2b24, which hit both."
 )

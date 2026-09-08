@@ -147,6 +147,43 @@ def _create_junction(link: Path, target: Path) -> None:
         os.symlink(str(target), str(link), target_is_directory=True)
 
 
+def _write_agent_settings(ws: Path) -> None:
+    """Give the step agent permission to edit files in its OWN worktree.
+
+    task_runner spawns the step agent as `claude -p` with cwd=<workspace>
+    (claude_cli.invoke passes cwd=str(work_dir)), so THIS file is the only
+    project settings that agent ever reads. The repo's own
+    `.claude/settings.local.json` cannot reach it: `.claude/` is gitignored
+    (.gitignore:73), so `git worktree add` never carries it across.
+
+    Without it the agent runs with no permission config at all, and the
+    harness refuses its own Edit. Task 1bcb2b24 died exactly there on
+    2026-09-08: "Claude requested permissions to edit
+    tests/unit/test_one_driver_per_task_worktree.py ... which is a
+    sensitive file". The agent then spent its whole USD budget, committed
+    nothing, and red_gate correctly refused a step that had produced no
+    test. A drive cannot reach red without writing a test file, so this
+    blocked EVERY implement drive on this host (task 2433fa8a).
+
+    Scoped to the worktree by absolute path, never granted globally. The
+    file lands under the gitignored `.claude/`, so it never dirties the
+    lane's diff. Rewritten every call so a workspace made before this fix
+    self-heals, exactly like _link_web_node_modules above it.
+    """
+    import json as _json
+    settings = ws / ".claude" / "settings.local.json"
+    try:
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        scope = f"//{ws.as_posix().lstrip('/')}/**"
+        settings.write_text(_json.dumps({"permissions": {"allow": [
+            f"Edit({scope})", f"Write({scope})", f"MultiEdit({scope})",
+        ]}}, indent=2) + "\n", encoding="utf-8")
+    except OSError:
+        # Never fail a workspace over its settings file; the agent still
+        # runs, it just meets the refusal this function exists to prevent.
+        pass
+
+
 def _link_web_node_modules(ws: Path, root: Path) -> None:
     """LINK (never copy) the main checkout's web `node_modules` into a
     task worktree. `node_modules` is gitignored, so a fresh worktree
@@ -255,6 +292,9 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
         # link. Idempotent no-op once the link exists.
         _link_web_node_modules(Path(rec["path"]),
                                 Path(rec.get("repo_root") or _prism_repo_root()))
+        # Same self-heal: a worktree created before the settings fix has no
+        # permission file, so its step agent still meets the refusal.
+        _write_agent_settings(Path(rec["path"]))
         # Fail-soft: advance to the lane's own branch tip if it moved
         # elsewhere (mx-399f3e / mx-2aff62). Never strand this fast path
         # on a sync hiccup.
@@ -286,6 +326,9 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
     # JS deps are gitignored, so the fresh checkout has none; link them in
     # so a UI slice's real typecheck (`npm run build`) works unaided.
     _link_web_node_modules(ws, root)
+    # The step agent's cwd is this worktree, so this is the only settings
+    # file it reads (task 2433fa8a).
+    _write_agent_settings(ws)
 
     rec = {"task_id": task_id, "path": str(ws), "baseline": _git_out(
         ws, "rev-parse", "HEAD"), "branch": branch, "repo_root": str(root)}
