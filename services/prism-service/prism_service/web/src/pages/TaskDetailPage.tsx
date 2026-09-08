@@ -1061,6 +1061,14 @@ export default function TaskDetailPage() {
     delivered: boolean;
   };
   const [delivery, setDelivery] = useState<Delivery | null>(null);
+  // Task Score — delivered work over what it cost, divided by rework drag.
+  // GET /api/tasks/:id/score. score is null when nothing measured it.
+  type TaskScore = {
+    size: number; effort_tokens: number; rework: number;
+    score: number | null; lines_per_1k: number;
+    resolution: string; multiplier: number; reason: string;
+  };
+  const [taskScore, setTaskScore] = useState<TaskScore | null>(null);
   // In-panel decision feedback: 'checking' while the machine check runs
   // (minutes), then the persistent result — never just a transient toast.
   const [gateResult, setGateResult] = useState<{ kind: "checking" | "ok" | "refused"; text: string } | null>(null);
@@ -1317,6 +1325,13 @@ export default function TaskDetailPage() {
           `/api/tasks/${id}/delivery?project=${project}`);
         if (!cancelled) setDelivery(dv);
       } catch { if (!cancelled) setDelivery(null); }
+    })();
+    (async () => {
+      try {
+        const sc = await api.get<TaskScore>(
+          `/api/tasks/${id}/score?project=${project}`);
+        if (!cancelled) setTaskScore(sc);
+      } catch { if (!cancelled) setTaskScore(null); }
     })();
     return () => { cancelled = true; };
   }, [id, project, task?.workflow_step, task?.gate_state, task?.status]);
@@ -2685,6 +2700,55 @@ export default function TaskDetailPage() {
       {/* DELIVERY — where the work IS and what's left before it's truly done
           (owner 2026-07-16: done means SHIPPED, merged + validated on main).
           Only rendered once the task has something to deliver. */}
+      {taskScore && (
+        <div id="task-score-card">
+        <Card>
+          <SectionLabel>Task Score — delivered work over what it cost</SectionLabel>
+          <div className="mt-3 text-2xl tabular-nums" style={{ color: "var(--text-primary)" }}>
+            {taskScore.score === null
+              ? "—"
+              : taskScore.score.toFixed(3)}
+            {taskScore.score !== null && (
+              <span className="ml-2 text-xs" style={{ color: "var(--text-muted)" }}>
+                × {taskScore.multiplier} {taskScore.resolution} (advisory)
+              </span>
+            )}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-6 text-xs" style={{ color: "var(--text-muted)" }}>
+            <div>
+              <div>shipped churn</div>
+              <div className="tabular-nums" style={{ color: "var(--text-primary)" }}>
+                {taskScore.size === 0 ? "not shipped" : `${taskScore.size} lines`}
+              </div>
+            </div>
+            <div>
+              <div>agent tokens</div>
+              <div className="tabular-nums" style={{ color: "var(--text-primary)" }}>
+                {taskScore.effort_tokens === 0
+                  ? "no measured tokens"
+                  : taskScore.effort_tokens.toLocaleString()}
+              </div>
+            </div>
+            <div>
+              <div>rework</div>
+              <div className="tabular-nums" style={{ color: "var(--text-primary)" }}>
+                {taskScore.rework} · ÷{(1 + taskScore.rework).toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div>lines per 1k tokens</div>
+              <div className="tabular-nums" style={{ color: "var(--text-primary)" }}>
+                {taskScore.lines_per_1k.toFixed(1)}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 text-xs" style={{ color: "var(--text-muted)" }}>
+            {taskScore.reason}
+          </div>
+        </Card>
+        </div>
+      )}
+
       {delivery && (delivery.commits.length > 0 || task.status === "done") && (
         <div id="delivery-card">
         <Card>

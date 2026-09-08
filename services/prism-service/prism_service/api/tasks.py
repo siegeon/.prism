@@ -1295,6 +1295,38 @@ def get_task_delivery(task_id: str, project: str = Query("default")) -> dict:
             "delivered": all(s["state"] == "done" for s in stages)}
 
 
+@router.get("/{task_id}/score")
+def get_task_score(task_id: str, project: str = Query("default")) -> dict:
+    """The Task Score — delivered work over what it cost, divided by rework
+    drag. Reads the same repo the /delivery route reads and the same
+    scores.db the Trace tab reads, so the three inputs (shipped churn, agent
+    tokens, rework) are the ones already on file. An unknown task is a 404,
+    never a fabricated zero."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", task_id):
+        raise HTTPException(400, "bad task id")
+    svc = _svc(project)
+    t = svc.get(task_id)
+    if t is None:
+        raise HTTPException(404, "task not found")
+
+    repo = ""
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        repo = _project_source_path(project) or ""
+    except Exception:
+        repo = ""
+    try:
+        history = svc.history(task_id) or []
+    except Exception:
+        history = []
+
+    from prism_service.services.task_score import score_task
+    return score_task(repo, _scores_db(project),
+                      {"id": task_id, "tags": list(getattr(t, "tags", None) or [])},
+                      [h if isinstance(h, dict) else dataclasses.asdict(h)
+                       for h in history])
+
+
 @router.get("/{task_id}/prototype")
 def get_task_prototype(
     task_id: str, project: str = Query("default"),
