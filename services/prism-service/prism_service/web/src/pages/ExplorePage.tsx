@@ -6,6 +6,7 @@ import { useProject } from "@/lib/project";
 import ArchifyMaps from "@/components/maps/ArchifyMaps";
 import { Card, Empty, ErrorBanner, Pill, SectionLabel, toneFromLabel } from "@/components/ui";
 import { GlyphIcon, EntityChip, type EntityKind } from "@/components/EntityChip";
+import Dossier from "@/components/Dossier";
 import { communityColor, hexToRgba } from "@/lib/palette";
 import { cn } from "@/lib/utils";
 
@@ -1443,117 +1444,6 @@ function Mesh({ token, project, hops, onFocus, onOpen, onCenter }: {
             the graph, it does not describe itself. */}
       </div>
     </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// Dossier — WHAT EACH SUBSYSTEM SAYS about the selected entity.
-//
-// PRISM keeps what it knows in four stores, and the mesh node alone showed
-// only a degree and a class. A reader could see THAT a thing exists without
-// seeing what the code graph, the symbol index, the brain and the ontology
-// each hold on it. Every section below names the store it read, so a
-// subsystem with nothing to say reads as exactly that rather than as an
-// absence the reader has to interpret.
-// Backed by GET /api/xref/entity.
-// ─────────────────────────────────────────────────────────────────────────
-
-type DossierRow = { label: string; text: string; href: string };
-type DossierSection = {
-  key: string; title: string; source: string;
-  ok: boolean; reason: string; rows: DossierRow[];
-};
-type DossierData = {
-  token: string; kind: string; label: string; href: string | null;
-  sections: DossierSection[];
-};
-
-function Dossier({ token, project, onOpen }: {
-  token: string; project: string; onOpen: (href: string) => void;
-}) {
-  const [d, setD] = useState<DossierData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setFailed("");
-    api.get<DossierData>(
-      `/api/xref/entity?token=${encodeURIComponent(token)}&project=${encodeURIComponent(project)}`)
-      .then((r) => { if (alive) { setD(r); setLoading(false); } })
-      .catch((e) => {
-        if (!alive) return;
-        setD(null); setLoading(false);
-        setFailed(String(e?.message || e) || "the request failed");
-      });
-    return () => { alive = false; };
-  }, [token, project]);
-
-  if (loading) {
-    return (
-      <Card className="!p-4 shrink-0">
-        <SectionLabel>What the system knows</SectionLabel>
-        <div className="mt-2 text-2xs opacity-50">reading the stores…</div>
-      </Card>
-    );
-  }
-  // A PANEL THAT FAILS MUST SAY SO. Rendering null made a broken endpoint
-  // indistinguishable from a feature that was never built.
-  if (failed) {
-    return (
-      <Card className="!p-4 shrink-0">
-        <SectionLabel>What the system knows</SectionLabel>
-        <div className="mt-2 text-2xs text-[color:var(--text-muted)]">
-          This could not be read: {failed}
-        </div>
-        <div className="mt-1 text-2xs opacity-50 font-mono break-all">
-          GET /api/xref/entity?token={token}
-        </div>
-      </Card>
-    );
-  }
-  if (!d) return null;
-
-  return (
-    <Card className="!p-4 shrink-0">
-      <SectionLabel>What the system knows</SectionLabel>
-      <div className="mt-2 space-y-3">
-        {d.sections.map((s) => (
-          <div key={s.key}
-            className="border-t border-[color:var(--border-default)] pt-2 first:border-t-0 first:pt-0">
-            <div className="flex items-baseline gap-2">
-              <span className="text-2xs font-semibold uppercase tracking-wider">{s.title}</span>
-              {/* The store this section read — the point of the panel. */}
-              <span className="text-2xs opacity-40 truncate">{s.source}</span>
-            </div>
-            {!s.ok ? (
-              <div className="mt-1 text-2xs italic text-[color:var(--text-muted)]">{s.reason}</div>
-            ) : (
-              <div className="mt-1.5 space-y-1 text-2xs">
-                {s.rows.map((r, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <span className="opacity-50 uppercase tracking-wider w-[64px] shrink-0 truncate">
-                      {r.label}
-                    </span>
-                    <span className="min-w-0 flex-1 text-[color:var(--text-secondary)]">
-                      {r.href ? (
-                        <button onClick={() => onOpen(r.href)}
-                          className="cursor-pointer text-left hover:underline break-words">
-                          {r.text}
-                        </button>
-                      ) : (
-                        <span className="break-words">{r.text}</span>
-                      )}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </Card>
   );
 }
 

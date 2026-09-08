@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.258"
+PRISM_VERSION = "7.13.259"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8671,4 +8671,24 @@ PRISM_VERSION_NOTES += (
     "extension) or an explicit &symbol=, so ArtifactPage's "
     "?focus=<file>&symbol=<name> hop is untouched while task, session and "
     "concept tokens go straight to the mesh."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.259: the What-the-system-knows dossier reaches the task page, live. "
+    "It read the four stores for whatever the Explore mesh was centred on and "
+    "existed only there, inside a page that keeps being redesigned; it is now "
+    "components/Dossier.tsx, imported by Explore and mounted on the task "
+    "page's context rail beside Map, so the two surfaces cannot drift. It "
+    "takes a generic xref token, so a task id works exactly as a file path "
+    "does. Real time comes off the /sse/tasks subscription the task page "
+    "already holds: a revision built from the streamed fields re-reads the "
+    "stores within about a second of the task moving, with no second "
+    "connection and no poll, and a refresh neither blanks the panel nor "
+    "erases good content when it fails. That needed one repair on the way -- "
+    "the event carries updated_at at the TOP level, not inside fields, and "
+    "the client dropped it, so the Metadata updated line was frozen for the "
+    "life of the tab and any write that touched neither status nor step nor "
+    "gate was invisible. Proven on an isolated instance: one oracle edit, one "
+    "re-read, the new text rendered, no reload, and the count still one after "
+    "eight idle seconds."
 )

@@ -14,6 +14,7 @@ import { stepLabel } from "@/lib/workflowChips";
 import Markdown, { renderInline } from "@/components/Markdown";
 import LinkedText from "@/components/LinkedText";
 import ArchifyMaps from "@/components/maps/ArchifyMaps";
+import Dossier from "@/components/Dossier";
 import { type PhaseProgress, type Activity } from "@/components/conductor/SdlcProgress";
 import { type Timeline } from "@/components/conductor/TaskActivityGantt";
 import { EASE_OUT, DUR, SPRING_SNAPPY, staggerDelay } from "@/lib/motion";
@@ -1260,11 +1261,26 @@ export default function TaskDetailPage() {
     if (!id) return;
     return subscribeStream(`/sse/tasks?project=${project}&task_id=${id}`, (data) => {
       try {
-        const payload = JSON.parse(data) as { task_id?: string; fields?: Partial<Task>; activity?: Activity | null };
+        const payload = JSON.parse(data) as {
+          task_id?: string; fields?: Partial<Task>; activity?: Activity | null; updated_at?: string;
+        };
         if (payload.task_id !== id || !payload.fields) return;
         const fields = payload.fields;
         const hasActivity = Object.prototype.hasOwnProperty.call(payload, "activity");
-        setTask((prev) => (prev ? { ...prev, ...fields, ...(hasActivity ? { activity: payload.activity } : {}) } : prev));
+        // `updated_at` rides the event at the TOP LEVEL, not inside `fields`
+        // (task_service._publish_task_changed), and used to be dropped here —
+        // so the Metadata "updated" line stayed frozen at its load-time value
+        // for the life of the tab, and anything keyed on it could not tell
+        // that the task had moved. `fields` carries only the columns that
+        // actually CHANGED, so a write that touches neither status nor step
+        // nor gate (a plan_doc, an oracle, a recalled concept) is invisible
+        // without it. Merging it makes every task write observable, which is
+        // what drives the dossier's live re-read below.
+        setTask((prev) => (prev ? {
+          ...prev, ...fields,
+          ...(hasActivity ? { activity: payload.activity } : {}),
+          ...(payload.updated_at ? { updated_at: payload.updated_at } : {}),
+        } : prev));
       } catch { /* ignore malformed payloads */ }
     });
   }, [id, project]);
@@ -3063,6 +3079,25 @@ export default function TaskDetailPage() {
             </RelGroup>
           )}
         </RailCard>
+        {/* What the system knows — the Explore mesh's dossier, pointed at this
+            task instead of a wandered node (owner: "its easily one of the
+            best, i think it adds more value to the task main view somewhere,
+            it should also be real time as we tie together code and memory and
+            ontology facts together to build the contents for the task").
+            Every section names the store it read — tasks.db, the recall log,
+            brain.db, the ontology — so a store with nothing on this task reads
+            as exactly that.
+
+            REAL TIME comes off the /sse/tasks subscription this page already
+            holds: `revision` is built from the fields that stream patches, so
+            the stores are re-read within ~1s of the task moving, with no
+            second connection and no poll. */}
+        <Dossier
+          token={id}
+          project={project}
+          revision={`${task.status}|${task.workflow_step ?? ""}|${task.gate_state ?? ""}|${task.updated_at ?? ""}|${children.length}|${history.length}`}
+          onOpen={(href) => navigate(href)}
+        />
         {/* Map — what this task is built around, rendered by archify from the
             task's own workflow steps, the concepts it recalled, and its
             children. The same renderer the Understand page uses. */}
