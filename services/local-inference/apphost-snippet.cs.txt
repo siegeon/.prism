@@ -1,3 +1,9 @@
+// EXTRACTED VERBATIM from ~/projects/aos/apphost.cs.
+// That directory is NOT version controlled, so this file is the only durable
+// copy of these two resources. Restore from here if the AppHost is lost.
+// NOTE: uvCaBundle is defined earlier in apphost.cs. It is a combined bundle
+// of the system roots plus the Aspire dev certs, rebuilt on every boot.
+
 // RAM-first local inference. Profiles are re-read on each resource restart.
 var inferenceRoot = Path.Combine(home, "projects", "prism", "services", "local-inference");
 var inferenceState = Path.Combine(home, "projects", "prism", "temp", "local-inference");
@@ -14,3 +20,33 @@ var inference = builder.AddContainer("inference", "ghcr.io/ggml-org/llama.cpp", 
     .WithHttpEndpoint(port: 8086, targetPort: 8080, name: "http")
     .WithHttpHealthCheck("/health");
 
+// Anthropic-facing proxy for the engine above. `claude -p` speaks the
+// Anthropic Messages API and the engine speaks the OpenAI API, so PRISM
+// cannot point ANTHROPIC_BASE_URL straight at 8086. This translates, which
+// is what lets PRISM run its own drives on the local model while the claude
+// harness keeps the tool loop, the turns, the budget and the run manifest.
+// PRISM reaches it by setting PRISM_INFERENCE_BACKEND=local.
+var inferenceProxy = builder.AddContainer("inference-proxy", "ghcr.io/berriai/litellm", "main-stable")
+    .WithImageSHA256("c8756e7b9a61fe45df2ccb5b781d388c3b2f3a21ef9e4956630caef20f9f03aa")
+    .WithBindMount(inferenceRoot, "/config", isReadOnly: true)
+    .WithArgs("--config", "/config/litellm.yaml", "--port", "8087")
+    .WithEnvironment("LOCAL_ENGINE_URL", inference.GetEndpoint("http"))
+    // Must equal PRISM_LOCAL_INFERENCE_AUTH_TOKEN, which claude_cli sends as
+    // ANTHROPIC_AUTH_TOKEN. It guards a local port and is not a secret.
+    .WithEnvironment("PROXY_MASTER_KEY", "local-inference")
+    // Every model call becomes a span: model, tokens, latency, errors. This is
+    // the only place the whole LLM path is observable, because the engine
+    // itself speaks Prometheus (launch.sh passes --metrics) and not OTLP.
+    .WithOtlpExporter()
+    .WithEnvironment("OTEL_SERVICE_NAME", "inference-proxy")
+    // LiteLLM is a Python client, so it hits the same trust problem the prism
+    // resource documents above: Aspire hands a resource a bundle holding only
+    // the dev cert, and an https OTLP export then fails verification. Mount
+    // the combined bundle and point both clients at it. These must come AFTER
+    // WithOtlpExporter so they win.
+    .WithBindMount(uvCaBundle, "/certs/ca-bundle.pem", isReadOnly: true)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_CERTIFICATE", "/certs/ca-bundle.pem")
+    .WithEnvironment("SSL_CERT_FILE", "/certs/ca-bundle.pem")
+    .WithHttpEndpoint(port: 8087, targetPort: 8087, name: "http")
+    .WithHttpHealthCheck("/health/liveliness")
+    .WaitFor(inference);

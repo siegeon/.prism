@@ -1,0 +1,48 @@
+# Anthropic-facing proxy for the local engine.
+#
+# `claude -p` speaks the Anthropic Messages API. The engine speaks the OpenAI
+# API. PRISM therefore cannot point ANTHROPIC_BASE_URL straight at the engine
+# on port 8086. This proxy translates between the two, which is what lets the
+# claude harness keep the tool loop, the turns, the budget and the run
+# manifest while only the model changes.
+#
+# The AppHost owns this file. It bind-mounts services/local-inference as
+# /config and passes this path to the proxy.
+
+model_list:
+  - model_name: prism-local
+    litellm_params:
+      model: openai/prism-local
+      # The AppHost injects the engine address from the inference resource.
+      # llama.cpp answers the OpenAI routes both with and without the /v1
+      # prefix. Both were verified against the running engine, so this needs
+      # no suffix.
+      api_base: os.environ/LOCAL_ENGINE_URL
+      # The engine checks no credential. LiteLLM still wants the field set.
+      api_key: not-used
+      extra_body:
+        chat_template_kwargs:
+          # Qwen3 thinks before it answers, and the thinking spends the token
+          # budget. Measured through this proxy: at max_tokens 64 the model
+          # returned 64 tokens and an EMPTY content array, and at 400 it
+          # returned 87 tokens and the answer. The harness does not know to
+          # raise the budget, so the thinking is turned off here.
+          enable_thinking: false
+
+litellm_settings:
+  # The harness sends parameters that a local engine does not implement.
+  # Dropping them stops a request from failing on a parameter the model does
+  # not need.
+  drop_params: true
+  # Emit a span per model call: model, tokens, latency and errors. The AppHost
+  # supplies OTEL_EXPORTER_OTLP_ENDPOINT, so the spans reach the Aspire
+  # dashboard beside every other resource.
+  callbacks: ["otel"]
+  # Record what the harness actually sent and what came back. This runs on one
+  # developer machine against a local engine, so the payloads leave nothing.
+  turn_off_message_logging: false
+
+general_settings:
+  # This must equal PRISM_LOCAL_INFERENCE_AUTH_TOKEN, which claude_cli sends
+  # as ANTHROPIC_AUTH_TOKEN when PRISM_INFERENCE_BACKEND is local.
+  master_key: os.environ/PROXY_MASTER_KEY

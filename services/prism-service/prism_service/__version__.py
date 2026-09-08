@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.268"
+PRISM_VERSION = "7.13.269"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8860,4 +8860,8 @@ PRISM_VERSION_NOTES += (
     "revision range origin/main...HEAD zeroed scope_alignment. A path now "
     "counts only in a sentence that states a change. Task 1bcb2b24 scores "
     "1.00, up from 0.62."
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.269: a setting chooses which model the harness runs. PRISM keeps the claude harness on both settings, so claude -p still owns the tool loop, the turns, the budget and the run manifest, and PRISM_INFERENCE_BACKEND changes only the model. The default is claude and adds nothing to the child environment, so existing behaviour does not change. The local setting makes claude_cli set ANTHROPIC_BASE_URL from PRISM_LOCAL_INFERENCE_BASE_URL. INV-1 still strips ANTHROPIC_API_KEY on both settings, and the redirect never adds one, which agrees with why INV-1 exists: the CLI runs on the subscription rather than on metered API billing. The default URL is port 8087, the translating proxy, NOT the model server on 8086, because the base URL must answer the Anthropic Messages API while a llama.cpp or Ollama server answers the OpenAI API. The AOS AppHost gains that proxy as the inference-proxy resource, a pinned LiteLLM container that reads services/local-inference/litellm.yaml, takes the engine address from the inference resource, and exports OTLP so every model call becomes a span. Proven end to end: a POST to /v1/messages in Anthropic format returned content the bridge works from Qwen3 through the proxy. The config turns Qwen3 thinking off, because measured through the proxy a 64-token budget returned 64 tokens and an EMPTY content array while a 400-token budget returned the answer in 87. Four tests join the existing INV-1 suite. 26 pinned and 349 neighbouring tests green. '
 )
