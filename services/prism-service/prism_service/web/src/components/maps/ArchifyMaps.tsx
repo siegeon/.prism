@@ -11,6 +11,11 @@ import { currentTheme } from "@/lib/theme";
 
 export type ArchifyKind = "code" | "concepts" | "language" | "task";
 
+// "map" draws the current published map; "delta" draws the Before/Delta/After
+// artifact for the last publish that replaced one (GET .../delta/html). The
+// component only RENDERS the view it is told — the page owns navigation.
+export type ArchifyView = "map" | "delta";
+
 const TABS: { kind: ArchifyKind; label: string }[] = [
   { kind: "code", label: "Code" },
   { kind: "concepts", label: "Concepts" },
@@ -52,6 +57,8 @@ export default function ArchifyMaps({
   focusId,
   onNodeSelect,
   fill,
+  view = "map",
+  onDeltaAvailability,
 }: {
   project: string;
   kind?: ArchifyKind;
@@ -69,6 +76,16 @@ export default function ArchifyMaps({
    *  path the box stands for when the builder named one -- a box that
    *  cannot say what code it is is a box you cannot click through. */
   onNodeSelect?: (nodeId: string, kind: ArchifyKind, target?: string) => void;
+  /** "map" (default) draws the current published map; "delta" draws the
+   *  Before/Delta/After artifact instead. The component never switches this
+   *  itself — the page owns navigation. */
+  view?: ArchifyView;
+  /** Called after probing the delta receipt for the active kind: true when a
+   *  delta exists to view, false when nothing has replaced this map yet (a
+   *  404 — absent, not broken). Fires once per project/kind/taskId change,
+   *  independent of `view`, so a caller can light a "what changed" control
+   *  before the reader ever switches to it. */
+  onDeltaAvailability?: (available: boolean) => void;
 }) {
   const tabbed = !fixedKind;
   const [activeTab, setActiveTab] = useState<ArchifyKind>("code");
@@ -93,6 +110,22 @@ export default function ArchifyMaps({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [project, kind, taskId]);
 
+  // Probe the delta receipt once per project/kind/taskId change and report
+  // whether one exists. 404 means "nothing has replaced this map yet" — that
+  // is absence, not a broken build, so it resolves to false with no banner
+  // and no thrown error.
+  useEffect(() => {
+    if (!onDeltaAvailability) return;
+    if (kind === "task" && !taskId) { onDeltaAvailability(false); return; }
+    let cancelled = false;
+    api
+      .get(`/api/archify/maps/${kind}/delta?project=${encodeURIComponent(project)}${taskQuery}`)
+      .then(() => { if (!cancelled) onDeltaAvailability(true); })
+      .catch(() => { if (!cancelled) onDeltaAvailability(false); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, kind, taskId]);
+
   useEffect(() => {
     if (!meta || meta.ok) { setFirstDiagnostic(""); return; }
     api
@@ -112,13 +145,22 @@ export default function ArchifyMaps({
   };
 
   // The map follows the APP's theme, never a fixed one: a dark diagram inside
-  // a light page reads as a broken embed.
+  // a light page reads as a broken embed. The artifact reads location.hash
+  // for every kind, not just concepts, so the deep link applies whenever a
+  // focusId is supplied, regardless of kind.
   const iframeSrc = useMemo(() => {
+    const slug = focusId ? slugForFocus(focusId) : null;
+    const hash = slug ? `#focus=${slug}` : "";
+    if (view === "delta") {
+      const base =
+        `/api/archify/maps/${kind}/delta/html?project=${encodeURIComponent(project)}${taskQuery}` +
+        `&theme=${currentTheme()}`;
+      return `${base}${hash}`;
+    }
     if (!meta?.html_url) return null;
     const base = `${meta.html_url}&theme=${currentTheme()}`;
-    const slug = kind === "concepts" && focusId ? slugForFocus(focusId) : null;
-    return slug ? `${base}#focus=${slug}` : base;
-  }, [meta, kind, focusId]);
+    return `${base}${hash}`;
+  }, [meta, kind, focusId, view, project, taskQuery]);
 
   const height = fixedKind === "task" ? "50vh" : "70vh";
 
@@ -234,7 +276,7 @@ export default function ArchifyMaps({
                 key={kind}
                 title={`${kind} map`}
                 src={iframeSrc}
-                sandbox="allow-scripts allow-same-origin"
+                sandbox="allow-scripts allow-same-origin allow-downloads"
                 className="w-full block h-full"
                 style={{ height: fill ? "100%" : height, background: "var(--background-base)" }}
               />
