@@ -19,7 +19,9 @@ to its own output.
 
 from __future__ import annotations
 
+import inspect
 import json
+import re
 
 import pytest
 
@@ -388,3 +390,57 @@ def test_the_model_reaches_invoke_as_a_string(monkeypatch, tmp_path):
     """claude_cli.invoke types `model` as str, never None."""
     seen = _drive_once(monkeypatch, "implement_tasks", tmp_path)
     assert isinstance(seen["model"], str)
+
+
+def _declared_plan_claims(doc: str) -> list[str]:
+    """The sentences of `doc` that say what the DECLARED PLAN governs.
+
+    Sentence granularity, never a fixed character window: the paragraph
+    that carries the claim also carries the wall-clock rationale, and that
+    rationale may legitimately name the turn and budget caps it defers to.
+    """
+    flat = " ".join(doc.split())
+    sentences = re.split(r"(?<=\.)\s+", flat)
+    return [s for s in sentences if "declared plan" in s.lower()]
+
+
+def test_invoke_budget_docstring_names_the_model_only():
+    """AC-10 / R-11: the docstring must state what the code DOES.
+
+    TRACE. `_invoke_budget` returns `plan.get("model")` for the model and
+    `_max_turns()` / `_max_budget_usd()` for the caps
+    (task_runner.py:259-264), and the comment above that return
+    (task_runner.py:245-258) explains at length why the declared caps are
+    deliberately NOT adopted -- the task 6a7105f9 truncation, pinned by
+    test_a_declared_plan_never_shrinks_the_turn_budget above. The docstring
+    contradicts both: at base commit cec813df its first paragraph reads
+    "The declared plan governs the MODEL, TURN LIMIT and BUDGET -- the
+    three caps that actually bound spend."
+
+    MEASURED RED at cec813df: rc = 1. None of the other 19 tests in this
+    file reads a docstring, which is why a fully green suite carries this
+    defect. The next reader of this module takes the docstring for the
+    contract and re-adopts the caps that took a drive down.
+
+    Reads `__doc__`, so the explanatory comment below the docstring can
+    never satisfy the assertion.
+    """
+    doc = inspect.getdoc(task_runner._invoke_budget) or ""
+    assert doc, "_invoke_budget lost its docstring"
+
+    claims = _declared_plan_claims(doc)
+    assert claims, "the docstring no longer says what the declared plan governs"
+
+    for claim in claims:
+        upper = claim.upper()
+        assert "MODEL" in upper, claim
+        if "TURN" in upper or "BUDGET" in upper:
+            negated = any(word in upper for word in ("NOT ", "NEVER", "ONLY"))
+            assert negated, (
+                "the docstring names a turn limit or a budget among what the "
+                f"declared plan pins: {claim!r}")
+
+    assert "three caps" not in doc.lower(), (
+        "the declared plan pins ONE thing, the model")
+    assert "wall clock" in doc.lower(), (
+        "the sentence that keeps _step_timeout_s as this module's must survive")
