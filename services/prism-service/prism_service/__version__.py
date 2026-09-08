@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.257"
+PRISM_VERSION = "7.13.258"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8653,4 +8653,22 @@ PRISM_VERSION_NOTES += (
     "carries a per-run marker on its own command line, and _pid_is_gone reads "
     "/proc/<pid>/cmdline for it, so the poll asks about identity and not about "
     "a number. Proven directly: a live pid answers gone under a foreign marker."
+)
+
+PRISM_VERSION_NOTES += (
+    "7.13.258: /brain?focus=<task-id> stops pretending a task is a source "
+    "file. ?focus= is the mesh's generic token param and carries task ids, "
+    "session ids and concept ids as readily as paths, but ExplorePage's "
+    "mount-time deepLink read handed whatever it found to focusSeed(), which "
+    "seeds /api/brain/understand with it as a FILE. understand echoed the raw "
+    "uuid back as a phantom kind:'file' node, so loading the link dropped the "
+    "bare uuid into the search box, showed 1 node / 0 edges / 0 communities / "
+    "1 ranked in the stat strip, and steered the Sigma canvas at a file that "
+    "does not exist: code-explore chrome wrapped around a task mesh. Loading "
+    "the same focus that a bare /brain resolves to therefore rendered a "
+    "visibly different page than /brain itself. deepLink now takes the "
+    "code-seed path only for a file-shaped token (path separator or a real "
+    "extension) or an explicit &symbol=, so ArtifactPage's "
+    "?focus=<file>&symbol=<name> hop is untouched while task, session and "
+    "concept tokens go straight to the mesh."
 )

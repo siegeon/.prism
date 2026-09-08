@@ -232,10 +232,26 @@ export default function ExplorePage() {
 
   // Read the deep-link once on mount. Present -> focus that seed; absent ->
   // the usual whole-graph overview.
+  //
+  // ?focus= is the MESH's generic token param -- it carries files, but also
+  // task ids, session ids and concept ids (the mesh writes whatever node you
+  // wander onto, the default-focus ladder writes a task, /understand writes a
+  // concept). focusSeed() below treats its argument as a FILE and seeds
+  // /api/brain/understand with it, so a non-file token landing here used to
+  // misfire a code-symbol lookup: the backend echoed the raw id back as a
+  // phantom kind:"file" node, which dumped the bare uuid into the search box,
+  // showed 1 node / 0 edges / 0 communities in the stat strip, and steered the
+  // Sigma canvas at a file that does not exist -- code-explore chrome wrapped
+  // around a task mesh. Only take the code-seed path when the token is
+  // actually file-shaped (a path separator or a real extension), or when an
+  // explicit &symbol= says a code seed was meant.
   const deepLink = useMemo(() => {
     const p = new URLSearchParams(window.location.search);
     const file = p.get("focus");
-    return file ? { file, symbol: p.get("symbol") } : null;
+    if (!file) return null;
+    const symbol = p.get("symbol");
+    const fileShaped = file.includes("/") || file.includes("\\") || /\.[A-Za-z0-9]{1,8}$/.test(file);
+    return fileShaped || symbol ? { file, symbol } : null;
   }, []);
 
   // Explicit /brain?session=<id> / /brain?task=<id> deep links (the /live
