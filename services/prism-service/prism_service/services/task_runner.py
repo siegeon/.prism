@@ -1323,6 +1323,24 @@ def _run_one_step(project: str, task_id: str) -> dict:
 
     if proof and (result.exit_code == 0 or result.graceful_budget_stop()):
         _route_proof(task_svc, task_id, step_id, proof)
+        # CODIFIED RED TEST IDS ON LIVE PATH. When write_failing_tests
+        # succeeds, consult the deterministic red-test-ids node to make those
+        # ids AVAILABLE for downstream consumers (gates, stall handler) without
+        # requiring a model to retype them. Previously this was ONLY called
+        # inside _handle_stall, i.e. after a task had already stalled (task
+        # 404ef4ce: make codified nodes from agentic blocks so we can not
+        # stall). Now it runs on the live path, so the ids are available
+        # immediately without waiting for a stall.
+        if step_id == "write_failing_tests" and project:
+            codified_ids, codified_reason = _codified_red_test_ids(project, task_id)
+            if codified_ids:
+                # Enhance the stored completion_proof with the authoritative ids
+                # so red_test_ids() can extract them without calling
+                # _codified_red_test_ids again. Use a format the regex can parse.
+                enhanced_proof = proof + (
+                    f"\nCodified red test ids (from oracle spec + red anchor):\n"
+                    + "\n".join(f"  {i}" for i in codified_ids))
+                task_svc.update(task_id, completion_proof=enhanced_proof)
         outcome: object = "pass"
     elif not proof:
         outcome = {"ok": False,

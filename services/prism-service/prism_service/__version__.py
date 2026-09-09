@@ -13,11 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.273"
+PRISM_VERSION = "7.13.274"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    '7.13.273: the red anchor is found however deep it sits. _red_tests_commit searched git log -n 500 for a tests-only commit tagged with [task:<id>], so a depth cap measured the anchor distance from HEAD, and that distance grows every time anyone commits. Live on task f97c196d: the tests-only commit 3c94a38e sat 201 commits back, missed by the original 80-cap, and the self-heal fell back to another task commit, so red_gate refused work that had real failing tests. Raising to 500 only moves the cliff. The search now filters with git log --grep <tag> --fixed-strings, which returns just this task commits from the whole history, making depth irrelevant. New suite test_red_anchor_survives_a_deep_history.py pins the commit at depth 520, past both shipped caps. Fixes task f97c196d and the stalled gate it stranded. 2 anchor and 47 neighbouring gate tests green. '
+    '7.13.274: codified red test ids are consulted on the live path. write_failing_tests now calls _codified_red_test_ids on success to make those ids AVAILABLE for downstream consumers without waiting for a stall. Previously this call lived only inside _handle_stall, i.e. after a task had already stalled. The codified ids are now incorporated into completion_proof so red_test_ids() extracts them without a second call, closing the gap where a non-stalling task had its red ids but a model had to retype them anyway (task 404ef4ce: make codified nodes from agentic blocks so we can not stall). New suite test_task_runner_red_ids_on_live_path.py pins the call on write_failing_tests success. 2 new and 30 neighbouring runner tests green. '
 )
 
 PRISM_VERSION_NOTES += (
