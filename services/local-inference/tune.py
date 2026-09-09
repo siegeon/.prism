@@ -36,17 +36,37 @@ def endpoint():
     return next(u["url"] for r in resources for u in r.get("urls", [])
                 if u["name"] == "http")
 
-def apply(name, ctx=40960):
+TRAINED_CTX = 40960
+
+def apply(name, ctx=TRAINED_CTX, kv_type="", yarn=False, kv_on_gpu=True):
     # A conductor step carries a plan, a diff and file contents, so the
-    # context length is a real dimension of a profile. The model trains to
-    # 40960 tokens. A longer context costs KV cache RAM.
+    # context length is a real dimension of a profile.
+    #
+    # The model trains to 40960 tokens. The claude harness sends about 85700
+    # tokens of system prompt and tool definitions BEFORE any task content,
+    # measured from a real `claude -p` run, so a drive needs more than the
+    # trained length. Qwen supports YaRN rope scaling to reach it.
+    #
+    # A longer context costs KV cache memory. Quantizing the cache to q8_0
+    # halves that, and kv_on_gpu=False moves it to system RAM, which this
+    # machine has far more of than it has GPU memory.
     STATE.mkdir(parents=True, exist_ok=True)
     args = PROFILES[name] + ["-tb", "12", "-c", str(ctx), "-b", "512", "-ub", "128"]
+    if yarn and ctx > TRAINED_CTX:
+        args += ["--rope-scaling", "yarn",
+                 "--rope-scale", f"{ctx / TRAINED_CTX:.4f}",
+                 "--yarn-orig-ctx", str(TRAINED_CTX)]
+    if kv_type:
+        args += ["--cache-type-k", kv_type, "--cache-type-v", kv_type]
+    if not kv_on_gpu:
+        args += ["--no-kv-offload"]
     tmp = STATE / "active.args.tmp"
     tmp.write_text("\n".join(args) + "\n")
     tmp.replace(STATE / "active.args")
-    (STATE / "profile.json").write_text(
-        json.dumps({"profile": name, "ctx": ctx, "args": args}, indent=2))
+    (STATE / "profile.json").write_text(json.dumps(
+        {"profile": name, "ctx": ctx, "kv_type": kv_type or "f16",
+         "yarn": bool(yarn and ctx > TRAINED_CTX), "kv_on_gpu": kv_on_gpu,
+         "args": args}, indent=2))
 
 def request(url, path, body):
     req = urllib.request.Request(url + path, json.dumps(body).encode(),
@@ -82,11 +102,19 @@ def main():
     parser.add_argument("profile", choices=[*PROFILES, "current"])
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--benchmark", action="store_true")
-    parser.add_argument("--ctx", type=int, default=40960,
-                        help="context length in tokens, up to the 40960 the model trains to")
+    parser.add_argument("--ctx", type=int, default=TRAINED_CTX,
+                        help="context length in tokens. Past 40960 pass --yarn too")
+    parser.add_argument("--kv-type", default="",
+                        help="KV cache type, for example q8_0. Empty keeps f16")
+    parser.add_argument("--yarn", action="store_true",
+                        help="rope-scale past the trained 40960 so the claude "
+                             "harness prompt of about 85700 tokens fits")
+    parser.add_argument("--kv-in-ram", action="store_true",
+                        help="hold the KV cache in system RAM instead of GPU memory")
     options = parser.parse_args()
     if options.profile != "current":
-        apply(options.profile, options.ctx)
+        apply(options.profile, options.ctx, options.kv_type, options.yarn,
+              kv_on_gpu=not options.kv_in_ram)
         if options.prepare_only:
             return
         print(aspire("resource", "inference", "restart"), flush=True)

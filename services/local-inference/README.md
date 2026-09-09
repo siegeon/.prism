@@ -36,7 +36,18 @@ profiles offload 16 layers. All use one slot, 12 batch threads, a 512-token
 batch, and a 128-token microbatch.
 
 The context length defaults to 40960, the length the model trains to. Pass
-`--ctx <tokens>` to change it. RESULTS.md measures 8192, 32768 and 40960. The
+`--ctx <tokens>` to change it. A DRIVE NEEDS MORE THAN THAT: the claude
+harness sends about 85700 tokens of system prompt and tool definitions before
+any task content, so run the engine with YaRN rope scaling for that work:
+
+```bash
+python services/local-inference/tune.py hybrid-8-resident \
+  --ctx 131072 --yarn --kv-type q8_0
+```
+
+`--yarn` rope-scales past the trained length. `--kv-type q8_0` halves the KV
+cache, which the long context needs. `--kv-in-ram` moves the cache off the
+GPU if the card runs out. See RESULTS.md for the measured numbers. RESULTS.md measures 8192, 32768 and 40960. The
 longest context is the fastest of the three. It costs about 1.9 GiB of GPU
 memory more than the shortest. A conductor step carries a plan, a diff and
 file contents, so it needs the long context.

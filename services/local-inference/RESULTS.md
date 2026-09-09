@@ -34,3 +34,43 @@ A five-fold context increase costs about 1.9 GiB of GPU memory and no throughput
 The default is now 40,960. Pass `--ctx` to measure another length.
 
 This matters because the target workload is a conductor step. A step carries a plan, a diff and file contents, so 8,192 tokens could not hold one.
+
+## The harness prompt does not fit the trained context — 2026-09-08
+
+A real `claude -p` against the proxy failed before it reached the model:
+
+```
+request (85731 tokens) exceeds the available context size (40960 tokens)
+model=claude-opus-5
+```
+
+The claude harness sends about **85,700 tokens** of system prompt and tool
+definitions BEFORE any task content. That is more than twice the 40,960
+tokens the model trains to, so no drive can run at the trained length. Only a
+live end-to-end run finds this. Every earlier bench used a 386-token prompt.
+
+YaRN rope scaling reaches the length Qwen documents for Qwen3:
+
+| Setting | Value |
+|---|---|
+| Context | 131,072 (`--rope-scaling yarn --rope-scale 3.2 --yarn-orig-ctx 40960`) |
+| KV cache | `q8_0` for both K and V |
+| GPU after load | 11,221 MiB used, 866 MiB free |
+| `/v1/models` reports | `n_ctx 131072` |
+| `claude -p` end to end | **exit code 0** |
+
+llama.cpp preallocates the whole KV cache at load, so that 866 MiB of
+headroom is the steady state and does not shrink as a prompt grows. The
+server runs one slot (`--parallel 1`), so nothing else competes for it.
+
+Reproduce with:
+
+```bash
+python services/local-inference/tune.py hybrid-8-resident \
+  --ctx 131072 --yarn --kv-type q8_0
+```
+
+Quality is NOT established by this. The harness ran and answered, but the
+answer did not follow a literal instruction that Claude follows. Throughput
+at this context is also unmeasured, because the fixed benchmark prompt does
+not exercise it.
