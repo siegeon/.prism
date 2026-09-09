@@ -193,7 +193,7 @@ def sweep_once() -> list[dict]:
             tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
             if not tid or step not in ("green_gate", "red_gate",
                                        "story_gate", "plan_gate",
-                                       "decide"):
+                                       "decide", "review"):
                 continue
             # green_gate also sweeps 'failed' — adjudicate_green_gate
             # re-presents ONLY machine refusal artifacts, never a human
@@ -215,6 +215,14 @@ def sweep_once() -> list[dict]:
                     # PENDING with a stamped reason, never 'failed'.
                     from prism_service.services import triage_decision
                     res = triage_decision.adjudicate(svc, ctx.task_svc, tid)
+                elif step == "review":
+                    # The promote_to_law workflow's ONLY gate. It carries no
+                    # rubric (validation=None), so the seat scores the draft
+                    # output from the draft step, checking for valid TTL and
+                    # proper structure. A refusal leaves the gate PENDING with
+                    # a stamped reason so the draft can be revised.
+                    from prism_service.services import promote_to_law_review
+                    res = promote_to_law_review.adjudicate(svc, ctx.task_svc, tid)
                 elif step == "green_gate":
                     res = svc.adjudicate_green_gate(tid)
                 elif step == "red_gate":
