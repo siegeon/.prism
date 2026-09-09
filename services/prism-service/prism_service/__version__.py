@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.272"
+PRISM_VERSION = "7.13.273"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.273: the red anchor is found however deep it sits. _red_tests_commit searched git log -n 500 for a tests-only commit tagged with [task:<id>], so a depth cap measured the anchor distance from HEAD, and that distance grows every time anyone commits. Live on task f97c196d: the tests-only commit 3c94a38e sat 201 commits back, missed by the original 80-cap, and the self-heal fell back to another task commit, so red_gate refused work that had real failing tests. Raising to 500 only moves the cliff. The search now filters with git log --grep <tag> --fixed-strings, which returns just this task commits from the whole history, making depth irrelevant. New suite test_red_anchor_survives_a_deep_history.py pins the commit at depth 520, past both shipped caps. Fixes task f97c196d and the stalled gate it stranded. 2 anchor and 47 neighbouring gate tests green. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.272: a step is judged by its typed outcome, not by how its proof is worded. 96a34c56 refused to advance any agent step whose completion_proof held failed, error, cannot, could not, exhausted, permission denied or did not land. Measured over this project own tasks.db that refuses 298 of 569 stored proofs, 245 of them on tasks that reached done, because the correct evidence of a passing write_failing_tests step is real pytest output reading 4 failed, 3 passed, and a verify_green_state proof reads 0 failed. Narrowing the markers does not rescue it: at the tightest useful set, 2 of the 3 live matches are successful steps whose proof DESCRIBES failure handling, since PRISM own domain vocabulary is failure vocabulary. The typed channel already existed in api/conductor_flow.py _is_failure, which leaves an agent step where it stands on a reported failure. Guard removed, superseded by test_advance_task_ignores_failure_prose.py, red at the base commit with 4 failures including the red step blocked by its own red evidence. The remaining hole, an agent that exits cleanly while its prose says it was blocked, needs a structured self-report channel and is tracked separately. '
 )
 

@@ -3415,7 +3415,20 @@ class ConductorService:
                 # unreachable sha - and the only symptom was readiness quoting
                 # that old sha's verdict forever, pointing nowhere near the
                 # real cause. Read the whole message so BOTH conventions work.
-                r = _sp.run(["git", "log", "--format=%H%x09%B%x00", "-n", "500"],
+                # A DEPTH CAP MEASURES THE WRONG THING (task f97c196d,
+                # 2026-09-09). `-n <k>` bounds the anchor's distance from
+                # HEAD, and that distance grows every time ANYONE commits.
+                # f97c196d's own tests-only commit 3c94a38e sat 201 commits
+                # back, so the 80-commit window missed it, the self-heal fell
+                # back to the worktree HEAD (another task's commit), and
+                # red_gate refused with "NOT red: the spec's tests PASS at
+                # the red-step commit". Raising the cap only moves the cliff.
+                # Let git filter instead: --grep returns just this task's own
+                # commits from the WHOLE history, so depth stops mattering
+                # and less output is parsed, not more. --fixed-strings
+                # because the tag "[task:xxxxxxxx" is a regex pattern.
+                r = _sp.run(["git", "log", "--format=%H%x09%B%x00",
+                             "--grep", tag, "--fixed-strings", "-n", "50"],
                             cwd=repo, capture_output=True, text=True,
                             timeout=15)
                 if r.returncode != 0:
