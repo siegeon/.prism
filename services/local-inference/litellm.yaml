@@ -11,9 +11,36 @@
 
 model_list:
   # The harness asks for a Claude model by name. The proxy routes all requests
-  # to the single local engine. LiteLLM wildcard support is unreliable for
-  # certain model patterns, so explicitly route common Claude models.
-  - model_name: claude-*
+  # to the single local engine. LiteLLM glob patterns are unreliable, so
+  # explicitly route both by model name and with a catch-all literal entry.
+  - model_name: claude-haiku-4-5-20251001
+    litellm_params:
+      model: openai/prism-local
+      api_base: os.environ/LOCAL_ENGINE_URL
+      api_key: not-used
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
+  - model_name: claude-opus-5
+    litellm_params:
+      model: openai/prism-local
+      api_base: os.environ/LOCAL_ENGINE_URL
+      api_key: not-used
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
+  - model_name: claude-sonnet-5
+    litellm_params:
+      model: openai/prism-local
+      api_base: os.environ/LOCAL_ENGINE_URL
+      api_key: not-used
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
+  - model_name: claude-fable-5-1
     litellm_params:
       model: openai/prism-local
       api_base: os.environ/LOCAL_ENGINE_URL
