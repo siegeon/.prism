@@ -98,14 +98,10 @@ def score(task) -> tuple[bool, str]:
         return True, ("promote_to_law review: lexicon term is valid TTL with "
                       "proper class and properties.")
 
-    # Generic TTL validation passed
-    if len(text) < 50:
-        return False, ("promote_to_law review: draft is too short to be a "
-                       "complete rule or term. Provide full TTL with all "
-                       "declarations.")
-
-    return True, ("promote_to_law review: draft TTL is valid and structurally "
-                  "sound. Ready for installation.")
+    # Neither rule nor term was found
+    return False, ("promote_to_law review: draft must declare either a SHACL "
+                   "rule (sh:NodeShape) or a lexicon term (o:Term). Provide "
+                   "the proper class declaration.")
 
 
 def adjudicate(svc, task_svc, task_id: str) -> Optional[dict]:
