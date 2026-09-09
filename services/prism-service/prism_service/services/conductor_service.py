@@ -1750,6 +1750,38 @@ class ConductorService:
                     "reason": reason,
                 }
 
+        # STEP FAILURE CHECK (task 0a9c3d1d): if the current step's
+        # completion_proof contains failure markers (did not land, Permission
+        # denied, exhausted, failed), refuse to advance. A completion_proof
+        # with failure indicators means the step did not actually complete,
+        # even if flow_report marked it as ok. This prevents tasks from being
+        # advanced past failed steps, which would create unwinnable gates.
+        if current_step is not None and current_step.get("type") == "agent":
+            completion_proof = getattr(task, "completion_proof", "") or ""
+            proof_lower = str(completion_proof).lower()
+            failure_markers = (
+                "did not land", "permission denied", "exhausted", "failed",
+                "error", "could not", "cannot", "failed to"
+            )
+            if any(marker in proof_lower for marker in failure_markers):
+                reason = (f"step {current_id}: completion_proof contains failure "
+                         f"indicators; step did not complete")
+                self._task_svc.update(task_id, gate_reason=reason)
+                self._task_svc.record_history(
+                    task_id, action="advance_refused",
+                    details=(f"step={current_id}; "
+                             f"validation=completion-proof-failed; "
+                             f"reason={reason}"),
+                    actor=session_id or "")
+                return {
+                    "ok": False,
+                    "task_id": task_id,
+                    "from_step": current_id,
+                    "to_step": current_id,
+                    "gate_state": task.gate_state,
+                    "reason": reason,
+                }
+
         current_index = self._step_index(current_id, task_workflow)
         next_index = current_index + 1
         if next_index >= len(steps):
