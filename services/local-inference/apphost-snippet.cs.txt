@@ -50,3 +50,12 @@ var inferenceProxy = builder.AddContainer("inference-proxy", "ghcr.io/berriai/li
     .WithHttpEndpoint(port: 8087, targetPort: 8087, name: "http")
     .WithHttpHealthCheck("/health/liveliness")
     .WaitFor(inference);
+
+// ---- On the 'prism' resource in the same apphost.cs ----
+// The daemon's own agent steps run on OUR engine, not the owner's Claude
+// subscription (owner 2026-09-08). Without these two lines the task runner
+// and the gate adjudicator spawn 'claude -p' against Anthropic.
+.WithEnvironment("PRISM_INFERENCE_BACKEND", "local")
+.WithEnvironment("PRISM_LOCAL_INFERENCE_BASE_URL", inferenceProxy.GetEndpoint("http"))
+// Deliberately NOT WaitFor(inferenceProxy): PRISM must still start when the
+// engine is down.

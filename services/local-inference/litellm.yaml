@@ -10,6 +10,20 @@
 # /config and passes this path to the proxy.
 
 model_list:
+  # The harness asks for a Claude model by name, because nothing tells it that
+  # the endpoint changed. Without this entry the proxy answers 400 "Invalid
+  # model name passed in model=claude-sonnet-4-5" and every drive fails. The
+  # wildcard sends any requested name to the one engine we run.
+  # Keep it FIRST so it cannot shadow a later explicit route.
+  - model_name: "*"
+    litellm_params:
+      model: openai/prism-local
+      api_base: os.environ/LOCAL_ENGINE_URL
+      api_key: not-used
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+
   - model_name: prism-local
     litellm_params:
       model: openai/prism-local
