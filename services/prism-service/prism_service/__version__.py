@@ -13,10 +13,14 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.271"
+PRISM_VERSION = "7.13.272"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.272: a step is judged by its typed outcome, not by how its proof is worded. 96a34c56 refused to advance any agent step whose completion_proof held failed, error, cannot, could not, exhausted, permission denied or did not land. Measured over this project own tasks.db that refuses 298 of 569 stored proofs, 245 of them on tasks that reached done, because the correct evidence of a passing write_failing_tests step is real pytest output reading 4 failed, 3 passed, and a verify_green_state proof reads 0 failed. Narrowing the markers does not rescue it: at the tightest useful set, 2 of the 3 live matches are successful steps whose proof DESCRIBES failure handling, since PRISM own domain vocabulary is failure vocabulary. The typed channel already existed in api/conductor_flow.py _is_failure, which leaves an agent step where it stands on a reported failure. Guard removed, superseded by test_advance_task_ignores_failure_prose.py, red at the base commit with 4 failures including the red step blocked by its own red evidence. The remaining hole, an agent that exits cleanly while its prose says it was blocked, needs a structured self-report channel and is tracked separately. '
+)
+
+PRISM_VERSION_NOTES += (
     '7.13.246: the corpus-median snapshot refreshes when another connection writes. phase_progress reads every advance_task row once and holds the grouped result, and the instance-local invalidation only fires for writes made through the SAME TaskService. A reader-only service, a viewer or the adjudicator, therefore held a snapshot that predated every foreign advance and served a stale median and ETA for the life of the process. The snapshot is now keyed on PRAGMA data_version, sqlite own change counter, which moves when another connection commits and reads no table, so the key follows the WRITE and costs neither a second task_history statement nor the corpus scan it exists to skip. The child-count read stays scoped by parent_id, so EXPLAIN QUERY PLAN reports SEARCH tasks USING INDEX idx_tasks_parent. New suite test_phase_progress_uses_parent_index.py. 29 pinned and 147 neighbouring tests green. '
 )
 

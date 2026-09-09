@@ -1750,37 +1750,32 @@ class ConductorService:
                     "reason": reason,
                 }
 
-        # STEP FAILURE CHECK (task 0a9c3d1d): if the current step's
-        # completion_proof contains failure markers (did not land, Permission
-        # denied, exhausted, failed), refuse to advance. A completion_proof
-        # with failure indicators means the step did not actually complete,
-        # even if flow_report marked it as ok. This prevents tasks from being
-        # advanced past failed steps, which would create unwinnable gates.
-        if current_step is not None and current_step.get("type") == "agent":
-            completion_proof = getattr(task, "completion_proof", "") or ""
-            proof_lower = str(completion_proof).lower()
-            failure_markers = (
-                "did not land", "permission denied", "exhausted", "failed",
-                "error", "could not", "cannot", "failed to"
-            )
-            if any(marker in proof_lower for marker in failure_markers):
-                reason = (f"step {current_id}: completion_proof contains failure "
-                         f"indicators; step did not complete")
-                self._task_svc.update(task_id, gate_reason=reason)
-                self._task_svc.record_history(
-                    task_id, action="advance_refused",
-                    details=(f"step={current_id}; "
-                             f"validation=completion-proof-failed; "
-                             f"reason={reason}"),
-                    actor=session_id or "")
-                return {
-                    "ok": False,
-                    "task_id": task_id,
-                    "from_step": current_id,
-                    "to_step": current_id,
-                    "gate_state": task.gate_state,
-                    "reason": reason,
-                }
+        # NO PROSE SNIFFING OF completion_proof HERE. 96a34c56 (task
+        # 0a9c3d1d) refused to advance any `agent` step whose
+        # completion_proof contained "failed"/"error"/"cannot"/"could
+        # not"/"exhausted"/"permission denied"/"did not land". Measured over
+        # this project's own stored proofs, that refuses 298 of 569 (245 of
+        # them on tasks that legitimately reached done), because a PASSING
+        # write_failing_tests proof reports real pytest output ("4 failed, 3
+        # passed") and a verify_green_state proof says "0 failed".
+        #
+        # It cannot be repaired by narrowing the marker list either: at the
+        # tightest useful set ("permission denied", "budget exhausted", "did
+        # not land") 2 of its 3 live matches are still successful steps whose
+        # proof DESCRIBES failure handling — b612fa19 reporting an action
+        # deliberately not taken, 6e37bcdc describing the auto-rewind
+        # budget-exhaustion feature it had just implemented. PRISM's own
+        # domain vocabulary is failure vocabulary, so a proof about gates,
+        # refusals and budgets always reads as a failed step.
+        #
+        # A step failure is carried by the TYPED report outcome, not by the
+        # artifact's wording: api/conductor_flow.py `_is_failure(body.outcome)`
+        # already records `flow_report_failure` and leaves an agent step where
+        # it stands ("a reported outcome is not step completion"). The real
+        # remaining hole 0a9c3d1d was chasing — an agent that exits cleanly
+        # while its prose says it was blocked (task 1bcb2b24) — needs a
+        # STRUCTURED self-report channel from the step agent; it is tracked
+        # separately and must not come back as a substring match.
 
         current_index = self._step_index(current_id, task_workflow)
         next_index = current_index + 1
