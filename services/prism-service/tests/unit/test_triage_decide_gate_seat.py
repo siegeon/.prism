@@ -76,3 +76,37 @@ def test_the_word_boundary_does_not_match_a_longer_word():
     """'openly' is not the bucket 'open'."""
     assert td.named_buckets("openly stated") == []
     assert td.named_buckets("Open.") == ["open"]
+
+
+def test_triage_bucketed_is_present_in_verifier_rules():
+    """The conductor service wires triage_bucketed as a validation kind."""
+    from prism_service.services.conductor_service import ConductorService
+    assert "triage_bucketed" in ConductorService._VERIFIER_RULES
+    assert ConductorService._VERIFIER_RULES["triage_bucketed"].get("handler") == "triage_bucketed"
+
+
+def test_wired_rule_returns_verified_true_for_bucketed_classification(tmp_path):
+    """The gate verification path returns verified=True with the scorer's reason."""
+    from prism_service.services.conductor_service import ConductorService
+
+    service = ConductorService(str(tmp_path / "scores.db"), enable_engine=False)
+    task = FakeTask(completion_proof=GOOD)
+
+    result = service._verify_gate(task, "decide", proof_type=None)
+    assert result["verified"] is True
+    assert "open" in result["reason"]
+    assert result["validation"] == "triage_bucketed"
+
+
+def test_wired_rule_returns_verified_false_for_empty_classification(tmp_path):
+    """The gate verification path returns verified=False with reason for empty classification."""
+    from prism_service.services.conductor_service import ConductorService
+
+    service = ConductorService(str(tmp_path / "scores.db"), enable_engine=False)
+    task = FakeTask(completion_proof="")
+
+    result = service._verify_gate(task, "decide", proof_type=None)
+    assert result["verified"] is False
+    assert result["reason"]
+    assert result["reason"].strip()
+    assert "recorded no classification" in result["reason"]

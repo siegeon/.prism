@@ -2102,6 +2102,13 @@ class ConductorService:
                 "or an explicit REFUTED/UNVERIFIED marker"
             ),
         },
+        "triage_bucketed": {
+            "handler": "triage_bucketed",
+            "expectation": (
+                "triage_bucketed is function-verified: the classify step "
+                "named exactly one bucket with a reasoned explanation"
+            ),
+        },
     }
 
     @staticmethod
@@ -3725,6 +3732,26 @@ class ConductorService:
         # task's own evidence + the YAML rubric — never the shell verifier.
         if rule.get("rubric"):
             return self._verify_rubric_gate(task, validation)
+        # TRIAGE BUCKETING VALIDATION (task edeab040): scored as a pure function
+        # of the classify step's completion_proof / premise_notes / plan_doc,
+        # delegating to triage_decision.score(task) without shell verifier.
+        if rule.get("handler") == "triage_bucketed":
+            try:
+                from prism_service.services import triage_decision
+                ok, reason = triage_decision.score(task)
+                return {
+                    "verified": ok,
+                    "reason": reason,
+                    "verifier": None,
+                    "validation": validation,
+                }
+            except Exception as exc:
+                return {
+                    "verified": False,
+                    "reason": f"triage_bucketed raised {type(exc).__name__}: {exc}",
+                    "verifier": None,
+                    "validation": validation,
+                }
         # PROOF-TYPE-AWARE TIER0 CONSULT (FR-3, task 0e071d68): the
         # test-shaped run_tier0 expectation (red_with_trace/green_full) only
         # applies to a test oracle. A non-test proof_type (metric/build-count/

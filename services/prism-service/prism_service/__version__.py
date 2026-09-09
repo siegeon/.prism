@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.278"
+PRISM_VERSION = "7.13.279"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.279: wire triage_bucketed validation into ConductorService._VERIFIER_RULES, delegating to triage_decision.score(task) to gate the triage decide step. The seat returns verified True for a bucketed, reasoned classification and verified False with a non-empty reason for empty, unnameable, ambiguous or unreasoned classifications. New tests in test_triage_decide_gate_seat.py verify the rule presence and its behavior on passing and failing classifications. Task edeab040. '
     '7.13.278: the triage decide gate now has a machine seat (services/triage_decision.py). The seat scores the classification and refuses a missing, bucket-less, ambiguous or unreasoned one. Gate readiness now returns receipt_ok for a gate declared validation=None, enabling the Approve control instead of showing a green_gate oracle refusal the gate can never satisfy. New suites test_triage_decide_gate_seat.py and test_plain_gate_readiness.py. Decide gate behavior is governed by the .prism/behaviors/conductor/decide-gate-check.json workflow definition. '
     '7.13.276: local inference proxy routes all models to the local engine. litellm wildcard pattern matching was unreliable - only claude-haiku-4-5-20251001 reached the inference engine while other Claude models hung. Replaced glob pattern with explicit model routes. Measured on local Qwen3-30B: claude-haiku-4-5-20251001 now returns real generated text with input/output token counts. '
 )
