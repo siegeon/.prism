@@ -13,11 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.275"
+PRISM_VERSION = "7.13.276"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
-    '7.13.275: coverage for the reap invocation on the shipped path. The wiring that reaps a task worktree and branch after a successful land (ship_worker.py:637 calling _reap_after_land at ship_worker.py:711) was implemented in 7.13.180 (shipped 2026-08-30). This closes the test coverage gap: test_the_pipeline_invokes_the_reap.py pins that the conductor pipeline invokes the reap when a task lands, verifying the wiring is exercised end-to-end. 16 reap and neighbouring coverage tests green. '
+    '7.13.276: local inference proxy routes all models to the local engine. litellm wildcard pattern matching was unreliable - only claude-haiku-4-5-20251001 reached the inference engine while other Claude models hung. Replaced glob pattern with explicit model routes. Measured on local Qwen3-30B: claude-haiku-4-5-20251001 now returns real generated text with input/output token counts. '
 )
 
 PRISM_VERSION_NOTES = (
