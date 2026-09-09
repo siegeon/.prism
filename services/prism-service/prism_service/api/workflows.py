@@ -1757,6 +1757,40 @@ def workflow_step_story_gate_check(
         )
 
 
+class DecideGateCheckRequest(BaseModel):
+    task_id: str
+
+
+class DecideGateCheckResponse(BaseModel):
+    ok: bool
+    reason: str
+
+
+@router.post("/steps/decide-gate-check")
+def workflow_step_decide_gate_check(
+    body: DecideGateCheckRequest, project: str = Query(...),
+) -> DecideGateCheckResponse:
+    """Read-only: wraps services.triage_decision.score behind a typed
+    contract, the same shape as /steps/story-gate-check above. Scores the
+    classification the triage `classify` step produced. Writes nothing and
+    decides nothing -- the real decision runs in the gate_adjudicator sweep
+    via triage_decision.adjudicate. This endpoint exists so the conductor
+    directory can show a real, callable behaviour for `decide` instead of
+    nothing (task edeab040)."""
+    with _tracer.start_as_current_span("workflow.step.decide_gate_check") as span:
+        span.set_attribute("workflow.step.id", "decide-gate-check")
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        from prism_service.project_context import get_project
+        from prism_service.services import triage_decision
+        task = get_project(project).task_svc.get(body.task_id)
+        if task is None:
+            return DecideGateCheckResponse(
+                ok=False, reason=f"no task {body.task_id!r} in {project!r}")
+        ok, reason = triage_decision.score(task)
+        return DecideGateCheckResponse(ok=ok, reason=reason)
+
+
 # ONE shape for every named gate tooth -- green_gate's registry
 # (_green_gate_check_registry) and plan_gate's deterministic teeth
 # (services/plan_gate_checks.py) both report through it, so the Workflows

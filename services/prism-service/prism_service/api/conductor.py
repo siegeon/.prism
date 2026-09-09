@@ -720,6 +720,44 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                                            "the sign-off; Approve to release")}}
     except Exception:
         pass
+    # PLAIN GATE READINESS (task 085ee5ff): a gate declared with
+    # validation=None has no machine rubric BY DESIGN (TRIAGE_STEPS "decide",
+    # after any proof_type="review" have been handled above). Resolve the
+    # task's own workflow steps and check if the current step is a
+    # validation=None gate that is NOT one of the named workflow gates
+    # (story_gate, plan_gate, red_gate, green_gate) which inherit their
+    # validation from preceding agent steps. If so, the human's review IS the
+    # sign-off. Return receipt_ok True so Approve is enabled, never claim the
+    # validation-inherited gates' machinery. This branch runs AFTER
+    # human-judgment so that proof_type="review" tasks (promote_to_law) are
+    # caught by the human-judgment path first with its full visual-evidence
+    # and shipping-status logic.
+    try:
+        from prism_service.models.workflow import steps_for
+        from prism_service.models.task import normalize_workflow
+        _workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+        _steps = steps_for(_workflow)
+        _current_step_id = getattr(task, "workflow_step", "")
+        _current_step = None
+        for _s in _steps:
+            if _s.get("id") == _current_step_id:
+                _current_step = _s
+                break
+        _known_inherited_gates = {"story_gate", "plan_gate", "red_gate",
+                                  "green_gate"}
+        if (_current_step is not None and
+                _current_step.get("type") == "gate" and
+                _current_step.get("validation") is None and
+                _current_step.get("id") not in _known_inherited_gates):
+            return {"receipt_ok": True, "receipt_refusal": "",
+                    "manual_review": True,
+                    "receipt": {"adapter": "plain-gate", "passed": True,
+                                "status": "manual_review", "ended_at": "",
+                                "reason": ("this gate has no machine rubric - "
+                                           "your review is the sign-off. "
+                                           "Approve to release it.")}}
+    except Exception:
+        pass
     # UNSHIPPED DISCLOSURE, MACHINE-GRADED LANE (task 8a06e121): the
     # human-judgment branch above already asks _unshipped_gate_reason before
     # every Approve click; this generic EvidenceReceipt branch (proof_type=

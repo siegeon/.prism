@@ -1,0 +1,23 @@
+{
+  "id": "decide-gate-check",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Check triage decision",
+  "version": 1,
+  "steps": [
+    {
+      "id": "evaluate",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/decide-gate-check?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "infer",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/gate-adjudication?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"stage\": \"infer\"}",
+      "timeoutSeconds": 420
+    }
+  ]
+}

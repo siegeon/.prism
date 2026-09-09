@@ -192,7 +192,8 @@ def sweep_once() -> list[dict]:
                 else getattr(t, "gate_state", "")
             tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
             if not tid or step not in ("green_gate", "red_gate",
-                                       "story_gate", "plan_gate"):
+                                       "story_gate", "plan_gate",
+                                       "decide"):
                 continue
             # green_gate also sweeps 'failed' — adjudicate_green_gate
             # re-presents ONLY machine refusal artifacts, never a human
@@ -206,7 +207,15 @@ def sweep_once() -> list[dict]:
             if _backoff_should_skip(tid, t):
                 continue
             try:
-                if step == "green_gate":
+                if step == "decide":
+                    # The triage workflow's ONLY gate. It carries no rubric
+                    # (validation=None), so the seat scores the CLASSIFICATION
+                    # the classify step produced and refuses a missing,
+                    # bucket-less or unreasoned one. A refusal leaves the gate
+                    # PENDING with a stamped reason, never 'failed'.
+                    from prism_service.services import triage_decision
+                    res = triage_decision.adjudicate(svc, ctx.task_svc, tid)
+                elif step == "green_gate":
                     res = svc.adjudicate_green_gate(tid)
                 elif step == "red_gate":
                     # demo rubric first (task 59ddfcbc), then the

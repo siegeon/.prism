@@ -163,6 +163,10 @@ def parse_verdict(text: str) -> Optional[dict]:
 _BEHAVIOUR_FOR_GATE = {
     "story_gate": "story-gate-check", "plan_gate": "plan-gate-check",
     "red_gate": "red-gate-status", "green_gate": "green-gate-status",
+    # The triage workflow's only gate. Without this entry the Workflows page
+    # showed no behaviour for `decide` at all, so a triage task parked there
+    # with nothing a reader could open (observed on task edeab040).
+    "decide": "decide-gate-check",
 }
 
 
