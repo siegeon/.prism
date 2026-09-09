@@ -251,16 +251,37 @@ def release(project: str, task_id: str, actor: str = "human") -> dict:
 
 
 def _total_dispatches(project: str, task_id: str) -> int:
-    """Every dispatch this seat has EVER made for `task_id`, from durable
-    history. Survives a daemon restart, and no budget reset can lower it —
-    that is the point: it is the backstop for a task that oscillates."""
+    """Dispatches this seat has made SINCE THE LAST HUMAN RELEASE, from
+    durable history. Survives a daemon restart, and no automatic budget
+    reset can lower it — that is the point: it is the backstop for a task
+    that oscillates (338f7810: 37 dispatches over 4h40m, advancing and
+    rewinding the whole time).
+
+    COUNTED FROM THE LAST RELEASE, not from the beginning of time (task
+    1bcb2b24, 2026-09-08). `_park_looping` writes "Parked for a person",
+    and `release` calls itself the human's "the cause is fixed, try again"
+    signal — but release only cleared the per-pass attempt budget, so the
+    very next sweep read the same all-time total, hit the ceiling again and
+    re-parked. A task that reached this ceiling was therefore unreachable
+    FOR EVER, by anyone, however thoroughly a person fixed the cause; the
+    park's own message promised a remedy that did not exist.
+
+    An explicit, audited human release is precisely the event this backstop
+    should yield to: it is a person stating the oscillation has a known
+    cause and that cause is now fixed. Oscillation with nobody watching
+    still parks at the ceiling, unchanged, because only a RELEASED_ACTION
+    row moves the start of the count."""
     try:
         from prism_service.project_context import get_project
 
         rows = get_project(project).task_svc.history(task_id) or []
     except Exception:
         return 0
-    return sum(1 for r in rows
+    start = 0
+    for i, r in enumerate(rows):
+        if str(getattr(r, "action", "") or "") == RELEASED_ACTION:
+            start = i + 1
+    return sum(1 for r in rows[start:]
                if str(getattr(r, "action", "") or "") == DISPATCH_ACTION)
 
 

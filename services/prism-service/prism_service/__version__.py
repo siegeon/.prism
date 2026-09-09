@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.270"
+PRISM_VERSION = "7.13.271"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8883,4 +8883,19 @@ PRISM_VERSION_NOTES += (
     "pending for ever. red_gate now rewinds to write_failing_tests under "
     "the same budget, and only on a real refusal, never on a seat that "
     "could not measure. Found by task 1bcb2b24, which hit both."
+)
+
+PRISM_VERSION_NOTES += (
+    " Parked for a person now means a person can unpark it. The resume "
+    "actuator parks a task that keeps moving without finishing, and it "
+    "writes Parked for a person. Its release call names itself the "
+    "signal that the cause is fixed. But release cleared only the "
+    "per-pass attempt budget, while the ceiling counted every dispatch "
+    "ever recorded, so the next sweep read the same total and parked the "
+    "task again. A task at the ceiling was unreachable for ever, by "
+    "anyone, however well a person fixed the cause. The ceiling now "
+    "counts dispatches after the last human release. Oscillation with "
+    "nobody watching still parks at 12, because only a release row moves "
+    "the start of the count. Found on task 1bcb2b24, which spent its 12 "
+    "dispatches on two real defects that are now fixed."
 )
