@@ -13,9 +13,13 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.274"
+PRISM_VERSION = "7.13.275"
 
 # Changelog-ish notes (free-form; keep short)
+PRISM_VERSION_NOTES = (
+    '7.13.275: coverage for the reap invocation on the shipped path. The wiring that reaps a task worktree and branch after a successful land (ship_worker.py:637 calling _reap_after_land at ship_worker.py:711) was implemented in 7.13.180 (shipped 2026-08-30). This closes the test coverage gap: test_the_pipeline_invokes_the_reap.py pins that the conductor pipeline invokes the reap when a task lands, verifying the wiring is exercised end-to-end. 16 reap and neighbouring coverage tests green. '
+)
+
 PRISM_VERSION_NOTES = (
     '7.13.274: codified red test ids are consulted on the live path. write_failing_tests now calls _codified_red_test_ids on success to make those ids AVAILABLE for downstream consumers without waiting for a stall. Previously this call lived only inside _handle_stall, i.e. after a task had already stalled. The codified ids are now incorporated into completion_proof so red_test_ids() extracts them without a second call, closing the gap where a non-stalling task had its red ids but a model had to retype them anyway (task 404ef4ce: make codified nodes from agentic blocks so we can not stall). New suite test_task_runner_red_ids_on_live_path.py pins the call on write_failing_tests success. 2 new and 30 neighbouring runner tests green. '
 )
