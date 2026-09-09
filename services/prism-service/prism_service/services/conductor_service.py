@@ -3415,7 +3415,7 @@ class ConductorService:
                 # unreachable sha - and the only symptom was readiness quoting
                 # that old sha's verdict forever, pointing nowhere near the
                 # real cause. Read the whole message so BOTH conventions work.
-                r = _sp.run(["git", "log", "--format=%H%x09%B%x00", "-n", "80"],
+                r = _sp.run(["git", "log", "--format=%H%x09%B%x00", "-n", "500"],
                             cwd=repo, capture_output=True, text=True,
                             timeout=15)
                 if r.returncode != 0:
