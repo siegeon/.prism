@@ -43,7 +43,7 @@ WORKFLOW_STEPS = [
 TRIAGE_STEPS = [
     {"id": "intake", "agent": None, "type": "intake", "validation": None},
     {"id": "classify", "agent": "sm", "type": "agent", "validation": "triage_bucketed"},
-    {"id": "decide", "agent": None, "type": "gate", "validation": "triage_bucketed"},
+    {"id": "decide", "agent": None, "type": "gate", "validation": None},
     {"id": "done", "agent": None, "type": "done", "validation": None},
 ]
 
