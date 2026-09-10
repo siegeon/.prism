@@ -842,18 +842,21 @@ def _stall_count(task_svc, task_id: str, step_id: str) -> int:
     an identical fresh mandate to retry. The status change is recorded
     as a durable history row with an actor, and _stall_count treats it
     as a budget boundary the same way as REWIND_ACTION (task 1ecbd866)."""
+    import re
     marker = f"step={step_id}; advanced=false"
     rows = list(task_svc.history(task_id) or [])
     start = 0
     for i, h in enumerate(rows):
         action = str(getattr(h, "action", "") or "")
         # REWIND_ACTION is a gate rejection (existing path)
-        # status_change from blocked -> in_progress is an operator reset (new path)
+        # "updated" action from blocked -> in_progress is an operator reset (new path)
         if action == REWIND_ACTION:
             start = i + 1
-        elif action == "status_change":
+        elif action == "updated":
             details = str(getattr(h, "details", "") or "")
-            if "blocked" in details and "in_progress" in details:
+            # Match DIRECTIONAL pattern: status: 'blocked' -> 'in_progress'
+            # Blocks on reverse direction (in_progress -> blocked) and other transitions
+            if re.search(r"status:\s*'blocked'\s*->\s*'in_progress'", details):
                 start = i + 1
     return sum(1 for h in rows[start:]
                if h.action == ATTEMPT_ACTION and marker in h.details)
