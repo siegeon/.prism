@@ -13,10 +13,11 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.279"
+PRISM_VERSION = "7.13.280"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
+    '7.13.280: let a failed decide gate be re-evaluated when the refusal came from the machine. Task edeab040 was stuck at the triage decide step with gate_state=failed after its classification validation failed due to misconfiguration (triage_bucketed was wired but gate_adjudicator never swept failed decide gates). The fix extends gate_adjudicator.sweep_once to re-sweep FAILED decide gates with the same safety guard green_gate uses: check the gate_decide history for action=reject to tell machine refusals from human rejects. A human reject is final (never re-swept); a machine/config refusal is resweppable once the condition clears. New tests in test_triage_decide_gate_seat.py verify the resweep logic and guard against regressions in green_gate behavior. Models/workflow.py TRIAGE_STEPS decide remains validation=None (pins the revert of commit 830bc54e). '
     '7.13.279: wire triage_bucketed validation into ConductorService._VERIFIER_RULES, delegating to triage_decision.score(task) to gate the triage decide step. The seat returns verified True for a bucketed, reasoned classification and verified False with a non-empty reason for empty, unnameable, ambiguous or unreasoned classifications. New tests in test_triage_decide_gate_seat.py verify the rule presence and its behavior on passing and failing classifications. Task edeab040. '
     '7.13.278: the triage decide gate now has a machine seat (services/triage_decision.py). The seat scores the classification and refuses a missing, bucket-less, ambiguous or unreasoned one. Gate readiness now returns receipt_ok for a gate declared validation=None, enabling the Approve control instead of showing a green_gate oracle refusal the gate can never satisfy. New suites test_triage_decide_gate_seat.py and test_plain_gate_readiness.py. Decide gate behavior is governed by the .prism/behaviors/conductor/decide-gate-check.json workflow definition. '
     '7.13.276: local inference proxy routes all models to the local engine. litellm wildcard pattern matching was unreliable - only claude-haiku-4-5-20251001 reached the inference engine while other Claude models hung. Replaced glob pattern with explicit model routes. Measured on local Qwen3-30B: claude-haiku-4-5-20251001 now returns real generated text with input/output token counts. '

@@ -197,10 +197,24 @@ def sweep_once() -> list[dict]:
                 continue
             # green_gate also sweeps 'failed' — adjudicate_green_gate
             # re-presents ONLY machine refusal artifacts, never a human
-            # reject (it checks the history itself). Every other gate:
-            # pending only — a decided gate stays decided.
+            # reject (it checks the history itself). decide (triage workflow)
+            # has the same guard: re-sweep ONLY machine/config refusals, never
+            # human rejects. Every other gate: pending only — a decided gate
+            # stays decided.
             if step == "green_gate":
                 if gate not in ("pending", "failed"):
+                    continue
+            elif step == "decide":
+                if gate == "pending":
+                    pass
+                elif gate == "failed":
+                    # Re-sweep a FAILED decide gate ONLY when the refusal
+                    # came from the machine (configuration/validation error),
+                    # never when a human explicitly rejected it. Check the
+                    # gate_decide history: action=reject means human decision.
+                    if not svc._failed_gate_is_refused_approve(tid, "decide"):
+                        continue
+                else:
                     continue
             elif gate != "pending":
                 continue

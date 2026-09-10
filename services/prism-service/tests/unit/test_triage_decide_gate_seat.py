@@ -110,3 +110,84 @@ def test_wired_rule_returns_verified_false_for_empty_classification(tmp_path):
     assert result["reason"]
     assert result["reason"].strip()
     assert "recorded no classification" in result["reason"]
+
+
+def test_decide_gate_has_validation_none():
+    """models/workflow.py TRIAGE_STEPS decide gate has validation=None (the
+    revert of the bad commit 830bc54e). A validation value of "triage_bucketed"
+    on decide is wrong — it already inherits that from classify via
+    _validation_for_gate's backward walk."""
+    from prism_service.models.workflow import TRIAGE_STEPS
+
+    decide_step = next((s for s in TRIAGE_STEPS if s["id"] == "decide"), None)
+    assert decide_step is not None
+    assert decide_step.get("validation") is None
+
+
+def test_failed_decide_gate_with_machine_refusal_is_resweepable(tmp_path):
+    """A FAILED decide gate whose latest gate_decide history row contains
+    NO action=reject (meaning a machine/config refusal) is eligible for
+    re-sweep by _failed_gate_is_refused_approve."""
+    from prism_service.services.conductor_service import ConductorService
+
+    service = ConductorService(str(tmp_path / "scores.db"), enable_engine=False)
+
+    # Mock the history to return a gate_decide with NO action=reject
+    # (a configuration refusal, not a human decision).
+    service._task_svc = _FakeTaskService([
+        "gate_decide event: gate=decide, actor=triage-validation, outcome=refused"
+    ])
+
+    result = service._failed_gate_is_refused_approve("task-123", "decide")
+    assert result is True, "should be resweepable when the refusal was a machine/config issue"
+
+
+def test_failed_decide_gate_with_human_reject_is_not_resweepable(tmp_path):
+    """A FAILED decide gate whose latest gate_decide history row contains
+    action=reject (meaning a human explicitly rejected it) must NOT be
+    re-swept."""
+    from prism_service.services.conductor_service import ConductorService
+
+    service = ConductorService(str(tmp_path / "scores.db"), enable_engine=False)
+
+    # Mock the history to return a gate_decide with action=reject
+    # (human decision, final).
+    service._task_svc = _FakeTaskService([
+        "gate_decide event: gate=decide, action=reject, actor=owner"
+    ])
+
+    result = service._failed_gate_is_refused_approve("task-123", "decide")
+    assert result is False, "should NOT be resweepable when a human rejected it"
+
+
+def test_green_gate_pending_and_failed_behavior_unchanged():
+    """Regression guard: green_gate's existing pending+failed re-sweep
+    behavior is unchanged by the new decide-gate logic."""
+    from prism_service.services.conductor_service import ConductorService
+
+    service = ConductorService(":memory:", enable_engine=False)
+
+    # A machine refusal on green_gate should still be resweepable.
+    service._task_svc = _FakeTaskService([
+        "gate_decide event: gate=green_gate, actor=conductor-adjudicator, outcome=refused"
+    ])
+
+    result = service._failed_gate_is_refused_approve("task-456", "green_gate")
+    assert result is True, "green_gate machine refusal should still be resweepable"
+
+    # A human reject on green_gate should still be unresweppable.
+    service._task_svc = _FakeTaskService([
+        "gate_decide event: gate=green_gate, action=reject, actor=owner"
+    ])
+
+    result = service._failed_gate_is_refused_approve("task-789", "green_gate")
+    assert result is False, "green_gate human reject should still be unresweppable"
+
+
+class _FakeTaskService:
+    """Minimal fake task service that returns canned history."""
+    def __init__(self, history_rows):
+        self._history_rows = history_rows
+
+    def history(self, task_id):
+        return self._history_rows
