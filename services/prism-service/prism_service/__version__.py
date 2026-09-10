@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.291"
+PRISM_VERSION = "7.13.293"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8966,4 +8966,31 @@ PRISM_VERSION_NOTES += (
     "unmodified checkout (3 brain_csharp_calls, 2 install_packaging) and "
     "1 integration flake is live-daemon lock contention, reproduced as "
     "2 fail / 1 pass on the same commit."
+)
+
+PRISM_VERSION_NOTES += (
+    " | 7.13.293 write_failing_tests WRITES, RUNS and COMMITS (task "
+    "ab9166d5). The step declared ONE node -- a reason-loop whose prompt "
+    "opens 'Draft a failing test (do NOT write it to disk, this is a "
+    "DRAFT only)' -- so it had no failing-test generator at all, and the "
+    "Workflows canvas drew that single node. A draft cannot satisfy the "
+    "step, so _run_step fell through to the inline claude call: on task "
+    "d5808cd1 that envelope measured 133,780 tokens against a 131,072 "
+    "window, 400'd with ContextWindowExceededError before inference, and "
+    "the resume actuator parked the task after 27 dispatches with no "
+    "model run. write-failing-tests-loop.json now also declares "
+    "write-test-file, run-pinned-suite and commit-tests-only, answered in "
+    "api/workflows.py, which refuse rather than raise (a path escaping "
+    "the worktree, a non-test path, a dirty non-test file at commit). "
+    "Three seams made this work end to end: _dispatch_declared_steps now "
+    "THREADS each step's output into the next step's variables, so the "
+    "draft's test_code reaches the write node instead of the literal "
+    "'${testCode}'; _result_from_build_chain harvests the write/run/commit "
+    "rows, so a completed chain no longer reports None and fall back to "
+    "the call that 400s; and _DRAFT_ONLY_WITHOUT_CHAIN drops the narrow "
+    "draft prompt when the chain did not run, so the step can never "
+    "advance on prose with no tests-only commit. The guard reads the "
+    "declared ROUTES, never the step name. Two older assertions are "
+    "retired in place with what superseded them; the budget invariant "
+    "they protected is re-pinned directly."
 )

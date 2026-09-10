@@ -66,18 +66,26 @@ def test_verify_plan_is_a_planned_step():
     assert plan["max_budget_usd"] == 0.5
 
 
-def test_the_three_build_steps_stay_out_of_the_allowlist():
-    """REGRESSION GUARD, not an oversight. write-failing-tests-loop,
-    implement-tasks-loop and verify-green-state-loop declare prompts that
-    open "Draft a failing test (do NOT write it to disk, this is a DRAFT
-    only)", "Draft an implementation approach (do NOT write any code)" and
-    "OBSERVE-only check". Those steps must WRITE the tests (the tests-only
-    commit is what the red seat anchors to), CHANGE the code, and RUN the
-    suite. Wiring them would make drives fast and green on nothing, which is
-    strictly worse than a timeout -- see task_runner.py's own note that
-    their template budget would break every drive."""
-    for step in ("write_failing_tests", "implement_tasks",
-                 "verify_green_state"):
+def test_the_draft_only_build_steps_stay_out_of_the_allowlist():
+    """REGRESSION GUARD, not an oversight. implement-tasks-loop and
+    verify-green-state-loop declare prompts that open "Draft an
+    implementation approach (do NOT write any code)" and "OBSERVE-only
+    check". Those steps must CHANGE the code and RUN the suite. Wiring one
+    would make drives fast and green on nothing, which is strictly worse
+    than a timeout.
+
+    SUPERSEDED IN PART 2026-09-10 by task ab9166d5, which removed
+    write_failing_tests from this list. The invariant was never the step
+    NAME -- it was that a step whose declaration can only DRAFT must not be
+    dispatched. write-failing-tests-loop.json now also declares
+    write-test-file, run-pinned-suite and commit-tests-only, so the chain
+    does the work the draft cannot, and the membership test moved to
+    _runs_as_declared_steps, which reads the declared ROUTES. The live
+    contract is pinned in test_write_failing_tests_runs_as_declared_nodes.py
+    (a draft-only declaration is still refused, and a draft never
+    substitutes for the step when the chain does not run).
+    """
+    for step in ("implement_tasks", "verify_green_state"):
         assert step not in task_runner._PLANNED_STEPS, (
             f"{step} does heavy work; its declared prompt only DRAFTS it")
 

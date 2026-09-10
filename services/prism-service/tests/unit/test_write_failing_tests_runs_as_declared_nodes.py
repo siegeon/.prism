@@ -215,6 +215,32 @@ def test_no_commit_falls_back_instead_of_advancing():
         _rows(committed=False)) is None
 
 
+def test_a_draft_never_substitutes_for_the_step():
+    """THE REGRESSION THIS SLICE COULD HAVE CAUSED. Giving the step a
+    narrow prompt makes an inline fallback possible, and that prompt says
+    "do NOT write it to disk" -- so it returns prose with exit 0 and the
+    step would advance with no tests-only commit. Before this slice the
+    fallback ran the full brief and 400'd LOUDLY, which is worse for cost
+    but better for honesty. The step must never advance on a draft."""
+    assert hasattr(task_runner, "_DRAFT_ONLY_WITHOUT_CHAIN"), (
+        "nothing stops the draft prompt standing in for the step")
+    assert "write_failing_tests" in task_runner._DRAFT_ONLY_WITHOUT_CHAIN
+
+
+def test_the_step_keeps_its_own_wall_clock():
+    """The retired guard's REAL invariant: a build step is not governed by
+    the template budget (haiku / 4 turns / $0.50 / 120 s). _invoke_budget
+    keeps _step_timeout_s, which gives write_failing_tests its 2.0
+    multiplier, so joining _PLANNED_STEPS must not shrink the clock."""
+    plan = _plan()
+    budget = task_runner._invoke_budget(
+        "write_failing_tests", plan, narrow=True)
+    assert budget["timeout_s"] == task_runner._step_timeout_s(
+        "write_failing_tests"), (
+        "the declared 120 s template must not replace the step's own clock")
+    assert budget["timeout_s"] >= 1800
+
+
 def test_the_document_chain_is_unchanged():
     """verify_plan's reason-loop -> plan_doc shape still works."""
     class _Resp:

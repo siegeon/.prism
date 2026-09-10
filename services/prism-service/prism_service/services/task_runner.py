@@ -177,16 +177,35 @@ def _step_timeout_s(step_id: str = "") -> float:
 # full brief with BUILD_TOOLS was killed at 900.1s having written nothing but
 # the model's empty think wrapper.
 #
-# THE THREE BUILD STEPS STILL DO NOT JOIN, and that is deliberate rather than
-# an oversight: their declared prompts open "Draft a failing test (do NOT write
-# it to disk, this is a DRAFT only)", "Draft an implementation approach (do NOT
-# write any code)" and "OBSERVE-only check". Those steps must WRITE the tests
-# (the tests-only commit is the red seat's anchor), CHANGE the code and RUN the
-# suite. Wiring them would make drives fast and green on nothing, which is
-# worse than a timeout. A node joins this set when its declaration is real,
-# never by default.
+# write_failing_tests JOINS THEM (task ab9166d5, 2026-09-10) -- and the rule
+# that kept it out is not weakened, it is SATISFIED. That rule said a step
+# whose declared prompt only DRAFTS ("do NOT write it to disk") must not be
+# dispatched, because the tests-only commit is the red seat's anchor and a
+# drive that skips it goes fast and green on nothing. 7.13.292 broke exactly
+# that and was reverted the same day. What changed is the DECLARATION: the
+# behaviour now also declares write-test-file, run-pinned-suite and
+# commit-tests-only, so the chain does the work the draft cannot. The
+# membership test lives in _runs_as_declared_steps and reads the declared
+# ROUTES, never the step name -- remove a route from the JSON and the step
+# falls back to the general agent rather than advancing on a draft.
+#
+# implement_tasks and verify_green_state still do NOT join, unchanged: their
+# declarations remain draft-only ("do NOT write any code", "OBSERVE-only
+# check"). A node joins this set when its declaration is real, never by
+# default.
 _PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story",
-                            "verify_plan"})
+                            "verify_plan", "write_failing_tests"})
+
+# Steps whose declared narrow prompt only DRAFTS the work, so it must never
+# stand in for the step itself when the declared chain did not run. Running
+# such a prompt inline returns prose with exit 0, which advances the step on
+# nothing. Membership here costs nothing while the chain works.
+_DRAFT_ONLY_WITHOUT_CHAIN = frozenset({"write_failing_tests"})
+
+# The routes a build step must declare before it may run as declared steps.
+# A step that cannot write, run and commit has no business leaving the
+# general-agent path, because its declared prompt only DRAFTS.
+_BUILD_ROUTES = ("write-test-file", "run-pinned-suite", "commit-tests-only")
 
 # Steps where a red test can meaningfully exist. The stall mechanism
 # (task 404ef4ce) reads codified red test ids to name the next action
@@ -344,7 +363,26 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_text_challenge(
             _wf.TextChallengeRequest(**body), project=project)
 
-    return {"reason-loop": _reason_loop, "text-challenge": _text_challenge}
+    # THE BUILD NODES (task ab9166d5). Without these three the declared
+    # write-failing-tests chain could only DRAFT, so the step fell back to a
+    # general claude -p with BUILD_TOOLS whose envelope 400'd at 163,315
+    # tokens against a 131,072 window. They write, run and commit.
+    def _write_test_file(project: str, body: dict):
+        return _wf.workflow_step_write_test_file(
+            _wf.WriteTestFileRequest(**body), project=project)
+
+    def _run_pinned_suite(project: str, body: dict):
+        return _wf.workflow_step_run_pinned_suite(
+            _wf.RunPinnedSuiteRequest(**body), project=project)
+
+    def _commit_tests_only(project: str, body: dict):
+        return _wf.workflow_step_commit_tests_only(
+            _wf.CommitTestsOnlyRequest(**body), project=project)
+
+    return {"reason-loop": _reason_loop, "text-challenge": _text_challenge,
+            "write-test-file": _write_test_file,
+            "run-pinned-suite": _run_pinned_suite,
+            "commit-tests-only": _commit_tests_only}
 
 
 def _subst(value, variables: dict):
@@ -365,6 +403,40 @@ def _subst(value, variables: dict):
     return value
 
 
+def _camel(name: str) -> str:
+    """snake_case -> camelCase. The declarations interpolate camelCase."""
+    head, *rest = str(name).split("_")
+    return head + "".join(p[:1].upper() + p[1:] for p in rest)
+
+
+def _exported_variables(result) -> dict:
+    """The names a LATER declared step may interpolate from an EARLIER one.
+
+    THE CHAIN IS A PIPELINE, not a list of independent calls: the
+    write-failing-tests declaration fills ${testCode} and ${testFilePath}
+    from the draft that reason-loop returned one step earlier. Without this,
+    _subst leaves an unknown placeholder verbatim and the write node is
+    handed the literal string "${testCode}" as a file body.
+
+    Both spellings are exported -- the schema fields are snake_case and the
+    declarations are camelCase -- so a declaration may name either.
+    """
+    fields: dict = {}
+    reason = getattr(result, "reason", None)
+    if isinstance(reason, dict):
+        fields.update(reason.get("fields") or {})
+    if isinstance(result, dict):
+        fields.update(result)
+    out: dict = {}
+    for key, val in fields.items():
+        if not isinstance(key, str) or not isinstance(
+                val, (str, int, float, bool)):
+            continue
+        out[key] = val
+        out[_camel(key)] = val
+    return out
+
+
 def _dispatch_declared_steps(project: str, plan: Optional[dict],
                              *, handlers: Optional[dict] = None,
                              variables: Optional[dict] = None) -> list[dict]:
@@ -373,10 +445,14 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
     A route with no handler is REPORTED, never skipped. Silence is what let
     text-challenge sit in a declaration for versions without running: the
     canvas drew it, the file declared it, and nothing said it had not run.
+
+    Each step's output is exported into the variables the NEXT step
+    interpolates, so a declaration can name a real pipeline.
     """
     if not plan:
         return []
     table = _step_handlers() if handlers is None else handlers
+    live = dict(variables or {})
     out: list[dict] = []
     for step in plan.get("steps") or []:
         route = step.get("route") or ""
@@ -385,7 +461,7 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
             out.append({"ok": False, "route": route,
                         "reason": f"no handler for declared route {route!r}"})
             continue
-        body = _subst(step.get("body") or {}, variables or {})
+        body = _subst(step.get("body") or {}, live)
         try:
             result = fn(project, body)
         except Exception as exc:
@@ -393,32 +469,101 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
                         "reason": f"{route} raised {type(exc).__name__}: {exc}"})
             continue
         out.append({"ok": True, "route": route, "result": result})
+        live.update(_exported_variables(result))
     return out
 
 
 def _runs_as_declared_steps(step_id: str, plan: Optional[dict]) -> bool:
     """True when this node's chain is safe to execute as declared.
 
-    DELIBERATELY NARROW. Only verify_plan is wired here. The three build
-    steps declare prompts that merely DRAFT ("do NOT write it to disk",
-    "do NOT write any code"), so dispatching them would make a drive fast
-    and green on nothing -- strictly worse than the timeout it replaced.
-    review_previous_notes keeps its own codified premise path, which already
-    resolves the step with no model call at all.
+    THE TEST IS THE DECLARED WORK, NEVER THE STEP NAME. A node qualifies
+    only when what it declares can finish the step on its own:
+
+      * verify_plan -- a reason-loop plus the json_schema that forbids a
+        chat transcript;
+      * write_failing_tests -- write, run AND commit, because the tests-only
+        commit is the red seat's anchor.
+
+    implement_tasks and verify_green_state stay out: their declarations
+    merely DRAFT ("do NOT write any code", "OBSERVE-only check"), so
+    dispatching one would make a drive fast and green on nothing --
+    strictly worse than the timeout it replaced. review_previous_notes
+    keeps its own codified premise path, which already resolves the step
+    with no model call at all.
     """
-    if step_id != "verify_plan" or not plan:
+    if not plan:
         return False
     routes = [s.get("route") for s in plan.get("steps") or []]
-    return "reason-loop" in routes and bool(plan.get("json_schema"))
+    if step_id == "verify_plan":
+        return "reason-loop" in routes and bool(plan.get("json_schema"))
+    # write_failing_tests joins ONLY on the strength of its declaration
+    # (task ab9166d5). The 7.13.292 attempt admitted it while the file
+    # still declared the draft alone, so the step would have advanced on a
+    # draft with no tests-only commit and no red anchor -- fast and green
+    # on nothing. The membership test is therefore the WORK, never the
+    # step name: it must be able to write, run AND commit.
+    if step_id == "write_failing_tests":
+        return all(r in routes for r in _BUILD_ROUTES)
+    return False
+
+
+def _result_from_build_chain(rows: list) -> Optional["_CodifiedResult"]:
+    """The write -> run -> commit chain's report, or None.
+
+    THE RED ANCHOR IS THE PRODUCT. None whenever the chain left no
+    tests-only commit, because the caller then falls back rather than
+    advancing a step on nothing -- the same rule the document chain keeps.
+
+    The rc is REPORTED, never interpreted. oracle_spec's red check wants
+    rc==1 and refuses 0, 2 and 4 by name, so the GATE judges the run; this
+    seat only carries the measured integer and the real pytest tail, which
+    is what conductor_service mints the red receipt from.
+    """
+    got: dict = {}
+    for row in rows or []:
+        route = row.get("route")
+        if route in _BUILD_ROUTES and row.get("ok"):
+            payload = row.get("result")
+            if isinstance(payload, dict) and payload.get("outcome") == "ok":
+                got[route] = payload
+    made = got.get("commit-tests-only") or {}
+    if not made.get("committed"):
+        return None
+    wrote = got.get("write-test-file") or {}
+    ran = got.get("run-pinned-suite") or {}
+    paths = " ".join(ran.get("paths") or [])
+    text = (
+        f"Wrote {wrote.get('path', '?')} "
+        f"({wrote.get('bytes', 0)} bytes) into the task worktree.\n"
+        f"Ran the pinned suite {paths}: pytest exit code {ran.get('rc')}.\n\n"
+        f"{ran.get('tail', '')}\n\n"
+        f"Committed tests only as {str(made.get('sha', ''))[:12]}: "
+        f"{', '.join(made.get('files') or [])}"
+    )
+    out = _CodifiedResult(text)
+    out.structured_output = {"rc": ran.get("rc"), "sha": made.get("sha"),
+                             "files": made.get("files") or [],
+                             "paths": ran.get("paths") or []}
+    return out
 
 
 def _result_from_dispatch(rows: list) -> Optional["_CodifiedResult"]:
-    """The reason-loop document, as a claude_cli-shaped result, or None.
+    """The declared chain's artifact, as a claude_cli-shaped result, or None.
 
-    None means "the chain did not produce a document", and every caller then
-    falls back to the inline call -- a declared flow that misfires must never
-    advance a step on nothing.
+    TWO CHAINS DECLARE TWO PRODUCTS: verify_plan's reason-loop returns a
+    DOCUMENT (plan_doc + plan_diagram), and write_failing_tests' write ->
+    run -> commit leaves a RED ANCHOR. Harvesting only the document is what
+    made the build chain report None even after it had written, run and
+    committed -- the caller then set dispatched=None and ran the inline
+    call whose envelope 400s.
+
+    None still means "the chain produced nothing", and every caller then
+    falls back -- a declared flow that misfires must never advance a step
+    on nothing.
     """
+    built = _result_from_build_chain(rows)
+    if built is not None:
+        return built
     for row in rows or []:
         if row.get("route") != "reason-loop" or not row.get("ok"):
             continue
@@ -1646,6 +1791,16 @@ def _run_one_step(project: str, task_id: str) -> dict:
             result = _result_from_dispatch(dispatched)
             if result is None:
                 dispatched = None
+        # A DRAFT IS NOT A SUBSTITUTE FOR THE STEP (task ab9166d5). The
+        # write-failing-tests narrow prompt says "do NOT write it to disk",
+        # so running it inline returns prose with exit 0 -- which _route_proof
+        # would store and the step would ADVANCE on, with no tests-only commit
+        # and no red anchor. That is the misfire this ticket names, and it is
+        # reachable only when the chain did not run. Drop the narrow prompt so
+        # the step keeps its pre-change behaviour (the full brief) instead of
+        # going fast and green on nothing.
+        if dispatched is None and job["step"] in _DRAFT_ONLY_WITHOUT_CHAIN:
+            narrow_prompt = ""
         if dispatched is None and narrow_prompt:
             prompt = narrow_prompt
             _record_codified_run(

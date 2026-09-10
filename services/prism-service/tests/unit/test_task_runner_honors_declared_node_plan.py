@@ -82,8 +82,7 @@ def test_review_previous_notes_plan_names_its_codified_substeps():
     assert "premise-judge" not in plan["codified"]
 
 
-@pytest.mark.parametrize("step", ["implement_tasks", "verify_green_state",
-                                  "write_failing_tests"])
+@pytest.mark.parametrize("step", ["implement_tasks", "verify_green_state"])
 def test_build_steps_keep_the_runner_budget(step):
     """A build step is NOT governed by the template budget.
 
@@ -92,6 +91,14 @@ def test_build_steps_keep_the_runner_budget(step):
     considered figure — `implement_tasks` alone has a 474 s median and
     needs far more than four turns. Honouring it would break every build
     step, so only a node with a real hand-tuned declaration opts in.
+
+    SUPERSEDED IN PART 2026-09-10 by task ab9166d5, which dropped
+    write_failing_tests from this list because its declaration is now real
+    (write-test-file, run-pinned-suite, commit-tests-only). The BUDGET
+    invariant this test protects did not move and is re-pinned directly in
+    test_write_failing_tests_runs_as_declared_nodes.py: _invoke_budget
+    keeps _step_timeout_s, so the declared 120 s template never replaces
+    that step's own 1800 s clock.
     """
     assert task_runner._node_plan("prism", step) is None
 

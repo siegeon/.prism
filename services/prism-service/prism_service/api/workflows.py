@@ -3216,6 +3216,29 @@ class ReapRequest(BaseModel):
     mode: str = Field(default="reap", pattern="^(reap|survey)$")
 
 
+class WriteTestFileRequest(BaseModel):
+    """The drafted test, and where it goes in the task's own worktree."""
+
+    task_id: str = Field(min_length=1)
+    test_file_path: str = Field(min_length=1)
+    test_code: str = Field(min_length=1)
+
+
+class RunPinnedSuiteRequest(BaseModel):
+    """Run the task's pinned suite. `paths` empty means read task.verify."""
+
+    task_id: str = Field(min_length=1)
+    paths: list[str] = Field(default_factory=list)
+    timeout_s: float = Field(default=600.0, gt=0)
+
+
+class CommitTestsOnlyRequest(BaseModel):
+    """Commit ONLY test files, carrying the task trailer."""
+
+    task_id: str = Field(min_length=1)
+    message: str = Field(default="")
+
+
 class BrainHealthRequest(BaseModel):
     task_id: str = Field(min_length=1)
 
@@ -3328,3 +3351,199 @@ def workflow_step_reap(
         return task_reaper.reap_task(
             body.task_id, status=str(getattr(task, "status", "") or ""),
             mode=chosen, is_live=_is_live)
+
+
+# ----------------------------------------------------------------------
+# THE BUILD NODES (task ab9166d5). write_failing_tests used to declare one
+# node -- a reason-loop that DRAFTS a test and is told not to write it --
+# so the step fell back to a general claude -p carrying BUILD_TOOLS. That
+# envelope measured 163,315 tokens against the engine's 131,072 window, so
+# the step 400'd before inference and 27 dispatches recorded no model run
+# at all. These three nodes do the work the draft cannot: write, run, and
+# commit. Same contract as /steps/reap -- always HTTP 200, a refusal is a
+# REPORTED fact, never an exception, so the flow reaches its next node and
+# the reason reaches a person.
+# ----------------------------------------------------------------------
+
+def _task_worktree(task_id: str) -> tuple[object, str]:
+    """(Path, "") for a resolvable worktree, else (None, reason)."""
+    from pathlib import Path
+
+    from prism_service.services import task_workspace
+
+    ws = task_workspace.workspace_path(task_id) or ""
+    if not ws:
+        return None, f"task {task_id[:8]} has no worktree on disk"
+    p = Path(ws)
+    if not p.is_dir():
+        return None, f"worktree {ws} is not a directory"
+    return p, ""
+
+
+def _inside(root, candidate: str) -> bool:
+    """True when `candidate` resolves inside `root`. Blocks ../ escapes."""
+    from pathlib import Path
+
+    try:
+        (root / candidate).resolve().relative_to(Path(root).resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+@router.post("/steps/write-test-file")
+def workflow_step_write_test_file(
+    body: WriteTestFileRequest, project: str = Query(...),
+) -> dict:
+    """Write the drafted test into the task's own worktree.
+
+    REFUSES rather than raises on: no worktree, a path that escapes the
+    worktree, and a path that is not a test file. The last one is the
+    tests-only invariant's first gate -- the red seat anchors on a commit
+    that carries tests and nothing else.
+    """
+    out = {"kind": "conductor.write_test_file", "node_id": "write-test-file",
+           "task_id": body.task_id, "outcome": "refused", "written": False,
+           "path": body.test_file_path, "bytes": 0, "reason": ""}
+    with _tracer.start_as_current_span("workflow.step.write_test_file") as sp:
+        sp.set_attribute("workflow.project", project)
+        sp.set_attribute("workflow.task.id", body.task_id)
+        root, why = _task_worktree(body.task_id)
+        if root is None:
+            out["reason"] = why
+            return out
+        rel = body.test_file_path.lstrip("/")
+        if not _inside(root, rel):
+            out["reason"] = f"path escapes the worktree: {rel}"
+            return out
+        name = rel.rsplit("/", 1)[-1]
+        if not (name.startswith("test_") and name.endswith(".py")):
+            out["reason"] = (
+                f"not a test file: {name} must match test_*.py, because "
+                f"the red anchor carries tests and nothing else")
+            return out
+        target = root / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body.test_code, encoding="utf-8")
+        except OSError as exc:
+            out["reason"] = f"write failed: {type(exc).__name__}: {exc}"
+            return out
+        out.update(outcome="ok", written=True,
+                   bytes=len(body.test_code.encode("utf-8")))
+        return out
+
+
+@router.post("/steps/run-pinned-suite")
+def workflow_step_run_pinned_suite(
+    body: RunPinnedSuiteRequest, project: str = Query(...),
+) -> dict:
+    """Run the task's pinned suite in its worktree and REPORT the rc.
+
+    The rc IS the product. oracle_spec's red check wants rc==1 and refuses
+    rc 0, 2 and 4 by name, so this node never interprets -- it reports the
+    integer and the tail, and the gate decides.
+    """
+    import subprocess
+
+    out = {"kind": "conductor.run_pinned_suite", "node_id": "run-pinned-suite",
+           "task_id": body.task_id, "outcome": "refused", "rc": None,
+           "paths": [], "tail": "", "reason": ""}
+    with _tracer.start_as_current_span("workflow.step.run_pinned_suite") as sp:
+        sp.set_attribute("workflow.project", project)
+        sp.set_attribute("workflow.task.id", body.task_id)
+        root, why = _task_worktree(body.task_id)
+        if root is None:
+            out["reason"] = why
+            return out
+        paths = list(body.paths)
+        if not paths:
+            task = get_project(project).task_svc.get(body.task_id)
+            paths = list(getattr(task, "verify", None) or [])
+        paths = [p for p in paths if _inside(root, p.lstrip("/"))]
+        if not paths:
+            out["reason"] = (
+                "no pinned suite: task.verify is empty or names a path "
+                "outside the worktree")
+            return out
+        out["paths"] = paths
+        cmd = ["python3", "-m", "pytest", *paths, "-q",
+               "-o", "faulthandler_timeout=120"]
+        try:
+            proc = subprocess.run(cmd, cwd=str(root), capture_output=True,
+                                  text=True, timeout=body.timeout_s)
+        except subprocess.TimeoutExpired:
+            out["reason"] = f"suite exceeded {body.timeout_s}s"
+            return out
+        except OSError as exc:
+            out["reason"] = f"could not run pytest: {exc}"
+            return out
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        out.update(outcome="ok", rc=proc.returncode,
+                   tail="\n".join(combined.splitlines()[-30:]))
+        return out
+
+
+@router.post("/steps/commit-tests-only")
+def workflow_step_commit_tests_only(
+    body: CommitTestsOnlyRequest, project: str = Query(...),
+) -> dict:
+    """Commit ONLY test files, carrying the task trailer.
+
+    THE TESTS-ONLY RULE IS ENFORCED HERE, not asked for in a prompt: any
+    staged path that is not a test file is a refusal, because a bundled
+    tests+impl commit makes red undemonstrable and strands red_gate with a
+    person. Nothing is committed when the refusal fires.
+    """
+    import subprocess
+
+    out = {"kind": "conductor.commit_tests_only",
+           "node_id": "commit-tests-only", "task_id": body.task_id,
+           "outcome": "refused", "committed": False, "sha": "",
+           "files": [], "reason": ""}
+
+    def _git(*args: str):
+        return subprocess.run(["git", *args], cwd=str(root),
+                              capture_output=True, text=True, timeout=120)
+
+    with _tracer.start_as_current_span("workflow.step.commit_tests_only") as s:
+        s.set_attribute("workflow.project", project)
+        s.set_attribute("workflow.task.id", body.task_id)
+        root, why = _task_worktree(body.task_id)
+        if root is None:
+            out["reason"] = why
+            return out
+        try:
+            changed = _git("status", "--porcelain")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            out["reason"] = f"git status failed: {exc}"
+            return out
+        files = [ln[3:].strip() for ln in
+                 (changed.stdout or "").splitlines() if ln[3:].strip()]
+        if not files:
+            out["reason"] = "nothing to commit: the worktree is clean"
+            return out
+        stray = [f for f in files
+                 if not f.rsplit("/", 1)[-1].startswith("test_")]
+        if stray:
+            out["files"] = files
+            out["reason"] = (
+                f"not tests-only: {len(stray)} non-test path(s) are dirty "
+                f"({', '.join(stray[:3])}). The red anchor must carry tests "
+                f"and nothing else, so nothing was committed.")
+            return out
+        msg = body.message or f"test: pin the failing case [task:{body.task_id[:8]}]"
+        if f"[task:{body.task_id[:8]}]" not in msg:
+            msg = f"{msg} [task:{body.task_id[:8]}]"
+        add = _git("add", *files)
+        if add.returncode != 0:
+            out["reason"] = f"git add failed: {(add.stderr or '').strip()[:200]}"
+            return out
+        made = _git("commit", "-m", msg)
+        if made.returncode != 0:
+            out["reason"] = f"git commit failed: {(made.stderr or '').strip()[:200]}"
+            return out
+        sha = _git("rev-parse", "HEAD")
+        out.update(outcome="ok", committed=True, files=files,
+                   sha=(sha.stdout or "").strip()[:40])
+        return out
