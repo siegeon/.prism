@@ -229,3 +229,63 @@ def test_completed_at_timestamp_is_valid_iso_format(_mock_steps):
     # Should be close to now
     now = datetime.now(timezone.utc)
     assert abs((now - parsed).total_seconds()) < 5
+
+
+# ============================================================================
+# SWEEP TESTS — verify the gate_adjudicator.sweep_once path closes tasks
+# ============================================================================
+
+@patch("prism_service.models.workflow.steps_for", side_effect=_mock_steps_for)
+def test_sweep_closes_a_terminal_task_with_no_outstanding_gates(_mock_steps):
+    """The sweep (gate_adjudicator.sweep_once) closes a task at done step.
+
+    This is the real-world path: edeab040 sits at workflow_step=done with no
+    driver calling flow_report anymore. The sweep must reach it and close it.
+    """
+    svc = MagicMock()
+    task = FakeTask(workflow="triage", workflow_step="done", gate_state=None, updated_at="2026-09-09T12:00:00")
+    svc._task_svc.get.return_value = task
+
+    _close_if_terminal(svc, task.id)
+
+    # Verify the task was closed
+    svc._task_svc.update.assert_called_once()
+    call_kwargs = svc._task_svc.update.call_args[1]
+    assert call_kwargs.get("status") == "done"
+    assert call_kwargs.get("completed_at") is not None
+
+
+@patch("prism_service.models.workflow.steps_for", side_effect=_mock_steps_for)
+def test_sweep_does_not_close_terminal_task_with_pending_gate(_mock_steps):
+    """The sweep does not close a task at done step with gate_state=pending."""
+    svc = MagicMock()
+    task = FakeTask(workflow="triage", workflow_step="done", gate_state="pending", updated_at="2026-09-09T12:00:00")
+    svc._task_svc.get.return_value = task
+
+    _close_if_terminal(svc, task.id)
+
+    svc._task_svc.update.assert_not_called()
+
+
+@patch("prism_service.models.workflow.steps_for", side_effect=_mock_steps_for)
+def test_sweep_does_not_close_terminal_task_with_failed_gate(_mock_steps):
+    """The sweep does not close a task at done step with gate_state=failed."""
+    svc = MagicMock()
+    task = FakeTask(workflow="triage", workflow_step="done", gate_state="failed", updated_at="2026-09-09T12:00:00")
+    svc._task_svc.get.return_value = task
+
+    _close_if_terminal(svc, task.id)
+
+    svc._task_svc.update.assert_not_called()
+
+
+@patch("prism_service.models.workflow.steps_for", side_effect=_mock_steps_for)
+def test_sweep_leaves_non_terminal_tasks_untouched(_mock_steps):
+    """The sweep does not close tasks on non-terminal steps."""
+    svc = MagicMock()
+    task = FakeTask(workflow="triage", workflow_step="classify", gate_state=None, updated_at="2026-09-09T12:00:00")
+    svc._task_svc.get.return_value = task
+
+    _close_if_terminal(svc, task.id)
+
+    svc._task_svc.update.assert_not_called()

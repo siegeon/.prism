@@ -191,9 +191,30 @@ def sweep_once() -> list[dict]:
             gate = t.get("gate_state") if isinstance(t, dict) \
                 else getattr(t, "gate_state", "")
             tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
-            if not tid or step not in ("green_gate", "red_gate",
-                                       "story_gate", "plan_gate",
-                                       "decide", "review"):
+            if not tid:
+                continue
+
+            # TERMINAL STEP CLOSURE (task 23019de9): close tasks that reach
+            # a step with type=done and have no outstanding gate. This check
+            # runs BEFORE the gate-step filter, so a task at "done" gets a
+            # close attempt before we skip it for not being in the gate list.
+            # Use backoff so a task that cannot close does not spam history.
+            if step == "done":
+                gate_state = gate or ""
+                if gate_state not in ("pending", "failed"):
+                    if not _backoff_should_skip(tid, t):
+                        try:
+                            from prism_service.api.conductor_flow import _close_if_terminal
+                            _close_if_terminal(svc, tid)
+                            _backoff_clear(tid)
+                        except Exception as exc:
+                            _log(f"{pid}/{tid[:8]}: terminal close raised ({exc})")
+                            _backoff_note_refused(tid, t)
+                continue
+
+            if step not in ("green_gate", "red_gate",
+                            "story_gate", "plan_gate",
+                            "decide", "review"):
                 continue
             # green_gate also sweeps 'failed' — adjudicate_green_gate
             # re-presents ONLY machine refusal artifacts, never a human
