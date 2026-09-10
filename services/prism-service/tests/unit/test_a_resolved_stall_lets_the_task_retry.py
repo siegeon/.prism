@@ -1,23 +1,23 @@
 """A fixed defect lets its stalled task retry (task 1ecbd866-142b-4c58-a59b-9cdc295a42d3).
 
-A manual status transition out of blocked is a fresh mandate to retry, just like
-a gate rejection (REWIND_ACTION). When an operator moves a task from blocked back
-to in_progress, _stall_count must reset the budget so the next runner tick does
-not route straight to _handle_stall again.
+A manual status transition from blocked to in_progress is a fresh mandate to retry,
+just like a gate rejection (REWIND_ACTION). The real history format records this as
+action='updated' with a directional pattern in details: "status: 'blocked' -> 'in_progress'".
 
-The history row recording the status flip carries an actor (the user or system
-that changed it), and _stall_count should treat it as a budget boundary exactly
-as it treats REWIND_ACTION — counting only attempts AFTER the most recent
-boundary marker.
+_stall_count must match this pattern precisely (directional, not just substrings) and
+treat it as a budget boundary exactly as it treats REWIND_ACTION — counting only
+attempts AFTER the most recent boundary marker.
 """
 
 from __future__ import annotations
 
+import tempfile
 import types
 
 import pytest
 
 from prism_service.services import task_runner as tr
+from prism_service.services.task_service import TaskService
 
 
 class _StallTask:
@@ -55,60 +55,76 @@ class _StallSvc:
 
 
 def test_an_operator_reset_lets_the_step_run_again():
-    """When an operator manually moves a task from blocked to in_progress,
-    the stall budget resets and the step can run again.
+    """Real TaskService integration test: task status change resets stall budget.
 
-    Simulates the sequence: step stalls 3 times (budget exhausted), task goes
-    blocked, operator manually clicks "in_progress" on the task page (which
-    records a status transition history row with an actor), next runner tick
-    should run the step again (stall count should be 0 for the new pass).
+    Drives a real task through TaskService.update(status=...) so the history
+    row matches the actual production format: action='updated' with a directional
+    details pattern "status: 'blocked' -> 'in_progress'". This test FAILS if
+    the regex match is direction-blind (would accept 'in_progress' -> 'blocked').
     """
-    svc = _StallSvc()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        svc = TaskService(db_path=f"{tmpdir}/test.db")
 
-    # Simulate three failed attempts at draft_story
-    for i in range(3):
-        svc.record_history(
-            "t-1",
-            action=tr.ATTEMPT_ACTION,
-            details=f"step=draft_story; advanced=false",
-            actor="prism-task-runner")
+        # Create a task (starts in_progress by default)
+        task = svc.create(
+            title="Test task",
+            description="Stall retry test",
+            priority=10)
+        task_id = task.id
 
-    # Simulate operator moving task from blocked to in_progress
-    # This should be a boundary marker for the stall count
-    svc.record_history(
-        "t-1",
-        action="status_change",
-        details="status: blocked -> in_progress",
-        actor="owner")
+        # Move it to blocked state first
+        svc.update(task_id, status="blocked")
 
-    # After the status change, stall count should be 0
-    count = tr._stall_count(svc, "t-1", "draft_story")
+        # Record three failed attempts at draft_story
+        for i in range(3):
+            svc.record_history(
+                task_id,
+                action=tr.ATTEMPT_ACTION,
+                details="step=draft_story; advanced=false",
+                actor="prism-task-runner")
 
-    assert count == 0, (
-        f"stall count should reset after operator status change, but got {count}")
+        # Count before status change (should be 3)
+        count_before = tr._stall_count(svc, task_id, "draft_story")
+        assert count_before == 3
+
+        # Operator manually moves task from blocked to in_progress
+        svc.update(task_id, status="in_progress")
+
+        # After the status change, stall count should be 0
+        count_after = tr._stall_count(svc, task_id, "draft_story")
+
+        assert count_after == 0, (
+            f"stall count should reset after status change from blocked -> in_progress, "
+            f"but got {count_after}")
 
 
 def test_an_unresolved_stall_still_blocks():
-    """When a task stays in blocked (no status change), it still blocks
-    after three attempts.
+    """Guard: blocking transition does NOT reset the budget.
 
-    This is the guard: confirm that the retry reset is specific to status
-    changes, not a general weakening of the stall threshold.
+    Confirms that the budget reset is specific to blocked->in_progress transitions,
+    not triggered by any transition containing those words. The history would read:
+    "status: 'in_progress' -> 'blocked'" and must NOT match the directional pattern.
     """
     svc = _StallSvc()
 
-    # Simulate three failed attempts at draft_story
+    # Record three failed attempts at draft_story
     for i in range(3):
         svc.record_history(
             "t-1",
             action=tr.ATTEMPT_ACTION,
-            details=f"step=draft_story; advanced=false",
+            details="step=draft_story; advanced=false",
             actor="prism-task-runner")
 
-    # NO status change — the task stays blocked
+    # Simulate blocking transition (opposite direction)
+    # This should NOT reset the budget
+    svc.record_history(
+        "t-1",
+        action="updated",
+        details="status: 'in_progress' -> 'blocked'; blocked_reason: 'step draft_story ...'",
+        actor="")
 
-    # Stall count should still be 3 (still at the limit)
+    # Stall count should still be 3 (not reset by the blocking transition)
     count = tr._stall_count(svc, "t-1", "draft_story")
 
     assert count == 3, (
-        f"unresolved stall should keep stall count at {tr.STALL_ATTEMPTS}, got {count}")
+        f"blocking transition should NOT reset budget, but stall count dropped to {count}")
