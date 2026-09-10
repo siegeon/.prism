@@ -176,6 +176,46 @@ def _build_cmd(
     return cmd
 
 
+def _narrow_context_dir() -> Path:
+    """An empty directory a NO-TOOL call runs from, so it inherits no CLAUDE.md.
+
+    THE MEASUREMENT (2026-09-10, live daemon). The declared verify_plan middle
+    is a 1,295-character prompt with no tools, and its call carried 28,560
+    input tokens. Three `claude -p` runs with the live seat's exact flags,
+    varying only what the child could see:
+
+        trivial 30-char prompt, real task workspace .. 28,003 input
+        trivial 30-char prompt, empty scratch dir ....  7,602 input
+        difference ................................... 20,401 tokens
+
+    A thirty-character prompt costs 28,003 tokens in the task workspace,
+    because that workspace carries a 75,961-byte CLAUDE.md written for an
+    INTERACTIVE CODING AGENT. Given ~20k tokens of "you read files and run
+    commands" and then `--tools ""`, the model role-plays the loop anyway and
+    emits `<file-read>` as text with INVENTED contents -- task d5808cd1's plan
+    cites prism_service/tasks/reap.py, which does not exist. a9f2bec7 removed
+    the tools; only this removes the belief that it has them.
+
+    NOT `--bare`, which also skips CLAUDE.md discovery but declares "Anthropic
+    auth is strictly ANTHROPIC_API_KEY or apiKeyHelper (OAuth and keychain are
+    never read)" -- and `_strip_env` removes ANTHROPIC_API_KEY under INV-1.
+    Discovery is directory-driven (`--bare`'s own escape hatch is "--add-dir
+    (CLAUDE.md dirs)"), so a clean cwd gets the reduction without touching
+    authentication.
+
+    STABLE, NEVER A PER-CALL TEMPDIR. The cwd appears in the harness system
+    prompt, so a path that changed per call would change the prefix per call
+    and defeat prompt caching -- and caching is what makes the envelope cheap
+    when it hits (a draft_story run paid 613 fresh tokens against 27,520
+    cache_read and finished in 23.9s).
+    """
+    from prism_service.config import DATA_DIR
+
+    d = Path(DATA_DIR) / "narrow_context"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _backend_env() -> dict:
     """Return the redirect that points `claude -p` at the chosen model.
 
@@ -371,6 +411,16 @@ def invoke(
         )
         tmp.close()
         out_path = Path(tmp.name)
+
+    # A no-tool call gets a clean room. `allowed_tools=()` is the narrow
+    # marker -- the same condition that selects the declared prompt and
+    # disables every tool -- and a narrow call has no use for the task
+    # workspace, only for the ~20k tokens of interactive-agent doctrine it
+    # would inherit from there. Both the cwd AND --plugin-dir move, because
+    # each carries its own discovery. A tool-using step is untouched: it reads
+    # and writes real files in the workspace and wants that CLAUDE.md.
+    if not allowed_tools:
+        work_dir = plugin_dir = _narrow_context_dir()
 
     cmd = _build_cmd(
         prompt, plugin_dir, model, max_budget_usd, max_turns,

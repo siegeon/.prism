@@ -118,9 +118,13 @@ def summarize_one(name: str, description: str, project: str) -> str:
     from prism_service.inference import claude_cli
     from prism_service.project_context import get_project
     prompt = render_prompt(name, description)
-    # The project data dir is a safe cwd/plugin-dir — claude doesn't load
-    # plugins from it (none present) and we don't need any tools for the
-    # task. allowed_tools=() omits --allowedTools entirely.
+    # We need no tools for this, so allowed_tools=() below. SUPERSEDED: that
+    # used to mean "omit --allowedTools entirely", which granted claude's
+    # DEFAULT toolset plus every configured MCP server. Since 7.13.287 an empty
+    # tuple emits `--tools ""` and `--strict-mcp-config`, i.e. genuinely no
+    # tools, and since 7.13.289 such a call also runs from an empty directory
+    # so it inherits no CLAUDE.md. The work_dir chosen here is therefore
+    # advisory for this path: claude_cli overrides it for no-tool calls.
     try:
         ctx = get_project(project)
         work_dir = str(ctx._data_dir)
