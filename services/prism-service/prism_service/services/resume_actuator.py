@@ -420,7 +420,7 @@ def dispatch_once(project: str, task_id: str) -> dict:
     plan = _tr._node_plan(project, job["step"])
     task_for_prompt = task_svc.get(task_id) if plan else None
     narrow_prompt = _tr._declared_agentic_prompt(
-        job["step"], task_for_prompt, [])
+        job["step"], task_for_prompt, [], plan=plan)
     prompt = narrow_prompt or job["instructions"]
     # after_kill: this seat re-drove d5808cd1's draft_story twelve times, and
     # the last of them still spent a full 900 s on a step whose previous

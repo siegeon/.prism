@@ -128,6 +128,31 @@ def test_a_budget_kill_names_the_budget_and_the_elapsed_time():
     assert "no usable output" not in reason
 
 
+def test_a_timeout_that_returned_a_think_prefix_is_still_a_timeout():
+    """CAUGHT LIVE, task d5808cd1 verify_plan, 2026-09-10.
+
+    The seat was killed at its 900s bound and the row read:
+
+        outcome={'ok': False, 'reason': 'exit=-9, non-graceful failure
+                 (crash/auth/truncated mid-turn)'}
+        runner_attempt | proof=<think>
+
+        </think>
+
+    The local model emits an empty `<think></think>` wrapper before any real
+    content, so a run killed before it wrote anything still returns a
+    NON-EMPTY proof -- which fell past the `not proof` branch and was
+    reported as a crash. THE EXIT CODE IS THE AUTHORITY on whether a step
+    ran out of clock, never the emptiness of what came back.
+    """
+    reason = task_runner._failure_reason(
+        _KilledResult(), budget_s=900.0, proof="<think>\n\n</think>")
+
+    assert "900s budget" in reason
+    assert "non-graceful" not in reason, (
+        "a timeout must never be reported as a crash")
+
+
 def test_a_crash_is_still_reported_as_a_crash():
     """A non-timeout failure keeps its own wording -- a timeout message on
     a crash is the same dishonesty in the other direction."""
@@ -136,23 +161,57 @@ def test_a_crash_is_still_reported_as_a_crash():
         exit_code = 1
         duration_s = 3.5
 
-    reason = task_runner._failure_reason(_Crashed(), budget_s=900.0)
+    empty = task_runner._failure_reason(_Crashed(), budget_s=900.0, proof="")
+    assert "budget" not in empty
+    assert "exit=1" in empty
+    assert "no usable output" in empty
 
-    assert "budget" not in reason
-    assert "exit=1" in reason
+    partial = task_runner._failure_reason(
+        _Crashed(), budget_s=900.0, proof="half an answer")
+    assert "budget" not in partial
+    assert "non-graceful" in partial
 
 
 # ----------------------------------------------------------------------
 # AC-3 -- the ladder stops paying full price after the first kill
 # ----------------------------------------------------------------------
 
-def test_the_draft_story_plan_carries_its_declared_wall_clock():
-    """draft-story-loop.json declares `timeoutSeconds: 120` on its agentic
-    middle. The literal 120, not the reader applied to itself."""
-    plan = task_runner._node_plan("prism", "draft_story")
+# Measured 2026-09-10 from agent_runs in scores.db, per step, dropping seat
+# rows over 4h and the runs killed at the 890s wall. These are the HEALTHY
+# distributions -- what a run that finished actually took:
+#
+#   draft_story   n=326  p50  69.1  p90 242.1  p95 275.7  p99 361.7  max 598.3
+#   verify_plan   n=324  p50 128.1  p90 538.4  p95 662.9  p99 810.8  max 859.9
+#
+# The declared bound is p99 rounded up. It is deliberately generous: these are
+# the WIDE path's numbers, and the narrow path does strictly less work (the
+# first narrow draft_story run took 23.9s against a wide p50 of 69s). An
+# over-generous bound costs nothing, because the turn and spend caps bind
+# first; a tight one kills healthy work.
+_MEASURED_P99 = {"draft_story": 361.7, "verify_plan": 810.8}
+_MEASURED_P50 = {"draft_story": 69.1, "verify_plan": 128.1}
+
+
+@pytest.mark.parametrize("step", sorted(_MEASURED_P99))
+def test_the_declared_wall_clock_is_above_the_measured_distribution(step):
+    """THE 120s THAT WAS THERE WAS A TEMPLATE DEFAULT, not a measurement: the
+    identical value appeared in all six conductor behaviour files, and it sits
+    BELOW verify_plan's healthy MEDIAN of 128.1s -- so the moment the post-kill
+    path adopted it, it would have killed more than half of that step's healthy
+    runs. Pin the bound against the real distribution so the template cannot
+    creep back."""
+    plan = task_runner._node_plan("prism", step)
 
     assert plan is not None
-    assert plan["timeout_s"] == 120.0
+    declared = plan["timeout_s"]
+    assert declared > _MEASURED_P99[step], (
+        f"{step}: declared {declared}s must clear its measured p99 "
+        f"({_MEASURED_P99[step]}s)")
+    assert declared > 4 * _MEASURED_P50[step], (
+        f"{step}: a bound near the median kills healthy runs")
+    assert declared < task_runner._step_timeout_s(step), (
+        f"{step}: a declared bound at or above the runner's own budget saves "
+        "nothing on the retry after a kill")
 
 
 def test_the_attempt_after_a_kill_runs_on_the_declared_bound():
@@ -160,8 +219,14 @@ def test_the_attempt_after_a_kill_runs_on_the_declared_bound():
     budget on the identical step.
 
     First attempt: the runner's own 900 s. Second: the node's declared
-    120 s, so a wedged draft_story costs 900 + 120 + 120 = 1140 s across
-    the three-attempt ladder instead of 2700 s.
+    bound, so a wedged draft_story costs 900 + 400 + 400 = 1700 s across the
+    three-attempt ladder instead of 2700 s.
+
+    The 400 replaced a template 120 (see
+    test_the_declared_wall_clock_is_above_the_measured_distribution). The
+    saving is smaller than 120 would have given and that is the point: 120
+    was below this step's measured p90 and would have turned the cheaper
+    retry into a guaranteed second kill.
     """
     plan = task_runner._node_plan("prism", "draft_story")
 
@@ -170,7 +235,7 @@ def test_the_attempt_after_a_kill_runs_on_the_declared_bound():
         "draft_story", plan, narrow=True, after_kill=True)
 
     assert first["timeout_s"] == 900.0
-    assert after["timeout_s"] == 120.0
+    assert after["timeout_s"] == 400.0
     assert after["timeout_s"] < first["timeout_s"]
 
 

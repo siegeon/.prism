@@ -168,7 +168,25 @@ def _step_timeout_s(step_id: str = "") -> float:
 # times and blocked with an empty story_md until the declared plan was
 # adopted. A node joins this set when its declaration is real, never by
 # default.
-_PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story"})
+#
+# verify_plan JOINS THEM (task a9f2bec7, 2026-09-10). Its declaration has been
+# real since verify-plan-loop.json v3 -- reason-loop, haiku, 4 turns, $0.50, a
+# 1295-character prompt and schema [plan_doc, plan_diagram] -- and nothing read
+# it. Measured the same day on the same box: draft_story on its narrow plan
+# with zero tools took 23.9s and went rubric-green, while verify_plan on the
+# full brief with BUILD_TOOLS was killed at 900.1s having written nothing but
+# the model's empty think wrapper.
+#
+# THE THREE BUILD STEPS STILL DO NOT JOIN, and that is deliberate rather than
+# an oversight: their declared prompts open "Draft a failing test (do NOT write
+# it to disk, this is a DRAFT only)", "Draft an implementation approach (do NOT
+# write any code)" and "OBSERVE-only check". Those steps must WRITE the tests
+# (the tests-only commit is the red seat's anchor), CHANGE the code and RUN the
+# suite. Wiring them would make drives fast and green on nothing, which is
+# worse than a timeout. A node joins this set when its declaration is real,
+# never by default.
+_PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story",
+                            "verify_plan"})
 
 # Steps where a red test can meaningfully exist. The stall mechanism
 # (task 404ef4ce) reads codified red test ids to name the next action
@@ -250,6 +268,7 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
     max_turns: Optional[int] = None
     budget: Optional[float] = None
     timeout_s: Optional[float] = None
+    prompt: Optional[str] = None
     for step in doc.get("steps") or []:
         url = step.get("url") or ""
         route = url.split("/steps/")[-1].split("?")[0] if "/steps/" in url else ""
@@ -271,13 +290,17 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
         except Exception:
             body = {}
         model = body.get("model") or model
+        # The declared PROMPT travels with the caps it was written for, so a
+        # consumer can never adopt one without the other (task 6a7105f9).
+        if isinstance(body.get("prompt"), str) and body["prompt"].strip():
+            prompt = body["prompt"]
         if isinstance(body.get("max_turns"), int):
             max_turns = body["max_turns"]
         if isinstance(body.get("max_budget_usd"), (int, float)):
             budget = float(body["max_budget_usd"])
     return {"model": model, "max_turns": max_turns,
             "max_budget_usd": budget, "timeout_s": timeout_s,
-            "codified": codified, "agentic": agentic}
+            "prompt": prompt, "codified": codified, "agentic": agentic}
 
 
 class _CodifiedResult:
@@ -348,7 +371,7 @@ def _codified_step_proof(step_id: str, task, facts) -> str:
         return ""            # a broken shortcut must fall back, never halt
 
 
-def _declared_agentic_prompt(step_id: str, task, facts) -> str:
+def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
     """The NARROW prompt the node's agentic middle is written for, or "".
 
     THE OVERRUN THIS CLOSES. The node declares a bounded middle -- premise
@@ -373,9 +396,13 @@ def _declared_agentic_prompt(step_id: str, task, facts) -> str:
     - draft_story: returns "" when the task hint is empty (no title/description
       loaded) -- a prompt with no task material must never replace the full
       brief, which at least contains it.
+    - verify_plan: returns "" when no `plan` is in hand, or the plan declares
+      no prompt. Its prompt is read from the DECLARATION rather than copied
+      into this module, so verify-plan-loop.json stays the single source of
+      truth for it and cannot drift from what the canvas shows.
 
-    Both refusals ensure the full brief is the fallback, not a materially-hollow
-    narrow prompt.
+    Every refusal ensures the full brief is the fallback, not a
+    materially-hollow narrow prompt.
     """
     if step_id == _PREMISE_STEP:
         if not facts:
@@ -409,6 +436,13 @@ def _declared_agentic_prompt(step_id: str, task, facts) -> str:
             "carry an id like AC-1 and end with an oracle marker, e.g. "
             "'\u2014 oracle: <observable check>'."
         )
+    if step_id == "verify_plan":
+        declared = str((plan or {}).get("prompt") or "")
+        task_hint = (f"{getattr(task, 'title', '') or ''}\n\n"
+                     f"{getattr(task, 'description', '') or ''}").strip()
+        if not declared or not task_hint:
+            return ""
+        return declared.replace("${taskHint}", task_hint)
     return ""
 
 
@@ -472,7 +506,7 @@ def _invoke_budget(step_id: str, plan: Optional[dict],
     }
 
 
-def _failure_reason(result, budget_s: float) -> str:
+def _failure_reason(result, budget_s: float, proof: str = "") -> str:
     """Why a step produced no usable report, in words that name the cause.
 
     `exit=-9` is PRISM'S OWN TIMEOUT (`claude_cli.TIMEOUT_EXIT_CODE`),
@@ -487,11 +521,21 @@ def _failure_reason(result, budget_s: float) -> str:
     from prism_service.inference import claude_cli as _cli
 
     exit_code = getattr(result, "exit_code", None)
+    # THE EXIT CODE IS THE AUTHORITY, tested FIRST and independently of what
+    # came back. Caught live on d5808cd1's verify_plan (2026-09-10): the local
+    # model emits an empty `<think></think>` wrapper before any real content,
+    # so a run killed at its bound before writing anything still returns a
+    # NON-EMPTY proof. That fell past the emptiness test and the row read
+    # "exit=-9, non-graceful failure (crash/auth/truncated mid-turn)" for what
+    # was a plain timeout -- the same class of lie this helper exists to end.
     if exit_code == _cli.TIMEOUT_EXIT_CODE:
         ran = float(getattr(result, "duration_s", 0.0) or 0.0)
         return (f"exit={exit_code}, the step exceeded its {int(budget_s)}s "
                 f"budget: it was stopped after {ran:.1f}s without reporting")
-    return f"exit={exit_code}, no usable output"
+    if not (proof or "").strip():
+        return f"exit={exit_code}, no usable output"
+    return (f"exit={exit_code}, non-graceful failure "
+            "(crash/auth/truncated mid-turn)")
 
 
 def _repair_premises(proof: str, task, facts) -> str:
@@ -869,11 +913,50 @@ def eligible_task(project: str) -> Optional[str]:
     return found[0] if found else None
 
 
+def _mermaid_source(proof: str) -> str:
+    """The mermaid SOURCE inside a markdown report, or "".
+
+    `arc_governance.score_plan_*` reads the plan_diagram FIELD and refuses on
+    "plan_diagram is missing" or "does not parse as mermaid" (arc_governance.py
+    :279-285). A narrow verify_plan returns ONE markdown blob, so the diagram
+    has to be lifted out of it or the field stays empty and a working plan is
+    refused -- which reads to a human as the drive's fault.
+
+    Returns "" when there is no diagram. NEVER fabricates one: an absent
+    diagram must stay absent so the rubric can refuse honestly.
+    """
+    import re as _re
+
+    from prism_service.services.arc_governance import _MERMAID_KEYWORDS
+
+    # A fenced block whose first non-blank line names a diagram type. Covers
+    # ```mermaid and a bare ``` fence holding "flowchart TD" alike.
+    for block in _re.findall(r"```[^\n]*\n(.*?)```", proof, _re.S):
+        head = block.strip().split("\n", 1)[0].strip().lower()
+        if head.startswith(_MERMAID_KEYWORDS):
+            return block.strip()
+    # Unfenced: a run of lines starting at a diagram-type keyword.
+    lines = proof.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip().lower().startswith(_MERMAID_KEYWORDS):
+            return "\n".join(lines[i:]).strip()
+    return ""
+
+
 def _route_proof(task_svc, task_id: str, step_id: str, proof: str) -> None:
     """Write a successful step's output to the field its gate rubric
     reads — the SAME routing conductor_work's MCP handler applies."""
     try:
-        if step_id in _PLAN_STEPS:
+        if step_id == "verify_plan":
+            # TWO fields, because the plan rubric reads two. plan_doc keeps the
+            # WHOLE report (coverage is diffed by looking for each AC-<n> in
+            # it), and plan_diagram gets the lifted mermaid source.
+            fields = {"plan_doc": proof, "completion_proof": proof}
+            diagram = _mermaid_source(proof)
+            if diagram:
+                fields["plan_diagram"] = diagram
+            task_svc.update(task_id, **fields)
+        elif step_id in _PLAN_STEPS:
             task_svc.update(task_id, plan_doc=proof, completion_proof=proof)
         elif step_id == _PREMISE_STEP:
             task_svc.update(task_id, premise_notes=proof,
@@ -1402,7 +1485,8 @@ def _run_one_step(project: str, task_id: str) -> dict:
         # and there is material for it, run THAT prompt with the caps it was
         # written for and no tools, rather than the whole step brief at 30
         # turns with the full toolset.
-        narrow_prompt = _declared_agentic_prompt(job["step"], task, facts)
+        narrow_prompt = _declared_agentic_prompt(
+            job["step"], task, facts, plan=plan)
         if narrow_prompt:
             prompt = narrow_prompt
             _record_codified_run(
@@ -1501,15 +1585,17 @@ def _run_one_step(project: str, task_id: str) -> dict:
                     + "\n".join(f"  {i}" for i in codified_ids))
                 task_svc.update(task_id, completion_proof=enhanced_proof)
         outcome: object = "pass"
-    elif not proof:
+    else:
+        # ONE reason builder for every failure shape. It used to be two
+        # branches keyed on whether `proof` was empty, which is why a timeout
+        # carrying the model's empty `<think></think>` wrapper was reported as
+        # a crash -- see _failure_reason.
         outcome = {"ok": False,
                    "reason": _failure_reason(
-                       result, float(budget.get("timeout_s")
-                                     or _step_timeout_s(step_id)))}
-    else:
-        outcome = {"ok": False,
-                   "reason": f"exit={result.exit_code}, non-graceful "
-                             "failure (crash/auth/truncated mid-turn)"}
+                       result,
+                       float(budget.get("timeout_s")
+                             or _step_timeout_s(step_id)),
+                       proof=proof)}
 
     if claim is not None:
         claim.release(claim_id)

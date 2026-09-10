@@ -49,11 +49,16 @@ def test_draft_story_dispatch_uses_declared_plan(monkeypatch):
     # Mock _declared_agentic_prompt to return the narrow prompt for draft_story
     from prism_service.services import task_runner as ra_tr
     orig_prompt = ra_tr._declared_agentic_prompt
-    def mock_declared_prompt(step, task, facts):
+    # `plan=` was added by task a9f2bec7: verify_plan reads its narrow prompt
+    # from the DECLARATION rather than from a copy in task_runner, so the
+    # declared plan has to travel to the prompt builder. The double mirrors the
+    # real signature, which is what makes this test able to see that the seat
+    # passes it.
+    def mock_declared_prompt(step, task, facts, plan=None):
         # For draft_story, return a narrow prompt (non-empty means narrow=True)
         if step == "draft_story":
             return "## Acceptance Criteria\nWrite..."
-        return orig_prompt(step, task, facts)
+        return orig_prompt(step, task, facts, plan=plan)
     monkeypatch.setattr(ra_tr, "_declared_agentic_prompt", mock_declared_prompt)
 
     # Mock the full flow to get draft_story step
