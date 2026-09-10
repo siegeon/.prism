@@ -735,6 +735,10 @@ def eligible_tasks(project: str, limit: int = 1) -> list[str]:
             step = ConductorService._step_by_id(t.workflow_step)
             if step is None or step["type"] == "gate":
                 continue
+            # Terminal steps (done, intake) are not driven by task_runner.
+            # They are auto-advanced by conductor_service when reached.
+            if step["type"] in ("done", "intake"):
+                continue
             out.append(t.id)
         if len(out) >= limit:
             break
