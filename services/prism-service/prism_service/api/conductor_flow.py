@@ -169,6 +169,60 @@ def _svc(project: str):
     return get_project(project).conductor_svc
 
 
+def _close_if_terminal(svc, task_id: str) -> None:
+    """Close a task when it reaches a terminal step with no outstanding gates.
+
+    A task closes when ALL of these hold:
+    - Its current step has type == "done"
+    - No gate is outstanding (gate_state is not "pending" and not "failed")
+
+    Then set status="done" and completed_at to the current UTC timestamp.
+
+    This is workflow-agnostic: triage reaches "done" only after "decide" passes,
+    implement reaches "done" only after green_gate passes. The step sequence
+    already encodes the oracle requirement.
+
+    Never closes on an exception path; errors are silently swallowed.
+    """
+    try:
+        task = svc._task_svc.get(task_id)
+    except Exception:
+        return
+    if task is None:
+        return
+
+    # Resolve the current step
+    workflow = _task_workflow(task)
+    try:
+        from prism_service.models.workflow import steps_for
+        all_steps = steps_for(workflow)
+    except Exception:
+        return
+
+    current_step_id = getattr(task, "workflow_step", None)
+    if not current_step_id:
+        return
+
+    current_step = next((s for s in all_steps if s.get("id") == current_step_id), None)
+    if current_step is None or current_step.get("type") != "done":
+        return
+
+    # Check for outstanding gates
+    gate_state = getattr(task, "gate_state", None)
+    if gate_state in ("pending", "failed"):
+        return
+
+    # All conditions met: close the task
+    try:
+        svc._task_svc.update(
+            task_id,
+            status="done",
+            completed_at=datetime.now(timezone.utc).isoformat()
+        )
+    except Exception:
+        pass
+
+
 def _task_workflow(task) -> str:
     """Normalize `task.workflow` the same way ConductorService's own step
     helpers do (task 6f22d0ad) — a blank/legacy value reads as "implement"."""
@@ -912,6 +966,9 @@ def flow_report(body: Ident, project: str = Query("default")) -> dict:
     # If the advance parked the task on a rubric gate that already scores
     # green, clear it now — no human click for a machine-verified pass.
     _autoclear_machine_gate(svc, body.task_id)
+
+    # Close the task if it has reached a terminal step with no outstanding gates.
+    _close_if_terminal(svc, body.task_id)
 
     nxt = svc._task_svc.get(body.task_id)
 
