@@ -104,7 +104,11 @@ def adjudicate(svc, task_svc, task_id: str) -> Optional[dict]:
         return None
     if getattr(task, "workflow_step", "") != "decide":
         return None
-    if getattr(task, "gate_state", "") != "pending":
+    # Accept both pending and failed gates. A FAILED gate from a machine/config
+    # refusal is resweppable; the sweep already checks _failed_gate_is_refused_approve
+    # to distinguish human rejects (never re-sweep) from machine refusals (resweppable).
+    # We filter to those two states; a passed gate stays decided and is never touched.
+    if getattr(task, "gate_state", "") not in ("pending", "failed"):
         return None
 
     ok, reason = score(task)

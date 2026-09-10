@@ -184,6 +184,103 @@ def test_green_gate_pending_and_failed_behavior_unchanged():
     assert result is False, "green_gate human reject should still be unresweppable"
 
 
+def test_adjudicate_acts_on_a_task_with_gate_state_failed(tmp_path):
+    """adjudicate() must accept gate_state='failed' so the resweep works.
+    A failed decide gate from a machine refusal must be re-evaluated."""
+    task = FakeTask(gate_state="failed", completion_proof=GOOD)
+
+    # Mock svc.gate_decide to avoid a real call, just check it gets invoked
+    svc = _MockSvc()
+    task_svc = _MockTaskService(task)
+
+    result = td.adjudicate(svc, task_svc, "task-123")
+
+    # adjudicate should call gate_decide when the task is failed + good
+    assert svc.gate_decide_called, "adjudicate should NOT return None for gate_state='failed'"
+    assert result is not None, "must return the decision result for a failed + fixable gate"
+
+
+def test_adjudicate_acts_on_a_task_with_gate_state_pending(tmp_path):
+    """adjudicate() must still work for gate_state='pending'."""
+    task = FakeTask(gate_state="pending", completion_proof=GOOD)
+
+    svc = _MockSvc()
+    task_svc = _MockTaskService(task)
+
+    result = td.adjudicate(svc, task_svc, "task-456")
+
+    assert svc.gate_decide_called, "adjudicate should act on pending gates"
+    assert result is not None, "must return the decision result"
+
+
+def test_adjudicate_returns_none_for_gate_state_passed(tmp_path):
+    """adjudicate() must return None for gate_state='passed'. A decided
+    gate is never re-decided."""
+    task = FakeTask(gate_state="passed", completion_proof=GOOD)
+
+    svc = _MockSvc()
+    task_svc = _MockTaskService(task)
+
+    result = td.adjudicate(svc, task_svc, "task-789")
+
+    assert result is None, "adjudicate must return None for passed gates"
+
+
+def test_adjudicate_returns_none_for_wrong_workflow(tmp_path):
+    """adjudicate() returns None for a non-triage workflow."""
+    task = FakeTask(workflow="implement", gate_state="pending", completion_proof=GOOD)
+
+    svc = _MockSvc()
+    task_svc = _MockTaskService(task)
+
+    result = td.adjudicate(svc, task_svc, "task-999")
+
+    assert result is None, "must return None for non-triage workflows"
+
+
+def test_adjudicate_returns_none_for_wrong_workflow_step(tmp_path):
+    """adjudicate() returns None for a non-decide step."""
+    task = FakeTask(workflow="triage", workflow_step="classify", gate_state="pending", completion_proof=GOOD)
+
+    svc = _MockSvc()
+    task_svc = _MockTaskService(task)
+
+    result = td.adjudicate(svc, task_svc, "task-abc")
+
+    assert result is None, "must return None for non-decide workflow steps"
+
+
+class _MockSvc:
+    """Mock ConductorService that captures gate_decide calls."""
+    def __init__(self):
+        self.gate_decide_called = False
+        self.gate_decide_args = None
+
+    def gate_decide(self, task_id, action, reason, session_id, actor):
+        self.gate_decide_called = True
+        self.gate_decide_args = {
+            'task_id': task_id,
+            'action': action,
+            'reason': reason,
+            'session_id': session_id,
+            'actor': actor,
+        }
+        return {'decision': 'made'}
+
+
+class _MockTaskService:
+    """Mock TaskService that returns a fixed task."""
+    def __init__(self, task):
+        self._task = task
+
+    def get(self, task_id):
+        return self._task
+
+    def update(self, task_id, **kwargs):
+        # Mock update call
+        pass
+
+
 class _FakeTaskService:
     """Minimal fake task service that returns canned history."""
     def __init__(self, history_rows):
