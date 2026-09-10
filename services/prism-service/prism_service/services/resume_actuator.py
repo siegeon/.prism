@@ -411,12 +411,26 @@ def dispatch_once(project: str, task_id: str) -> dict:
                     "reason": f"already driving: held by {holder}"}
 
     from prism_service.inference import claude_cli
+
+    # Route through the SAME plan-aware helpers task_runner uses so declared
+    # node plans (model, turns, budget, prompt, tools) reach this seat's invoke.
+    # For steps with no declared plan, this returns defaults. facts=[] here
+    # because this seat runs no premise gather (task_runner has the same branch
+    # in _declared_agentic_prompt).
+    plan = _tr._node_plan(project, job["step"])
+    task_for_prompt = task_svc.get(task_id) if plan else None
+    narrow_prompt = _tr._declared_agentic_prompt(
+        job["step"], task_for_prompt, [])
+    prompt = narrow_prompt or job["instructions"]
+    budget = _tr._invoke_budget(job["step"], plan, narrow=bool(narrow_prompt))
+
     try:
         result = claude_cli.invoke(
-            job["instructions"], work_dir=work_dir, plugin_dir=work_dir,
-            max_turns=_max_turns(), max_budget_usd=_max_budget_usd(),
-            allowed_tools=BUILD_TOOLS, project=project,
-            purpose=f"resume-actuator@{job['step']}#{task_id[:8]}")
+            prompt, work_dir=work_dir, plugin_dir=work_dir,
+            allowed_tools=() if narrow_prompt else BUILD_TOOLS,
+            project=project,
+            purpose=f"resume-actuator@{job['step']}#{task_id[:8]}",
+            **budget)
     except Exception as exc:
         if claim is not None:
             claim.release(claim_id)
