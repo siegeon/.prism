@@ -340,11 +340,18 @@ def _declared_agentic_prompt(step_id: str, task, facts) -> str:
     _invoke_budget's own note set the condition -- "a future slice that
     also adopts the declared PROMPT may then adopt the caps that were
     written for it, never one without the other". This is that slice: the
-    prompt below is the same one /api/workflows/steps/premise-judge builds,
-    so the caps beside it are the ones it was sized for.
+    prompts below are the same ones the workflow steps build, so the caps
+    beside them are the ones they were sized for.
 
-    Returns "" when there is nothing gathered -- with no facts the narrow
-    prompt has no material and the full brief is still the honest fallback.
+    REFUSAL RULES BY STEP:
+    - review_previous_notes: returns "" when no facts gathered -- the narrow
+      prompt has no material and the full brief is the honest fallback.
+    - draft_story: returns "" when the task hint is empty (no title/description
+      loaded) -- a prompt with no task material must never replace the full
+      brief, which at least contains it.
+
+    Both refusals ensure the full brief is the fallback, not a materially-hollow
+    narrow prompt.
     """
     if step_id == _PREMISE_STEP:
         if not facts:
@@ -365,6 +372,11 @@ def _declared_agentic_prompt(step_id: str, task, facts) -> str:
         task_title = getattr(task, "title", "") or ""
         task_desc = getattr(task, "description", "") or ""
         task_hint = f"{task_title}\n\n{task_desc}".strip()
+        # REFUSE when the task material is empty: a narrow prompt with no
+        # task to draft about is strictly worse than the full brief, which at
+        # least includes task details. The fallback wide prompt is honest.
+        if not task_hint:
+            return ""
         return (
             "Draft a PRISM story document in markdown for this task: "
             f"{task_hint}\n\n"
@@ -1253,12 +1265,15 @@ def _run_one_step(project: str, task_id: str) -> dict:
     run_id = str(uuid.uuid4())
     # Bound before the branch: the citation-check/render step below reads
     # both, and a NameError there would be swallowed as "no repair" rather
-    # than surfacing.
+    # than surfacing. Load task for any plan so both premise-gather and
+    # draft_story can access task.title/description for their prompts.
     task = None
     facts: list = []
-    if plan and "premise-gather" in (plan.get("codified") or []):
+    if plan:
         ctx = get_project(project)
         task = task_svc.get(task_id)
+    if plan and "premise-gather" in (plan.get("codified") or []):
+        ctx = get_project(project)
         preamble, facts = _codified_preamble(
             project, task, memory_svc=getattr(ctx, "memory_svc", None),
             task_svc=task_svc, brain_svc=getattr(ctx, "brain_svc", None))

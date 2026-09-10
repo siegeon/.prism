@@ -246,3 +246,116 @@ def test_a_killed_pre_test_step_still_says_it_was_killed(monkeypatch):
     tr._handle_stall(svc, "t-1", "draft_story", project="prism")
 
     assert "KILLED" in _reason(svc)
+
+
+# ----------------------------------------------------------------------
+# AC-5: the live-path defect — task must be loaded for draft_story
+# ----------------------------------------------------------------------
+
+def test_the_draft_story_prompt_refuses_empty_task_hint():
+    """Task None means the material-less refusal works (the live-path defect).
+
+    In _run_one_step, task is None until it is explicitly loaded. For
+    draft_story, that used to never happen: its codified route is
+    'text-challenge', not 'premise-gather', so the task stayed None and
+    getattr(None, "title", "") returned empty string. The prompt then held no
+    task material at all, strictly worse than the full brief.
+
+    A narrow prompt with no material must refuse, not render hollow.
+    """
+    prompt = tr._declared_agentic_prompt("draft_story", None, [])
+
+    assert prompt == "", "prompt must refuse when task is None (empty hint)"
+
+
+def test_the_live_path_loads_task_for_draft_story(monkeypatch, tmp_path):
+    """LIVE-PATH TEST: task is loaded for draft_story, so prompt holds its
+    title. This test FAILS on bc524cb8 (before the fix) and PASSES after.
+
+    On the defect (bc524cb8), draft_story's codified route is 'text-challenge',
+    not 'premise-gather', so the task load block is skipped and task stays
+    None. Then _declared_agentic_prompt returns "" (refusing empty hint),
+    prompt stays the full brief, and the task title is NOT in it.
+
+    After the fix, task IS loaded for any plan, so task_hint is non-empty,
+    and draft_story's narrow prompt DOES contain the real title.
+    """
+    from prism_service.api import conductor_flow as flow
+    from prism_service.inference import claude_cli
+    from prism_service.services import task_workspace
+
+    seen = {}
+
+    monkeypatch.setattr(flow, "flow_start", lambda *a, **k: {
+        "ok": True, "job": {"step": "draft_story", "kind": "agent",
+                            "instructions": "DO THE STEP"}})
+    monkeypatch.setattr(flow, "flow_report",
+                        lambda *a, **k: {"ok": True, "advanced": True})
+    monkeypatch.setattr(task_workspace, "workspace_for",
+                        lambda tid: {"path": str(tmp_path)})
+    monkeypatch.setattr(tr, "_stall_count", lambda *a, **k: 0)
+    monkeypatch.setattr(tr, "_route_proof", lambda *a, **k: None)
+    monkeypatch.setattr(tr, "_claim_service", lambda _proj: None)
+
+    # Patch the project context to return a fake task with real title/description.
+    # This is what the fix checks: the task gets loaded and passed to _declared_agentic_prompt.
+    class FakeTaskSvc:
+        def get(self, task_id):
+            return _task()
+
+        def list(self, **_kw):
+            return []
+
+        def record_history(self, *_a, **_kw):
+            pass
+
+    class FakeCtx:
+        def __init__(self):
+            self.task_svc = FakeTaskSvc()
+            self._data_dir = tmp_path
+
+        def __getattr__(self, name):
+            return None
+
+    def fake_get_project(_proj):
+        return FakeCtx()
+
+    # The get_project function is imported lazily inside _run_one_step,
+    # so patch it at the project_context module level where it's actually used.
+    import prism_service.project_context
+    monkeypatch.setattr(prism_service.project_context, "get_project",
+                        fake_get_project)
+
+    # Patch drive_heartbeat to do nothing.
+    from prism_service.services import drive_heartbeat
+    monkeypatch.setattr(drive_heartbeat, "record_heartbeat",
+                        lambda *a, **k: None)
+
+    # Capture invoke's arguments.
+    class FakeResult:
+        exit_code = 0
+        run_id = "r-live"
+        usage = None
+
+        def final_text(self):
+            return '{"story_md": "## Summary\nFake story"}'
+
+        def graceful_budget_stop(self):
+            return False
+
+    def fake_invoke(prompt, **kwargs):
+        seen["prompt"] = prompt
+        seen.update(kwargs)
+        return FakeResult()
+
+    monkeypatch.setattr(claude_cli, "invoke", fake_invoke)
+
+    # Drive the step.
+    tr._run_one_step("prism", "task-id")
+
+    # On bc524cb8 (defect): narrow_prompt is "" (task None, task_hint empty,
+    # refused), so prompt stays full brief without the task title.
+    # After fix: narrow_prompt is the declared one with the task title.
+    prompt_text = seen.get("prompt", "")
+    assert "A hand landed task still reaches the reap" in prompt_text, (
+        f"Task title NOT in prompt (defect not fixed?). Prompt:\n{prompt_text}")
