@@ -147,14 +147,33 @@ def _step_timeout_s(step_id: str = "") -> float:
 # every task -- grepped the repo cold on every drive (3,762 tokens, 1,725 s
 # mean, against a declared 180 s bound).
 #
-# Only review_previous_notes opts in today, and DELIBERATELY so: it is the
-# one behavior with a hand-tuned v2 plan and real codified sub-steps. The
-# other five agentic behaviors all carry the SAME template budget (haiku /
-# 4 turns / $0.50 / 120 s), which is boilerplate rather than a considered
-# figure -- implement_tasks alone has a 474 s median and needs far more
-# than four turns, so honouring that template would break every build step.
-# A node joins this set when its declaration is real, never by default.
-_PLANNED_STEPS = frozenset({"review_previous_notes"})
+# review_previous_notes and draft_story opt in with real declarations.
+# review_previous_notes is the one behavior with a hand-tuned v2 plan and
+# real codified sub-steps. draft_story declares haiku / 4 turns / $0.50 /
+# 120 s, sized for a specific narrow prompt (not the wide step brief).
+# The reasoning still holds for the BUILD steps (implement_tasks,
+# verify_green_state, write_failing_tests) -- their template budget would
+# break every drive and they still run the defaults -- but draft_story
+# writes a document rather than running anything. Measured on 349 recorded
+# draft_story runs in 2026-09 over scores.db: median 75 s, p90 293 s,
+# and 22 runs (6.3%) at or past 890 s (the 900 s wall, where the step is
+# SIGKILLed with no agent_runs record). Task d5808cd1 hit that tail three
+# times and blocked with an empty story_md until the declared plan was
+# adopted. A node joins this set when its declaration is real, never by
+# default.
+_PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story"})
+
+# Steps where a red test can meaningfully exist. The stall mechanism
+# (task 404ef4ce) reads codified red test ids to name the next action
+# instead of parking for a human. That read is meaningful ONLY at steps
+# that write tests and execute them: write_failing_tests pins the first
+# red receipt, implement_tasks re-runs them, verify_green_state confirms
+# them green. For review_previous_notes, draft_story, and verify_plan
+# (which write documents, not tests), consulting the codified read sends
+# the owner hunting for a nonexistent test problem steps before any test
+# ever exists. The SIGKILL branch still outranks everything at every step.
+_RED_TEST_STEPS = frozenset({"write_failing_tests", "implement_tasks",
+                             "verify_green_state"})
 
 # Behavior ids per conductor step. Mirrors api/workflows._BEHAVIOUR_FOR_STEP
 # for the steps THIS seat drives; the file is read straight off disk rather
@@ -327,20 +346,34 @@ def _declared_agentic_prompt(step_id: str, task, facts) -> str:
     Returns "" when there is nothing gathered -- with no facts the narrow
     prompt has no material and the full brief is still the honest fallback.
     """
-    if step_id != _PREMISE_STEP or not facts:
-        return ""
-    facts_md = "\n".join(
-        f"- ({f.kind}) {f.text} \u2014 {f.citation}" for f in facts)
-    return (
-        "Material already GATHERED for you is below; every line already "
-        "carries a real citation. Decide which are load-bearing for this "
-        "task and report them as a '## Premises' markdown list, one "
-        "bullet per claim, reusing its citation VERBATIM. Never invent a "
-        "new citation. You may add a claim of your own only if you mark "
-        "it UNVERIFIED or REFUTED.\n\n"
-        f"Task: {getattr(task, 'title', '')}\n{getattr(task, 'description', '')}\n\n"
-        f"Gathered material:\n{facts_md}"
-    )
+    if step_id == _PREMISE_STEP:
+        if not facts:
+            return ""
+        facts_md = "\n".join(
+            f"- ({f.kind}) {f.text} \u2014 {f.citation}" for f in facts)
+        return (
+            "Material already GATHERED for you is below; every line already "
+            "carries a real citation. Decide which are load-bearing for this "
+            "task and report them as a '## Premises' markdown list, one "
+            "bullet per claim, reusing its citation VERBATIM. Never invent a "
+            "new citation. You may add a claim of your own only if you mark "
+            "it UNVERIFIED or REFUTED.\n\n"
+            f"Task: {getattr(task, 'title', '')}\n{getattr(task, 'description', '')}\n\n"
+            f"Gathered material:\n{facts_md}"
+        )
+    if step_id == "draft_story":
+        task_title = getattr(task, "title", "") or ""
+        task_desc = getattr(task, "description", "") or ""
+        task_hint = f"{task_title}\n\n{task_desc}".strip()
+        return (
+            "Draft a PRISM story document in markdown for this task: "
+            f"{task_hint}\n\n"
+            "It MUST have these exact headings: ## Summary, ## Requirements, "
+            "## Acceptance Criteria. Every acceptance criterion bullet MUST "
+            "carry an id like AC-1 and end with an oracle marker, e.g. "
+            "'\u2014 oracle: <observable check>'."
+        )
+    return ""
 
 
 def _invoke_budget(step_id: str, plan: Optional[dict],
@@ -1044,8 +1077,12 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
     # that answers it (owner: "making maximum codified nodes from agentic
     # blocks so we can not stall"). Consulted ONLY when the prose names
     # nothing, so the existing path keeps its behaviour unchanged.
+    # SCOPE: only meaningful for steps that can have red tests (write_failing_tests,
+    # implement_tasks, verify_green_state). For document-writing steps
+    # (review_previous_notes, draft_story, verify_plan), a red read tells the
+    # owner to hunt for tests steps before any test ever exists.
     codified_reason = ""
-    if not ids and project:
+    if not ids and project and step_id in _RED_TEST_STEPS:
         # No project => nothing to read; stay a strict no-op so the
         # pre-existing message and behaviour are untouched.
         _codified, codified_reason = _codified_red_test_ids(project, task_id)
@@ -1087,12 +1124,13 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
         # three times for a step that was being killed at the 900 s bound,
         # which sends whoever reads it hunting for a test problem that does
         # not exist. Name the real thing, and name the knob that changes it.
+        # SIGKILL outranks everything at every step.
         reason += (f"the step was KILLED before it reported (exit=-9, "
                    f"SIGKILL) -- it ran past its "
                    f"{int(_step_timeout_s(step_id))}s budget. Raise "
                    f"PRISM_TASK_RUNNER_STEP_TIMEOUT_S, or narrow what this "
                    f"step has to run")
-    elif codified_reason:
+    elif step_id in _RED_TEST_STEPS and codified_reason:
         # Says what the DETERMINISTIC read found, not just what the prose
         # lacked -- the real answer is one of the codified node's own reasons
         # (no anchor yet, no fresh receipt, not pytest-backed), which names
@@ -1101,8 +1139,16 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
         # allowed to replace it (see _last_outcome_was_a_kill above).
         reason += ("no red test id was named in the last proof, and the "
                    f"codified read found none either: {codified_reason}")
-    else:
+    elif step_id in _RED_TEST_STEPS:
         reason += "no red test id was named in the last proof"
+    else:
+        # For non-red-test steps (review_previous_notes, draft_story,
+        # verify_plan), the step did not produce a usable report after the
+        # attempts. These steps write documents, not tests, so no red test
+        # id could exist here.
+        reason += (f"the step did not produce a usable report after {STALL_ATTEMPTS} "
+                   f"attempts; this step writes a document rather than tests, so "
+                   f"no red test id could exist yet")
     task_svc.update(task_id, status="blocked", blocked_reason=reason)
     task_svc.record_history(task_id, action="runner_stall",
                             details=reason, actor=SEAT_ID)
