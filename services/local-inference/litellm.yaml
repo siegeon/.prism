@@ -94,4 +94,6 @@ litellm_settings:
 general_settings:
   # This must equal PRISM_LOCAL_INFERENCE_AUTH_TOKEN, which claude_cli sends
   # as ANTHROPIC_AUTH_TOKEN when PRISM_INFERENCE_BACKEND is local.
-  master_key: os.environ/PROXY_MASTER_KEY
+  # Commented for dev: env var not set. Set both PROXY_MASTER_KEY and
+  # PRISM_LOCAL_INFERENCE_AUTH_TOKEN to same value to re-enable auth.
+  # master_key: os.environ/PROXY_MASTER_KEY
