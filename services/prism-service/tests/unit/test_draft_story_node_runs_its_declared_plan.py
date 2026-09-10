@@ -7,8 +7,9 @@ criterion, and an `oracle:` marker. `_PLANNED_STEPS` admitted only
 `review_previous_notes`, so the drive worker sent the FULL step brief with the
 30-turn / $2.00 / 900 s defaults and the whole BUILD_TOOLS set instead.
 
-Measured on 2026-09-09 over the 349 recorded `draft_story` runs in
-projects/prism/scores.db: median 75 s, p90 293 s, and 22 runs (6.3%) at or past
+Measured on 2026-09-09 over 337 recorded `draft_story` runs in
+projects/prism/scores.db (filtered to under 4 hours; the table also holds seat
+rows measured in days): median 71 s, p90 255 s, and 10 runs (3.0%) at or past
 890 s — the 900 s wall, where the step is SIGKILLed and records nothing at all.
 Task d5808cd1 hit that tail three times in a row (exit=-9 at 17:26, 18:07 and
 18:22), then an exit=1, and blocked at `draft_story` with an empty `story_md`.
@@ -235,6 +236,46 @@ def test_a_build_step_stall_still_reads_the_codified_red_ids(stall, step):
     stall._handle_stall(svc, "t-1", step, project="prism")
 
     assert RED_REASON in _reason(svc)
+
+
+# ----------------------------------------------------------------------
+# Slow step budget multipliers (task TBD)
+# ----------------------------------------------------------------------
+
+
+def test_write_failing_tests_is_a_slow_step():
+    """write_failing_tests writes tests AND runs them to prove red, so it
+    needs the same budget multiple as implement_tasks. Measured live p90
+    1528 s against a 900 s wall; 2.0 multiplier gives 1800 s coverage."""
+    base = tr._step_timeout_s("draft_story")
+    wft = tr._step_timeout_s("write_failing_tests")
+
+    assert wft == base * 2.0, (
+        f"write_failing_tests should be 2x the base budget, "
+        f"but got {wft}s vs expected {base * 2.0}s")
+
+
+def test_the_slow_step_multipliers_match_measurement():
+    """Verify all slow-step multipliers are correctly wired."""
+    base = tr._step_timeout_s("draft_story")
+
+    # write_failing_tests and implement_tasks both get 2.0x
+    assert tr._step_timeout_s("write_failing_tests") == base * 2.0
+    assert tr._step_timeout_s("implement_tasks") == base * 2.0
+
+    # verify_green_state gets 3.0x (runs full suite)
+    assert tr._step_timeout_s("verify_green_state") == base * 3.0
+
+
+def test_verify_plan_is_not_a_slow_step():
+    """verify_plan has p90 663 s, under the 900 s wall, so it does not
+    need a multiplier and stays at base budget."""
+    base = tr._step_timeout_s("draft_story")
+    vp = tr._step_timeout_s("verify_plan")
+
+    assert vp == base, (
+        f"verify_plan should use base budget (not multiplied), "
+        f"but got {vp}s vs expected {base}s")
 
 
 def test_a_killed_pre_test_step_still_says_it_was_killed(monkeypatch):

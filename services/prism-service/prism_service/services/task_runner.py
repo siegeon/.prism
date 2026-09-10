@@ -110,13 +110,19 @@ def _max_budget_usd() -> float:
 
 
 # Steps that RUN THINGS rather than write about them. verify_green_state
-# executes the whole suite, and implement_tasks builds and re-runs it, so
-# the wall clock a paragraph needs is not the wall clock they need. The
-# implement workflow already knew this ("known-slow steps get a multiple of
-# it"); the task runner did not, and epic 9f60a849 stalled three times at
+# executes the whole suite, implement_tasks builds and re-runs it, and
+# write_failing_tests writes tests AND runs them to prove red. The wall
+# clock a paragraph needs is not the wall clock they need. The implement
+# workflow already knew this ("known-slow steps get a multiple of it"); the
+# task runner did not, and epic 9f60a849 stalled three times at
 # verify_green_state with exit=-9 -- SIGKILL at the 900 s bound, on a host
 # with 85 GB free and no OOM kills, so it was the clock and nothing else.
-_SLOW_STEPS = {"verify_green_state": 3.0, "implement_tasks": 2.0}
+# Measured on live durations (filtered to under 4 hours): write_failing_tests
+# p90 1528 s, implement_tasks p90 1426 s, verify_green_state p90 1759 s.
+# Multipliers: write_failing_tests 2.0 (1800 s), implement_tasks 2.0 (1800 s),
+# verify_green_state 3.0 (2700 s). verify_plan is NOT in this set (p90 663 s).
+_SLOW_STEPS = {"verify_green_state": 3.0, "implement_tasks": 2.0,
+               "write_failing_tests": 2.0}
 
 
 def _step_timeout_s(step_id: str = "") -> float:
@@ -154,9 +160,10 @@ def _step_timeout_s(step_id: str = "") -> float:
 # The reasoning still holds for the BUILD steps (implement_tasks,
 # verify_green_state, write_failing_tests) -- their template budget would
 # break every drive and they still run the defaults -- but draft_story
-# writes a document rather than running anything. Measured on 349 recorded
-# draft_story runs in 2026-09 over scores.db: median 75 s, p90 293 s,
-# and 22 runs (6.3%) at or past 890 s (the 900 s wall, where the step is
+# writes a document rather than running anything. Measured on 337 recorded
+# draft_story runs in 2026-09 over scores.db, filtered to under 4 hours
+# (the table also records seat rows measured in days): median 71 s, p90 255 s,
+# and 10 runs (3.0%) at or past 890 s (the 900 s wall, where the step is
 # SIGKILLed with no agent_runs record). Task d5808cd1 hit that tail three
 # times and blocked with an empty story_md until the declared plan was
 # adopted. A node joins this set when its declaration is real, never by
