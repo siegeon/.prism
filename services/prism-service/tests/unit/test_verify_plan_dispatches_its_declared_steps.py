@@ -112,3 +112,60 @@ def test_an_undeclared_route_is_reported_never_silently_skipped():
     assert len(results) == 2
     assert all(r["ok"] is False for r in results)
     assert all("no handler" in r["reason"] for r in results)
+
+
+def test_the_template_is_filled_before_the_step_runs():
+    """A verbatim body would send the model the literal '${taskHint}'."""
+    plan = task_runner._node_plan("prism", "verify_plan")
+    got: dict = {}
+
+    def _capture(project, body):
+        got.update(body)
+        return {"ok": True}
+
+    task_runner._dispatch_declared_steps(
+        "prism", plan, handlers={"reason-loop": _capture,
+                                 "text-challenge": _capture},
+        variables={"taskHint": "REAP THE WORKTREE", "taskId": "abc123"})
+
+    assert "${taskHint}" not in got.get("prompt", "")
+    assert "REAP THE WORKTREE" in got.get("prompt", "")
+
+
+# ----------------------------------------------------------------------
+# AC-4 -- the dispatcher is WIRED, not merely present
+# ----------------------------------------------------------------------
+
+def test_verify_plan_is_wired_to_run_as_declared_steps():
+    plan = task_runner._node_plan("prism", "verify_plan")
+    assert task_runner._runs_as_declared_steps("verify_plan", plan) is True
+
+
+@pytest.mark.parametrize("step", ["write_failing_tests", "implement_tasks",
+                                  "verify_green_state"])
+def test_the_build_steps_are_never_dispatched(step):
+    """Their declared prompts only DRAFT the work. Dispatching one would
+    make a drive fast and green on nothing."""
+    plan = task_runner._node_plan("prism", "verify_plan")
+    assert task_runner._runs_as_declared_steps(step, plan) is False
+
+
+def test_a_document_comes_back_as_a_result_with_its_diagram():
+    class _Resp:
+        reason = {"fields": {"plan_doc": "## Plan\nAC-1 oracle: run it",
+                             "plan_diagram": "flowchart TD\n A-->B"}}
+
+    out = task_runner._result_from_dispatch(
+        [{"route": "reason-loop", "ok": True, "result": _Resp()}])
+    assert out is not None
+    assert "AC-1" in out.final_text()
+    assert "```mermaid" in out.final_text()
+    assert out.structured_output["plan_diagram"].startswith("flowchart TD")
+
+
+def test_an_empty_document_falls_back_instead_of_advancing():
+    class _Resp:
+        reason = {"fields": {"plan_doc": "   ", "plan_diagram": ""}}
+
+    assert task_runner._result_from_dispatch(
+        [{"route": "reason-loop", "ok": True, "result": _Resp()}]) is None

@@ -1907,6 +1907,14 @@ class ReasonLoopRequest(BaseModel):
     max_budget_usd: float = 0.5
     max_turns: int = 4
     task_id: str = ""
+    # NARROW BY DEFAULT (task eda5a843). Every declared agentic middle on the
+    # conductor bot is a no-tool text generation -- it is handed its material
+    # and asked to write a document. Leaving tools on costs the ~20k-token
+    # interactive-agent envelope the workspace CLAUDE.md carries (measured
+    # 7.13.289: 28,560 -> 8,159 input tokens on this very step) and buys
+    # nothing, because the step reports a document, not a file edit. A caller
+    # that genuinely needs to read the tree sets this False.
+    narrow: bool = True
 
 
 class ReasonLoopResponse(BaseModel):
@@ -1960,11 +1968,12 @@ def workflow_step_reason_loop(
         fallback = Path.home() / "projects" / project
         root = configured if configured.is_absolute() and configured.exists() else fallback
         full_prompt = f"{body.prompt}\n\nProject conventions:\n{bundle.get('conventions')}"
+        invoke_kwargs = {"allowed_tools": ()} if body.narrow else {}
         result = claude_cli.invoke(
             full_prompt, work_dir=root, plugin_dir=root,
             model=body.model, max_budget_usd=body.max_budget_usd, max_turns=body.max_turns,
             project=project, purpose="reason-loop",
-            json_schema=body.json_schema,
+            json_schema=body.json_schema, **invoke_kwargs,
         )
         fields = result.structured_output or {}
         reason = {

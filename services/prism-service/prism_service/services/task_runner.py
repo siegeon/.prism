@@ -269,26 +269,45 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
     budget: Optional[float] = None
     timeout_s: Optional[float] = None
     prompt: Optional[str] = None
+    # THE DECLARATION IS A FLOW, NOT A SETTINGS FILE (task eda5a843). The
+    # loop below used to reduce a declared chain to scalars and a list of
+    # route NAMES, so a step nobody had written an `if` for -- text-challenge
+    # -- was collected and dropped. Keep each step whole, in file order, so a
+    # dispatcher can run it. The scalars stay for the callers that already
+    # read them; nothing below changes meaning.
+    steps: list[dict] = []
+    json_schema: Optional[dict] = None
+    rubric: Optional[str] = None
     for step in doc.get("steps") or []:
         url = step.get("url") or ""
         route = url.split("/steps/")[-1].split("?")[0] if "/steps/" in url else ""
         if not route:
             continue
+        # Parsed for EVERY route, not just the agentic one. A codified step
+        # carries its own body (text-challenge names the step_id it judges),
+        # and the old order parsed the body only after the codified `continue`
+        # -- so that body was never read.
+        try:
+            body = json.loads(step.get("body") or "{}")
+        except Exception:
+            body = {}
+        steps.append({"route": route, "body": body,
+                      "url": url, "timeout_s": step.get("timeoutSeconds")})
         if route not in _AGENTIC_ROUTES:
             codified.append(route)
             continue
         agentic = route
+        if isinstance(body.get("json_schema"), dict):
+            json_schema = body["json_schema"]
+        if isinstance(body.get("rubric"), str) and body["rubric"].strip():
+            rubric = body["rubric"]
         # The agentic middle also declares its own WALL CLOCK, beside the
         # model and the spend caps. Read it: it is the only figure that
         # says how long this node was ever meant to take.
         declared_clock = step.get("timeoutSeconds")
         if isinstance(declared_clock, (int, float)) and declared_clock > 0:
             timeout_s = float(declared_clock)
-        # The agentic middle carries the budget, as a JSON string body.
-        try:
-            body = json.loads(step.get("body") or "{}")
-        except Exception:
-            body = {}
+        # The agentic middle carries the budget, in the body parsed above.
         model = body.get("model") or model
         # The declared PROMPT travels with the caps it was written for, so a
         # consumer can never adopt one without the other (task 6a7105f9).
@@ -300,7 +319,122 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
             budget = float(body["max_budget_usd"])
     return {"model": model, "max_turns": max_turns,
             "max_budget_usd": budget, "timeout_s": timeout_s,
-            "prompt": prompt, "codified": codified, "agentic": agentic}
+            "prompt": prompt, "codified": codified, "agentic": agentic,
+            "steps": steps, "json_schema": json_schema, "rubric": rubric}
+
+
+def _step_handlers() -> dict:
+    """Route name -> the in-process callable that IS that step.
+
+    IN PROCESS ON PURPOSE, never a self HTTP call. This worker runs inside
+    the same service that serves /api/workflows/steps/*, and the engine
+    behind an agentic step serves one request at a time, so a worker that
+    POSTed to its own API could wait on a slot it is itself holding. Calling
+    the handler function directly runs the SAME code the route runs --
+    Observe, the schema, and Validate all included -- with no socket in the
+    middle.
+    """
+    from prism_service.api import workflows as _wf
+
+    def _reason_loop(project: str, body: dict):
+        req = _wf.ReasonLoopRequest(**body)
+        return _wf.workflow_step_reason_loop(req, project=project)
+
+    def _text_challenge(project: str, body: dict):
+        return _wf.workflow_step_text_challenge(
+            _wf.TextChallengeRequest(**body), project=project)
+
+    return {"reason-loop": _reason_loop, "text-challenge": _text_challenge}
+
+
+def _subst(value, variables: dict):
+    """Fill ${name} placeholders in a declared body, recursively.
+
+    The declaration is a TEMPLATE -- verify-plan-loop.json says ${taskHint}
+    and ${taskId} -- so a dispatcher that passed the body through verbatim
+    would send the model the literal string "${taskHint}".
+    """
+    if isinstance(value, str):
+        for key, val in variables.items():
+            value = value.replace("${" + key + "}", str(val))
+        return value
+    if isinstance(value, dict):
+        return {k: _subst(v, variables) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_subst(v, variables) for v in value]
+    return value
+
+
+def _dispatch_declared_steps(project: str, plan: Optional[dict],
+                             *, handlers: Optional[dict] = None,
+                             variables: Optional[dict] = None) -> list[dict]:
+    """Run every step the node declares, in file order.
+
+    A route with no handler is REPORTED, never skipped. Silence is what let
+    text-challenge sit in a declaration for versions without running: the
+    canvas drew it, the file declared it, and nothing said it had not run.
+    """
+    if not plan:
+        return []
+    table = _step_handlers() if handlers is None else handlers
+    out: list[dict] = []
+    for step in plan.get("steps") or []:
+        route = step.get("route") or ""
+        fn = table.get(route)
+        if fn is None:
+            out.append({"ok": False, "route": route,
+                        "reason": f"no handler for declared route {route!r}"})
+            continue
+        body = _subst(step.get("body") or {}, variables or {})
+        try:
+            result = fn(project, body)
+        except Exception as exc:
+            out.append({"ok": False, "route": route,
+                        "reason": f"{route} raised {type(exc).__name__}: {exc}"})
+            continue
+        out.append({"ok": True, "route": route, "result": result})
+    return out
+
+
+def _runs_as_declared_steps(step_id: str, plan: Optional[dict]) -> bool:
+    """True when this node's chain is safe to execute as declared.
+
+    DELIBERATELY NARROW. Only verify_plan is wired here. The three build
+    steps declare prompts that merely DRAFT ("do NOT write it to disk",
+    "do NOT write any code"), so dispatching them would make a drive fast
+    and green on nothing -- strictly worse than the timeout it replaced.
+    review_previous_notes keeps its own codified premise path, which already
+    resolves the step with no model call at all.
+    """
+    if step_id != "verify_plan" or not plan:
+        return False
+    routes = [s.get("route") for s in plan.get("steps") or []]
+    return "reason-loop" in routes and bool(plan.get("json_schema"))
+
+
+def _result_from_dispatch(rows: list) -> Optional["_CodifiedResult"]:
+    """The reason-loop document, as a claude_cli-shaped result, or None.
+
+    None means "the chain did not produce a document", and every caller then
+    falls back to the inline call -- a declared flow that misfires must never
+    advance a step on nothing.
+    """
+    for row in rows or []:
+        if row.get("route") != "reason-loop" or not row.get("ok"):
+            continue
+        reason = getattr(row.get("result"), "reason", None) or {}
+        fields = reason.get("fields") or {}
+        doc = (fields.get("plan_doc") or "").strip()
+        if not doc:
+            return None
+        diagram = (fields.get("plan_diagram") or "").strip()
+        # _route_proof reads the mermaid out of the report, so carry the
+        # declared diagram FIELD back in the shape it already parses.
+        text = f"{doc}\n\n```mermaid\n{diagram}\n```" if diagram else doc
+        out = _CodifiedResult(text)
+        out.structured_output = fields
+        return out
+    return None
 
 
 class _CodifiedResult:
@@ -1471,6 +1605,10 @@ def _run_one_step(project: str, task_id: str) -> dict:
     # an empty mapping keeps the shared failure-reporting path below able to
     # ask for one without an unbound-name crash.
     budget: dict = {}
+    # Bound before the branch so the dispatch check below can never read an
+    # unassigned name on the codified path.
+    dispatched: Optional[list] = None
+    narrow_prompt: str = ""
     codified_proof = _codified_step_proof(job["step"], task, facts)
     if codified_proof:
         for route in ("premise-select", "premise-render",
@@ -1487,13 +1625,35 @@ def _run_one_step(project: str, task_id: str) -> dict:
         # turns with the full toolset.
         narrow_prompt = _declared_agentic_prompt(
             job["step"], task, facts, plan=plan)
-        if narrow_prompt:
+        # RUN THE DECLARED FLOW (task eda5a843). When the node declares a
+        # real chain, execute its steps instead of lifting the prompt out and
+        # calling the model directly: only the declared route supplies the
+        # json_schema that forbids a chat transcript and the rubric that
+        # scores what came back. Falls through to the inline call below
+        # whenever the chain cannot run, so a bad declaration is never worse
+        # than today.
+        dispatched = None
+        if narrow_prompt and _runs_as_declared_steps(job["step"], plan):
+            dispatched = _dispatch_declared_steps(
+                project, plan,
+                variables={"taskHint": narrow_prompt, "taskId": task_id,
+                           "project": project})
+            for row in dispatched:
+                _record_codified_run(
+                    project, task_id, row.get("route") or "?", run_id,
+                    bool(row.get("ok")),
+                    row.get("reason") or "ran as a declared step")
+            result = _result_from_dispatch(dispatched)
+            if result is None:
+                dispatched = None
+        if dispatched is None and narrow_prompt:
             prompt = narrow_prompt
             _record_codified_run(
                 project, task_id, str(plan.get("agentic") or "premise-judge"),
                 run_id, True,
                 f"fell back to the node's declared agentic middle over "
                 f"{len(facts)} gathered fact(s)")
+    if not codified_proof and dispatched is None:
         budget = _invoke_budget(
             job["step"], plan, narrow=bool(narrow_prompt),
             after_kill=_last_outcome_was_a_kill(
