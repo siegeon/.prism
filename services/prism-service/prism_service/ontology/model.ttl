@@ -262,20 +262,35 @@ o:projectKnown a rdf:Property ; rdfs:domain o:JiraIssue ; rdfs:range xsd:boolean
 # ---------------------------------------------------------------------
 # Bot — its own term, NOT a subclass of o:Agent (task 8bcd4cb3, epic
 # 12029f92, owner 2026-08-27 mx-0e5a88): the top level is a Bot, a
-# tier-1 deterministic workflow run as a finite state machine; the
-# agentic Behaviors are partOf that FSM, one tier down.
+# deterministic workflow run as a finite state machine; the agentic
+# Behaviors are partOf that FSM, one tier down.
+#
+# A BOT IS A WORKFLOW (owner 2026-09-10): "bots are workflows that have
+# nodes that perform the steps involved executing tasks", and "bots can
+# call bots as bots are just workflows ... workflows that have workflows
+# (behaviors) that have nodes that are as programmatic as possible".
+# So the structure is ONE recursion, not three kinds of thing:
+#   Workflow -> hasBehavior -> Workflow -> hasNode -> Node -> performs -> Step
+# A Bot and a Behavior are both Workflows; that is what lets a Bot call
+# a Bot. The tier is the DEPTH of a Workflow in that tree, never a
+# separate kind. o:Role is deliberately absent: a role (Steward,
+# Verifier, Builder) is a Bot, not a class of its own.
 # ---------------------------------------------------------------------
 
-o:Bot a rdfs:Class ; rdfs:label "Bot" ;
-    rdfs:comment "A tier-1 deterministic workflow: it runs one FSM and delegates the agentic work to Behaviors." .
+o:Workflow a rdfs:Class ; rdfs:label "Workflow" ;
+    rdfs:comment "A named unit of work that contains Workflows and Nodes. A Bot and a Behavior are both Workflows." .
+o:Bot a rdfs:Class ; rdfs:subClassOf o:Workflow ; rdfs:label "Bot" ;
+    rdfs:comment "A deterministic Workflow at the top of a tree: it runs one FSM, it calls other Bots, and it delegates the agentic work to Behaviors." .
 o:FSM a rdfs:Class ; rdfs:label "FSM" ;
     rdfs:comment "A finite state machine: the States and Transitions one Bot runs." .
 o:State a rdfs:Class ; rdfs:label "State" ;
     rdfs:comment "One named position in an FSM." .
 o:Transition a rdfs:Class ; rdfs:label "Transition" ;
     rdfs:comment "One edge of an FSM: from one State to another." .
-o:Behavior a rdfs:Class ; rdfs:label "Behavior" ;
-    rdfs:comment "A tier-2 agentic unit of work that is part of an FSM." .
+o:Behavior a rdfs:Class ; rdfs:subClassOf o:Workflow ; rdfs:label "Behavior" ;
+    rdfs:comment "A Workflow that a Bot calls to do one unit of agentic work. It is part of that Bot's FSM." .
+o:Node a rdfs:Class ; rdfs:label "Node" ;
+    rdfs:comment "One unit of work in a Workflow. A Node performs a Step. Make a Node as programmatic as possible: a deterministic Node scores better than an agentic one." .
 
 o:runsFsm a rdf:Property ; rdfs:domain o:Bot ; rdfs:range o:FSM ;
     rdfs:label "runsFsm" ; rdfs:comment "The FSM a Bot runs." .
@@ -289,5 +304,19 @@ o:toState a rdf:Property ; rdfs:domain o:Transition ; rdfs:range o:State ;
     rdfs:label "toState" ; rdfs:comment "The State a Transition enters." .
 o:partOf a rdf:Property ; rdfs:domain o:Behavior ; rdfs:range o:FSM ;
     rdfs:label "partOf" ; rdfs:comment "The FSM a Behavior is part of." .
+
+# The recursion. Domain and range are both o:Workflow on purpose: a Bot
+# is a Workflow, so o:calls lets a Bot call a Bot, and o:hasBehavior
+# lets a Workflow hold Workflows. o:calls up to this point named a Code
+# to Code edge only (see o:calls above, domain o:Code), which cannot say
+# that the conductor calls the Steward.
+o:hasBehavior a rdf:Property ; rdfs:domain o:Workflow ; rdfs:range o:Workflow ;
+    rdfs:label "hasBehavior" ; rdfs:comment "A Workflow that belongs to a Workflow." .
+o:hasNode a rdf:Property ; rdfs:domain o:Workflow ; rdfs:range o:Node ;
+    rdfs:label "hasNode" ; rdfs:comment "A Node that belongs to a Workflow." .
+o:performs a rdf:Property ; rdfs:domain o:Node ; rdfs:range o:Step ;
+    rdfs:label "performs" ; rdfs:comment "The Step a Node performs to execute a Task." .
+o:callsWorkflow a rdf:Property ; rdfs:domain o:Workflow ; rdfs:range o:Workflow ;
+    rdfs:label "callsWorkflow" ; rdfs:comment "A Workflow that this Workflow calls. A Bot calls a Bot through this edge." .
 o:tier a rdf:Property ; rdfs:range xsd:integer ;
-    rdfs:label "tier" ; rdfs:comment "1 for a deterministic Bot, 2 for an agentic Behavior." .
+    rdfs:label "tier" ; rdfs:comment "The depth of a Workflow in its tree. 0 for a Bot at the top. 1 for a Workflow that a Bot calls. The API stamps the same numbers (api/workflows.py _apply_bot_tiers)." .

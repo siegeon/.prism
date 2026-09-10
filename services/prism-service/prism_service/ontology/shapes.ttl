@@ -461,3 +461,29 @@ o:task-blocked-needs-decomposition a sh:SPARQLConstraint ;
             FILTER NOT EXISTS { ?child o:parent $this }
         }
     """ .
+
+# ---------------------------------------------------------------------
+# node-performs-a-step — a Node that performs no Step does no work
+# (owner 2026-09-10: "bots are workflows that have nodes that perform
+# the steps involved executing tasks"). Nodes come from
+# services/ontology_graph._emit_bot_tree, off models/workflow.py
+# WORKFLOWS -- so this fires when a workflow gains a node that is wired
+# to no step, which is the one way the bot tree can silently do nothing.
+# ---------------------------------------------------------------------
+
+o:node-performs-a-step.target a sh:NodeShape ;
+    sh:targetClass o:Node ;
+    sh:sparql o:node-performs-a-step .
+
+o:node-performs-a-step a sh:SPARQLConstraint ;
+    rdfs:comment "A Node performs a Step. A Node that performs no Step executes no part of a Task." ;
+    sh:name "A node performs a step" ;
+    sh:description "This node performs no step. Give the node the step it performs, or remove the node from the workflow." ;
+    sh:message "a workflow node performs no step" ;
+    sh:select """
+        PREFIX o: <urn:prism:onto:>
+        SELECT $this WHERE {
+            $this a o:Node .
+            FILTER NOT EXISTS { $this o:performs ?step }
+        }
+    """ .

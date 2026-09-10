@@ -157,9 +157,15 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
     # own) the same way conductor's own steps are -- not a new persisted
     # entity, so none violates this test's original "no new entities"
     # spirit; the exact catalog id list just grew by one each time.
+    # SUPERSEDED AGAIN 2026-09-10 (owner: "it should list out the bots
+    # (roles and conductor etc.)"): the three role bots join the catalog
+    # between the root workflows and the conductor's behaviours. They are
+    # derived from the conductor's OWN steps grouped by persona, not a
+    # new persisted entity, so the "no new entities" spirit above holds.
     assert [workflow["id"] for workflow in body["workflows"]] == [
         "conductor", "validation", "triage", "align_language", "quickfix",
-        "promote_to_law", "knowledge_health"]
+        "promote_to_law", "knowledge_health", "steward", "verifier",
+        "builder"]
     validation = body["workflows"][1]
     assert validation["name"] == "Build and test"
     assert validation["parent_id"] == "conductor", (
@@ -678,7 +684,13 @@ def test_story_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_p
     assert story_gate_step["linked_workflow_id"] == "story-gate-check"
 
     by_id = {w["id"]: w for w in body["workflows"]}
-    assert by_id["story-gate-check"].get("parent_id") == "conductor"
+    # SUPERSEDED 2026-09-10 (owner: "bots can call bots as bots are just
+    # workflows"): story_gate's persona is sm, so the Steward bot now
+    # sits between the conductor and this behaviour. The invariant these
+    # lines protect -- the behaviour is INSIDE the conductor's tree, and
+    # ci-local-dev is still outside it -- is unchanged; only the seat is
+    # named differently. Same edit at every other call site below.
+    assert by_id["story-gate-check"].get("parent_id") == "steward"
     assert by_id["land"].get("parent_id") == "conductor"
     assert "parent_id" not in by_id["ci-local-dev"]
 
@@ -774,7 +786,7 @@ def test_plan_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_pa
     assert plan_gate_step["linked_workflow_id"] == "plan-gate-check"
 
     by_id = {w["id"]: w for w in body["workflows"]}
-    assert by_id["plan-gate-check"].get("parent_id") == "conductor"
+    assert by_id["plan-gate-check"].get("parent_id") == "steward"
     assert by_id["land"].get("parent_id") == "conductor", (
         "land nests under conductor now (owner, 2026-08-21) -- it is the "
         "FSM's real terminal step, no longer a useful negative control")
@@ -939,8 +951,8 @@ def test_review_notes_and_verify_plan_link_to_their_loops_and_nest_under_conduct
     assert step_by_id["verify_plan"]["linked_workflow_id"] == "verify-plan-loop"
 
     by_id = {w["id"]: w for w in body["workflows"]}
-    assert by_id["review-previous-notes-loop"].get("parent_id") == "conductor"
-    assert by_id["verify-plan-loop"].get("parent_id") == "conductor"
+    assert by_id["review-previous-notes-loop"].get("parent_id") == "steward"
+    assert by_id["verify-plan-loop"].get("parent_id") == "steward"
     assert by_id["land"].get("parent_id") == "conductor"
 
 
@@ -1026,8 +1038,11 @@ def test_write_failing_tests_and_implement_tasks_link_but_validate_is_honest(tmp
     assert step_by_id["implement_tasks"]["linked_workflow_id"] == "implement-tasks-loop"
 
     by_id = {w["id"]: w for w in body["workflows"]}
-    assert by_id["write-failing-tests-loop"].get("parent_id") == "conductor"
-    assert by_id["implement-tasks-loop"].get("parent_id") == "conductor"
+    # write_failing_tests is the Verifier's node; implement_tasks is the
+    # Builder's. Two different seats, so two different parents -- which is
+    # the point of the 2026-09-10 change.
+    assert by_id["write-failing-tests-loop"].get("parent_id") == "verifier"
+    assert by_id["implement-tasks-loop"].get("parent_id") == "builder"
     assert by_id["land"].get("parent_id") == "conductor"
 
 
@@ -1548,7 +1563,7 @@ def test_green_gate_links_to_the_new_behavior_and_it_nests_under_conductor(tmp_p
     assert green_gate_step["linked_workflow_id"] == "green-gate-status"
 
     by_id = {w["id"]: w for w in body["workflows"]}
-    assert by_id["green-gate-status"].get("parent_id") == "conductor"
+    assert by_id["green-gate-status"].get("parent_id") == "steward"
 
 
 def test_land_is_the_conductors_visible_final_ship_step(tmp_path, monkeypatch):

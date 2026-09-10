@@ -405,6 +405,7 @@ class OntologyGraph:
         self._emit_documents_folders(g, rows, U, CLS, RDF, RDFS)
         self._emit_code_graph(g, rows, U, CLS, RDF, RDFS)
         self._emit_workflow_steps(g, U, CLS, RDF, RDFS)
+        self._emit_bot_tree(g, U, CLS, RDF, RDFS)
         self._emit_memories(g, rows, U, CLS, RDF, RDFS)
 
         nt = g.serialize(format="nt")
@@ -780,6 +781,67 @@ class OntologyGraph:
                 g.add((u, CLS("decidedBy"), rdflib.Literal(role_for_step(sid))))
                 g.add((u, CLS("producedBy"), rdflib.Literal(role_for_step(prev_id))))
             prev_id = sid
+
+    @staticmethod
+    def _emit_bot_tree(g, U, CLS, RDF, RDFS) -> None:
+        """The bot tree as real triples (owner 2026-09-10: "bots are
+        workflows that have nodes that perform the steps involved
+        executing tasks", "bots can call bots").
+
+        o:Bot/o:Behavior/o:FSM were DECLARED in model.ttl and never
+        populated -- the vocabulary existed, no instance ever did, so no
+        SHACL shape over it could fire on anything. This emits the tree
+        the API already serves, from the SAME source of truth
+        (models/workflow.py WORKFLOWS + models/roles.py), never
+        fabricated:
+
+            Bot -hasNode-> Node -performs-> Step
+            Bot -callsWorkflow-> Bot        (conductor -> steward)
+
+        Steps reuse U("step", id) so these Nodes join the SAME o:Step
+        instances _emit_workflow_steps already emits for the gates.
+        """
+        import rdflib
+        from prism_service.models.roles import ROLES, role_for_step
+        from prism_service.models.workflow import WORKFLOWS
+
+        for wf_id, steps in WORKFLOWS.items():
+            bot = U("bot", wf_id)
+            g.add((bot, RDF.type, CLS("Bot")))
+            g.add((bot, RDFS.label, rdflib.Literal(wf_id)))
+            g.add((bot, CLS("tier"), rdflib.Literal(0)))
+            for step in steps:
+                sid = step["id"]
+                node = U("node", f"{wf_id}/{sid}")
+                target = U("step", sid)
+                g.add((node, RDF.type, CLS("Node")))
+                g.add((node, RDFS.label, rdflib.Literal(sid)))
+                g.add((target, RDF.type, CLS("Step")))
+                g.add((bot, CLS("hasNode"), node))
+                g.add((node, CLS("performs"), target))
+                # A step's role IS the bot that runs it, so this edge is
+                # exactly "a bot calls a bot". Only the implement FSM
+                # carries role seats today; role_for_step falls back to
+                # the default role for the shorter FSMs, so gate steps
+                # (agent None) are skipped rather than mis-attributed.
+                role_id = step.get("agent")
+                if role_id in ROLES:
+                    g.add((bot, CLS("callsWorkflow"), U("bot", role_id)))
+                    g.add((U("bot", role_id), RDF.type, CLS("Bot")))
+                    g.add((U("bot", role_id), CLS("hasNode"), node))
+                elif step.get("type") == "gate":
+                    # A gate has no producing agent; the role that DECIDES
+                    # it still runs it, and that is a real call edge.
+                    decider = role_for_step(sid)
+                    if decider in ROLES:
+                        g.add((bot, CLS("callsWorkflow"), U("bot", decider)))
+                        g.add((U("bot", decider), RDF.type, CLS("Bot")))
+                        g.add((U("bot", decider), CLS("hasNode"), node))
+        for role_id, role in ROLES.items():
+            bot = U("bot", role_id)
+            g.add((bot, RDF.type, CLS("Bot")))
+            g.add((bot, RDFS.label, rdflib.Literal(role.label)))
+            g.add((bot, CLS("tier"), rdflib.Literal(1)))
 
     @staticmethod
     def _emit_memories(g, rows, U, CLS, RDF, RDFS) -> None:

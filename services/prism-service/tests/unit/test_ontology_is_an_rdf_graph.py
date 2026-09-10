@@ -215,6 +215,82 @@ def test_post_sparql_route_answers_select_and_rejects_writes(project):
 # api/okf.py no longer imports OntologyStore for reads — grep-assert
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# The bot tree is REAL INSTANCES, not just declared classes (owner
+# 2026-09-10: "bots are workflows that have nodes that perform the steps
+# involved executing tasks", "bots can call bots")
+# ---------------------------------------------------------------------------
+
+def test_the_bot_tree_is_emitted_as_instances(project):
+    """o:Bot/o:Behavior were DECLARED in model.ttl and never populated.
+
+    Asserts the LITERAL shape the owner named, walked over the real
+    rebuilt store -- never the emitter's own output fed back to itself.
+    """
+    from prism_service.services.ontology_graph import OntologyGraph
+
+    graph = OntologyGraph(project)
+    graph.rebuild()
+
+    def rows(sparql):
+        return graph.query("PREFIX o: <urn:prism:onto:> " + sparql)["bindings"]
+
+    # A bot exists at all.
+    bots = {str(r["b"]).rsplit("/", 1)[-1]
+            for r in rows("SELECT ?b WHERE { GRAPH ?g { ?b a o:Bot } }")}
+    assert "implement" in bots, bots
+    assert {"sm", "qa", "dev"} <= bots, "the role bots must be bots"
+
+    # A bot has nodes, and a node performs a step.
+    performed = {str(r["s"]).rsplit("/", 1)[-1] for r in rows(
+        "SELECT ?s WHERE { GRAPH ?g { ?b a o:Bot ; o:hasNode ?n . "
+        "?n o:performs ?s } }")}
+    assert "plan_gate" in performed, performed
+    assert "implement_tasks" in performed, performed
+
+    # A BOT CALLS A BOT. The conductor's implement FSM calls the Steward.
+    called = {str(r["c"]).rsplit("/", 1)[-1] for r in rows(
+        "SELECT ?c WHERE { GRAPH ?g { ?b o:callsWorkflow ?c } }")}
+    assert {"sm", "qa", "dev"} <= called, called
+
+
+def test_the_real_bot_tree_satisfies_the_node_rule(project):
+    """Run node-performs-a-step over the REAL emitted tree.
+
+    Pins the positive case only: every node the emitter produces performs
+    a step. The negative case (the rule actually reporting a node wired to
+    nothing) is NOT pinned here -- planting a bad triple needs a write
+    into the store this test has no handle on. Worth adding.
+    """
+    from prism_service.services.ontology_graph import OntologyGraph
+    from prism_service.services import ontology_rules
+
+    graph = OntologyGraph(project)
+    graph.rebuild()
+
+    # validate() returns ONE ROW PER RULE whether or not it fired, so the
+    # row's presence proves nothing. `looked_at` is what proves the rule
+    # ran over real instances, and `focus` carries the actual violations.
+    row = next(r for r in ontology_rules.validate(project)
+               if r["name"] == "node-performs-a-step")
+    assert row["looked_at"] > 0, (
+        "the rule examined no nodes at all -- the bot tree is not emitted")
+    assert row["violations"] == 0, ("every emitted node performs a step", row["detail"])
+    assert row["state"] == "quiet"
+    """The subclass edge is what makes 'bots are just workflows' true."""
+    from prism_service.services.ontology_graph import OntologyGraph
+
+    graph = OntologyGraph(project)
+    graph.rebuild()
+    rows = graph.query(
+        "PREFIX o: <urn:prism:onto:> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> "
+        "SELECT ?c WHERE { GRAPH ?g { ?c rdfs:subClassOf o:Workflow } }")["bindings"]
+    # A CLASS iri is urn:prism:onto:Bot (colon), an INSTANCE iri is
+    # urn:prism:onto:instance/bot/sm (slash) -- different split.
+    subclasses = {str(r["c"]).rsplit(":", 1)[-1] for r in rows}
+    assert {"Bot", "Behavior"} <= subclasses, subclasses
+
+
 def test_okf_api_no_longer_imports_ontology_store():
     okf_src = (_SERVICE_ROOT / "prism_service" / "api" / "okf.py").read_text(
         encoding="utf-8")

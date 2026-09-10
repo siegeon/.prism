@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.290"
+PRISM_VERSION = "7.13.291"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8928,4 +8928,42 @@ PRISM_VERSION_NOTES += (
     "nobody watching still parks at 12, because only a release row moves "
     "the start of the count. Found on task 1bcb2b24, which spent its 12 "
     "dispatches on two real defects that are now fixed."
+)
+
+PRISM_VERSION_NOTES += (
+    "\n\n7.13.291: BOTS ARE WORKFLOWS. Owner, looking at the conductor "
+    "flow screen: 'the roles are the bots that build things in prism', "
+    "'bots can call bots as bots are just workflows ... workflows that "
+    "have workflows (behaviors) that have nodes that are as programmatic "
+    "as possible', and 'make sure that the Code and the Ontology "
+    "structure rules, and such all understand that Bots are workflows "
+    "that have nodes that perform the steps involved executing tasks'. "
+    "Steward/Verifier/Builder were roles only: models/roles.py entries "
+    "the Workflows canvas drew as bot boxes with kind:'bot' and wires of "
+    "kind:'structure', which a click could not open, while the sidebar "
+    "listed them under a separate Roles heading OUTSIDE the bot tree "
+    "(task 0c396de2, superseded here in place). ONTOLOGY: model.ttl "
+    "declared o:Bot as 'a tier-1 deterministic workflow' and had no "
+    "o:Workflow class to be, no o:Node at all, and no instance of "
+    "o:Bot/o:Behavior/o:FSM was ever emitted -- the vocabulary existed "
+    "and nothing populated it, so no shape over it could fire. Adds "
+    "o:Workflow and o:Node, makes Bot and Behavior subclasses of "
+    "Workflow, and adds hasBehavior/hasNode/performs/callsWorkflow "
+    "(o:calls was domain o:Code, so it could not say the conductor calls "
+    "the Steward). ontology_graph._emit_bot_tree now emits the real tree "
+    "off WORKFLOWS + roles.py: Bot -hasNode-> Node -performs-> Step, and "
+    "Bot -callsWorkflow-> Bot. New SHACL rule node-performs-a-step "
+    "(19 rules now); measured live it examines 26 real nodes and reports "
+    "0 violations. API: _apply_bot_tiers computed tier from a hardcoded "
+    "parent_id == 'conductor', so the tree could only ever be two deep; "
+    "tier is now walked DEPTH, and _role_bot_workflows adds the three "
+    "role bots between the conductor and the behaviours their steps "
+    "call, derived from the conductor's own steps by persona and "
+    "linked_workflow_id -- no second hand-kept list. UI: the sidebar "
+    "renders recursively (renderBranch calls itself), the Roles section "
+    "is retired, and a click on a bot box opens that bot. Full unit and "
+    "integration trees run; 5 failures confirmed pre-existing on the "
+    "unmodified checkout (3 brain_csharp_calls, 2 install_packaging) and "
+    "1 integration flake is live-daemon lock contention, reproduced as "
+    "2 fail / 1 pass on the same commit."
 )

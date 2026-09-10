@@ -293,7 +293,10 @@ export class WorkflowGraph {
         kind: "bot",
         label: b.persona_label,
         sub: b.id,
-        summary: "Owns workflow states",
+        // "Owns workflow states" described an annotation. A bot IS a
+        // workflow (owner 2026-09-10), and this box now opens it, so the
+        // summary says what a click does rather than what the box is.
+        summary: "Open this bot",
         glyph: glyphFor("session", b.id),
         gate: false,
         count: 0,

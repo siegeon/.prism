@@ -88,8 +88,51 @@ def test_every_workflows_entry_is_a_tier0_bot(body):
 def test_conductor_behaviours_are_tier1_children(body):
     children = [w for w in body["workflows"] if w.get("parent_id") == "conductor"]
     assert children
-    assert {w["id"] for w in children} >= {"validation", "story-gate-check"}
+    # SUPERSEDED 2026-09-10 (owner: "bots can call bots as bots are just
+    # workflows"). This asserted story-gate-check was a DIRECT child of
+    # the conductor. It is now a grandchild: the conductor calls the
+    # Steward bot, and the Steward runs story-gate-check. The invariant
+    # that survives is the one this line was really protecting -- a
+    # behaviour is INSIDE the bot tree, never a top-level orphan -- so it
+    # is re-pinned below at whatever depth it now sits.
+    assert {w["id"] for w in children} >= {"validation", "steward", "verifier", "builder"}
     assert all(w["tier"] == 1 for w in children), [(w["id"], w.get("tier")) for w in children]
+
+
+# AC-2 (owner 2026-09-10): a bot calling a bot makes the tree three deep.
+def test_a_role_bot_sits_between_the_conductor_and_its_behaviours(body):
+    entries = _by_id(body)
+    steward = entries["steward"]
+    assert steward["parent_id"] == "conductor"
+    assert steward["tier"] == 1
+    # The behaviour the Steward runs is a grandchild of the conductor.
+    gate_check = entries["story-gate-check"]
+    assert gate_check["parent_id"] == "steward"
+    assert gate_check["tier"] == 2
+    # A role bot's nodes are the conductor steps it is the seat for --
+    # read off `persona`, never a second hand-kept list.
+    assert {s["id"] for s in steward["steps"]} == {
+        "review_previous_notes", "draft_story", "story_gate",
+        "verify_plan", "plan_gate", "red_gate", "green_gate"}
+    assert {s["id"] for s in entries["builder"]["steps"]} == {"implement_tasks"}
+
+
+def test_a_behaviour_no_step_calls_stays_under_the_conductor(body):
+    """land/reap have no role seat: the conductor runs them itself.
+
+    Drives the re-parent rule directly rather than naming `land`, which
+    the `body` fixture's stubbed behaviour list does not contain."""
+    conductor = _by_id(body)["conductor"]
+    behaviours = [
+        {"id": "story-gate-check", "parent_id": "conductor"},
+        {"id": "land", "parent_id": "conductor"},
+    ]
+    workflows_api._reparent_behaviours_under_role_bots(conductor, behaviours)
+    moved = {b["id"]: b["parent_id"] for b in behaviours}
+    # story_gate names story-gate-check and its persona is sm -> Steward.
+    assert moved["story-gate-check"] == "steward"
+    # No conductor step links `land`, so it keeps the conductor as parent.
+    assert moved["land"] == "conductor"
 
 
 # AC-3
@@ -166,8 +209,32 @@ def test_step_marker_reads_agentic_field():
     assert not re.search(r"(draft_story|write_failing_tests)\s*:\s*[\"']?(agentic|deterministic)", src)
 
 
-# AC-7
-def test_roles_heading_holds_persona_cards():
+# AC-7 — RETIRED 2026-09-10, superseded by the two tests below.
+#
+# This required a separate "Roles" heading outside the bot tree, mapping
+# data.roles into persona cards. The owner reversed the premise it
+# encoded ("the roles are the bots that build things in prism"; "it
+# should list out the bots (roles and conductor etc.)"), so a standing
+# assertion that the roles live OUTSIDE the tree now pins the opposite of
+# what the page must do. Replaced by: the roles are catalog entries in
+# the tree (test_api above), and the tree renders recursively so a bot
+# that calls a bot has somewhere to draw its children.
+def test_the_directory_renders_recursively_not_two_deep():
+    """A bot calling a bot needs the tree to recurse.
+
+    Pins the RENDER PATH, not a constant: the branch renderer must call
+    itself, or a role bot's own behaviours cannot appear at all."""
     src = _src()
-    assert re.search(r"<h[1-6][^>]*>\s*Roles\s*</h[1-6]>", src), "no Roles heading"
-    assert re.search(r"data\.roles\b[^;]*?\.map\(", src, re.S), "Roles section must map data.roles"
+    assert "const renderBranch = useCallback((" in src, "no recursive branch renderer"
+    # It recurses: the body renders its own grandchildren.
+    assert re.search(r"renderBranch\(child\.id,\s*grandchildren,\s*depth \+ 1\)", src), \
+        "renderBranch must call itself for a child's own children"
+    # And the root row delegates to it rather than mapping children inline.
+    assert re.search(r"expanded && renderBranch\(workflow\.id, children, 1\)", src)
+
+
+def test_no_separate_roles_section_survives_outside_the_tree():
+    """A role appears exactly once, in the tree, as the bot it is."""
+    src = _src()
+    assert not re.search(r'aria-label="Roles"', src), \
+        "the Roles section is retired; a role is a bot in the tree now"

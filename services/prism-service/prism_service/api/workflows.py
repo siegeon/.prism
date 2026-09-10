@@ -937,24 +937,124 @@ def _fsm_entry_ids() -> dict[str, str]:
 
 
 def _apply_bot_tiers(catalog: list[dict]) -> None:
-    """Stamp tier/fsm_id/bot_header on the FSM Bots, tier 1 on the
-    conductor's own behaviours, and an `agentic` flag on every step.
+    """Stamp tier/fsm_id/bot_header on the FSM Bots, a DEPTH tier on
+    everything reachable below one, and an `agentic` flag on every step.
 
-    Entries that are neither an FSM nor a conductor child get NO tier and
-    NO parent_id, so they stay outside the Bot tree (AC-8)."""
+    Entries that are neither an FSM nor reachable from one get NO tier
+    and NO parent_id, so they stay outside the Bot tree (AC-8).
+
+    TIER IS DEPTH, NOT A KIND (owner 2026-09-10: "bots can call bots as
+    bots are just workflows ... workflows that have workflows
+    (behaviors) that have nodes"). This walked `parent_id == "conductor"`
+    and nothing else, so the tree could only ever be two deep and a bot
+    that calls a bot had nowhere to sit. Now a parent at tier N gives its
+    children N+1, however deep the chain runs -- conductor(0) ->
+    steward(1) -> plan-gate-check(2). model.ttl's o:tier carries the same
+    definition so the ontology and this stamp cannot drift."""
     fsm_ids = _fsm_entry_ids()
+    by_id = {entry.get("id"): entry for entry in catalog}
     for entry in catalog:
         fsm_id = fsm_ids.get(entry.get("id"))
         if fsm_id is not None:
             entry["tier"] = 0
             entry["fsm_id"] = fsm_id
             entry["bot_header"] = BOT_HEADER
-        elif entry.get("parent_id") == "conductor":
-            entry["tier"] = 1
+    for entry in catalog:
+        if entry.get("tier") == 0:
+            continue
+        depth, cursor, seen = 0, entry, {entry.get("id")}
+        while True:
+            parent = by_id.get(cursor.get("parent_id"))
+            # A missing parent, or a cycle, means this entry is not
+            # reachable from an FSM: leave it untiered rather than
+            # inventing a depth for it.
+            if parent is None or parent.get("id") in seen:
+                break
+            depth += 1
+            seen.add(parent.get("id"))
+            if fsm_ids.get(parent.get("id")) is not None:
+                entry["tier"] = depth
+                break
+            cursor = parent
+    for entry in catalog:
         for step in entry.get("steps") or []:
             # A behaviour step already decided this from its kind+url above;
             # an FSM step is agentic when its declared type is "agent".
             step.setdefault("agentic", step.get("type") == "agent")
+
+
+# --- Role bots (owner 2026-09-10) -------------------------------------
+# "the roles are the bots that build things in prism"; "bots are
+# workflows that have nodes that perform the steps involved executing
+# tasks"; "bots can call bots as bots are just workflows".
+#
+# SUPERSEDES the roles-are-not-bots split of task 0c396de2 (2026-08-27),
+# which put the persona cards in their own list OUTSIDE the bot tree.
+# That split was right that a Bot is a workflow and a card is not one;
+# it was wrong that the Steward therefore is not a bot. The repair is to
+# give the Steward a workflow rather than to keep it out of the tree --
+# so a role bot's nodes are the conductor steps it is the seat for, and
+# the behaviour behind each of those steps re-parents under it.
+#
+# Nothing new is invented here: `persona` already says which role owns a
+# step and `linked_workflow_id` already says which behaviour runs it.
+_ROLE_BOT_IDS = {"sm": "steward", "qa": "verifier", "dev": "builder"}
+
+# Every catalog description must say WHEN its workflow runs
+# (test_workflow_descriptions_say_when, rule skill-description-says-when).
+# A role's `purpose` in models/roles.py says what the seat DOES, never
+# when it is called, so each bot gets its trigger written here.
+_ROLE_BOT_WHEN = {
+    "sm": "Runs when a conductor step needs the story, needs the plan, or "
+          "needs an independent decision at a gate.",
+    "qa": "Runs when a conductor step must write the failing tests, or must "
+          "verify the green state against a real run.",
+    "dev": "Runs when a conductor step must make the smallest change that "
+           "turns the failing tests green.",
+}
+
+
+def _role_bot_workflows(conductor: dict, project: str, svc=None) -> list[dict]:
+    """One catalog entry per role bot, built from the conductor's OWN
+    steps grouped by persona -- never a second hand-kept step list that
+    could drift from the conductor's."""
+    from prism_service.models import roles as _roles
+
+    entries = []
+    for role_id, entry_id in _ROLE_BOT_IDS.items():
+        steps = [s for s in conductor["steps"] if s.get("persona") == role_id]
+        if not steps:
+            continue  # a role with no step it owns is not a bot here
+        role = _roles.ROLES.get(role_id)
+        entries.append({
+            "id": entry_id,
+            "name": _persona_label(role_id),
+            "description": " ".join(
+                p for p in ((role.purpose if role else ""),
+                            _ROLE_BOT_WHEN.get(role_id, "")) if p),
+            "steps": steps,
+            "bots": [],
+            "parent_id": "conductor",
+            "occupancy": _occupancy(project, [s["id"] for s in steps], svc=svc),
+        })
+    return entries
+
+
+def _reparent_behaviours_under_role_bots(conductor: dict, behaviours: list[dict]) -> None:
+    """Move each conductor behaviour under the role bot whose step calls
+    it, so the tree reads conductor -> steward -> plan-gate-check.
+
+    A behaviour no conductor step links to (land, reap, refresh-maps,
+    brain-health) has no role seat and stays a direct child of the
+    conductor, which is the truth: the conductor runs it itself."""
+    owner_of = {
+        s["linked_workflow_id"]: _ROLE_BOT_IDS.get(s.get("persona"))
+        for s in conductor["steps"] if s.get("linked_workflow_id")
+    }
+    for entry in behaviours:
+        parent = owner_of.get(entry.get("id"))
+        if parent:
+            entry["parent_id"] = parent
 
 
 def _attach_node_trend(scores_db, steps: list[dict]) -> None:
@@ -1568,8 +1668,15 @@ def get_workflows(project: str = Query("default")) -> dict:
     # knowledge_health (task b1971944): an eighth root workflow, same
     # posture -- no parent_id.
     knowledge_health = _knowledge_health_workflow(project)
+    # Role bots (owner 2026-09-10): the Steward/Verifier/Builder sit
+    # BETWEEN the conductor and the behaviours its steps call, so the
+    # tree shows a bot calling a bot. Built and re-parented before the
+    # catalog is tiered, because _apply_bot_tiers reads parent_id.
+    role_bots = _role_bot_workflows(conductor, project, svc=_svc)
+    _reparent_behaviours_under_role_bots(conductor, conductor_behaviors)
     catalog = [conductor, validation, triage, align_language, quickfix,
-              promote_to_law, knowledge_health, *conductor_behaviors]
+              promote_to_law, knowledge_health, *role_bots,
+              *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)

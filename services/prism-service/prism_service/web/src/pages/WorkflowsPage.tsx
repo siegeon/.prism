@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useReducedMotion } from "motion/react";
@@ -89,6 +90,13 @@ const DRAG_THRESHOLD_PX = 5;
 const POLL_MS = 10_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 10_000;
+// A role id (what a step's `persona` carries, and what a bot node's
+// `sub` field holds) mapped to the catalog entry that IS that bot --
+// api/workflows.py _ROLE_BOT_IDS is the same map on the server side.
+const ROLE_BOT_ENTRY: Record<string, string> = {
+  sm: "steward", qa: "verifier", dev: "builder",
+};
+
 const DIRECTORY_MIN_PX = 180;
 const DIRECTORY_MAX_PX = 480;
 const DIRECTORY_DEFAULT_PX = 240;
@@ -389,10 +397,11 @@ export default function WorkflowsPage() {
   });
   const directoryResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>([]);
-  // The whole /api/workflows payload, kept so the Roles section below
-  // can render the persona cards the catalog itself no longer carries
-  // (task 0c396de2).
-  const [data, setData] = useState<WorkflowDef | null>(null);
+  // The whole /api/workflows payload. Task 0c396de2 kept it so a
+  // separate Roles section could render the persona cards; that section
+  // is retired (owner 2026-09-10, roles are bots in the tree now), and
+  // the setter still feeds `workflows` below, so only the value is unused.
+  const [, setData] = useState<WorkflowDef | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
     () => searchParams.get("workflow") || "conductor",
   );
@@ -1667,6 +1676,93 @@ export default function WorkflowsPage() {
     });
   }, [orderedChildren, project]);
 
+  // A BOT CALLS A BOT, so the tree recurses (owner 2026-09-10: "bots can
+  // call bots as bots are just workflows ... workflows that have
+  // workflows (behaviors) that have nodes"). This used to be one inline
+  // .map() under each root, so the directory could only ever be two deep
+  // and a role bot's own behaviours had nowhere to render. Depth drives
+  // the indent only; every row is the same kind of thing at every level.
+  const renderBranch = useCallback((
+    parentId: string, siblings: WorkflowCatalogEntry[], depth: number,
+  ): ReactElement[] => orderedChildren(parentId, siblings).flatMap((child) => {
+    const childSel = child.id === selectedWorkflowId;
+    const dragOver = dragOverChildId?.id === child.id ? dragOverChildId : null;
+    const grandchildren = workflows.filter((c) => c.parent_id === child.id);
+    const grandSelected = grandchildren.some((g) => g.id === selectedWorkflowId);
+    const open = expandedDirectoryIds.has(child.id) || grandSelected;
+    return [
+      <button
+        type="button"
+        key={child.id}
+        // A STABLE HOOK. These rail entries carried no id, no data
+        // attribute and no aria-label, and the remote-assist bridge
+        // resolves selectors with a plain document.querySelector -- CSS
+        // only, no text matching. So an agent could SEE this entry in a
+        // screenshot and had no way to click it (owner 2026-08-29:
+        // "CLICK ON IT AS A USER WOULD thats why you have remote assist").
+        data-workflow-id={child.id}
+        draggable
+        aria-current={childSel ? "page" : undefined}
+        aria-grabbed={draggedChildId === child.id}
+        onClick={() => selectWorkflow(child)}
+        onDragStart={(ev) => {
+          ev.dataTransfer.effectAllowed = "move";
+          setDraggedChildId(child.id);
+        }}
+        onDragEnd={() => { setDraggedChildId(null); setDragOverChildId(null); }}
+        onDragOver={(ev) => {
+          if (!draggedChildId || draggedChildId === child.id) return;
+          ev.preventDefault();
+          const rect = ev.currentTarget.getBoundingClientRect();
+          const before = ev.clientY - rect.top < rect.height / 2;
+          setDragOverChildId((prev) =>
+            prev?.id === child.id && prev.before === before ? prev : { id: child.id, before });
+        }}
+        onDragLeave={() => setDragOverChildId((prev) => (prev?.id === child.id ? null : prev))}
+        onDrop={(ev) => {
+          ev.preventDefault();
+          if (draggedChildId) {
+            reorderChild(parentId, siblings, draggedChildId,
+              child.id, dragOverChildId?.before ?? true);
+          }
+          setDraggedChildId(null);
+          setDragOverChildId(null);
+        }}
+        title="Drag to reorder"
+        style={{ paddingLeft: `${0.5 + (depth - 1) * 0.75}rem` }}
+        className={`w-full flex cursor-grab items-start gap-2 pr-5 py-2 text-left text-2xs uppercase tracking-wider transition-colors active:cursor-grabbing ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"} ${dragOver?.before ? "border-t-2 border-[color:var(--accent-solid)]" : ""} ${dragOver && !dragOver.before ? "border-b-2 border-[color:var(--accent-solid)]" : ""} ${draggedChildId === child.id ? "opacity-40" : ""}`}
+      >
+        {/* A bot that calls bots gets a real disclosure chevron, the same
+            one a root row has; a leaf keeps the drag handle. One shared
+            w-4 icon column either way, never an extra forced indent. */}
+        {grandchildren.length > 0 ? (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label={open ? `Collapse ${child.name}` : `Expand ${child.name}`}
+            onClick={(ev) => { ev.stopPropagation(); toggleDirectoryExpanded(child.id); }}
+            onKeyDown={(ev) => {
+              if (ev.key !== "Enter" && ev.key !== " ") return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              toggleDirectoryExpanded(child.id);
+            }}
+            className="w-4 shrink-0 pt-px text-center text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)]"
+          >
+            {open ? "⌄" : "›"}
+          </span>
+        ) : (
+          <span aria-hidden="true" className="w-4 shrink-0 pt-px text-center text-[color:var(--nav-text)] opacity-50">⠿</span>
+        )}
+        <span className="flex-1">{child.name}</span>
+        <span className="shrink-0 pt-px font-mono opacity-70">{child.steps.length}</span>
+      </button>,
+      ...(open ? renderBranch(child.id, grandchildren, depth + 1) : []),
+    ];
+  }), [orderedChildren, workflows, expandedDirectoryIds, selectedWorkflowId,
+       draggedChildId, dragOverChildId, selectWorkflow, reorderChild,
+       toggleDirectoryExpanded]);
+
   const persist = useCallback(() => {
     writeJson(positionsKey(project), graphRef.current.serializeOverrides());
   }, [project]);
@@ -1843,6 +1939,23 @@ export default function WorkflowsPage() {
       setStateDetailsOpen(false);
       return;
     }
+    // A BOT BOX IS A WORKFLOW YOU CAN OPEN (owner 2026-09-10: "bots can
+    // call bots as bots are just workflows"). The Steward/Verifier/
+    // Builder boxes drew as annotations with nothing behind them -- a
+    // click landed on no step, so it did nothing at all. They are real
+    // catalog entries now, so a click walks into the bot the same way a
+    // click on a step walks into the behaviour it calls.
+    if (node.kind === "bot") {
+      const botWorkflow = workflows.find((w) => w.id === ROLE_BOT_ENTRY[node.sub]);
+      if (botWorkflow) {
+        setStateDetailsOpen(false);
+        selectWorkflow(botWorkflow, [...workflowPath, {
+          workflowId: selectedWorkflow?.id ?? "conductor",
+          stepId: node.id,
+        }]);
+        return;
+      }
+    }
     const linkedStep = selectedWorkflow?.steps.find(
       (step) => step.id === node.id,
     );
@@ -1991,61 +2104,7 @@ export default function WorkflowsPage() {
                       <span className="flex-1">{workflow.name}</span>
                       <span className="text-2xs font-mono opacity-70">{workflow.steps.length}</span>
                     </button>
-                    {expanded && orderedChildren(workflow.id, children).map((child) => {
-                      const childSel = child.id === selectedWorkflowId;
-                      const dragOver = dragOverChildId?.id === child.id ? dragOverChildId : null;
-                      return (
-                        <button
-                          type="button"
-                          key={child.id}
-                          // A STABLE HOOK. These rail entries carried no id,
-                          // no data attribute and no aria-label, and the
-                          // remote-assist bridge resolves selectors with a
-                          // plain document.querySelector -- CSS only, no text
-                          // matching. So an agent could SEE this entry in a
-                          // screenshot and had no way to click it (owner
-                          // 2026-08-29: "CLICK ON IT AS A USER WOULD thats
-                          // why you have remote assist").
-                          data-workflow-id={child.id}
-                          draggable
-                          aria-current={childSel ? "page" : undefined}
-                          aria-grabbed={draggedChildId === child.id}
-                          onClick={() => selectWorkflow(child)}
-                          onDragStart={(ev) => {
-                            ev.dataTransfer.effectAllowed = "move";
-                            setDraggedChildId(child.id);
-                          }}
-                          onDragEnd={() => { setDraggedChildId(null); setDragOverChildId(null); }}
-                          onDragOver={(ev) => {
-                            if (!draggedChildId || draggedChildId === child.id) return;
-                            ev.preventDefault();
-                            const rect = ev.currentTarget.getBoundingClientRect();
-                            const before = ev.clientY - rect.top < rect.height / 2;
-                            setDragOverChildId((prev) =>
-                              prev?.id === child.id && prev.before === before ? prev : { id: child.id, before });
-                          }}
-                          onDragLeave={() => setDragOverChildId((prev) => (prev?.id === child.id ? null : prev))}
-                          onDrop={(ev) => {
-                            ev.preventDefault();
-                            if (draggedChildId) {
-                              reorderChild(workflow.id, children, draggedChildId,
-                                child.id, dragOverChildId?.before ?? true);
-                            }
-                            setDraggedChildId(null);
-                            setDragOverChildId(null);
-                          }}
-                          title="Drag to reorder"
-                          className={`w-full flex cursor-grab items-start gap-2 pl-2 pr-5 py-2 text-left text-2xs uppercase tracking-wider transition-colors active:cursor-grabbing ${childSel ? "text-[color:var(--nav-active-text)] bg-[color:var(--nav-active-bg)] font-semibold" : "text-[color:var(--nav-text)] hover:text-[color:var(--nav-text-hi)] hover:bg-[color:var(--nav-hover)]"} ${dragOver?.before ? "border-t-2 border-[color:var(--accent-solid)]" : ""} ${dragOver && !dragOver.before ? "border-b-2 border-[color:var(--accent-solid)]" : ""} ${draggedChildId === child.id ? "opacity-40" : ""}`}
-                        >
-                          {/* Same w-4/shrink-0/text-center column as the parent row's own
-                              disclosure chevron above -- one shared icon column, not an
-                              extra forced indent past it. */}
-                          <span aria-hidden="true" className="w-4 shrink-0 pt-px text-center text-[color:var(--nav-text)] opacity-50">⠿</span>
-                          <span className="flex-1">{child.name}</span>
-                          <span className="shrink-0 pt-px font-mono opacity-70">{child.steps.length}</span>
-                        </button>
-                      );
-                    })}
+                    {expanded && renderBranch(workflow.id, children, 1)}
                     {/* Ingestion paths (task c7edf4e2, epic cc9a44c8): only the
                         align_language catalog entry carries `coverage` — the
                         real write paths services.language_alignment has seen
@@ -2115,30 +2174,23 @@ export default function WorkflowsPage() {
               })}
             </nav>
           )}
-          {/* ROLES ARE NOT BOTS (task 0c396de2). A Bot is an FSM — it has
-              states and it runs. A role is a seat a step is assigned to,
-              and the card describes how whoever sits there should think.
-              Keeping the cards inside the Bot tree read as though the
-              Steward were itself a workflow, so they live under their own
-              heading, below the tree and outside it. */}
-          {directoryOpen && data && (data.roles ?? []).length > 0 && (
-            <section
-              aria-label="Roles"
-              className="border-t border-[color:var(--nav-line)] px-2 py-3"
-            >
-              <h2 className="px-1 pb-2 text-2xs uppercase tracking-widest text-[color:var(--nav-text)] opacity-70">Roles</h2>
-              {(data.roles ?? []).map((role) => (
-                <div key={role.id} className="px-1 pb-2">
-                  <div className="text-2xs uppercase tracking-wider text-[color:var(--nav-text-hi)]">
-                    {role.persona_label}
-                  </div>
-                  <p className="mt-0.5 text-2xs leading-snug text-[color:var(--nav-text)] opacity-70">
-                    {role.card}
-                  </p>
-                </div>
-              ))}
-            </section>
-          )}
+          {/* ROLES ARE BOTS (owner 2026-09-10: "the roles are the bots
+              that build things in prism"; "it should list out the bots
+              (roles and conductor etc.)").
+
+              SUPERSEDES task 0c396de2's split, which read: "A Bot is an
+              FSM — it has states and it runs. A role is a seat a step is
+              assigned to ... so they live under their own heading, below
+              the tree and outside it." That was right that a Bot is a
+              workflow and a persona CARD is not one. It was wrong that
+              the Steward is therefore not a bot: the repair is to give
+              the Steward a workflow, not to keep it out of the tree. So
+              Steward/Verifier/Builder are now real catalog entries
+              (api/workflows.py _role_bot_workflows) nested between the
+              conductor and the behaviours their steps call, and this
+              separate heading is retired — a role appears exactly once,
+              in the tree, as the bot it is. The card text survives as
+              each bot's own `description`. */}
         </aside>
         <div
           role="separator"
