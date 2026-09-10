@@ -249,6 +249,7 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
     model: Optional[str] = None
     max_turns: Optional[int] = None
     budget: Optional[float] = None
+    timeout_s: Optional[float] = None
     for step in doc.get("steps") or []:
         url = step.get("url") or ""
         route = url.split("/steps/")[-1].split("?")[0] if "/steps/" in url else ""
@@ -258,6 +259,12 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
             codified.append(route)
             continue
         agentic = route
+        # The agentic middle also declares its own WALL CLOCK, beside the
+        # model and the spend caps. Read it: it is the only figure that
+        # says how long this node was ever meant to take.
+        declared_clock = step.get("timeoutSeconds")
+        if isinstance(declared_clock, (int, float)) and declared_clock > 0:
+            timeout_s = float(declared_clock)
         # The agentic middle carries the budget, as a JSON string body.
         try:
             body = json.loads(step.get("body") or "{}")
@@ -269,8 +276,8 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
         if isinstance(body.get("max_budget_usd"), (int, float)):
             budget = float(body["max_budget_usd"])
     return {"model": model, "max_turns": max_turns,
-            "max_budget_usd": budget, "codified": codified,
-            "agentic": agentic}
+            "max_budget_usd": budget, "timeout_s": timeout_s,
+            "codified": codified, "agentic": agentic}
 
 
 class _CodifiedResult:
@@ -406,7 +413,7 @@ def _declared_agentic_prompt(step_id: str, task, facts) -> str:
 
 
 def _invoke_budget(step_id: str, plan: Optional[dict],
-                   narrow: bool = False) -> dict:
+                   narrow: bool = False, after_kill: bool = False) -> dict:
     """claude_cli.invoke kwargs for `step_id` under `plan`.
 
     The declared plan governs the MODEL, TURN LIMIT and BUDGET -- the three
@@ -415,8 +422,22 @@ def _invoke_budget(step_id: str, plan: Optional[dict],
     run things rather than write about them, and a timeout that is too
     small kills a drive outright while one that is too large costs nothing
     once the turn and budget caps bind first.
+
+    ONE EXCEPTION, `after_kill` (task 1c42ee74): when the LAST recorded
+    outcome at this step was a budget kill, the full clock has already been
+    proven not to help. Task d5808cd1 spent seven runs at 900 s each on a
+    draft_story that never emitted a `result` event -- three per stall
+    ladder, then the resume actuator's whole ceiling of 12 dispatches. So a
+    retry after a kill runs on the node's DECLARED bound where it has one
+    (draft-story-loop declares 120 s), which turns the three-attempt ladder
+    from 2700 s into 1140 s. A step with no declaration keeps its own
+    budget: a kill must never invent a tighter clock out of nothing.
     """
     runner_timeout = _step_timeout_s(step_id)
+    declared_clock = (plan or {}).get("timeout_s")
+    if after_kill and isinstance(declared_clock, (int, float)) \
+            and 0 < declared_clock < runner_timeout:
+        runner_timeout = float(declared_clock)
     if not plan:
         return {"model": "", "max_turns": _max_turns(),
                 "max_budget_usd": _max_budget_usd(),
@@ -449,6 +470,28 @@ def _invoke_budget(step_id: str, plan: Optional[dict],
         "max_budget_usd": _max_budget_usd(),
         "timeout_s": runner_timeout,
     }
+
+
+def _failure_reason(result, budget_s: float) -> str:
+    """Why a step produced no usable report, in words that name the cause.
+
+    `exit=-9` is PRISM'S OWN TIMEOUT (`claude_cli.TIMEOUT_EXIT_CODE`),
+    returned when subprocess.run raises TimeoutExpired at `timeout_s`. It
+    is not a host SIGKILL and not a crash. Reported as the old flat string
+    "exit=-9, no usable output" it read as either, which is how task
+    d5808cd1's seven timeouts were first diagnosed as an out-of-memory
+    kill: the host had ~60 GB free and no OOM row in dmesg the whole time.
+    Name the limit and the elapsed time so a reader can tell a step that
+    ran out of clock from a step that fell over.
+    """
+    from prism_service.inference import claude_cli as _cli
+
+    exit_code = getattr(result, "exit_code", None)
+    if exit_code == _cli.TIMEOUT_EXIT_CODE:
+        ran = float(getattr(result, "duration_s", 0.0) or 0.0)
+        return (f"exit={exit_code}, the step exceeded its {int(budget_s)}s "
+                f"budget: it was stopped after {ran:.1f}s without reporting")
+    return f"exit={exit_code}, no usable output"
 
 
 def _repair_premises(proof: str, task, facts) -> str:
@@ -1172,11 +1215,22 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
         # which sends whoever reads it hunting for a test problem that does
         # not exist. Name the real thing, and name the knob that changes it.
         # SIGKILL outranks everything at every step.
+        # "KILLED" is the load-bearing word here and two other suites pin
+        # it (test_slow_step_budget_and_honest_stall,
+        # test_draft_story_node_runs_its_declared_plan): a killed step must
+        # say so rather than blame a missing test id. What CHANGED in task
+        # 1c42ee74 is the attribution and the advice. exit=-9 is PRISM's own
+        # TIMEOUT_EXIT_CODE, not a host SIGKILL -- d5808cd1's seven timeouts
+        # were first read as an OOM kill on a host with ~60 GB free -- and
+        # "raise PRISM_TASK_RUNNER_STEP_TIMEOUT_S" was the wrong first move:
+        # the step was spending its budget on a toolset its declared plan
+        # never asked for.
         reason += (f"the step was KILLED before it reported (exit=-9, "
-                   f"SIGKILL) -- it ran past its "
-                   f"{int(_step_timeout_s(step_id))}s budget. Raise "
-                   f"PRISM_TASK_RUNNER_STEP_TIMEOUT_S, or narrow what this "
-                   f"step has to run")
+                   f"PRISM's own timeout, not the host) -- it ran past its "
+                   f"{int(_step_timeout_s(step_id))}s budget. Narrow what "
+                   f"this step has to run: check that its declared node "
+                   f"plan is in force, because a step handed tools it does "
+                   f"not need spends the budget on them")
     elif step_id in _RED_TEST_STEPS and codified_reason:
         # Says what the DETERMINISTIC read found, not just what the prose
         # lacked -- the real answer is one of the codified node's own reasons
@@ -1330,6 +1384,10 @@ def _run_one_step(project: str, task_id: str) -> dict:
     # zero tokens, sub-second, and no `claude -p` at all. The model is the
     # fallback for the case the programmatic path cannot answer (nothing
     # gathered), not the default route.
+    # The codified branch never invokes a model, so it never has a budget;
+    # an empty mapping keeps the shared failure-reporting path below able to
+    # ask for one without an unbound-name crash.
+    budget: dict = {}
     codified_proof = _codified_step_proof(job["step"], task, facts)
     if codified_proof:
         for route in ("premise-select", "premise-render",
@@ -1352,7 +1410,10 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 run_id, True,
                 f"fell back to the node's declared agentic middle over "
                 f"{len(facts)} gathered fact(s)")
-        budget = _invoke_budget(job["step"], plan, narrow=bool(narrow_prompt))
+        budget = _invoke_budget(
+            job["step"], plan, narrow=bool(narrow_prompt),
+            after_kill=_last_outcome_was_a_kill(
+                task_svc, task_id, job["step"]))
         try:
             result = claude_cli.invoke(
                 prompt, work_dir=work_dir, plugin_dir=work_dir,
@@ -1442,7 +1503,9 @@ def _run_one_step(project: str, task_id: str) -> dict:
         outcome: object = "pass"
     elif not proof:
         outcome = {"ok": False,
-                   "reason": f"exit={result.exit_code}, no usable output"}
+                   "reason": _failure_reason(
+                       result, float(budget.get("timeout_s")
+                                     or _step_timeout_s(step_id)))}
     else:
         outcome = {"ok": False,
                    "reason": f"exit={result.exit_code}, non-graceful "

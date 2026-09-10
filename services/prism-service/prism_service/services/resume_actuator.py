@@ -422,7 +422,13 @@ def dispatch_once(project: str, task_id: str) -> dict:
     narrow_prompt = _tr._declared_agentic_prompt(
         job["step"], task_for_prompt, [])
     prompt = narrow_prompt or job["instructions"]
-    budget = _tr._invoke_budget(job["step"], plan, narrow=bool(narrow_prompt))
+    # after_kill: this seat re-drove d5808cd1's draft_story twelve times, and
+    # the last of them still spent a full 900 s on a step whose previous
+    # outcome was already a budget kill. The two seats must agree here too.
+    budget = _tr._invoke_budget(
+        job["step"], plan, narrow=bool(narrow_prompt),
+        after_kill=_tr._last_outcome_was_a_kill(
+            task_svc, task_id, job["step"]))
 
     try:
         result = claude_cli.invoke(

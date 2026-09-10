@@ -119,9 +119,28 @@ def _build_cmd(
       it bypasses every guard, trips Claude's root/sudo safety check,
       and grants tool access we don't actually need.
 
-      Pass `allowed_tools=()` to omit --allowedTools entirely and use
-      Claude's interactive default permission model (useful if a call
-      site wants permission prompts to fall through to a wrapping UI).
+      Pass `allowed_tools=()` for NO TOOLS AT ALL: `--tools ""` disables
+      the built-in set and `--strict-mcp-config`, with no --mcp-config
+      beside it, leaves no MCP server configured.
+
+      IT USED TO MEAN THE OPPOSITE, and every call site read it the way it
+      reads: premise-judge ("this call needs zero tool round trips"),
+      brain /ask ("no tool calls"), graph_enrich, and the narrow declared
+      middles in task_runner and resume_actuator all pass `()` meaning
+      none. What they got was claude's DEFAULT toolset plus every
+      configured MCP server, because an empty tuple is falsy and the flag
+      was simply skipped. v5.3.14 already recorded the symptom
+      ("`allowed_tools=()` doesn't disable claude's default tool set") and
+      worked around it in the PROMPT rather than on the command line, so
+      the trap stayed set. It cost task d5808cd1 seven `exit=-9` runs at
+      the 900 s bound: the `system/init` event of run a141a41ee2ae shows
+      40+ tools and 13 MCP servers offered to a single no-tool text
+      generation, which then spent the whole budget in
+      `mcp__prism__brain_*` round trips and never reported.
+
+      A call site that genuinely wants claude's default permission model
+      passes the tools it wants by name; there is no longer a spelling
+      that silently means "everything".
     """
     cmd = [
         "claude",
@@ -134,6 +153,11 @@ def _build_cmd(
     ]
     if allowed_tools:
         cmd += ["--allowedTools", *allowed_tools]
+    else:
+        # Both halves are load-bearing. `--tools ""` empties the built-in
+        # set; without --strict-mcp-config the workspace .mcp.json still
+        # hands the model a full MCP toolset through the back door.
+        cmd += ["--tools", "", "--strict-mcp-config"]
     if model:
         cmd += ["--model", model]
     if max_budget_usd > 0:
