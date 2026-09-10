@@ -175,6 +175,16 @@ _PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story"})
 _RED_TEST_STEPS = frozenset({"write_failing_tests", "implement_tasks",
                              "verify_green_state"})
 
+# An operator moving a task OUT of blocked, as TaskService records it:
+# action "updated", details carrying "status: 'blocked' -> 'in_progress'".
+# DIRECTIONAL ON PURPOSE. The blocking row reads
+# "status: 'in_progress' -> 'blocked'; blocked_reason: ..." and contains BOTH
+# words, so a substring test matches it too and would reset the budget on the
+# very row that blocks the task -- which retires the 3-attempt guard entirely.
+# test_an_unresolved_stall_still_blocks pins this and goes red on a
+# direction-blind match.
+_OPERATOR_RESET_RE = re.compile(r"status:\s*'blocked'\s*->\s*'in_progress'")
+
 # Behavior ids per conductor step. Mirrors api/workflows._BEHAVIOUR_FOR_STEP
 # for the steps THIS seat drives; the file is read straight off disk rather
 # than through the AosWorkflows engine, so a drive never depends on that
@@ -839,10 +849,13 @@ def _stall_count(task_svc, task_id: str, step_id: str) -> int:
     within one pass still stall exactly as before.
 
     An operator manually moving a task from blocked to in_progress is
-    an identical fresh mandate to retry. The status change is recorded
-    as a durable history row with an actor, and _stall_count treats it
-    as a budget boundary the same way as REWIND_ACTION (task 1ecbd866)."""
-    import re
+    an identical fresh mandate to retry, so it is a budget boundary the
+    same way as REWIND_ACTION (task 1ecbd866). TaskService records that
+    transition as an `updated` row whose details carry the transition
+    text; it writes NO actor on it (task_service.py:1322 passes none), so
+    the act is durable and attributable to a time but not yet to a
+    person. Ticket 1ecbd866 asks for an actor; supplying one needs
+    TaskService, which is outside this slice, and is filed separately."""
     marker = f"step={step_id}; advanced=false"
     rows = list(task_svc.history(task_id) or [])
     start = 0
@@ -856,7 +869,7 @@ def _stall_count(task_svc, task_id: str, step_id: str) -> int:
             details = str(getattr(h, "details", "") or "")
             # Match DIRECTIONAL pattern: status: 'blocked' -> 'in_progress'
             # Blocks on reverse direction (in_progress -> blocked) and other transitions
-            if re.search(r"status:\s*'blocked'\s*->\s*'in_progress'", details):
+            if _OPERATOR_RESET_RE.search(details):
                 start = i + 1
     return sum(1 for h in rows[start:]
                if h.action == ATTEMPT_ACTION and marker in h.details)
