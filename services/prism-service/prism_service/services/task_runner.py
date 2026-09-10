@@ -177,26 +177,16 @@ def _step_timeout_s(step_id: str = "") -> float:
 # full brief with BUILD_TOOLS was killed at 900.1s having written nothing but
 # the model's empty think wrapper.
 #
-# write_failing_tests JOINS THEM (task d5808cd1, 2026-09-10). Its declared
-# plan (write-failing-tests-loop.json) has been available since the workflow's
-# authoring, declaring haiku / 4 turns / $0.50, but the full context envelope
-# was swallowing the node's budget — full CLAUDE.md (~20k tokens) plus tool
-# schemas caused context window exceeded errors at 133k tokens. Using the
-# declared budget (haiku, 4 turns, $0.50, 120 s timeout) limits the context to
-# what the narrow prompt (reason-loop draft step) was sized for. The actual
-# implementation (writing tests to disk, running them) happens in the conductor
-# flow after the draft is reported; the task_runner just gets the draft and
-# reports it through flow_report.
-#
-# THE TWO REMAINING BUILD STEPS (implement_tasks, verify_green_state) still do
-# not join, by deliberate design: their declared prompts open "Draft an
-# implementation approach (do NOT write any code)" and "OBSERVE-only check".
-# Those steps must CHANGE the code and RUN the suite (verify in particular must
-# execute the real full suite). Wiring them would make drives fast and green on
-# nothing, which is worse than a timeout. A node joins this set when its
-# declaration is real, never by default.
+# THE THREE BUILD STEPS STILL DO NOT JOIN, and that is deliberate rather than
+# an oversight: their declared prompts open "Draft a failing test (do NOT write
+# it to disk, this is a DRAFT only)", "Draft an implementation approach (do NOT
+# write any code)" and "OBSERVE-only check". Those steps must WRITE the tests
+# (the tests-only commit is the red seat's anchor), CHANGE the code and RUN the
+# suite. Wiring them would make drives fast and green on nothing, which is
+# worse than a timeout. A node joins this set when its declaration is real,
+# never by default.
 _PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story",
-                            "verify_plan", "write_failing_tests"})
+                            "verify_plan"})
 
 # Steps where a red test can meaningfully exist. The stall mechanism
 # (task 404ef4ce) reads codified red test ids to name the next action
