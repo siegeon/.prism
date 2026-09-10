@@ -826,7 +826,7 @@ def _route_proof(task_svc, task_id: str, step_id: str, proof: str) -> None:
 
 def _stall_count(task_svc, task_id: str, step_id: str) -> int:
     """Non-advancing runner reports recorded on `step_id` SINCE the most
-    recent rewind (durable).
+    recent rewind OR operator status reset (durable).
 
     Counting the WHOLE life of the task made every gate rejection
     terminal (task ce471e06, 2026-09-04): a reject rewinds the task to
@@ -836,13 +836,25 @@ def _stall_count(task_svc, task_id: str, step_id: str) -> int:
     reason ("did not advance after 3 attempts") describing work the
     driver had not been allowed to attempt. A reject is a fresh mandate
     carrying new direction, so the budget starts over with it; attempts
-    within one pass still stall exactly as before."""
+    within one pass still stall exactly as before.
+
+    An operator manually moving a task from blocked to in_progress is
+    an identical fresh mandate to retry. The status change is recorded
+    as a durable history row with an actor, and _stall_count treats it
+    as a budget boundary the same way as REWIND_ACTION (task 1ecbd866)."""
     marker = f"step={step_id}; advanced=false"
     rows = list(task_svc.history(task_id) or [])
     start = 0
     for i, h in enumerate(rows):
-        if str(getattr(h, "action", "") or "") == REWIND_ACTION:
+        action = str(getattr(h, "action", "") or "")
+        # REWIND_ACTION is a gate rejection (existing path)
+        # status_change from blocked -> in_progress is an operator reset (new path)
+        if action == REWIND_ACTION:
             start = i + 1
+        elif action == "status_change":
+            details = str(getattr(h, "details", "") or "")
+            if "blocked" in details and "in_progress" in details:
+                start = i + 1
     return sum(1 for h in rows[start:]
                if h.action == ATTEMPT_ACTION and marker in h.details)
 
@@ -1155,12 +1167,10 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
         reason += "no red test id was named in the last proof"
     else:
         # For non-red-test steps (review_previous_notes, draft_story,
-        # verify_plan), the step did not produce a usable report after the
-        # attempts. These steps write documents, not tests, so no red test
-        # id could exist here.
-        reason += (f"the step did not produce a usable report after {STALL_ATTEMPTS} "
-                   f"attempts; this step writes a document rather than tests, so "
-                   f"no red test id could exist yet")
+        # verify_plan), the step did not produce a usable report. These steps
+        # write documents, not tests, so no red test id could exist here.
+        reason += ("the step did not produce a usable report. This step writes "
+                   "a document rather than tests, so no red test id could exist yet")
     task_svc.update(task_id, status="blocked", blocked_reason=reason)
     task_svc.record_history(task_id, action="runner_stall",
                             details=reason, actor=SEAT_ID)
