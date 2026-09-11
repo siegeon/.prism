@@ -28,7 +28,6 @@ from pathlib import Path
 
 _WEB = Path(__file__).resolve().parent.parent.parent / "prism_service/web/src"
 _GRAPH = _WEB / "live/workflowGraph.ts"
-_PACKETS = _WEB / "live/packets.ts"
 _PAGE = _WEB / "pages/WorkflowsPage.tsx"
 
 
@@ -173,28 +172,32 @@ def test_the_runs_own_step_is_lit_on_the_top_level_canvas():
         "WorkflowsPage never hands the run's task.workflow_step to RunView")
 
 
-def test_the_agent_marker_sits_on_the_lit_step_not_on_the_bot_wire():
-    """The owner reads the teal-ring marker as the agent. It rode the
-    Steward -> draft_story wire, so the agent read as the bot's. It is now
-    parked ON the lit step, and the bot wire into that step carries none."""
-    packets = _code(_PACKETS.read_text(encoding="utf-8"))
-    assert "export function drawMarkerHead(" in packets, (
-        "the marker head is not a shared primitive -- a second look would drift")
-    assert "drawMarkerHead(" in _fn(packets, "drawPackets"), (
-        "drawPackets no longer paints its head with the shared primitive")
+_TAKEN = set("▣◇▼▲●◆▶■")  # glyphFor + the canvas's own node glyphs
+
+
+def test_the_lit_step_carries_an_agent_glyph_not_only_its_persona():
+    """SUPERSEDES the 7.13.299 version of this test, which parked the
+    ambient occupancy PACKET on the node and hid it on the bot wire. That
+    packet is not an agent symbol, and its motion stays as it was. The
+    owner saw no inference symbol anywhere; the ▼ on a card is the Steward
+    PERSONA. The step where an agent works now carries its own glyph,
+    defined in palette.ts beside glyphFor, sharing no silhouette."""
+    palette = _code((_WEB / "live/palette.ts").read_text(encoding="utf-8"))
+    m = re.search(r'export const (\w+)\s*=\s*"(.)"\s*;', palette)
+    assert m, "palette.ts exports no agent-at-work glyph beside glyphFor"
+    name, glyph = m.group(1), m.group(2)
+    assert glyph not in _TAKEN, f"{glyph!r} shares a silhouette in use"
     code = _graph()
     node = _fn(code, "drawNode")
-    assert "drawMarkerHead(" in node, "the lit step carries no agent marker"
-    assert "occupiedLit" in _guard_of(node, "drawMarkerHead("), (
-        "the agent marker is not scoped to the lit step")
+    call = re.search(rf"ctx\.fillText\(\s*{name}\b", node)
+    assert call, "drawNode never draws the agent glyph"
+    assert "occupiedLit" in _guard_of(node, call.group(0)), (
+        "the agent glyph is not scoped to the lit step")
+    assert "ctx.fillText(n.glyph" in node, "the persona glyph is gone elsewhere"
     frame = _block(code, "export function drawWorkflows(")
-    consts = _consts(frame)
-    lit_set = [k for k, v in consts.items() if "isOccupiedLit(" in v]
+    assert re.search(r"drawPackets\(\s*ctx\s*,\s*g\.packets\s*,", frame), (
+        "the ambient occupancy packets are filtered -- leave them alone")
+    lit_set = [k for k, v in _consts(frame).items() if "isOccupiedLit(" in v]
     assert lit_set, "drawWorkflows never collects the lit nodes"
-    shown = [k for k, v in consts.items() if "g.packets.filter(" in v
-             and "bot:" in v and re.search(rf"{lit_set[0]}\.has\(\s*p\.target", v)]
-    assert shown, "bot-wire markers into the lit step are still drawn"
-    assert re.search(rf"drawPackets\(\s*ctx\s*,\s*{shown[0]}\b", frame), (
-        "the filtered markers are computed but never the ones drawn")
     assert re.search(rf"drawNode\([^;]*\b{lit_set[0]}\.has\(\s*n\.id\s*\)", frame), (
         "drawNode is not told which node is lit")
