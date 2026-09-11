@@ -240,6 +240,19 @@ _RED_TEST_STEPS = frozenset({"write_failing_tests", "implement_tasks",
 # direction-blind match.
 _OPERATOR_RESET_RE = re.compile(r"status:\s*'blocked'\s*->\s*'in_progress'")
 
+# A model call that never reached a model: the gateway's own error shape
+# ("API Error: <code> ...") followed by a connect failure. Anchored on that
+# prefix, so a report that only MENTIONS a refused connection in its prose is
+# never read as an outage (task b490fabc, 2026-09-11).
+_ENDPOINT_OUTAGE_RE = re.compile(
+    r"API Error: \d+.*?(?:Cannot connect to host ([^\s,]+)"
+    r"|Connection refused|Name or service not known)", re.S)
+
+
+def _endpoint_outage(text: str):
+    """The match when `text` shows the model endpoint was unreachable."""
+    return _ENDPOINT_OUTAGE_RE.search(text or "")
+
 # Behavior ids per conductor step. Mirrors api/workflows._BEHAVIOUR_FOR_STEP
 # for the steps THIS seat drives; the file is read straight off disk rather
 # than through the AosWorkflows engine, so a drive never depends on that
@@ -826,9 +839,7 @@ def _failure_reason(result, budget_s: float, proof: str = "") -> str:
     # "Cannot connect to host inference.dev.internal:8080" because the engine
     # behind it was gone, and this row read "crash/auth/truncated". Name the
     # endpoint so a reader sees an outage the step could not fix.
-    import re
-    hit = re.search(r"Cannot connect to host ([^\s,]+)|Connection refused"
-                    r"|Name or service not known", proof or "")
+    hit = _endpoint_outage(proof)
     if hit:
         where = hit.group(1) or "the model endpoint"
         return (f"exit={exit_code}, the model endpoint was unreachable "
@@ -1357,8 +1368,14 @@ def _stall_count(task_svc, task_id: str, step_id: str) -> int:
             # Blocks on reverse direction (in_progress -> blocked) and other transitions
             if _OPERATOR_RESET_RE.search(details):
                 start = i + 1
+    # AN OUTAGE IS NOT AN ATTEMPT (task b490fabc, 2026-09-11): a run that
+    # died on an unreachable model endpoint never reached a model, so it
+    # must not spend the step's budget. Retries stay bounded by
+    # dispatch_guard's ceiling, and _engine_unreachable() stops dispatch
+    # while the engine is down.
     return sum(1 for h in rows[start:]
-               if h.action == ATTEMPT_ACTION and marker in h.details)
+               if h.action == ATTEMPT_ACTION and marker in h.details
+               and not _endpoint_outage(h.details))
 
 
 def red_test_ids(proof: str) -> list[str]:

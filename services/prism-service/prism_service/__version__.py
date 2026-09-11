@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.301"
+PRISM_VERSION = "7.13.302"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9204,4 +9204,25 @@ PRISM_VERSION_NOTES += (
     'was unreachable, with host and port) in place of crash/auth/truncated '
     'mid-turn. test_task_runner_engine_down_breaker.py pins it, red at '
     'ef2f9279 and at the tests-only commit after it. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.302: an attempt that never reached a model no longer spends the '
+    'stall budget (task b490fabc, second node). After 7.13.301 went live '
+    'and the engine came back, the task went pending to in_progress and the '
+    'runner re-blocked it 45 s later without one attempt: _stall_count still '
+    'counted the three draft_story attempts that died on the dead engine, '
+    'and its operator-reset boundary matches only blocked to in_progress. '
+    '_stall_count now skips an attempt whose proof carries the gateway error '
+    'shape (API Error with a code, then Cannot connect to host, Connection '
+    'refused or Name or service not known), through one shared '
+    '_endpoint_outage() helper that _failure_reason also uses. The match is '
+    'anchored on the API Error prefix, so a report that only mentions a '
+    'refused connection in its prose still counts. Retries stay bounded by '
+    'the dispatch_guard ceiling, and _engine_unreachable() stops dispatch '
+    'while the engine is down. The pending to in_progress reset is NOT '
+    'widened on purpose: flow_start and resume_actuator set in_progress on '
+    'their own, so that boundary is a separate decision. '
+    'test_stall_budget_ignores_outage_attempts.py, 4 tests, red at the '
+    'tests-only commit before this one. '
 )
