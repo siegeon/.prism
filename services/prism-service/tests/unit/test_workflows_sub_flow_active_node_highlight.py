@@ -11,6 +11,12 @@ That path holds CONDUCTOR step ids (review_previous_notes, draft_story),
 so on a sub-flow (ids loop, text-challenge) no node is ever on it and the
 whole layer dims -- the occupied node included.
 
+Scope addition, owner on the TOP-LEVEL canvas (same task): "if this is the
+active step with an agent on it, put the agent icon and the outline for it
+rather then the one with a sub agent please." draft_story held the task and
+the badge but drew with no outline; the bright outline sat on the PASSED
+review_previous_notes, and the agent marker rode the Steward bot wire.
+
 The PRISM SPA has NO JS test runner, so this is pinned by reading the real
 TS source. Every check runs on COMMENT-STRIPPED code, and blocks are cut by
 brace depth, never a fixed character window.
@@ -20,8 +26,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-_GRAPH = (Path(__file__).resolve().parent.parent.parent
-          / "prism_service/web/src/live/workflowGraph.ts")
+_WEB = Path(__file__).resolve().parent.parent.parent / "prism_service/web/src"
+_GRAPH = _WEB / "live/workflowGraph.ts"
+_PACKETS = _WEB / "live/packets.ts"
+_PAGE = _WEB / "pages/WorkflowsPage.tsx"
 
 
 def _code(src: str) -> str:
@@ -50,28 +58,44 @@ def _consts(block: str) -> dict[str, str]:
             for m in re.finditer(r"\bconst\s+(\w+)\s*=\s*([^;]+);", block)}
 
 
-def _draw_node() -> str:
-    return _block(_code(_GRAPH.read_text(encoding="utf-8")), "function drawNode(")
+def _graph() -> str:
+    return _code(_GRAPH.read_text(encoding="utf-8"))
 
 
-def _occupied_flags(consts: dict[str, str]) -> list[str]:
-    """Flags that REQUIRE the badge's own occupancy (`n.count > 0`) as a
-    conjunct. An `||` would let a node with no occupancy light up too, which
-    is the misfire of lighting every node of the sub-flow."""
-    return [name for name, rhs in consts.items()
-            if re.search(r"\bn\.count\s*>\s*0\b", rhs) and "||" not in rhs]
+def _fn(code: str, name: str) -> str:
+    assert f"function {name}(" in code, f"no function {name} in the source"
+    return _block(code, f"function {name}(")
+
+
+def _guard_of(code: str, call: str) -> str:
+    """The condition of the `if (...)` that directly governs `call`: the
+    nearest one before it, with no closing brace between its `)` and the
+    call (so an if-block that already closed never counts)."""
+    at = code.index(call)
+    start = code.rindex("if (", 0, at) + 3
+    depth = 0
+    for i in range(start, at):
+        depth += {"(": 1, ")": -1}.get(code[i], 0)
+        if depth == 0:
+            assert "}" not in code[i:at], f"{call!r} is outside its if-block"
+            return code[start + 1:i]
+    raise AssertionError(f"no closed if-guard before {call!r}")
 
 
 def test_occupied_node_is_not_dimmed_in_run_mode():
-    node = _draw_node()
+    code = _graph()
+    node = _fn(code, "drawNode")
     consts = _consts(node)
     # The badge is drawn from this occupancy; the lit card must use the same.
     assert re.search(r"if\s*\(\s*n\.count\s*>\s*0\s*&&\s*!active\s*\)\s*"
                      r"drawOccupancy\(", node), "the occupancy badge guard moved"
-    flags = _occupied_flags(consts)
-    assert flags, (
-        "drawNode names no occupied-node flag built on `n.count > 0` -- the "
-        "node that carries the badge cannot be told apart from an idle one")
+    # ONE decision names the lit node, and a node with no occupancy can
+    # never pass it (the misfire: every node of the sub-flow lit).
+    lit = _fn(code, "isOccupiedLit")
+    assert re.search(r"if\s*\([^;{]*n\.count\s*<=\s*0[^;{]*\)\s*return\s+false",
+                     lit), "isOccupiedLit does not require n.count > 0: %r" % lit
+    assert re.search(r"\brunMode\b", lit), "the lit rule is not scoped to run mode"
+    flags = ["occupiedLit"]
     run_dim = consts.get("runDim", "")
     # Idle nodes of the layer must STAY dimmed in run mode.
     assert "runMode" in run_dim and re.search(
@@ -94,11 +118,25 @@ def test_occupied_node_is_not_dimmed_in_run_mode():
     assert any(re.search(rf"\b{f}\b[^?:]*\?\s*activeStroke", s)
                for s in card for f in flags), (
         "the occupied node does not take the active accent border: %r" % card)
+
+
+def test_a_passed_step_never_outshines_the_live_one():
+    """Owner screenshot: the bright outline sat on the PASSED
+    review_previous_notes while the step the agent stood on had none. The
+    live node's border must be HEAVIER than a verdict border, and glow."""
+    node = _fn(_graph(), "drawNode")
     widths = [" ".join(m.group(1).split()) for m in
               re.finditer(r"ctx\.lineWidth\s*=\s*([^;]+);", node)]
-    assert any(re.search(rf"\b{f}\b[^?:]*\?\s*1\.5", w)
-               for w in widths for f in flags), (
-        "the occupied node border keeps the idle 1px width: %r" % widths)
+    card = [w for w in widths if "verdictLook" in w and "occupiedLit" in w]
+    assert card, "the card border width ignores the lit node: %r" % widths
+    live = re.search(r"\boccupiedLit\s*\?\s*([\d.]+)", card[0])
+    passed = re.search(r"\bverdictLook\s*\?\s*([\d.]+)", card[0])
+    assert live and passed and float(live.group(1)) > float(passed.group(1)), (
+        "a PASSED border is as heavy as the live one: %r" % card[0])
+    glow = re.search(r"ctx\.shadowBlur\s*=\s*[1-9]", node)
+    assert glow, "the live node has no glow"
+    assert "occupiedLit" in _guard_of(node, glow.group(0)), (
+        "the glow is not scoped to the lit node")
 
 
 def test_the_run_still_foregrounds_a_layer_its_path_names():
@@ -106,18 +144,57 @@ def test_the_run_still_foregrounds_a_layer_its_path_names():
     steps (other tasks). Lighting every occupied step there would undo run
     mode (task ce471e06). So the exemption applies only on a layer that the
     run's path names no node of -- decided once per frame in drawWorkflows
-    and handed to drawNode."""
-    code = _code(_GRAPH.read_text(encoding="utf-8"))
+    -- plus the run's OWN step (the next test)."""
+    code = _graph()
     frame = _block(code, "export function drawWorkflows(")
     layer = [name for name, rhs in _consts(frame).items()
              if re.search(r"g\.nodes\.some\(", rhs) and "traversedPath" in rhs]
     assert layer, "drawWorkflows never asks if the path names this layer"
-    call = frame[frame.index("drawNode("):]
-    assert re.search(rf"\b{layer[0]}\b", call[:call.index(";")]), (
-        "the layer answer is computed but never handed to drawNode")
-    node = _draw_node()
-    params = re.findall(r"(\w+)\s*(?::|=)", node[:node.index("{")])
-    flags = _occupied_flags(_consts(node))
-    assert any(re.search(rf"!\s*{p}\b", _consts(node)[f])
-               for f in flags for p in params if p not in ("active", "n")), (
-        "the occupied-node flag ignores whether the path names this layer")
+    assert re.search(rf"isOccupiedLit\([^;]*\b{layer[0]}\b", frame), (
+        "the layer answer is computed but never used to pick the lit node")
+    lit = _fn(code, "isOccupiedLit")
+    assert re.search(r"return\s*!\s*\w+\s*\|\|\s*n\.id\s*===", lit), (
+        "on a layer the path names, every occupied step would light up: %r" % lit)
+
+
+def test_the_runs_own_step_is_lit_on_the_top_level_canvas():
+    """draft_story held the task (badge 1) and drew with no outline. The
+    run's own step is where its task stands NOW -- task.workflow_step, with
+    the last traversed stop as the fallback -- and it lights when occupied."""
+    lit = _fn(_graph(), "isOccupiedLit")
+    tip = [name for name, rhs in _consts(lit).items()
+           if "currentStep" in rhs
+           and re.search(r"traversedPath\[[^\]]*length\s*-\s*1\s*\]", rhs)]
+    assert tip, "isOccupiedLit never resolves the run's own step: %r" % lit
+    assert re.search(rf"return\s*!\s*\w+\s*\|\|\s*n\.id\s*===\s*{tip[0]}\b", lit), (
+        "the run's own step is not the node that lights: %r" % lit)
+    page = _code(_PAGE.read_text(encoding="utf-8"))
+    assert re.search(r"currentStep\s*:[^;,}]*workflow_step", page), (
+        "WorkflowsPage never hands the run's task.workflow_step to RunView")
+
+
+def test_the_agent_marker_sits_on_the_lit_step_not_on_the_bot_wire():
+    """The owner reads the teal-ring marker as the agent. It rode the
+    Steward -> draft_story wire, so the agent read as the bot's. It is now
+    parked ON the lit step, and the bot wire into that step carries none."""
+    packets = _code(_PACKETS.read_text(encoding="utf-8"))
+    assert "export function drawMarkerHead(" in packets, (
+        "the marker head is not a shared primitive -- a second look would drift")
+    assert "drawMarkerHead(" in _fn(packets, "drawPackets"), (
+        "drawPackets no longer paints its head with the shared primitive")
+    code = _graph()
+    node = _fn(code, "drawNode")
+    assert "drawMarkerHead(" in node, "the lit step carries no agent marker"
+    assert "occupiedLit" in _guard_of(node, "drawMarkerHead("), (
+        "the agent marker is not scoped to the lit step")
+    frame = _block(code, "export function drawWorkflows(")
+    consts = _consts(frame)
+    lit_set = [k for k, v in consts.items() if "isOccupiedLit(" in v]
+    assert lit_set, "drawWorkflows never collects the lit nodes"
+    shown = [k for k, v in consts.items() if "g.packets.filter(" in v
+             and "bot:" in v and re.search(rf"{lit_set[0]}\.has\(\s*p\.target", v)]
+    assert shown, "bot-wire markers into the lit step are still drawn"
+    assert re.search(rf"drawPackets\(\s*ctx\s*,\s*{shown[0]}\b", frame), (
+        "the filtered markers are computed but never the ones drawn")
+    assert re.search(rf"drawNode\([^;]*\b{lit_set[0]}\.has\(\s*n\.id\s*\)", frame), (
+        "drawNode is not told which node is lit")
