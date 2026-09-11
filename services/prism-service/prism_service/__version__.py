@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.302"
+PRISM_VERSION = "7.13.303"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9225,4 +9225,25 @@ PRISM_VERSION_NOTES += (
     'their own, so that boundary is a separate decision. '
     'test_stall_budget_ignores_outage_attempts.py, 4 tests, red at the '
     'tests-only commit before this one. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.303: a live session driver keeps its step against the daemon '
+    '(task ad38e421). dispatch.after_step hands every advancing report on '
+    'an agent step to _drive_now, which calls task_runner._run_one_step at '
+    'once, and that path never asked _foreign_driver_on -- only '
+    'eligible_tasks did. A session that drives through conductor_work holds '
+    'no ClaimService lease, so nothing stopped it: on 2026-09-11 the daemon '
+    'dispatched draft_story on task 4d86db87 in the same second a session '
+    'report advanced it, and the local model replaced that session 8-AC '
+    'story in plan_doc within 2 s. _run_one_step now refuses at its top, '
+    'before flow_start, whenever _foreign_driver_on names another live '
+    'driver -- one chokepoint for _drive_now, on_started and every sweep. '
+    'after_step and on_started ask the same question synchronously through '
+    'dispatch._live_driver, because both return before the handoff thread '
+    'runs and the caller must be able to see who holds the step. The runner '
+    'cannot lock itself out: _foreign_driver_on ignores its own beats and '
+    'any beat past HEARTBEAT_WINDOW_S, and reads only that one task id. '
+    'test_handoff_respects_a_live_session_driver.py, 7 tests, red at the '
+    'tests-only commit before this one (3 failed, 4 passed). '
 )

@@ -1746,6 +1746,25 @@ def _run_one_step(project: str, task_id: str) -> dict:
     from prism_service.project_context import get_project
     from prism_service.services import task_workspace
 
+    # A LIVE FOREIGN DRIVER KEEPS THE STEP (task ad38e421). This is the ONE
+    # chokepoint every route reaches -- dispatch._drive_now, dispatch.
+    # on_started and the sweep -- so the refusal belongs here, not at each
+    # caller. eligible_tasks already asks this question, but neither handoff
+    # route passes through it: on 2026-09-11 the daemon took draft_story from
+    # a session driving task 4d86db87 in the same second its report advanced,
+    # and the local model replaced that session's story. The claim lease
+    # below cannot answer it either, because a session driving through
+    # conductor_work never takes one. _foreign_driver_on ignores this seat's
+    # own beats and any beat past HEARTBEAT_WINDOW_S, so the runner cannot
+    # lock itself out, and it reads only THIS task_id's beat. Asked BEFORE
+    # flow_start, which would otherwise mark the task in_progress on behalf
+    # of a drive that must not start.
+    foreign = _foreign_driver_on(project, task_id)
+    if foreign:
+        return {"ok": False, "task_id": task_id,
+                "reason": f"already driving: live driver {foreign!r} holds "
+                          "the step"}
+
     task_svc = get_project(project).task_svc
     started = flow.flow_start(
         flow.Ident(task_id=task_id, session_id=SEAT_ID), project=project)

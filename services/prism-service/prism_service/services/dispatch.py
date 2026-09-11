@@ -92,6 +92,26 @@ def _drive_now(task_id: str, project: str) -> None:
                      name=f"handoff-{task_id[:8]}").start()
 
 
+def _live_driver(task_id: str, project: str) -> str:
+    """The name of a DIFFERENT driver whose beat is live on `task_id`, or "".
+
+    Asked SYNCHRONOUSLY, before the handoff starts its thread: after_step
+    returns to its caller before that thread runs, so a check made inside
+    the thread could never tell the caller who holds the step. The driver
+    seat refuses the same way at its own entry (task ad38e421); this half is
+    what makes the answer visible in the handoff's own result.
+
+    Never raises: a handoff that cannot read the beat store falls back to
+    today's behaviour rather than silently stopping every drive.
+    """
+    try:
+        from prism_service.services import task_runner
+
+        return task_runner._foreign_driver_on(project, task_id)
+    except Exception:
+        return ""
+
+
 def unblocked_by(task_id: str, task_svc) -> list[str]:
     """Ids of the PENDING tasks that `task_id` completing has just freed.
 
@@ -222,6 +242,15 @@ def after_step(task_id: str, project: str, advanced: bool = True) -> dict:
 
     step = str(getattr(t, "workflow_step", "") or "")
     if getattr(t, "status", "") == "in_progress" and _is_agent_step(step):
+        # SOMEBODY IS ALREADY ON THIS STEP (task ad38e421). A report that
+        # advances a task is usually a driver reporting its OWN step, and
+        # that driver keeps the next one: handing it to a daemon seat the
+        # same second is what replaced a session story on 4d86db87.
+        held_by = _live_driver(task_id, project)
+        if held_by:
+            return {"kind": "conductor.handoff", "from": task_id,
+                    "started": [], "step": step, "drove": False,
+                    "reason": f"live driver {held_by!r} holds the step"}
         _drive_now(task_id, project)
         return {"kind": "conductor.handoff", "from": task_id,
                 "started": [task_id], "step": step, "drove": True}
@@ -246,6 +275,13 @@ def on_started(task_id: str, project: str) -> dict:
         return {"kind": "conductor.handoff", "from": task_id, "started": []}
     if t is None or getattr(t, "status", "") != "in_progress":
         return {"kind": "conductor.handoff", "from": task_id, "started": []}
+    # The same question after_step asks: a task can become startable while a
+    # session is already driving it, and the lease does not see that session.
+    held_by = _live_driver(task_id, project)
+    if held_by:
+        return {"kind": "conductor.handoff", "from": task_id, "started": [],
+                "drove": False,
+                "reason": f"live driver {held_by!r} holds the step"}
     _drive_now(task_id, project)
     return {"kind": "conductor.handoff", "from": task_id,
             "started": [task_id], "drove": True}
