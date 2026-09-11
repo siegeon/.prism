@@ -11,8 +11,8 @@
  */
 
 import { drawGrid } from "./grid";
-import { PALETTE, glyphFor } from "./palette";
-import { drawMarkerHead, drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
+import { AGENT_AT_WORK_GLYPH, PALETTE, glyphFor } from "./palette";
+import { drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
 import { pointAtFraction, polylineLength, wireKey, type Point } from "./wires";
 import {
   WireInteraction, drawEditableWire,
@@ -593,12 +593,6 @@ export function drawWorkflows(
   const litIds = new Set(g.nodes
     .filter((n) => isOccupiedLit(n, runView, pathNamesLayer))
     .map((n) => n.id));
-  // The agent marker is parked ON the lit step (drawNode). A marker still
-  // riding the bot wire into it read as the agent sitting on the Steward
-  // (owner, task 67a98810), so that wire carries none. FSM transition
-  // markers (never from a bot) are untouched.
-  const shownPackets = g.packets.filter((p) => !(
-    p.source.startsWith("bot:") && litIds.has(p.target)));
 
   for (const wire of g.wires) {
     const selected = g.editor.selected === wire.key;
@@ -621,7 +615,7 @@ export function drawWorkflows(
       });
     }
   }
-  drawPackets(ctx, shownPackets, now);
+  drawPackets(ctx, g.packets, now);
   // Flow units ride only the one wire the currently active node actually
   // arrived on -- see drawFlowUnits for why that, and only that, counts as
   // "genuinely live" here.
@@ -801,10 +795,12 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   ctx.font = "12px ui-monospace, SFMono-Regular, monospace";
   ctx.textBaseline = "middle";
   if (occupiedLit) {
-    // The agent marker -- the SAME head a marker rides a wire with -- parked
-    // in the glyph slot: the agent is ON this step, not on its bot's wire
-    // (owner, task 67a98810: "put the agent icon and the outline for it").
-    drawMarkerHead(ctx, { x: x + 13, y: y + 10 });
+    // An agent is running on this step: its own mark, in the accent, in
+    // place of the persona glyph (owner, task 67a98810: "put the agent icon
+    // and the outline for it"). Idle steps and bots keep their persona.
+    ctx.font = "14px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = activeStroke;
+    ctx.fillText(AGENT_AT_WORK_GLYPH, x + 7, y + 10);
   } else {
     ctx.fillStyle = PALETTE.textLabel;
     ctx.fillText(n.glyph, x + 8, y + 10);

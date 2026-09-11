@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.299"
+PRISM_VERSION = "7.13.300"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9160,4 +9160,23 @@ PRISM_VERSION_NOTES += (
     'd67d998a and 625f914f), and test_layer_nodes_show_their_real_state.py '
     're-anchored for the extra !occupiedLit guard on verdictLook. Rendered '
     'before and after in a headless browser against the live API. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.300: the step where an agent works carries an agent glyph, and the '
+    'occupancy packets move as before (task 67a98810, correction to '
+    '7.13.299). 7.13.299 misread the teal ring on the Steward wire as an agent '
+    'icon: it is the ambient occupancy PACKET, so parking that marker on the '
+    'node and hiding it on the bot wire changed motion nobody asked to change. '
+    'Both are reverted: live/packets.ts is back to its 7.13.298 content and '
+    'drawWorkflows draws g.packets again. The owner saw no inference symbol '
+    'anywhere, which was true, and the ▼ on a card is the Steward persona '
+    'from glyphFor. palette.ts now defines AGENT_AT_WORK_GLYPH (✦) beside '
+    'glyphFor, a silhouette shared with none of ▣ ◇ ▼ ▲ ● ◆ ▶ ■, and the lit '
+    'step (isOccupiedLit, unchanged) draws it in the accent in place of its '
+    'persona glyph. Idle steps and bots keep their persona glyph; the outline, '
+    'glow and dimming rules of 7.13.299 are unchanged, so a PASSED step still '
+    'never carries the live outline. '
+    'test_the_lit_step_carries_an_agent_glyph_not_only_its_persona replaces '
+    'the marker test, red at 2d4855cc. '
 )

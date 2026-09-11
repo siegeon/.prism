@@ -78,6 +78,15 @@ export function glyphFor(kind: "task" | "subtask" | "session", role?: string | n
   return "●"; // ● dev / unknown agent
 }
 
+/** The agent-at-work mark (task 67a98810): drawn on a /workflows step card
+ * in place of its persona glyph while an agent is actually running there.
+ * glyphFor answers WHO owns a step (▼ steward, ▲ verifier, ● dev); this
+ * answers IS INFERENCE RUNNING HERE NOW. The owner saw no such symbol
+ * anywhere and read the persona ▼ as it. A four-point star shares no
+ * silhouette with ▣ ◇ ▼ ▲ ● or the canvas's ◆ ▶ ■ -- the same test the
+ * steward's ▼ had to pass against ▣ above. */
+export const AGENT_AT_WORK_GLYPH = "✦";
+
 /** Round 2, piece 3 (node state while working): the five states a card
  * can be in, and the ONE place their chrome maps to color. Red stays
  * reserved for "stalled" here and here only — the round1 critic's exact
