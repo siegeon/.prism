@@ -1117,9 +1117,22 @@ def test_conductor_instance_badge_shows_task_state_never_build_test_language():
 
     # The top run badge renders the conductor summary instead of the
     # build/test sentence when the conductor workflow is selected.
-    badge = page[page.index('{(workflowRun || workflowRunError) && ('):page.index('{selectedHistoryRun && (')]
-    assert 'isStateMachineWorkflow && workflowRun\n                ? conductorRunSummary(workflowRun)' in badge
-    assert 'isStateMachineWorkflow && workflowRun ? conductorRunTone(workflowRun)' in badge
+    #
+    # SUPERSEDED slice boundary (task: move page-level chrome off the
+    # canvas, owner reproduced live 2026-09-10 on "Build and test" -- the
+    # badge used to be one `absolute left-4 top-4` box immediately
+    # followed by `{selectedHistoryRun && (`; the run-identity content now
+    # renders inside a real-DOM header row, so `{selectedHistoryRun && (`
+    # next matches a FAR LATER occurrence (the historical-overlay curtain,
+    # still inside the canvas frame) and would slice in the whole header +
+    # canvas-open in between. The badge's own close is the reliable nearby
+    # boundary instead. Whitespace between tokens is matched with `\s+`
+    # rather than a literal indentation string, because indentation is an
+    # authoring detail, not the contract (lesson: e139295d -- assert the
+    # rendered content, never a fixed character window).
+    badge = page[page.index('{(workflowRun || workflowRunError) && ('):page.index('<div className="flex flex-wrap items-center justify-end gap-2">')]
+    assert re.search(r"isStateMachineWorkflow\s*&&\s*workflowRun\s*\?\s*conductorRunSummary\(workflowRun\)", badge)
+    assert "isStateMachineWorkflow && workflowRun ? conductorRunTone(workflowRun)" in badge
     # The validation sentence (build X / test Y) still renders unchanged for
     # every other workflow -- this is an ADDED branch, not a rewrite.
     assert "build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status}" in badge

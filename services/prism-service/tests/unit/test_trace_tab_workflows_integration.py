@@ -92,15 +92,26 @@ def test_ring_highlight_visibility():
 
 
 def test_layout_split_top_left_and_bottom_bar():
-    """AC-6: Layout must split: top-left title only, bottom bar for timeline/scrubber."""
+    """AC-6: Layout must split: run-identity chrome kept separate from the
+    bottom timeline/scrubber bar, never crammed into one box.
+
+    SUPERSEDED literal check (task: move page-level chrome off the canvas,
+    owner reproduced live 2026-09-10 -- an `absolute left-4 top-4` overlay
+    on the canvas could land on top of a node same as any other corner, so
+    the run-identity box no longer uses `left-4`/`top-4` positioning at
+    all; it now renders in real DOM flow in the page-level header above
+    `data-canvas-frame`, see test_workflows_page_live_tiers.py's
+    test_canvas_frame_excludes_page_level_chrome). The AC-6 invariant this
+    protects -- identity and timeline are two separate regions -- still
+    holds and is what this now checks directly."""
     workflows_path = _SERVICE_ROOT / "prism_service/web/src/pages/WorkflowsPage.tsx"
     content = workflows_path.read_text(encoding="utf-8")
 
-    # Top-left box should exist (absolute left-4 top-4)
-    assert "left-4" in content and "top-4" in content, "Top-left box not found"
+    # Run-identity box (workflowRun/workflowRunError summary) exists as
+    # its own region...
+    assert "conductorRunSummary(workflowRun)" in content, "Run-identity box not found"
 
-    # Bottom bar for timeline should exist
-    # Look for bottom positioning or a separate timeline/scrubber container
+    # ...separate from the bottom timeline/scrubber bar.
     assert ("bottom" in content and ("bar" in content or "timeline" in content.lower())) or \
            "SdlcProgress" in content, \
         "Bottom timeline bar not implemented"
