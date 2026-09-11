@@ -800,3 +800,82 @@ def test_canvas_frame_excludes_page_level_chrome():
             f"frame marker at {frame_idx} -- it must never be layered on top "
             f"of the graph"
         )
+
+
+# ---------------------------------------------------------------------------
+# occupied_node_trust: an occupied node must never draw a false elapsed
+# time / progress fill off a conductor task that is merely queued (owner,
+# live, 2026-09-10: "RUN 7760m 0s" -- 5.4 DAYS -- on task 0b5dd37c,
+# verified `pending`, never run) -- and two text lines painted at the same
+# canvas coordinates must never overlap (owner, same session: "ATTEMPT"
+# with another string overstruck on it, "the glyphs are garbled").
+# ---------------------------------------------------------------------------
+
+def test_conductor_run_genuinely_active_helper_exists_and_is_conservative():
+    """conductorRunGenuinelyActive must exist, default a run with NO
+    conductorTask (a real scripted WorkflowCore run) to trusted, and gate a
+    conductor task's synthesized "running" on gate-pending/refused or a
+    real working/driving activity state -- never on the mere presence of
+    runtime.status, which fetchConductorRunFromTask sets unconditionally
+    for every non-done task."""
+    src = _strip_comments(_read_page())
+    # conductorRunGenuinelyActive is a `function`, not a const arrow -- walk
+    # its own braces directly.
+    marker = "function conductorRunGenuinelyActive("
+    i = src.index(marker)
+    brace = src.index("{", i)
+    body = _walk_braces(src, brace)
+    assert "if (!conductorTask) return true;" in body, (
+        "a run with no conductorTask (a real scripted run) must default to trusted"
+    )
+    assert 'gateState === "pending"' in body and 'gateState === "failed"' in body
+    assert 'state === "working"' in body and 'state === "driving"' in body
+
+
+def test_active_progress_branches_require_genuinely_active():
+    """Both activeProgress branches (the flowRuns.progress-fed
+    state-machine branch and the generic runtime/p95 fallback) must gate
+    on the SAME genuinely-active check -- neither may fire off a
+    conductor task's synthesized runtime.status alone."""
+    src = _strip_comments(_read_page())
+    frame_marker = "const frame = (now: number) => {"
+    i = src.index(frame_marker)
+    brace = src.index("{", i)
+    frame_body = _walk_braces(src, brace)
+    assert "const genuinelyActive = conductorRunGenuinelyActive(workflowRun?.data.conductorTask);" in frame_body
+    assert re.search(
+        r'if \(isStateMachineWorkflow && runtime\?\.status === "running" && genuinelyActive && flowRuns\?\.progress\)',
+        frame_body,
+    ), "the state-machine activeProgress branch must require genuinelyActive"
+    assert re.search(
+        r'else if \(runtime\?\.status === "running" && genuinelyActive && runtime\.startedAt && selectedWorkflow\)',
+        frame_body,
+    ), "the generic runtime-fallback activeProgress branch must require genuinelyActive"
+
+
+def test_conductor_live_phase_requires_genuinely_active():
+    """The bottom SdlcProgress bar (conductorLivePhase) must not fill for
+    a merely-queued conductor task either -- same false-progress class as
+    the node's own elapsed clock (owner report: "IMPLEMENT TASKS · 72.73%
+    ... 322:33:45 ago" on a task that was not running)."""
+    src = _strip_comments(_read_page())
+    marker = "const conductorLivePhase = useMemo<PhaseProgress | null>(() => {"
+    i = src.index(marker)
+    brace = src.index("{", src.index("=>", i))
+    body = _walk_braces(src, brace)
+    assert "conductorRunGenuinelyActive(workflowRun.data.conductorTask)" in body
+
+
+def test_attempt_and_token_trend_lines_never_share_a_canvas_position():
+    """drawNode's ATTEMPT label and token-trend label used to both paint at
+    (x+10, y+58) unconditionally, overstriking each other into garbled text
+    whenever a node had both a retried dwell and a real token trend (the
+    common case). The token-trend line must move to a different y when the
+    attempts line is present."""
+    src = _read_graph()
+    body = _function_keyword_body(src, "drawNode")
+    assert "const attemptsLine = " in body, "attemptsLine must be computed once and reused by both labels"
+    # The token-trend fillText call must reference attemptsLine to pick its
+    # y-offset, not a bare y + 58 shared with the ATTEMPT label.
+    m = re.search(r"fitTokenTrend\(ctx, n\.tokenTrend, w - 20\), x \+ 10, y \+ \(attemptsLine \? \d+ : 58\)\)", body)
+    assert m, "the token-trend line must offset its y-position when attemptsLine is true"

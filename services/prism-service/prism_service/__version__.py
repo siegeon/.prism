@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.297"
+PRISM_VERSION = "7.13.298"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9090,4 +9090,46 @@ PRISM_VERSION_NOTES += (
     "rides ON the node via ActiveNodeProgress.taskTitle, shipped in "
     "7.13.296 and independently correct. Verified with a real "
     "`npm run build` (rc=0) and a live screenshot of Build and test."
+)
+
+PRISM_VERSION_NOTES += (
+    " | 7.13.298 two more defects found driving the deep link "
+    "/workflows?workflow=conductor&task=<id> on an occupied node (owner, "
+    "live, 2026-09-10). (A) FALSE ELAPSED TIME: the occupied node read "
+    "'RUN 7760m 0s' -- 5.4 DAYS -- for a task verified `pending`, never "
+    "run. Root cause: fetchConductorRunFromTask (lib/useWorkflowDef.ts) "
+    "sets a synthesized run's `runtime.status` to the literal 'running' "
+    "for EVERY non-done conductor task -- it only ever meant 'not "
+    "finished', never 'actively being worked right now' -- and both "
+    "activeProgress branches (the flowRuns.progress state-machine branch, "
+    "the generic runtime/p95 fallback) plus conductorLivePhase (the bottom "
+    "SdlcProgress bar, which showed the same false-progress family: "
+    "'IMPLEMENT TASKS - 72.73% - 322:33:45 ago' on a non-running task) all "
+    "trusted it unconditionally. New helper conductorRunGenuinelyActive "
+    "gates all three on the SAME genuine-occupancy signal every other "
+    "liveness surface on this page already uses (gate pending/refused, or "
+    "activity.state working/driving) -- a scripted (non-conductor) run has "
+    "no conductorTask at all and keeps trusting its own real runtime.status "
+    "as-is. An unknown/false elapsed time now renders as NOTHING, never a "
+    "number. (B) GARBLED OVERLAPPING TEXT: the node's own 'ATTEMPT N' label "
+    "and its token-trend label both painted at the identical canvas "
+    "position (x+10, y+58) whenever a node had both a retried dwell and a "
+    "real token trend (the common case) -- two strings overstruck, "
+    "unreadable. live/workflowGraph.ts drawNode now computes attemptsLine "
+    "once and offsets the token-trend line to y+70 when it is set. (C) "
+    "investigated, not code: the reported 'permanent tooltip' evidence was "
+    "captured before this session's OWN prior canvas-frame fix (7.13.297) "
+    "was live -- the 'white tooltip' is the run-identity box "
+    "(conductorRunSummary) and the 'dark tooltip' is the status/activity "
+    "strip, both already moved off the canvas into real header flow by "
+    "that fix; no separate tooltip-pinning code exists anywhere in this "
+    "file (the only `title=` usages are native HTML attributes, browser- "
+    "not app-controlled). Four new source-checkable tests pin (A)/(B): "
+    "test_conductor_run_genuinely_active_helper_exists_and_is_conservative, "
+    "test_active_progress_branches_require_genuinely_active, "
+    "test_conductor_live_phase_requires_genuinely_active, "
+    "test_attempt_and_token_trend_lines_never_share_a_canvas_position. "
+    "Full suite: 5295 passed, same 5 pre-existing failures (3x "
+    "test_brain_csharp_calls, 2x test_install_packaging_assets), 12 "
+    "skipped. Verified with a real `npm run build` (rc=0)."
 )

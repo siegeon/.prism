@@ -787,10 +787,19 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
 
   // Retried dispatches on the current dwell. Two failed attempts used to be
   // invisible on this board; the count is the run's own setback rows.
-  if (active?.attempts && active.attempts > 1) {
+  //
+  // This and the token-trend line below both used to paint at the SAME
+  // (x+10, y+58) -- a node that was both retried AND had a real token
+  // trend (the common case: a step with enough runs to trend usually has
+  // enough to have retried once) got two strings overstruck at one
+  // position, unreadable (owner, live, 2026-09-10: "ATTEMPT" with another
+  // string on top of it, "the glyphs are garbled"). `attemptsLine` bumps
+  // the token-trend row down one line rather than sharing it.
+  const attemptsLine = !!(active?.attempts && active.attempts > 1);
+  if (attemptsLine) {
     ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
     ctx.fillStyle = "#fcd34d";
-    ctx.fillText(`ATTEMPT ${active.attempts}`, x + 10, y + 58);
+    ctx.fillText(`ATTEMPT ${active!.attempts}`, x + 10, y + 58);
   }
 
   // The node's own measured multiplier + trailing token trend (task
@@ -800,7 +809,7 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   if (n.tokenTrend) {
     ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
     ctx.fillStyle = n.tokenTrend.indeterminate ? PALETTE.textLabel : PALETTE.teal;
-    ctx.fillText(fitTokenTrend(ctx, n.tokenTrend, w - 20), x + 10, y + 58);
+    ctx.fillText(fitTokenTrend(ctx, n.tokenTrend, w - 20), x + 10, y + (attemptsLine ? 70 : 58));
   }
 
   // A node someone is actively working carries WHICH TASK on this same

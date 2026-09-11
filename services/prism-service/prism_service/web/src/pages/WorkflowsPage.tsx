@@ -234,6 +234,33 @@ function conductorRunTone(run: WorkflowRun): string {
   return "border-[color:var(--accent-solid)]/60 text-[color:var(--text-secondary)]";
 }
 
+/** Is a conductor-synthesized run's `runtime.status === "running"` a claim
+ * worth trusting?
+ *
+ * fetchConductorRunFromTask (lib/useWorkflowDef.ts) sets `runtime.status`
+ * to the literal string "running" for EVERY non-done conductor task --
+ * there is no real WorkflowCore run behind one, so that field only ever
+ * meant "not finished yet", never "actively being worked right now". The
+ * canvas trusted it unconditionally and drew a RUN badge with a false
+ * elapsed time -- "RUN 7760m 0s" (5.4 DAYS) -- on task 0b5dd37c, which the
+ * owner verified live was `pending` and had never run (owner, live,
+ * 2026-09-10: "it is not a missing feature, it is the UI asserting
+ * something untrue"). The real signal is the SAME genuine-occupancy check
+ * every other liveness surface on this page already uses
+ * (conductorPillTone, conductorRowLiveness, liveRunning): a gate actually
+ * pending/refused, or the drive heartbeat's own working/driving state.
+ * Absent both, the task is merely queued/idle -- true, but not "running"
+ * -- and nothing here should draw a number that implies otherwise. A run
+ * with NO conductorTask at all (the scripted "validation" engine) has a
+ * REAL WorkflowCore runtime behind it, so its own runtime.status is
+ * trusted as-is. */
+function conductorRunGenuinelyActive(conductorTask?: WorkflowRun["data"]["conductorTask"]): boolean {
+  if (!conductorTask) return true;
+  if (conductorTask.gateState === "pending" || conductorTask.gateState === "failed") return true;
+  const state = (conductorTask.activity as { state?: string } | null | undefined)?.state;
+  return state === "working" || state === "driving";
+}
+
 type FailureEvidence = { location: string | null; lines: string[] };
 
 function failureEvidence(output?: string): FailureEvidence | null {
@@ -833,6 +860,9 @@ export default function WorkflowsPage() {
   // same tradeoff the canvas's own activeProgress already makes.
   const conductorLivePhase = useMemo<PhaseProgress | null>(() => {
     if (!isStateMachineWorkflow || !workflowRun?.runtime || workflowRun.status !== "Runnable") return null;
+    // A pending/never-touched conductor task must not fill this bar --
+    // see conductorRunGenuinelyActive's own docstring (task 0b5dd37c).
+    if (!conductorRunGenuinelyActive(workflowRun.data.conductorTask)) return null;
     // COUNTED UNITS ONLY. This value once grew off the wall clock and the
     // step's stored average duration -- a bar that filled because time
     // passed, not because work got done. The server counts the real units
@@ -1715,7 +1745,13 @@ export default function WorkflowsPage() {
       graphRef.current.step(dt, now);
       let activeProgress: ActiveNodeProgress | null = null;
       const runtime = workflowRun?.runtime;
-      if (isStateMachineWorkflow && runtime?.status === "running" && flowRuns?.progress) {
+      // See conductorRunGenuinelyActive's own docstring (task 0b5dd37c): a
+      // conductor task's synthesized runtime.status === "running" means
+      // only "not done yet", never "actually being worked right now" --
+      // computed once so neither branch below can draw a RUN badge/elapsed
+      // clock/progress fill off a merely-queued task.
+      const genuinelyActive = conductorRunGenuinelyActive(workflowRun?.data.conductorTask);
+      if (isStateMachineWorkflow && runtime?.status === "running" && genuinelyActive && flowRuns?.progress) {
         // Task 8fbd5cf0 oracle: "the occupied node carries its OWN progress
         // fill... progress fills against TRUE WALL TIME over that node's
         // OWN historical duration... never a fabricated percentage." The
@@ -1742,7 +1778,7 @@ export default function WorkflowsPage() {
           overrunRatio: ratio > 1 ? ratio : null,
           attempts: runTrace?.attempts ?? 1,
         };
-      } else if (runtime?.status === "running" && runtime.startedAt && selectedWorkflow) {
+      } else if (runtime?.status === "running" && genuinelyActive && runtime.startedAt && selectedWorkflow) {
         // A linked CHILD node (e.g. verify_green_state's "Build and test",
         // whose own steps are "build"/"test" from the external AOS engine)
         // never appears in selectedWorkflow.steps (the CONDUCTOR's own 10

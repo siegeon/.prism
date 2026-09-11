@@ -1812,8 +1812,18 @@ def test_the_occupied_node_reads_the_recorders_wall_time_not_a_clock():
     # The state-machine (conductor/bot-family) branch must come FIRST and
     # read flowRuns.progress -- the exact source conductorLivePhase already
     # uses for the bottom rail -- never Date.now()/p95/average_duration.
+    #
+    # SUPERSEDED literal condition (task: an occupied node must not draw a
+    # false elapsed time/progress off a merely-queued conductor task, owner
+    # reproduced live 2026-09-10: "RUN 7760m 0s" -- 5.4 DAYS -- on task
+    # 0b5dd37c, verified `pending` and never run). The condition gained a
+    # `&& genuinelyActive` guard (conductorRunGenuinelyActive) between the
+    # runtime-status check and flowRuns?.progress; the regex now tolerates
+    # that extra clause. The invariant this test protects -- state-machine
+    # branch first, reads the recorder's wall time, never a clock -- is
+    # unchanged and still checked below.
     m = re.search(
-        r"if \(isStateMachineWorkflow && runtime\?\.status === \"running\" && flowRuns\?\.progress\) \{(.*?)\n      \} else if",
+        r"if \(isStateMachineWorkflow && runtime\?\.status === \"running\" && genuinelyActive && flowRuns\?\.progress\) \{(.*?)\n      \} else if",
         frame_body, re.DOTALL,
     )
     assert m, "the state-machine branch of activeProgress must exist and run before the scripted-workflow fallback"
