@@ -2216,15 +2216,27 @@ def _mark_in_progress(task_svc, task, done: bool, session_id: str) -> None:
     """HONEST ACTIVITY: a task being driven by conductor_work is WORKING. Flip
     a pending/blocked task to in_progress (with the real session) so the tile's
     activity state reads 'working' and its live ETA/throughput indicator renders
-    instead of a frozen 'pending / —'. No-op when terminal or already moving."""
+    instead of a frozen 'pending / —'. No-op when terminal or already moving.
+
+    NEVER resurrects a GOVERNANCE park (task ab9166d5 incident,
+    2026-09-10): a task resume_actuator or dispatch_guard parked at a
+    dispatch ceiling must not be silently un-parked by the next
+    conductor_work peek -- see dispatch_guard.is_governance_park. Only an
+    explicit release() may lift one of these."""
     if task is None or done:
         return
-    if str(getattr(task, "status", "") or "") in ("pending", "blocked", ""):
-        try:
-            task_svc.update(getattr(task, "id", None),
-                            status="in_progress", session_id=session_id)
-        except Exception:
-            pass
+    status = str(getattr(task, "status", "") or "")
+    if status not in ("pending", "blocked", ""):
+        return
+    if status == "blocked":
+        from prism_service.services.dispatch_guard import is_governance_park
+        if is_governance_park(getattr(task, "blocked_reason", "") or ""):
+            return
+    try:
+        task_svc.update(getattr(task, "id", None),
+                        status="in_progress", session_id=session_id)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

@@ -430,6 +430,22 @@ def dispatch_once(project: str, task_id: str) -> dict:
         after_kill=_tr._last_outcome_was_a_kill(
             task_svc, task_id, job["step"]))
 
+    # THE CHOKEPOINT (task ab9166d5 incident, dispatch_guard.py): re-check,
+    # fresh, right before the GPU actually spends anything -- the claim
+    # above only proves no OTHER driver holds this task, it says nothing
+    # about whether this task is still supposed to be driven at all (a
+    # park can land between the stall recheck above and here). This is
+    # also the one place a REAL dispatch is counted, shared with
+    # task_runner, so the ceiling it enforces cannot disagree with what
+    # actually ran -- unlike this seat's own attempt/total-dispatch
+    # bookkeeping above, which only ever saw ITS OWN attempts.
+    from prism_service.services import dispatch_guard
+    ticket, refusal = dispatch_guard.try_begin(project, task_id, job["step"], SEAT)
+    if ticket is None:
+        if claim is not None:
+            claim.release(claim_id)
+        return _no_advance(refusal or "dispatch refused", step=job["step"])
+
     try:
         result = claude_cli.invoke(
             prompt, work_dir=work_dir, plugin_dir=work_dir,
@@ -438,10 +454,12 @@ def dispatch_once(project: str, task_id: str) -> dict:
             purpose=f"resume-actuator@{job['step']}#{task_id[:8]}",
             **budget)
     except Exception as exc:
+        dispatch_guard.end_dispatch(ticket)
         if claim is not None:
             claim.release(claim_id)
         return _no_advance(f"claude_cli invocation failed: {exc}",
                            step=job["step"])
+    dispatch_guard.end_dispatch(ticket)
 
     proof = (result.final_text() or "").strip()
     step_id = job["step"]

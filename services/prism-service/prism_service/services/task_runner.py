@@ -1823,6 +1823,22 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 f"fell back to the node's declared agentic middle over "
                 f"{len(facts)} gathered fact(s)")
     if not codified_proof and dispatched is None:
+        # THE CHOKEPOINT (task ab9166d5 incident, dispatch_guard.py):
+        # re-check, fresh, right before the GPU actually spends anything --
+        # the claim above only proves no OTHER driver holds this task, it
+        # says nothing about whether this task is still supposed to be
+        # driven at all (a park can land between eligibility and here).
+        # This is also the one place a REAL dispatch is counted, shared
+        # across task_runner and resume_actuator, so the ceiling it
+        # enforces cannot disagree with what actually ran.
+        from prism_service.services import dispatch_guard
+        ticket, refusal = dispatch_guard.try_begin(
+            project, task_id, job["step"], SEAT_ID)
+        if ticket is None:
+            if claim is not None:
+                claim.release(claim_id)
+            return {"ok": False, "task_id": task_id, "step": job["step"],
+                    "reason": refusal or "dispatch refused"}
         budget = _invoke_budget(
             job["step"], plan, narrow=bool(narrow_prompt),
             after_kill=_last_outcome_was_a_kill(
@@ -1835,10 +1851,12 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 purpose=f"task-runner@{job['step']}#{task_id[:8]}",
                 session_id=str(uuid.uuid4()), **budget)
         except Exception as exc:
+            dispatch_guard.end_dispatch(ticket)
             if claim is not None:
                 claim.release(claim_id)
             return {"ok": False, "task_id": task_id, "step": job["step"],
                     "reason": f"claude_cli invocation failed: {exc}"}
+        dispatch_guard.end_dispatch(ticket)
 
     # The run's OWN usage, straight off the `result` stream event that
     # claude_cli already parsed for us. This seat reports under a SEAT NAME,

@@ -95,8 +95,16 @@ def test_draft_story_dispatch_uses_declared_plan(monkeypatch):
     from prism_service.services import drive_heartbeat
     monkeypatch.setattr(drive_heartbeat, "record_heartbeat", lambda *a, **k: None)
 
+    # A REAL task, in_progress: dispatch_guard.try_begin (the shared
+    # chokepoint every real invoke now passes through) does its own
+    # independent task_svc.get() lookup ahead of the mocked flow_start
+    # above, so a fabricated id would be refused before invoke is ever
+    # reached.
+    real_task = task_svc.create(title="draft_story plan routing")
+    task_svc.update(real_task.id, status="in_progress")
+
     # Dispatch
-    result = ra.dispatch_once("prism", "test-task-id")
+    result = ra.dispatch_once("prism", real_task.id)
 
     # Verify the invoke received declared caps
     assert captured_kwargs.get("model") == "haiku", (
@@ -172,7 +180,12 @@ def test_unplanned_step_dispatch_uses_defaults(monkeypatch):
     from prism_service.services import drive_heartbeat
     monkeypatch.setattr(drive_heartbeat, "record_heartbeat", lambda *a, **k: None)
 
-    result = ra.dispatch_once("prism", "test-task-id")
+    # See test_draft_story_dispatch_uses_declared_plan: dispatch_guard's
+    # own task lookup needs a real, in_progress task.
+    real_task = task_svc.create(title="unplanned step defaults")
+    task_svc.update(real_task.id, status="in_progress")
+
+    result = ra.dispatch_once("prism", real_task.id)
 
     # Verify defaults are preserved
     assert captured_kwargs.get("max_turns") == _max_turns(), (
@@ -236,7 +249,12 @@ def test_both_planned_and_unplanned_get_timeout(monkeypatch):
 
         monkeypatch.setattr(drive_heartbeat, "record_heartbeat", lambda *a, **k: None)
 
-        result = ra.dispatch_once("prism", f"task-{step_name}")
+        # See test_draft_story_dispatch_uses_declared_plan: dispatch_guard's
+        # own task lookup needs a real, in_progress task.
+        real_task = task_svc.create(title=f"timeout check {step_name}")
+        task_svc.update(real_task.id, status="in_progress")
+
+        result = ra.dispatch_once("prism", real_task.id)
 
         timeout = captured_kwargs.get("timeout_s")
         assert timeout is not None, (

@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.294"
+PRISM_VERSION = "7.13.295"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -8995,4 +8995,37 @@ PRISM_VERSION_NOTES += (
     "declared ROUTES, never the step name. Two older assertions are "
     "retired in place with what superseded them; the budget invariant "
     "they protected is re-pinned directly."
+)
+PRISM_VERSION_NOTES += (
+    " | 7.13.295 dispatch_guard: a stopped task actually stops (task "
+    "ab9166d5 incident). Task ab9166d5 was parked blocked by "
+    "resume_actuator's own ceiling (12 of 12), yet fresh claude -p "
+    "children kept spawning for it for 6+ hours, GPU pinned 98 percent. "
+    "Root cause, measured live: task_runner and resume_actuator are two "
+    "independent dispatchers, and only resume_actuator counted its own "
+    "attempts -- including ones it later deferred because task_runner "
+    "already held the claim, counted before the claim check. "
+    "task_runner's real dispatches, the ones that actually ran the GPU "
+    "for up to 1800s each, were never counted by anyone. Separately, "
+    "flow_start's own mark_in_progress silently flipped ANY blocked task "
+    "back to in_progress the instant anything called conductor_work for "
+    "it, erasing a park before the next check ever ran. New module "
+    "dispatch_guard.py is the one chokepoint every real invoke now "
+    "passes through, wired into task_runner._run_one_step and "
+    "resume_actuator.dispatch_once right before claude_cli.invoke -- one "
+    "shared ceiling counted at the true dispatch moment, so it cannot "
+    "disagree with what actually ran. mark_in_progress (both copies, "
+    "api/conductor_flow.py and mcp/tools.py) now refuses to resurrect a "
+    "governance park. A reaper (process-scan by ppid plus cwd, no change "
+    "to the hot invoke path) kills any daemon-spawned claude -p child "
+    "whose task has left a driving state -- the fix for a child already "
+    "in flight when a park lands mid-step. A DispatchTicket re-beats "
+    "drive_heartbeat every 60s while a real invoke runs, closing the "
+    "visibility gap that hid this: neither existing heartbeat producer "
+    "can see an internal --no-session-persistence invoke, so a step past "
+    "180s read stalled on the Workflows canvas while it was actually "
+    "running. All decisions (refuse, park, reap) are written to the "
+    "task's own history, the existing Trace surface -- no new UI. Both "
+    "new seat-startup env vars default OFF: PRISM_DISPATCH_REAPER_INTERVAL "
+    "and PRISM_DISPATCH_CEILING (default 12)."
 )

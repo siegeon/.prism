@@ -656,6 +656,18 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.resume_actuator import start_resume_actuator
         start_resume_actuator()
 
+        # Task ab9166d5 incident (2026-09-10) — the reaper seat: a task
+        # parked mid-flight (blocked/done/cancelled while its own step
+        # agent was already running) left that `claude -p` child running
+        # to its full step budget, up to 1800s, with nothing that knew to
+        # stop it early. Kills any daemon-spawned `claude -p` child whose
+        # task has left a driving state; never touches a task that is
+        # genuinely in_progress. Own thread (same footprint as
+        # gate_adjudicator/task_runner); default OFF —
+        # PRISM_DISPATCH_REAPER_INTERVAL=<seconds> opts an environment in.
+        from prism_service.services.dispatch_guard import start_dispatch_reaper
+        start_dispatch_reaper()
+
         # Task dd1e8871 — the server-side, observed-activity heartbeat
         # producer: a SECOND, harness-guaranteed source onto the SAME
         # drive_heartbeats store the implement.js prompt text already

@@ -52,7 +52,7 @@ def _task():
     return types.SimpleNamespace(
         id="d5808cd1", title="A hand landed task still reaches the reap",
         description="The reap fires only from ship_worker.", oracle="",
-        tags=[])
+        tags=[], status="in_progress")
 
 
 # ----------------------------------------------------------------------

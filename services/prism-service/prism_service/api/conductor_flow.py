@@ -634,6 +634,15 @@ def _mark_in_progress(svc, task_id: str, session_id: str) -> None:
     done this (`mcp/tools.py:_mark_in_progress`); only this path did not.
 
     NEVER resurrects terminal work: only pending/blocked/unset flips.
+
+    NEVER resurrects a GOVERNANCE park either (task ab9166d5 incident,
+    2026-09-10): a task resume_actuator or dispatch_guard parked at a
+    dispatch ceiling used to be un-parked by the very next flow_start call
+    -- from any caller, including a fresh conductor_work peek -- before
+    dispatch_guard's own status check further down the call ever ran, so
+    the park never held. Only an explicit release() (a person saying "the
+    cause is fixed") may lift one of these; see
+    dispatch_guard.is_governance_park.
     """
     try:
         task = svc._task_svc.get(task_id)
@@ -641,8 +650,13 @@ def _mark_in_progress(svc, task_id: str, session_id: str) -> None:
         return
     if task is None:
         return
-    if str(getattr(task, "status", "") or "") not in ("pending", "blocked", ""):
+    status = str(getattr(task, "status", "") or "")
+    if status not in ("pending", "blocked", ""):
         return
+    if status == "blocked":
+        from prism_service.services.dispatch_guard import is_governance_park
+        if is_governance_park(getattr(task, "blocked_reason", "") or ""):
+            return
     try:
         svc._task_svc.update(task_id, status="in_progress",
                              session_id=session_id or None)

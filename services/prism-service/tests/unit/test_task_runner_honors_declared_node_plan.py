@@ -329,7 +329,19 @@ def _drive_once(monkeypatch, step, tmp_path, facts=None):
         return _Result()
 
     monkeypatch.setattr(claude_cli, "invoke", _fake_invoke)
-    task_runner._run_one_step("prism", "t-live")
+
+    # A REAL, in_progress task: dispatch_guard.try_begin (the shared
+    # chokepoint every real invoke now passes through) does its own
+    # independent task_svc.get() lookup ahead of the mocked flow_start
+    # above, so a fabricated id like the old "t-live" would be refused
+    # before invoke is ever reached.
+    from prism_service.project_context import get_project
+
+    task_svc = get_project("prism").task_svc
+    task = task_svc.create(title="declared node plan drive")
+    task_svc.update(task.id, status="in_progress")
+
+    task_runner._run_one_step("prism", task.id)
     return seen
 
 
