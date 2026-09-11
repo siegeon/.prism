@@ -13,7 +13,7 @@
 import { drawGrid } from "./grid";
 import { PALETTE, glyphFor } from "./palette";
 import { drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
-import { wireKey, type Point } from "./wires";
+import { pointAtFraction, polylineLength, wireKey, type Point } from "./wires";
 import {
   WireInteraction, drawEditableWire,
   type PortHit, type SegmentGrab, type WaypointHit, type WireEnd, type WireSurface,
@@ -583,6 +583,10 @@ export function drawWorkflows(
     }
   }
   drawPackets(ctx, g.packets, now);
+  // Flow units ride only the one wire the currently active node actually
+  // arrived on -- see drawFlowUnits for why that, and only that, counts as
+  // "genuinely live" here.
+  drawFlowUnits(ctx, g, now, activeProgress);
   for (const n of g.nodes) drawNode(
     ctx, n, n.id === selectedNodeId,
     activeProgress?.nodeId === n.id ? activeProgress : null,
@@ -604,6 +608,54 @@ function drawTransitionLabel(ctx: CanvasRenderingContext2D, label: string, at: P
   ctx.textBaseline = "middle";
   ctx.fillText(text, at.x, at.y);
   ctx.textAlign = "left";
+}
+
+/** Px/second a flow unit travels along a live edge -- Factorio-conveyor
+ * pacing, not a packet's slower ~1.2-1.8s single-traverse feel (packets.ts):
+ * this is a steady stream, several units on the wire at once, not one
+ * marker riding start to finish. */
+export const FLOW_UNIT_SPEED = 90;
+
+/** How many units sit on one live edge at a time -- enough to read as a
+ * conveyor belt, not a lonely dot. */
+const FLOW_UNITS_PER_EDGE = 4;
+const FLOW_UNIT_RADIUS = 2.5;
+
+/** Draws the small dots that read as work moving from the step that just
+ * finished into the step running now. This is the ONE FSM wire the active
+ * node actually arrived on (kind "token", ending at active.nodeId) -- never
+ * every wire flagged `live`, because occupancy-live and "the active node's
+ * own inbound edge" are different questions and only the second one is what
+ * a viewer needs to see moving right now.
+ *
+ * Position comes straight from `now`, the same rAF clock drawWorkflows
+ * already threads through every frame -- no extra timer, no state kept
+ * between calls. Drawn ONLY when `active` names a node: with no run in
+ * flight the caller never feeds one, so this returns immediately and paints
+ * nothing. That is the whole point of the ticket -- motion on an idle wire
+ * would make a real stall read as healthy. */
+function drawFlowUnits(
+  ctx: CanvasRenderingContext2D,
+  g: WorkflowGraph,
+  now: number,
+  active: ActiveNodeProgress | null,
+): void {
+  if (!active) return;
+  const wire = g.wires.find((w) => w.kind === "token" && w.to === active.nodeId);
+  if (!wire) return;
+  const pts = g.route(wire);
+  const edgeLength = polylineLength(pts);
+  if (edgeLength <= 0) return;
+
+  const phase = ((now * FLOW_UNIT_SPEED) / 1000) % edgeLength;
+  ctx.fillStyle = PALETTE.teal;
+  for (let i = 0; i < FLOW_UNITS_PER_EDGE; i++) {
+    const dist = (phase + (i * edgeLength) / FLOW_UNITS_PER_EDGE) % edgeLength;
+    const at = pointAtFraction(pts, dist / edgeLength);
+    ctx.beginPath();
+    ctx.arc(at.x, at.y, FLOW_UNIT_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null, runView: RunView | null = null): void {

@@ -11,6 +11,7 @@ import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/co
 import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict, type RunView } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
+import { relativeTime } from "@/lib/relativeTime";
 import Editor from "@monaco-editor/react";
 
 /** /workflows — the conductor's FSM and the bots that drive it, per project.
@@ -106,6 +107,19 @@ const REPLAY_MIN_STEP_MS = 1500;
 const REPLAY_MAX_STEP_MS = 5000;
 const REPLAY_MAX_GAP_MS = 1800;
 const RUN_RAIL_PILLS = 72;
+
+// task 0b5dd37c: "/workflows must feel like a game to watch ... a person
+// who opens the page sees which step is active, what moves between
+// steps, and the last three things that happened, within 5 seconds and
+// with no click." SETTLE_WINDOW_MS is the one-shot flourish window a
+// just-finished run/task gets before the board reads plain quiet again;
+// LiveTier is the single page-wide answer every surface below (the rail,
+// the directory dot, the ticker, the status line) reads instead of each
+// guessing "is this alive" on its own.
+export const SETTLE_WINDOW_MS = 6000;
+export type LiveTier = "running" | "settling" | "quiet" | "disconnected";
+const RECENT_EVENT_LIMIT = 3;
+type RecentEvent = { id: string; text: string; iso: string };
 
 type ReplayEvent = NonNullable<WorkflowRun["timeline"]>[number];
 
@@ -256,6 +270,64 @@ function failureMarkerLine(scriptSource: string, scriptPath: string | undefined,
   }
   const invocation = lines.findLastIndex((line) => /^\s*(?:exec\s+)?(?:uv|npm|pnpm|yarn|pytest|dotnet|python|node)\b/.test(line));
   return invocation >= 0 ? invocation + 1 : null;
+}
+
+/** Which real FSM step ids a given catalog entry occupies, so a managed
+ * task's own workflow_step can say whether THIS row is being worked right
+ * now. Pulled out of the old `conductorStepIds` useMemo (which only ever
+ * asked this about the SELECTED workflow) so the directory's live dot can
+ * ask the identical question about every row, never a second, drifting
+ * copy of the same resolution. See that memo's own history for why "land"
+ * and "reap" fall back to "green_gate" explicitly. */
+function conductorStepIdsFor(workflow: WorkflowCatalogEntry, allWorkflows: WorkflowCatalogEntry[]): Set<string> {
+  const hasChildren = allWorkflows.some((candidate) => candidate.parent_id === workflow.id);
+  if (hasChildren) return new Set(workflow.steps.map((step) => step.id));
+  const parentId = workflow.parent_id;
+  if (!parentId || parentId === "validation") return new Set<string>();
+  const parentCanvas = allWorkflows.find((candidate) => candidate.id === parentId);
+  const linkedStep = parentCanvas?.steps.find((step) => step.linked_workflow_id === workflow.id);
+  if (linkedStep) return new Set([linkedStep.id]);
+  if (workflow.id === "land" || workflow.id === "reap") return new Set(["green_gate"]);
+  return new Set<string>();
+}
+
+/** One page-wide presentation tier so the rail, the directory dot, the
+ * ticker and the status line all tell the same story instead of four
+ * surfaces each guessing "is this alive" on its own. `disconnected` wins
+ * first -- a lost feed must never paint as a plain quiet board. `settling`
+ * is a ONE-SHOT flourish window (SETTLE_WINDOW_MS) after a real
+ * running -> not-running edge: either watched live this page's own
+ * lifetime (the ref), or inferred from a fresh `endedAt` on first paint --
+ * the page opened moments after a run ended, before this page ever saw it
+ * running. Never a repeating timer: the settle window is retired by a
+ * single bounded setTimeout, not a tick that keeps firing regardless of
+ * whether anything real is happening. */
+function useLiveTier(connectionInterrupted: boolean, running: boolean, endedAt: string | null): LiveTier {
+  const settledAtRef = useRef<number | null>(null);
+  const wasRunningRef = useRef(running);
+  const [, forceRerender] = useState(0);
+
+  if (wasRunningRef.current && !running) settledAtRef.current = Date.now();
+  wasRunningRef.current = running;
+  if (running) settledAtRef.current = null;
+
+  const endedMs = endedAt ? Date.parse(endedAt) : NaN;
+  if (!running && settledAtRef.current == null && Number.isFinite(endedMs) && Date.now() - endedMs < SETTLE_WINDOW_MS) {
+    settledAtRef.current = endedMs;
+  }
+
+  useEffect(() => {
+    if (settledAtRef.current == null) return;
+    const remaining = SETTLE_WINDOW_MS - (Date.now() - settledAtRef.current);
+    if (remaining <= 0) return;
+    const id = window.setTimeout(() => forceRerender((n) => n + 1), remaining);
+    return () => window.clearTimeout(id);
+  });
+
+  if (connectionInterrupted) return "disconnected";
+  if (running) return "running";
+  if (settledAtRef.current != null && Date.now() - settledAtRef.current < SETTLE_WINDOW_MS) return "settling";
+  return "quiet";
 }
 
 function workflowForGraph(workflow: WorkflowCatalogEntry): WorkflowCatalogEntry {
@@ -684,6 +756,70 @@ export default function WorkflowsPage() {
   );
   const isStateMachineWorkflow = selectedWorkflowId !== "validation"
     && (hasChildWorkflows || !!selectedWorkflow?.parent_id);
+  // Real step ids the SELECTED canvas occupies -- moved up here, ahead of
+  // runPillTone/conductorPillTone below, so the live tier those tones read
+  // is derived before it's needed rather than after. Resolution stays
+  // INLINE (never delegated to conductorStepIdsFor below, which exists for
+  // every OTHER row's ambient liveness) so the parent lookup is always
+  // generic (workflows.find(w => w.id === parentId)), never a hardcoded
+  // "conductor" literal -- test_workflows_section_ui.py pins this shape.
+  const conductorStepIds = useMemo(() => {
+    if (hasChildWorkflows) {
+      // A top-level bot canvas (this workflow, whichever bot it turns out
+      // to be) -- occupy every one of ITS OWN real step ids.
+      return new Set((selectedWorkflow?.steps ?? []).map((step) => step.id));
+    }
+    const parentId = selectedWorkflow?.parent_id;
+    if (!parentId || parentId === "validation") return new Set<string>();
+    // A child behavior: resolve the ONE real step id on ITS PARENT canvas
+    // that links to it, via the same linked_workflow_id field a click on
+    // the parent canvas already reverses the other direction with (see
+    // handleCanvasClick below) -- never assume the parent is "conductor".
+    const parentCanvas = workflows.find((workflow) => workflow.id === parentId);
+    const linkedStep = parentCanvas?.steps.find(
+      (step) => step.linked_workflow_id === selectedWorkflowId,
+    );
+    if (linkedStep) return new Set([linkedStep.id]);
+    // "land"/"reap" are the documented exceptions with no linked_workflow_id
+    // of their own (api/workflows.py: green_gate is the FSM's structurally-
+    // terminal step, so neither terminal behavior has a step to hang the
+    // link on) -- mirrors that exact same hardcoded exception server-side.
+    if (selectedWorkflowId === "land" || selectedWorkflowId === "reap") {
+      return new Set(["green_gate"]);
+    }
+    return new Set<string>();
+  }, [selectedWorkflow, selectedWorkflowId, workflows, hasChildWorkflows]);
+  // Ambient, whole-board occupancy per catalog row -- NOT scoped to the
+  // selected canvas -- so the directory's live dot can answer "is this row
+  // being worked right now" for every row at every depth, from data the
+  // page already holds (conductorManaged, the same SSE-pushed source the
+  // rail reads). A row with no real step ids (a non-FSM/validation entry
+  // this page has no ambient data for) reads false, never a guess.
+  const conductorRowLiveness = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const workflow of workflows) {
+      const stepIds = conductorStepIdsFor(workflow, workflows);
+      map.set(workflow.id, stepIds.size > 0 && conductorManaged.some((task) =>
+        stepIds.has(task.workflow_step ?? "")
+        && (task.activity?.state === "working" || task.activity?.state === "driving")));
+    }
+    return map;
+  }, [workflows, conductorManaged]);
+  // The single page-wide LiveTier (task 0b5dd37c). "running" per the
+  // owner's own spec: the selected canvas's own run is runtime.running, OR
+  // a task it's driving right now shows working/driving activity -- never
+  // a wider "something, somewhere is running" (that would make every
+  // canvas read the same, which defeats "which step is active").
+  const liveRunning = workflowRun?.runtime?.status === "running"
+    || (isStateMachineWorkflow && conductorManaged.some((task) =>
+      conductorStepIds.has(task.workflow_step ?? "")
+      && (task.activity?.state === "working" || task.activity?.state === "driving")));
+  // `runtime.ended_at` doesn't exist on this codebase's WorkflowRun type --
+  // completeTime (scripted runs) / the last closed timeline entry
+  // (conductor-synthesized runs, which carry no completeTime) are the real
+  // fields that say the same thing.
+  const liveEndedAt = workflowRun?.completeTime ?? workflowRun?.timeline?.at(-1)?.endedAt ?? null;
+  const tier = useLiveTier(connectionInterrupted, liveRunning, liveEndedAt);
   // The conductor's live instance view (a task still in flight, not a
   // replay) reuses SdlcProgress -- the SAME segmented, legibly-labeled
   // "fill up the panel while it's active" bar TaskDetailPage/PlanView
@@ -781,6 +917,17 @@ export default function WorkflowsPage() {
     if (run.runtime?.status === "running" || !["Complete", "Terminated"].includes(run.status)) {
       return "bg-[color:var(--accent-solid)] animate-pulse";
     }
+    // The rightmost filled pill is the most recent run (see the "grow from
+    // the left" comment above) -- while the page-wide tier is settling on
+    // THAT run, it gets the one-shot verdict flourish instead of the plain
+    // static tone every other completed pill wears. Reuses Tailwind's own
+    // built-in `pulse` keyframe (opacity-only) at a bounded, non-repeating
+    // count, never a new animation.
+    const isMostRecent = pillIndex - historyOffset === visibleRunHistory.length - 1;
+    const withinSettleWindow = run.completeTime && Date.now() - Date.parse(run.completeTime) < SETTLE_WINDOW_MS;
+    if (tier === "settling" && isMostRecent && withinSettleWindow) {
+      return run.data.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]";
+    }
     if (run.status === "Terminated") return "bg-amber-300/60";
     if (run.data.passed) return "bg-emerald-400";
     return "bg-red-400";
@@ -788,54 +935,13 @@ export default function WorkflowsPage() {
   // The conductor's own rail: real tasks it is engaged with RIGHT NOW, per
   // useConductorState (the same live, SSE-pushed source LiveBar.tsx already
   // reads) -- never a WorkflowCore run, since conductor drives tasks through
-  // Python, not through AosWorkflows. Filtered to genuine FSM occupancy (a
-  // real step id on THIS canvas) so a legacy/orphaned workflow_step can't
-  // invent a pill. Oldest-updated first: the rail GROWS FROM THE LEFT, same
-  // as validation's (visibleRunHistory[index] above, no offset subtracted)
-  // -- filled pills start at index 0, empty capacity trails on the right.
-  //
-  // A CHILD behavior's own diagram uses SYNTHETIC step ids local to that
-  // diagram (green-gate-status: candidate_controls/reachability/.../status
-  // -- none of them ever equal a real task.workflow_step). So for a child,
-  // resolve the REAL WORKFLOW_STEPS id it services via the conductor
-  // canvas's own linked_workflow_id (the SAME field a click on the
-  // conductor canvas already reverses the other direction with, see
-  // handleCanvasClick below) -- "land" is the one child with no
-  // linked_workflow_id of its own (it nests via _CONDUCTOR_LINKED_
-  // BEHAVIOR_IDS directly, api/workflows.py, because green_gate is the
-  // FSM's structurally-terminal step), so it falls back to "green_gate"
-  // explicitly, same reasoning as that decision.
-  const conductorStepIds = useMemo(() => {
-    if (hasChildWorkflows) {
-      // A top-level bot canvas (this workflow, whichever bot it turns out
-      // to be) -- occupy every one of ITS OWN real step ids.
-      return new Set((selectedWorkflow?.steps ?? []).map((step) => step.id));
-    }
-    const parentId = selectedWorkflow?.parent_id;
-    if (!parentId || parentId === "validation") return new Set<string>();
-    // A child behavior: resolve the ONE real step id on ITS PARENT canvas
-    // that links to it, via the same linked_workflow_id field a click on
-    // the parent canvas already reverses the other direction with (see
-    // handleCanvasClick below) -- never assume the parent is "conductor".
-    const parentCanvas = workflows.find((workflow) => workflow.id === parentId);
-    const linkedStep = parentCanvas?.steps.find(
-      (step) => step.linked_workflow_id === selectedWorkflowId,
-    );
-    if (linkedStep) return new Set([linkedStep.id]);
-    // "land" is the one documented exception with no linked_workflow_id of
-    // its own (api/workflows.py: green_gate is the FSM's structurally-
-    // terminal step, so there is nowhere on the canvas to hang the link) --
-    // mirrors that exact same hardcoded exception on the backend, not a
-    // new one invented here.
-    // "reap" (task f97c196d) is the step AFTER land and carries the same
-    // exception for the same reason: green_gate is the FSM's structurally-
-    // terminal WORKFLOW_STEPS entry, so neither terminal behavior has a step
-    // to hang a linked_workflow_id on.
-    if (selectedWorkflowId === "land" || selectedWorkflowId === "reap") {
-      return new Set(["green_gate"]);
-    }
-    return new Set<string>();
-  }, [selectedWorkflow, selectedWorkflowId, workflows, hasChildWorkflows]);
+  // Python, not through AosWorkflows. Filtered to genuine FSM occupancy via
+  // `conductorStepIds` (computed above, alongside the live tier that reads
+  // the identical resolution -- see conductorStepIdsFor's own docstring for
+  // why "land"/"reap" fall back to "green_gate"). Oldest-updated first: the
+  // rail GROWS FROM THE LEFT, same as validation's (visibleRunHistory[index]
+  // above, no offset subtracted) -- filled pills start at index 0, empty
+  // capacity trails on the right.
   // managed_tasks() (useConductorState's own source) deliberately EXCLUDES
   // status=="done" -- the same doctrine that drops a finished task off the
   // /conductor board. That's correct for "who's currently engaged", but it
@@ -892,12 +998,16 @@ export default function WorkflowsPage() {
   // MEANS a task advanced -- a still board is honestly still, which is the
   // same contract the ambient occupancy motion already keeps.
   const prevStepsRef = useRef<Map<string, string>>(new Map());
+  // Live half of the recent-events ticker -- real transitions this page
+  // lifetime saw, newest first (finished-run/task history joins below).
+  const [transitionEvents, setTransitionEvents] = useState<RecentEvent[]>([]);
   useEffect(() => {
     if (!isStateMachineWorkflow) return;
     // While an instance overlay is open the canvas is replaying THAT task,
     // so board-wide traffic would mix two stories on one screen.
     if (viewingInstanceRef.current) return;
     const seen = prevStepsRef.current;
+    const observed: RecentEvent[] = [];
     for (const task of conductorManaged) {
       const step = task.workflow_step ?? "";
       if (!step) continue;
@@ -909,10 +1019,19 @@ export default function WorkflowsPage() {
       // A rewind (green_gate -> implement_tasks) has no forward token wire;
       // sendTransition returns false and nothing is drawn, which is correct.
       graphRef.current.sendTransition(prev, step);
+      // Same real edge, into the ticker (task 0b5dd37c).
+      observed.push({
+        id: `${task.id}:${step}:${Date.now()}`,
+        text: `${task.title} moved to ${step.replace(/_/g, " ")}`,
+        iso: new Date().toISOString(),
+      });
     }
     // Forget tasks that left the board so the map cannot grow forever.
     const liveIds = new Set(conductorManaged.map((t) => t.id));
     for (const id of [...seen.keys()]) if (!liveIds.has(id)) seen.delete(id);
+    if (observed.length) {
+      setTransitionEvents((prev) => [...observed, ...prev].slice(0, 10));
+    }
   }, [isStateMachineWorkflow, conductorManaged]);
 
   const conductorRailTasks = isStateMachineWorkflow
@@ -926,7 +1045,15 @@ export default function WorkflowsPage() {
       // Stranded: the SDLC passed but the code never reached origin/main --
       // amber, the SAME tone validation's own rail already uses for
       // "Terminated" (a run that finished without a clean pass/fail verdict).
-      return strandedTaskIds.has(task.id) ? "bg-amber-300/60" : "bg-emerald-400";
+      if (strandedTaskIds.has(task.id)) return "bg-amber-300/60";
+      // The rightmost pill (rail grows from the left, same as validation's)
+      // is the most-recently-updated task -- while the page-wide tier is
+      // settling on it, one verdict flourish instead of the plain tone.
+      const isMostRecent = conductorRailTasks[conductorRailTasks.length - 1]?.id === task.id;
+      const withinSettleWindow = !!task.updated_at && Date.now() - Date.parse(task.updated_at) < SETTLE_WINDOW_MS;
+      return tier === "settling" && isMostRecent && withinSettleWindow
+        ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]"
+        : "bg-emerald-400";
     }
     if (task.gate_state === "pending" || task.gate_state === "failed") return "bg-fuchsia-400/70 animate-pulse";
     if (task.activity?.state === "working" || task.activity?.state === "driving") return "bg-[color:var(--accent-solid)] animate-pulse";
@@ -965,6 +1092,83 @@ export default function WorkflowsPage() {
           onClick: run ? () => replayHistoricalRun(run) : undefined,
         };
       });
+
+  // The selected canvas's own most recent finished verdict -- the status
+  // line's "last run" copy, the settling flourish's pass/fail colour, and
+  // the directory dot's static quiet-tone all read this ONE answer rather
+  // than three separate re-derivations of "what happened last."
+  const lastOutcome = useMemo<{ name: string; passed: boolean; endedAtIso: string } | null>(() => {
+    if (isStateMachineWorkflow) {
+      const mostRecentDone = [...doneConductorTasks]
+        .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0];
+      if (!mostRecentDone?.updated_at) return null;
+      return {
+        name: mostRecentDone.title,
+        passed: !strandedTaskIds.has(mostRecentDone.id),
+        endedAtIso: mostRecentDone.updated_at,
+      };
+    }
+    const mostRecentRun = workflowRunHistory.find((run) => ["Complete", "Terminated"].includes(run.status));
+    if (!mostRecentRun) return null;
+    return {
+      name: selectedWorkflow?.name ?? "Workflow",
+      passed: mostRecentRun.status === "Complete" && mostRecentRun.data.passed,
+      endedAtIso: mostRecentRun.completeTime ?? mostRecentRun.createTime,
+    };
+  }, [isStateMachineWorkflow, doneConductorTasks, strandedTaskIds, workflowRunHistory, selectedWorkflow]);
+
+  // "The last three things that happened" (task 0b5dd37c): live-observed
+  // step transitions (transitionEvents, populated above off the exact
+  // edges the token graph itself draws) merged with finished-task/
+  // finished-run history already on the page -- never a fabricated entry,
+  // and capped at RECENT_EVENT_LIMIT by real recency, newest first.
+  const recentEvents = useMemo<RecentEvent[]>(() => {
+    const events: RecentEvent[] = [...transitionEvents];
+    if (isStateMachineWorkflow) {
+      for (const task of doneConductorTasks) {
+        if (!task.updated_at) continue;
+        events.push({
+          id: `done:${task.id}`,
+          text: `${task.title} finished${strandedTaskIds.has(task.id) ? " · not yet on origin/main" : ""}`,
+          iso: task.updated_at,
+        });
+      }
+    } else {
+      for (const run of workflowRunHistory.filter((run) => ["Complete", "Terminated"].includes(run.status))) {
+        events.push({
+          id: `run:${run.id}`,
+          text: `${selectedWorkflow?.name ?? "Workflow"} ${run.status === "Terminated" ? "stopped" : run.data.passed ? "passed" : "failed"}`,
+          iso: run.completeTime ?? run.createTime,
+        });
+      }
+    }
+    return events
+      .sort((a, b) => Date.parse(b.iso) - Date.parse(a.iso))
+      .slice(0, RECENT_EVENT_LIMIT);
+  }, [transitionEvents, isStateMachineWorkflow, doneConductorTasks, strandedTaskIds, workflowRunHistory, selectedWorkflow]);
+
+  // Exact quiet-tier copy (task 0b5dd37c, pinned verbatim): a board with
+  // nothing in flight must read CALM, never frozen and never alarming.
+  // A block-bodied memo (not a bare ternary) on purpose: it gives the quiet
+  // copy its OWN tight scope, holding nothing but calm strings -- never the
+  // motion classes/alarm words other branches of this page legitimately
+  // carry elsewhere.
+  const statusLineText = useMemo(() => {
+    if (tier === "disconnected") return "Connection interrupted";
+    if (tier === "running") {
+      const step = workflowRun?.runtime?.currentStep
+        ?? conductorRailTasks.find((task) =>
+          task.activity?.state === "working" || task.activity?.state === "driving")?.workflow_step
+        ?? "";
+      return `running · ${step.replace(/_/g, " ") || "working"}`;
+    }
+    if (tier === "settling" && lastOutcome
+      && liveEndedAt && Date.now() - Date.parse(liveEndedAt) < SETTLE_WINDOW_MS) {
+      return `${lastOutcome.name} ${lastOutcome.passed ? "passed" : "failed"} · just now`;
+    }
+    if (!lastOutcome) return "No runs yet";
+    return `No run in progress · last run ${relativeTime(lastOutcome.endedAtIso)} · ${lastOutcome.passed ? "passed" : "failed"}`;
+  }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks]);
 
   const refreshRunHistory = useCallback(() => {
     if (!selectedWorkflow || selectedWorkflow.id !== "validation") {
@@ -1624,13 +1828,33 @@ export default function WorkflowsPage() {
           label: replayLabel,
           tone,
         };
+      } else if (tier === "settling" && lastOutcome) {
+        // Task 0b5dd37c item 5: the last node sweeps ONCE in pass/fail
+        // colour while the board settles -- the canvas's own share of the
+        // same one-shot flourish the rail/dot/status-line render in DOM.
+        // `__complete__` is the terminal node every workflow's graph
+        // carries (WorkflowGraph.setDef), so this applies regardless of
+        // which canvas is selected.
+        activeProgress = {
+          nodeId: "__complete__",
+          progress: 1,
+          indeterminate: false,
+          elapsedSeconds: 0,
+          averageSeconds: null,
+          // Re-checked against the real window here too, not just via
+          // `tier` -- the sweep must stop the instant SETTLE_WINDOW_MS
+          // elapses, never ride a stale render.
+          tone: liveEndedAt && Date.now() - Date.parse(liveEndedAt) < SETTLE_WINDOW_MS
+            ? (lastOutcome.passed ? "success" : "failure")
+            : undefined,
+        };
       }
       drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, effectiveNodeVerdicts, runView);
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts, runView, runTrace, runMotionSeconds]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts, runView, runTrace, runMotionSeconds, tier, lastOutcome, liveEndedAt]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
@@ -1690,6 +1914,12 @@ export default function WorkflowsPage() {
     const grandchildren = workflows.filter((c) => c.parent_id === child.id);
     const grandSelected = grandchildren.some((g) => g.id === selectedWorkflowId);
     const open = expandedDirectoryIds.has(child.id) || grandSelected;
+    // Same ambient live signal as the top-level directory row above -- see
+    // its own comment; this is the nested-row half of the SAME contract,
+    // reached via renderBranch's own recursion at every depth.
+    const dotLive = (child.id === selectedWorkflowId && workflowRun?.runtime?.status === "running")
+      || conductorRowLiveness.get(child.id);
+    const dotVerdict = child.id === selectedWorkflowId ? lastOutcome : null;
     return [
       <button
         type="button"
@@ -1755,13 +1985,27 @@ export default function WorkflowsPage() {
           <span aria-hidden="true" className="w-4 shrink-0 pt-px text-center text-[color:var(--nav-text)] opacity-50">⠿</span>
         )}
         <span className="flex-1">{child.name}</span>
+        {(dotLive || dotVerdict) && (
+          <span
+            data-live-dot
+            aria-hidden="true"
+            title={dotLive ? `${child.name} · running now` : `${dotVerdict?.name} · last run ${dotVerdict?.passed ? "passed" : "failed"}`}
+            className={`h-1.5 w-1.5 shrink-0 self-center rounded-full ${
+              (child.id === selectedWorkflowId && workflowRun?.runtime?.status === "running") || conductorRowLiveness.get(child.id)
+                ? "bg-[color:var(--accent-solid)] animate-pulse"
+                : tier === "settling" && dotVerdict && Date.now() - Date.parse(dotVerdict.endedAtIso) < SETTLE_WINDOW_MS
+                  ? (dotVerdict.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]")
+                  : (dotVerdict?.passed ? "bg-emerald-400" : "bg-red-400")
+            }`}
+          />
+        )}
         <span className="shrink-0 pt-px font-mono opacity-70">{child.steps.length}</span>
       </button>,
       ...(open ? renderBranch(child.id, grandchildren, depth + 1) : []),
     ];
   }), [orderedChildren, workflows, expandedDirectoryIds, selectedWorkflowId,
        draggedChildId, dragOverChildId, selectWorkflow, reorderChild,
-       toggleDirectoryExpanded]);
+       toggleDirectoryExpanded, conductorRowLiveness, workflowRun, tier, lastOutcome]);
 
   const persist = useCallback(() => {
     writeJson(positionsKey(project), graphRef.current.serializeOverrides());
@@ -2065,6 +2309,14 @@ export default function WorkflowsPage() {
                 const selected = workflow.id === selectedWorkflowId;
                 const childSelected = children.some((child) => child.id === selectedWorkflowId);
                 const expanded = expandedDirectoryIds.has(workflow.id) || childSelected;
+                // Ambient live signal for THIS row (task 0b5dd37c): a viewer
+                // scanning the collapsed directory sees which entry is alive
+                // without opening anything. `dotVerdict` (the selected row's
+                // own last outcome) only exists for the one row this page has
+                // fresh data for; every other row gets `running` or nothing.
+                const dotLive = (workflow.id === selectedWorkflowId && workflowRun?.runtime?.status === "running")
+                  || conductorRowLiveness.get(workflow.id);
+                const dotVerdict = workflow.id === selectedWorkflowId ? lastOutcome : null;
                 return (
                   <div key={workflow.id}>
                     {workflow.tier === 0 && (
@@ -2102,6 +2354,20 @@ export default function WorkflowsPage() {
                         <span className="w-4 shrink-0" aria-hidden="true" />
                       )}
                       <span className="flex-1">{workflow.name}</span>
+                      {(dotLive || dotVerdict) && (
+                        <span
+                          data-live-dot
+                          aria-hidden="true"
+                          title={dotLive ? `${workflow.name} · running now` : `${dotVerdict?.name} · last run ${dotVerdict?.passed ? "passed" : "failed"}`}
+                          className={`h-1.5 w-1.5 shrink-0 self-center rounded-full ${
+                            (workflow.id === selectedWorkflowId && workflowRun?.runtime?.status === "running") || conductorRowLiveness.get(workflow.id)
+                              ? "bg-[color:var(--accent-solid)] animate-pulse"
+                              : tier === "settling" && dotVerdict && Date.now() - Date.parse(dotVerdict.endedAtIso) < SETTLE_WINDOW_MS
+                                ? (dotVerdict.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]")
+                                : (dotVerdict?.passed ? "bg-emerald-400" : "bg-red-400")
+                          }`}
+                        />
+                      )}
                       <span className="text-2xs font-mono opacity-70">{workflow.steps.length}</span>
                     </button>
                     {expanded && renderBranch(workflow.id, children, 1)}
@@ -2385,6 +2651,28 @@ export default function WorkflowsPage() {
             {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
           </button>
         ) : null}
+        {/* Task 0b5dd37c: "sees which step is active, what moves between
+            steps, and the last three things that happened, within 5
+            seconds and with no click." ALWAYS rendered -- unlike the
+            top-left run-instance box above, which only appears once a run
+            exists -- so a quiet board still says so plainly instead of
+            showing nothing. */}
+        <div
+          className="absolute right-4 top-14 z-20 max-w-[300px] border border-[color:var(--border-strong)] bg-[color:var(--surface-1)] px-3 py-2 text-xs text-[color:var(--text-secondary)]"
+        >
+          <div>{statusLineText}</div>
+          <div aria-label="Recent workflow activity" className="mt-2 flex flex-col gap-1 text-[color:var(--text-muted)]">
+            {recentEvents.length === 0 ? (
+              <div>No recent activity</div>
+            ) : (
+              recentEvents.map((event) => (
+                <div key={event.id} className="truncate" title={event.text}>
+                  {event.text} · {relativeTime(event.iso)} ago
+                </div>
+              ))
+            )}
+          </div>
+        </div>
         <div className="absolute bottom-0 left-0 right-0 z-10 h-10 border-t border-white/10 bg-[#08090b]">
           <div
             role="progressbar"
