@@ -751,3 +751,52 @@ def test_flow_recent_event_limit_equals_3():
     assert re.search(r"RECENT_EVENT_LIMIT\s*=\s*3\b", src), (
         "RECENT_EVENT_LIMIT must be defined and equal 3"
     )
+
+
+# ---------------------------------------------------------------------------
+# canvas_frame: page-level chrome never paints OVER the canvas (owner, live,
+# reproduced 2026-09-10 on "Build and test" -- real run history laid
+# __complete__ top-right, and the brain-activity pill plus the status/
+# activity ticker both landed on top of that node, slicing its own
+# "Workflow finished" caption in half). Node positions are data-dependent
+# and the canvas is pannable, so no on-canvas corner is ever safe; the fix
+# is page-level chrome living in real DOM flow ABOVE a `data-canvas-frame`
+# marker div, never layered on top of it. This is a source-POSITION check
+# (this file's whole convention, see the module docstring) rather than a
+# full JSX-scope parse: the page is authored top-to-bottom with no
+# component that would reorder these renders, so "chrome text appears
+# before the marker, `<canvas` appears after it" is a faithful proxy for
+# "chrome renders as an earlier sibling, never nested inside the canvas
+# frame." A regression that moves chrome back inside the frame (or removes
+# the marker) fails loudly here rather than waiting for a live screenshot.
+# ---------------------------------------------------------------------------
+
+def test_canvas_frame_marker_present():
+    src = _read_page()
+    assert "data-canvas-frame" in src, (
+        "WorkflowsPage.tsx must mark the div that wraps ONLY the canvas and "
+        "its own edge-anchored bars with data-canvas-frame, so page-level "
+        "chrome can be checked as living outside it"
+    )
+
+
+def test_canvas_frame_excludes_page_level_chrome():
+    src = _strip_comments(_read_page())
+    frame_idx = src.index("data-canvas-frame")
+    canvas_idx = src.index("<canvas")
+    assert canvas_idx > frame_idx, "<canvas> must render inside the data-canvas-frame div"
+    for marker, label in [
+        ('aria-label="Recent workflow activity"', "the recent-activity ticker"),
+        ('aria-label="Workflow breadcrumb"', "the breadcrumb nav"),
+        ('href="/consolidation"', "the brain-activity link"),
+        ("Show catalog stats", "the catalog-stats toggle"),
+        ("statusLineText", "the status line"),
+    ]:
+        idx = src.find(marker)
+        assert idx != -1, f"{label} ({marker!r}) not found in source"
+        assert idx < frame_idx, (
+            f"{label} ({marker!r}) must render BEFORE data-canvas-frame opens "
+            f"(as page-level chrome above the canvas), found at {idx} vs. "
+            f"frame marker at {frame_idx} -- it must never be layered on top "
+            f"of the graph"
+        )

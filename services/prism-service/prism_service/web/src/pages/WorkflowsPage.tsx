@@ -2502,135 +2502,152 @@ export default function WorkflowsPage() {
           onKeyDown={onDirectoryResizeKey}
           className={`relative z-10 w-1.5 shrink-0 border-l border-[color:var(--nav-line)] bg-[color:var(--surface-1)] outline-none ${directoryOpen ? "cursor-col-resize hover:bg-[color:var(--accent-solid)] focus:bg-[color:var(--accent-solid)]" : ""}`}
         />
-        <div className="relative min-w-0 flex-1">
-        {/* ONE column anchors every top-right chrome element (breadcrumb/
-            run controls, the catalog-stats toggle, the status+activity
-            strip) so they stack in flow and can never occupy the same
-            corner at once -- previously three independently `absolute`-
-            positioned pieces (this row at right-4/top-4, "Show catalog
-            stats" at right-3/top-3, the status ticker at right-4/top-14)
-            sat on top of one another (owner: "impossible to look at ...
-            look at all the overlaps and confusion"). */}
-        <div className="absolute right-4 top-4 z-20 flex flex-col items-end gap-2 max-w-[380px]">
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {workflowPath.length > 0 && (
-            <nav
-              aria-label="Workflow breadcrumb"
-              className="flex items-center gap-2 border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider"
-            >
-              {workflowPath.map((entry, index) => (
-                <span key={`${entry.workflowId}:${index}`} className="flex items-center gap-2">
-                  <button type="button" onClick={() => returnToWorkflowOrigin(index)}
-                    className="text-[color:var(--accent-solid)] hover:underline">
-                    {workflows.find((workflow) => workflow.id === entry.workflowId)?.name ?? entry.workflowId}
-                  </button>
-                  <span aria-hidden="true" className="text-[color:var(--text-muted)]">›</span>
-                </span>
-              ))}
-              <span aria-current="page" className="text-[color:var(--text-primary)]">{selectedWorkflow?.name}</span>
-            </nav>
-          )}
-          {selectedWorkflow?.id === "validation" && brainActivity && (
-            <a
-              href="/consolidation"
-              title="Validation emits deterministic evidence; Brain indexing and reflective learning run asynchronously"
-              className="border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:border-[color:var(--accent-solid)] hover:text-[color:var(--text-primary)]"
-            >
-              After validation · Brain {brainActivity.stale ? "syncing" : "current"} · Learning {brainActivity.inFlight > 0 ? `${brainActivity.inFlight} active` : brainActivity.queueDepth > 0 ? `${brainActivity.queueDepth} queued` : brainActivity.running ? "idle" : "off"} ↗
-            </a>
-          )}
-          {testStep !== null && selectedWorkflow && (
-            <span className="rounded bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-secondary)]">
-              {replayStoppedAt
-                ? `Replay stopped · ${replayStoppedAt.step.replace(/_/g, " ")} ${replayStoppedAt.status.replace(/_/g, " ")}`
-                : testStep < 0
-                ? testModeRef.current === "replay" ? `Replay ${replaySpeed}× · start` : "Testing · start"
-                : testStep < selectedWorkflow.steps.length
-                  ? `${testModeRef.current === "replay" ? `Replay ${replaySpeed}×` : "Testing"} · ${selectedWorkflow.steps[testStep].id.replace(/_/g, " ")}`
-                : testModeRef.current === "replay" ? `Replay ${replaySpeed}× · complete` : "Flow complete"}
-            </span>
-          )}
-          {selectedHistoryRun ? (
-            <>
+        <div className="flex min-w-0 flex-1 flex-col">
+        {/* Page-level chrome (run identity, breadcrumb/controls, status+
+            activity) lives in REAL DOM FLOW above the canvas, never
+            layered over it. It used to be one `absolute` column
+            consolidated onto the canvas corner (7.13.296) -- that stopped
+            the pieces colliding WITH EACH OTHER, but they still sat on top
+            of the GRAPH: on "Build and test" (real run history,
+            __complete__ laid out top-right by default) the brain-activity
+            pill and the status/ticker panel covered the Complete node's
+            corner and sliced its own "Workflow finished" caption in half
+            (owner, live, reproduced 2026-09-10). Node positions are
+            data-dependent and the canvas is pannable, so no on-canvas
+            corner is ever safe -- the fix is to never paint chrome over
+            the canvas at all, trading canvas height for guaranteed
+            readability. Per-node live detail (which task, how long) still
+            rides ON the node itself via ActiveNodeProgress.taskTitle --
+            see live/workflowGraph.ts -- that half of the owner's "belongs
+            to the node" directive was already correct and is unchanged. */}
+        <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-4 py-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {(workflowRun || workflowRunError) && (
+              <div className={`${conductorLivePhase ? "w-[420px]" : "max-w-[620px]"} border bg-[color:var(--surface-2)] px-3 py-2 text-xs ${
+                workflowRunError ? "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
+                : isStateMachineWorkflow && workflowRun ? conductorRunTone(workflowRun)
+                : workflowRun?.status === "Complete" ? (workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300")
+                : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
+              }`}>
+                <div>
+                  {workflowRunError || (isStateMachineWorkflow && workflowRun
+                    ? conductorRunSummary(workflowRun)
+                    : workflowRun?.status === "Complete"
+                      ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
+                      : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {workflowPath.length > 0 && (
+              <nav
+                aria-label="Workflow breadcrumb"
+                className="flex items-center gap-2 border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider"
+              >
+                {workflowPath.map((entry, index) => (
+                  <span key={`${entry.workflowId}:${index}`} className="flex items-center gap-2">
+                    <button type="button" onClick={() => returnToWorkflowOrigin(index)}
+                      className="text-[color:var(--accent-solid)] hover:underline">
+                      {workflows.find((workflow) => workflow.id === entry.workflowId)?.name ?? entry.workflowId}
+                    </button>
+                    <span aria-hidden="true" className="text-[color:var(--text-muted)]">›</span>
+                  </span>
+                ))}
+                <span aria-current="page" className="text-[color:var(--text-primary)]">{selectedWorkflow?.name}</span>
+              </nav>
+            )}
+            {selectedWorkflow?.id === "validation" && brainActivity && (
+              <a
+                href="/consolidation"
+                title="Validation emits deterministic evidence; Brain indexing and reflective learning run asynchronously"
+                className="border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:border-[color:var(--accent-solid)] hover:text-[color:var(--text-primary)]"
+              >
+                After validation · Brain {brainActivity.stale ? "syncing" : "current"} · Learning {brainActivity.inFlight > 0 ? `${brainActivity.inFlight} active` : brainActivity.queueDepth > 0 ? `${brainActivity.queueDepth} queued` : brainActivity.running ? "idle" : "off"} ↗
+              </a>
+            )}
+            {testStep !== null && selectedWorkflow && (
+              <span className="rounded bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-secondary)]">
+                {replayStoppedAt
+                  ? `Replay stopped · ${replayStoppedAt.step.replace(/_/g, " ")} ${replayStoppedAt.status.replace(/_/g, " ")}`
+                  : testStep < 0
+                  ? testModeRef.current === "replay" ? `Replay ${replaySpeed}× · start` : "Testing · start"
+                  : testStep < selectedWorkflow.steps.length
+                    ? `${testModeRef.current === "replay" ? `Replay ${replaySpeed}×` : "Testing"} · ${selectedWorkflow.steps[testStep].id.replace(/_/g, " ")}`
+                  : testModeRef.current === "replay" ? `Replay ${replaySpeed}× · complete` : "Flow complete"}
+              </span>
+            )}
+            {selectedHistoryRun ? (
+              <>
+                <button
+                  type="button"
+                  onClick={leaveHistoricalReplay}
+                  title="Historical run selected · click to return to live workflow"
+                  className="rounded border border-[color:var(--accent-solid)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--accent-solid)]"
+                >
+                  Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
+                </button>
+                {workflowRun?.data.conductorTask?.id && (
+                  <Link
+                    to={`/tasks/${workflowRun?.data.conductorTask?.id}`}
+                    aria-label="Open task detail"
+                    title="Open this task's own detail page"
+                    className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
+                  >
+                    ↗ Task
+                  </Link>
+                )}
+              </>
+            ) : selectedWorkflowId !== "conductor" && (
               <button
                 type="button"
-                onClick={leaveHistoricalReplay}
-                title="Historical run selected · click to return to live workflow"
-                className="rounded border border-[color:var(--accent-solid)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--accent-solid)]"
+                onClick={runScriptedWorkflow}
+                disabled={startingWorkflow}
+                title="Execute this project's typed scripted workflow"
+                className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
               >
-                Ran {new Date(selectedHistoryRun.createTime).toLocaleString()}
+                {startingWorkflow ? "Starting…" : "Run workflow"}
               </button>
-              {workflowRun?.data.conductorTask?.id && (
-                <Link
-                  to={`/tasks/${workflowRun?.data.conductorTask?.id}`}
-                  aria-label="Open task detail"
-                  title="Open this task's own detail page"
-                  className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
-                >
-                  ↗ Task
-                </Link>
-              )}
-            </>
-          ) : selectedWorkflowId !== "conductor" && (
-            <button
-              type="button"
-              onClick={runScriptedWorkflow}
-              disabled={startingWorkflow}
-              title="Execute this project's typed scripted workflow"
-              className="rounded border border-[color:var(--border-strong)] bg-[color:var(--surface-2)] px-3 py-2 text-2xs uppercase tracking-wider text-[color:var(--text-primary)] hover:border-[color:var(--accent-solid)]"
-            >
-              {startingWorkflow ? "Starting…" : "Run workflow"}
-            </button>
-          )}
+            )}
+            {runTrace && (
+              <button
+                type="button"
+                onClick={() => setCatalogStatsOpen((open) => !open)}
+                className="rounded border border-[color:var(--border-default)] bg-[color:var(--surface-2)] px-2 py-1 text-2xs uppercase tracking-wide text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
+              >
+                {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
+              </button>
+            )}
+          </div>
         </div>
-        {runTrace && (
-          <button
-            type="button"
-            onClick={() => setCatalogStatsOpen((open) => !open)}
-            className="rounded border border-white/15 bg-[#08090b]/90 px-2 py-1 text-2xs uppercase tracking-wide text-[color:var(--text-muted)] hover:text-white"
-          >
-            {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
-          </button>
-        )}
         {/* Task 0b5dd37c: "sees which step is active, what moves between
             steps, and the last three things that happened, within 5
             seconds and with no click." ALWAYS rendered -- unlike the
-            top-left run-instance box below, which only appears once a run
-            exists -- so a quiet board still says so plainly instead of
-            showing nothing. Stacked here, in flow under the header row,
-            instead of a separately floating panel that used to land right
-            on top of it. */}
-        <div className="w-full border border-[color:var(--border-strong)] bg-[color:var(--surface-1)] px-3 py-2 text-xs text-[color:var(--text-secondary)]">
+            run-identity box above, which only appears once a run exists --
+            so a quiet board still says so plainly instead of showing
+            nothing. Its own full-width row under the header, never over
+            the canvas. */}
+        <div className="border-b border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-4 py-2 text-xs text-[color:var(--text-secondary)]">
           <div>{statusLineText}</div>
-          <div aria-label="Recent workflow activity" className="mt-2 flex flex-col gap-1 text-[color:var(--text-muted)]">
+          <div aria-label="Recent workflow activity" className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[color:var(--text-muted)]">
             {recentEvents.length === 0 ? (
               <div>No recent activity</div>
             ) : (
               recentEvents.map((event) => (
-                <div key={event.id} className="line-clamp-2" title={event.text}>
+                <div key={event.id} className="max-w-[320px] line-clamp-2" title={event.text}>
                   {event.text} · {relativeTime(event.iso)} ago
                 </div>
               ))
             )}
           </div>
         </div>
-        </div>
-        {(workflowRun || workflowRunError) && (
-          <div className={`absolute left-4 top-4 z-20 ${conductorLivePhase ? "w-[420px]" : "max-w-[620px]"} border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
-            workflowRunError ? "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
-            : isStateMachineWorkflow && workflowRun ? conductorRunTone(workflowRun)
-            : workflowRun?.status === "Complete" ? (workflowRun.data.passed ? "border-emerald-500/60 text-emerald-300" : "border-red-500/60 text-red-300")
-            : "border-[color:var(--border-strong)] text-[color:var(--text-secondary)]"
-          }`}>
-            <div>
-              {workflowRunError || (isStateMachineWorkflow && workflowRun
-                ? conductorRunSummary(workflowRun)
-                : workflowRun?.status === "Complete"
-                  ? `${selectedWorkflow?.name ?? "Workflow"} ${workflowRun.data.passed ? "passed" : "failed"} · build ${workflowRun.data.build?.status} · test ${workflowRun.data.tests?.status} · select a step for results`
-                  : `Run ${workflowRun?.id.slice(0, 8)} · ${workflowRun?.runtime?.status === "running" ? "running" : "queued"} · ${workflowRun?.runtime?.currentStep || "waiting"}`)}
-            </div>
-          </div>
-        )}
+        {/* CANVAS FRAME: past this point, only the canvas itself and the
+            edge-anchored bars that are genuinely part of ITS OWN chrome
+            (progress rail, replay curtain, run-history pills, the
+            click-triggered node-detail drawer) render -- nothing
+            page-level/informational is layered on top of the graph, by
+            construction, because the header above already owns that. */}
+        <div data-canvas-frame className="relative min-w-0 flex-1">
         {/* AC-6: the timeline content (SdlcProgress for a live run, the
             speed control for a done-instance replay) lives in its OWN bottom
             bar, separate from the box above which now holds only the
@@ -2919,6 +2936,7 @@ export default function WorkflowsPage() {
             </div>
           </aside>
         )}
+        </div>
         </div>
       </div>
   );

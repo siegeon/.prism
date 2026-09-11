@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.296"
+PRISM_VERSION = "7.13.297"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9056,4 +9056,38 @@ PRISM_VERSION_NOTES += (
     "All 22 tests_workflows_page_live_tiers.py assertions still pass "
     "unmodified -- none of them pinned the panel's screen position. "
     "Verified with a real `npm run build` (rc=0)."
+)
+
+PRISM_VERSION_NOTES += (
+    " | 7.13.297 7.13.296's own consolidation was NOT the fix: it stopped "
+    "the page-level chrome pieces colliding WITH EACH OTHER, but the "
+    "shared column was still an absolute overlay ON TOP OF THE CANVAS, so "
+    "it just moved which thing got covered. Reproduced live on 'Build and "
+    "test' (real run history; __complete__ lays out top-right by default): "
+    "the brain-activity pill sat on the Complete node's corner, and the "
+    "status+activity panel covered the bottom of that same node, slicing "
+    "its own 'Workflow finished' caption in half horizontally. The idle "
+    "Conductor board used for 7.13.296's own before/after screenshots "
+    "never rendered any of this chrome, which is why it looked fixed and "
+    "was not. Node positions are data-dependent and the canvas is "
+    "pannable, so no on-canvas corner is ever safe -- there is no "
+    "'better spot' for a floating overlay. The real fix: ALL page-level "
+    "chrome (run identity, breadcrumb/controls, catalog-stats toggle, "
+    "status+activity strip) now renders in REAL DOM FLOW in a header "
+    "block ABOVE a new `data-canvas-frame` div, never layered over it -- "
+    "trading canvas height for guaranteed readability, per the owner's "
+    "own tradeoff call ('a smaller canvas that is fully readable beats a "
+    "larger one with content hidden under a panel'). Only genuinely "
+    "canvas-own chrome (the live-progress bar, the replay curtain, the "
+    "run-history pill rail, the click-triggered node-detail drawer) stays "
+    "inside the frame, edge-anchored as before. Two new source-checkable "
+    "tests pin the invariant directly (test_canvas_frame_marker_present, "
+    "test_canvas_frame_excludes_page_level_chrome): every page-level "
+    "chrome marker must appear BEFORE data-canvas-frame opens, and "
+    "<canvas> must render inside it. All 24 "
+    "test_workflows_page_live_tiers.py assertions pass (22 prior + 2 new). "
+    "Per-node live detail (which task, how long) is unchanged -- it still "
+    "rides ON the node via ActiveNodeProgress.taskTitle, shipped in "
+    "7.13.296 and independently correct. Verified with a real "
+    "`npm run build` (rc=0) and a live screenshot of Build and test."
 )
