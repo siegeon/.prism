@@ -136,6 +136,25 @@ def test_sweep_once_starts_nothing_while_the_engine_is_down(monkeypatch):
     assert tr.sweep_once() is None
 
 
+def test_the_resume_seat_dispatches_nothing_while_the_engine_is_down(
+        monkeypatch):
+    """resume_actuator is a SECOND dispatcher with its own eligibility, and
+    an open retry reaches dispatch_once without it. The runner's breaker
+    alone would leave this seat spending retries on the outage."""
+    from prism_service.services import resume_actuator as ra
+    from prism_service.services import resume_attempts_data as rad
+    from prism_service.services import task_runner as tr
+
+    monkeypatch.setattr(tr, "_engine_unreachable", lambda: True)
+    monkeypatch.setattr(ra, "_scores_db_for", lambda p: ":memory:")
+    monkeypatch.setattr(ra, "_open_retry_task_id", lambda p: "t-open")
+    monkeypatch.setattr(ra, "_total_dispatches", lambda p, t: 0)
+    monkeypatch.setattr(rad, "attempt_count", lambda db, t: 0)
+    monkeypatch.setattr(ra, "dispatch_once", lambda *a, **k: pytest.fail(
+        "resume_actuator dispatched onto a dead engine"))
+    assert ra.sweep_once_for("any-project") is None
+
+
 # The proof all three of b490fabc's draft_story attempts returned.
 LIVE_PROOF = (
     "API Error: 500 litellm.InternalServerError: InternalServerError: "
