@@ -44,6 +44,12 @@ LOCAL_INFERENCE_BASE_URL = os.environ.get(
 LOCAL_INFERENCE_AUTH_TOKEN = os.environ.get(
     "PRISM_LOCAL_INFERENCE_AUTH_TOKEN", "local-inference",
 )
+# The engine's own health URL (llama.cpp answers /health, 503 while loading).
+# The proxy answers its liveness while the engine behind it is dead, so the
+# task runner probes both before it starts a step. Empty disables this probe.
+LOCAL_ENGINE_HEALTH_URL = os.environ.get(
+    "PRISM_LOCAL_ENGINE_HEALTH_URL", "http://127.0.0.1:8086/health",
+)
 
 # Governance
 GOVERNANCE_INTERVAL_SECONDS = int(os.environ.get("PRISM_GOVERNANCE_INTERVAL", "300"))  # 5 min

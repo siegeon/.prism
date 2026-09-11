@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.300"
+PRISM_VERSION = "7.13.301"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9179,4 +9179,29 @@ PRISM_VERSION_NOTES += (
     'never carries the live outline. '
     'test_the_lit_step_carries_an_agent_glyph_not_only_its_persona replaces '
     'the marker test, red at 2d4855cc. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.301: the task runner and the resume seat wait out a dead local '
+    'engine instead of blocking the task on it (found while playing task '
+    'b490fabc). With PRISM_INFERENCE_BACKEND=local the AOS inference '
+    'container died while its LiteLLM proxy stayed up, so every claude -p '
+    'step got Cannot connect to host inference.dev.internal:8080. The runner '
+    'spent all three draft_story attempts on the outage, then blocked the '
+    'task with a reason that blamed the step. _engine_unreachable() is the '
+    'sibling of _system_overloaded(), wired at the same two call sites '
+    '(eligible_tasks, sweep_once) and at the top of '
+    'resume_actuator.sweep_once_for, because that seat dispatches on its own '
+    'path and an open retry reaches dispatch_once past its own eligibility. '
+    'It probes the proxy liveness AND the engine health (new '
+    'PRISM_LOCAL_ENGINE_HEALTH_URL, default 127.0.0.1:8086/health, empty '
+    'disables it), because the proxy answers liveness with nothing behind '
+    'it. One verdict per 15 s, so a tick over many projects does not probe '
+    'once per project. The default claude backend never probes. While the '
+    'engine is down a tick starts nothing: no claim, no dispatch, no attempt '
+    'spent, so the task resumes by itself when the engine answers again. '
+    '_failure_reason also names an unreachable endpoint (the model endpoint '
+    'was unreachable, with host and port) in place of crash/auth/truncated '
+    'mid-turn. test_task_runner_engine_down_breaker.py pins it, red at '
+    'ef2f9279 and at the tests-only commit after it. '
 )

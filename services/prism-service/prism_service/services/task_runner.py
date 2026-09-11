@@ -822,6 +822,17 @@ def _failure_reason(result, budget_s: float, proof: str = "") -> str:
         ran = float(getattr(result, "duration_s", 0.0) or 0.0)
         return (f"exit={exit_code}, the step exceeded its {int(budget_s)}s "
                 f"budget: it was stopped after {ran:.1f}s without reporting")
+    # AN OUTAGE IS NOT A CRASH (task b490fabc, 2026-09-11). The proxy answered
+    # "Cannot connect to host inference.dev.internal:8080" because the engine
+    # behind it was gone, and this row read "crash/auth/truncated". Name the
+    # endpoint so a reader sees an outage the step could not fix.
+    import re
+    hit = re.search(r"Cannot connect to host ([^\s,]+)|Connection refused"
+                    r"|Name or service not known", proof or "")
+    if hit:
+        where = hit.group(1) or "the model endpoint"
+        return (f"exit={exit_code}, the model endpoint was unreachable "
+                f"({where}): the step never reached a model")
     if not (proof or "").strip():
         return f"exit={exit_code}, no usable output"
     return (f"exit={exit_code}, non-graceful failure "
@@ -1006,6 +1017,56 @@ def _system_overloaded() -> bool:
     return True
 
 
+# One verdict per window. sweep_once asks once per project, and a tick over
+# 130 projects must not become 260 HTTP probes.
+ENGINE_PROBE_TTL_S = 15.0
+_ENGINE_PROBE: dict = {"at": None, "down": False}
+
+
+def _http_ok(url: str, timeout_s: float = 2.0) -> bool:
+    """True when `url` answers 2xx within `timeout_s`. Never raises."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
+            return 200 <= int(resp.status) < 300
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+
+
+def _engine_unreachable() -> bool:
+    """True (and logged) while the LOCAL engine cannot answer a step.
+
+    Sibling of `_system_overloaded()`, at the same two call sites. Task
+    b490fabc, 2026-09-11: the AOS engine died while its proxy stayed up,
+    all three draft_story attempts failed on the outage, and the task was
+    blocked with a reason that blamed the step. So the tick starts nothing:
+    no claim, no attempt spent, and the task resumes when the engine does.
+    Probes the engine as well as the proxy, since the proxy answers
+    liveness with nothing behind it. The default backend never probes.
+    """
+    import time
+    from prism_service import config
+
+    if (config.INFERENCE_BACKEND or "").strip().lower() != "local":
+        return False
+    now = time.monotonic()
+    at = _ENGINE_PROBE.get("at")
+    if at is not None and now - at < ENGINE_PROBE_TTL_S:
+        return bool(_ENGINE_PROBE.get("down"))
+    probes = [(config.LOCAL_INFERENCE_BASE_URL or "").rstrip("/")
+              + "/health/liveliness"]
+    if (config.LOCAL_ENGINE_HEALTH_URL or "").strip():
+        probes.append(config.LOCAL_ENGINE_HEALTH_URL.strip())
+    dead = [u for u in probes if not _http_ok(u)]
+    _ENGINE_PROBE.update(at=now, down=bool(dead))
+    if dead:
+        _log(f"local engine unreachable: {', '.join(dead)} did not answer "
+             "-- starting no step until it does")
+    return bool(dead)
+
+
 def _log(msg: str) -> None:
     print(f"[task-runner] {msg}", file=sys.stderr, flush=True)
 
@@ -1153,6 +1214,8 @@ def eligible_tasks(project: str, limit: int = 1) -> list[str]:
     if _spend_ceiling_crossed():
         return []
     if _system_overloaded():
+        return []
+    if _engine_unreachable():
         return []
 
     out: list[str] = []
@@ -1986,6 +2049,8 @@ def sweep_once() -> Optional[dict]:
     if _spend_ceiling_crossed():
         return None
     if _system_overloaded():
+        return None
+    if _engine_unreachable():
         return None
 
     global _rr_index

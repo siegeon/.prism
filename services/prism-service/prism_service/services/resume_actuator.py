@@ -516,6 +516,13 @@ def sweep_once_for(project: str) -> Optional[dict]:
     is spent, or else dispatch one newly-stalled task. Returns None when
     nothing was eligible."""
     from prism_service.services import resume_attempts_data as rad
+    from prism_service.services import task_runner as _runner
+
+    # A DEAD ENGINE IS NOT A STALL (task b490fabc, 2026-09-11). This seat
+    # dispatches on its own path, so the runner's breaker does not cover it,
+    # and a retry here would spend budget and park the task on an outage.
+    if _runner._engine_unreachable():
+        return None
 
     scores_db = _scores_db_for(project)
     max_retries = _max_retries()
