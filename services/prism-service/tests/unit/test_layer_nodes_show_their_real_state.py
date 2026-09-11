@@ -151,7 +151,15 @@ def test_the_rail_a_ran_check_gets_is_full_width_and_still():
 def test_a_live_run_still_wins_over_a_verdict():
     src = _GRAPH.read_text(encoding="utf-8")
     node = _block(src, "function drawNode")
-    assert "const verdictLook = !active && verdict ? verdictPaint(verdict) : null;" in node
+    # RE-ANCHORED 2026-09-11 (task 67a98810): the exact one-line literal
+    # this pinned gained a second live-work guard, `!occupiedLit` -- the
+    # occupied node of a drilled sub-flow is live work too, so it also wins
+    # over a verdict. The invariant is unchanged: `!active` still gates the
+    # verdict paint, so a live run still wins.
+    import re
+    assert re.search(
+        r"const verdictLook = !active && (?:!\w+ && )*verdict \? "
+        r"verdictPaint\(verdict\) : null;", node)
 
 
 def test_a_refused_node_says_why_in_the_details_panel():

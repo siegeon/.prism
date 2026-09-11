@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.298"
+PRISM_VERSION = "7.13.299"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9132,4 +9132,32 @@ PRISM_VERSION_NOTES += (
     "Full suite: 5295 passed, same 5 pre-existing failures (3x "
     "test_brain_csharp_calls, 2x test_install_packaging_assets), 12 "
     "skipped. Verified with a real `npm run build` (rc=0)."
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.299: the occupied node of a drilled sub-workflow renders LIT in run '
+    'mode (task 67a98810). Owner, live on 7.13.296: in Conductor > Steward > '
+    'Draft story, the node loop carried the orange occupancy badge and the lit '
+    'teal wire, but drew as dim as the idle text-challenge. Cause: '
+    'live/workflowGraph.ts drawNode dimmed every node whose id is not in '
+    'runView.traversedPath, and that path holds CONDUCTOR step ids, so on a '
+    'sub-flow no node is ever on it and the whole layer dimmed. Owner scope '
+    'addition on the top-level canvas: the step the agent stands on '
+    '(draft_story, badge 1) drew with no outline, the bright outline sat on '
+    'the PASSED review_previous_notes, and the agent marker rode the Steward '
+    'bot wire. One rule now picks the lit node, isOccupiedLit: in run mode, a '
+    'node with occupancy (the count that draws the badge) that is either on a '
+    'layer the run path names no node of (a drilled sub-flow), or is the run '
+    'own step (RunView.currentStep from task.workflow_step, last traversed '
+    'stop as fallback). The lit node is never dimmed, beats a verdict paint, '
+    'takes activeStroke at 2.5 px plus a glow (a verdict or gate border stays '
+    '1.5 px), and carries the agent marker in its glyph slot, drawn by '
+    'drawMarkerHead, now a shared primitive in live/packets.ts that '
+    'drawPackets also uses. A bot-wire marker into the lit node is no longer '
+    'drawn. Idle siblings still dim, and other tasks steps on the top-level '
+    'board stay dimmed in run mode. Tests: '
+    'test_workflows_sub_flow_active_node_highlight.py (5 tests, red at '
+    'd67d998a and 625f914f), and test_layer_nodes_show_their_real_state.py '
+    're-anchored for the extra !occupiedLit guard on verdictLook. Rendered '
+    'before and after in a headless browser against the live API. '
 )

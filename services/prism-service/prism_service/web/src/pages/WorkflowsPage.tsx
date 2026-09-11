@@ -1494,15 +1494,15 @@ export default function WorkflowsPage() {
   // that IS the conductor's instance record -- never a guess off the step
   // order, and the attempt count from the setback rows written during a
   // dwell (flow_report_failure / advance_refused).
-  const [runTrace, setRunTrace] = useState<{ traversedPath: string[]; attempts: number } | null>(null);
+  const [runTrace, setRunTrace] = useState<{ traversedPath: string[]; attempts: number; currentStep: string | null } | null>(null);
   const [catalogStatsOpen, setCatalogStatsOpen] = useState(false);
   const runTraceTaskId = searchParams.get("task") ?? workflowRun?.data.conductorTask?.id ?? null;
   useEffect(() => {
     if (!runTraceTaskId) { setRunTrace(null); return; }
     let cancelled = false;
-    api.get<{ history?: Array<{ action?: string; details?: string }> }>(
+    api.get<{ task?: { workflow_step?: string | null }; history?: Array<{ action?: string; details?: string }> }>(
       `/api/tasks/${encodeURIComponent(runTraceTaskId)}?project=${encodeURIComponent(project)}&scope=core`,
-    ).then(({ history }) => {
+    ).then(({ task, history }) => {
       if (cancelled) return;
       const traversedPath: string[] = [];
       let attempts = 1;
@@ -1517,15 +1517,22 @@ export default function WorkflowsPage() {
           attempts += 1;
         }
       }
-      setRunTrace({ traversedPath, attempts });
+      setRunTrace({ traversedPath, attempts, currentStep: task?.workflow_step ?? null });
     }).catch(() => setRunTrace(null));
     return () => { cancelled = true; };
   }, [runTraceTaskId, project]);
+  // Where the run's task stands NOW, so the canvas can light that step and
+  // park the agent marker on it (task 67a98810). The polled board row wins
+  // over the one-shot fetch above, which goes stale as the task advances.
+  const runCurrentStep = conductorManaged.find((t) => t.id === runTraceTaskId)?.workflow_step
+    ?? runTrace?.currentStep ?? null;
   // Run mode dims the rest of the catalog; the stats toggle folds it back on
   // WITHOUT leaving the run.
   const runView = useMemo<RunView | null>(() => (
-    runTrace ? { runMode: !catalogStatsOpen, traversedPath: runTrace.traversedPath } : null
-  ), [runTrace, catalogStatsOpen]);
+    runTrace
+      ? { runMode: !catalogStatsOpen, traversedPath: runTrace.traversedPath, currentStep: runCurrentStep }
+      : null
+  ), [runTrace, catalogStatsOpen, runCurrentStep]);
   // Seconds since THIS task's last conductor transition. Never the drive
   // heartbeat's own signal age, which read as "RUN 0s / -4s" against 25
   // minutes of real motion.

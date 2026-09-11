@@ -12,7 +12,7 @@
 
 import { drawGrid } from "./grid";
 import { PALETTE, glyphFor } from "./palette";
-import { drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
+import { drawMarkerHead, drawPackets, spawnPacket, stepPackets, type Packet } from "./packets";
 import { pointAtFraction, polylineLength, wireKey, type Point } from "./wires";
 import {
   WireInteraction, drawEditableWire,
@@ -107,7 +107,25 @@ export type ActiveNodeProgress = {
 export type RunView = {
   runMode: boolean;
   traversedPath: string[];
+  /** The step the run's task stands on NOW (task.workflow_step). A task
+   * with no advance_task row yet has an empty path, so this is what names
+   * where its agent is (task 67a98810). */
+  currentStep?: string | null;
 };
+
+/** The node where the foregrounded run's work stands right now: it is lit
+ * as live work and carries the agent marker (task 67a98810). It must hold
+ * occupancy -- the SAME count that draws the badge -- so an idle node never
+ * lights. On a layer the run's path names (the top-level conductor, where
+ * other tasks occupy most steps) only the run's OWN step lights, or run mode
+ * would light the whole board. On a layer the path names no node of (a
+ * drilled sub-flow: loop, text-challenge), occupancy is the only answer to
+ * "where is the work", so the occupied node lights. */
+function isOccupiedLit(n: WfNode, run: RunView | null, pathNamesLayer: boolean): boolean {
+  if (!run?.runMode || n.count <= 0) return false;
+  const tip = run.currentStep ?? run.traversedPath[run.traversedPath.length - 1];
+  return !pathNamesLayer || n.id === tip;
+}
 
 /** True when the wire is a token edge between two consecutive stops of the
  * path this run actually walked. */
@@ -567,6 +585,21 @@ export function drawWorkflows(
   ctx.scale(g.zoom, g.zoom);
   ctx.translate(-g.pan.x, -g.pan.y);
 
+  // Run mode foregrounds a run by the step ids its path names. A drilled
+  // sub-flow (loop, text-challenge) shares none of the conductor's ids, so
+  // the path says nothing about it (task 67a98810). Decided once per frame.
+  const pathNamesLayer = !!runView?.runMode && g.nodes.some((n) => (
+    runView.traversedPath.includes(n.id) || n.id === runView.currentStep));
+  const litIds = new Set(g.nodes
+    .filter((n) => isOccupiedLit(n, runView, pathNamesLayer))
+    .map((n) => n.id));
+  // The agent marker is parked ON the lit step (drawNode). A marker still
+  // riding the bot wire into it read as the agent sitting on the Steward
+  // (owner, task 67a98810), so that wire carries none. FSM transition
+  // markers (never from a bot) are untouched.
+  const shownPackets = g.packets.filter((p) => !(
+    p.source.startsWith("bot:") && litIds.has(p.target)));
+
   for (const wire of g.wires) {
     const selected = g.editor.selected === wire.key;
     // The selected-wire paint (orange body, orange endpoint dots, hollow
@@ -588,7 +621,7 @@ export function drawWorkflows(
       });
     }
   }
-  drawPackets(ctx, g.packets, now);
+  drawPackets(ctx, shownPackets, now);
   // Flow units ride only the one wire the currently active node actually
   // arrived on -- see drawFlowUnits for why that, and only that, counts as
   // "genuinely live" here.
@@ -598,6 +631,7 @@ export function drawWorkflows(
     activeProgress?.nodeId === n.id ? activeProgress : null,
     nodeVerdicts?.[n.id] ?? null,
     runView,
+    litIds.has(n.id),
   );
 
   ctx.restore();
@@ -664,18 +698,21 @@ function drawFlowUnits(
   }
 }
 
-function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null, runView: RunView | null = null): void {
+function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null, runView: RunView | null = null, occupiedLit = false): void {
   const { x, y, w, h } = n.slot;
 
   // A live run wins: `active` is what is happening RIGHT NOW, a verdict is
   // what a check already answered. They never coincide on a behaviour layer
   // (no WorkflowCore run backs one), so this is an ordering rule, not a
-  // conflict.
-  const verdictLook = !active && verdict ? verdictPaint(verdict) : null;
+  // conflict. The lit node (isOccupiedLit) is live work too, so it wins the
+  // same way: a PASSED paint must never out-shine where the agent is now.
+  const verdictLook = !active && !occupiedLit && verdict ? verdictPaint(verdict) : null;
   // In runMode every lane this run did not walk drops to the SAME dim draw
   // path a not-reached verdict already uses -- dimmed, never removed, so the
-  // catalog-wide picture survives behind the run being foregrounded.
-  const runDim = !active && !!runView?.runMode && !runView.traversedPath.includes(n.id);
+  // catalog-wide picture survives behind the run being foregrounded. The
+  // lit node is never dimmed: on a sub-flow its id is never in the
+  // conductor-step path, which is what drew `loop` dark (task 67a98810).
+  const runDim = !active && !occupiedLit && !!runView?.runMode && !runView.traversedPath.includes(n.id);
   if (verdictLook?.dim || runDim) {
     ctx.save();
     ctx.globalAlpha = 0.45;
@@ -742,11 +779,19 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   const activeStroke = active?.tone === "failure" ? "#f87171"
     : active?.tone === "success" ? "#34d399"
       : active?.tone === "warning" ? "#fcd34d" : PALETTE.teal;
-  ctx.strokeStyle = active ? activeStroke
+  // Where the agent stands takes the active accent at a HEAVIER width than
+  // a verdict or gate border, plus a glow, so a PASSED step never reads as
+  // the live one (owner screenshot, task 67a98810).
+  ctx.strokeStyle = active || occupiedLit ? activeStroke
     : verdictLook ? verdictLook.stroke
       : n.gate ? PALETTE.magenta : PALETTE.border;
-  ctx.lineWidth = active || n.gate || verdictLook ? 1.5 : 1;
+  ctx.lineWidth = active || occupiedLit ? 2.5 : n.gate || verdictLook ? 1.5 : 1;
+  if (occupiedLit) {
+    ctx.shadowColor = activeStroke;
+    ctx.shadowBlur = 14;
+  }
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  ctx.shadowBlur = 0;
   if (selected) {
     ctx.strokeStyle = PALETTE.teal;
     ctx.lineWidth = 2;
@@ -755,15 +800,22 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
 
   ctx.font = "12px ui-monospace, SFMono-Regular, monospace";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = PALETTE.textLabel;
-  ctx.fillText(n.glyph, x + 8, y + 10);
+  if (occupiedLit) {
+    // The agent marker -- the SAME head a marker rides a wire with -- parked
+    // in the glyph slot: the agent is ON this step, not on its bot's wire
+    // (owner, task 67a98810: "put the agent icon and the outline for it").
+    drawMarkerHead(ctx, { x: x + 13, y: y + 10 });
+  } else {
+    ctx.fillStyle = PALETTE.textLabel;
+    ctx.fillText(n.glyph, x + 8, y + 10);
+  }
 
   ctx.font = "600 12px ui-sans-serif, system-ui, sans-serif";
   ctx.fillStyle = PALETTE.textPrimary;
   ctx.fillText(clip(ctx, n.label, w - 104), x + 24, y + 10);
   ctx.textAlign = "right";
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
-  ctx.fillStyle = active ? activeStroke
+  ctx.fillStyle = active || occupiedLit ? activeStroke
     : verdictLook ? verdictLook.stroke
       : selected ? PALETTE.teal : PALETTE.textLabel;
   // done > total is a WEDGED step, not a nearly-finished one: say OVERRUN

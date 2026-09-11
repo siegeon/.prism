@@ -184,20 +184,29 @@ export function drawPackets(ctx: CanvasRenderingContext2D, packets: Packet[], no
     // holding 10+ in-flight markers the whole time. Bigger core + bigger,
     // more opaque halo gives the encoder more contiguous high-contrast
     // area to keep instead of quantizing away.
-    ctx.beginPath();
-    ctx.arc(at.x, at.y, 10, 0, Math.PI * 2);
-    ctx.fillStyle = PALETTE.teal;
-    ctx.globalAlpha = 0.75 * fadeAlpha;
-    ctx.fill();
-    ctx.globalAlpha = fadeAlpha;
-
-    ctx.beginPath();
-    ctx.rect(at.x - 4.5, at.y - 4.5, 9, 9);
-    ctx.fillStyle = PALETTE.packet;
-    ctx.fill();
-    ctx.lineWidth = 1.8;
-    ctx.strokeStyle = PALETTE.packetOutline;
-    ctx.stroke();
+    drawMarkerHead(ctx, at, fadeAlpha);
   }
   ctx.globalAlpha = 1;
+}
+
+/** The marker's head: teal halo, near-white core, dark outline. Shared so
+ * the /workflows canvas can park the SAME marker on the step where the
+ * agent now stands (workflowGraph.ts drawNode, task 67a98810) instead of
+ * inventing a second look that would drift. Leaves globalAlpha at
+ * `fadeAlpha`; the caller restores it. */
+export function drawMarkerHead(ctx: CanvasRenderingContext2D, at: Point, fadeAlpha = 1): void {
+  ctx.beginPath();
+  ctx.arc(at.x, at.y, 10, 0, Math.PI * 2);
+  ctx.fillStyle = PALETTE.teal;
+  ctx.globalAlpha = 0.75 * fadeAlpha;
+  ctx.fill();
+  ctx.globalAlpha = fadeAlpha;
+
+  ctx.beginPath();
+  ctx.rect(at.x - 4.5, at.y - 4.5, 9, 9);
+  ctx.fillStyle = PALETTE.packet;
+  ctx.fill();
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = PALETTE.packetOutline;
+  ctx.stroke();
 }
