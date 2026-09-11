@@ -91,6 +91,12 @@ export type ActiveNodeProgress = {
   overrunRatio?: number | null;
   /** Retried dispatches for the current dwell (1 = first try). */
   attempts?: number;
+  /** WHICH real task is occupying this node right now -- the owner's fix
+   * for task 0b5dd37c's own follow-up ("if we are doing something like
+   * this it belongs to the NODE that is doing it"): live detail (which
+   * task, how long) must ride ON the node, never in a page-level floating
+   * panel. Drawn in place of the node's own summary line while set. */
+  taskTitle?: string;
 };
 
 /** How ONE driven task's own run is foregrounded on a catalog-wide board.
@@ -797,9 +803,13 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
     ctx.fillText(fitTokenTrend(ctx, n.tokenTrend, w - 20), x + 10, y + 58);
   }
 
+  // A node someone is actively working carries WHICH TASK on this same
+  // line instead of the generic "what happens next" preview -- the
+  // elapsed clock at top-right already answers "how long", so together
+  // the two answer the owner's ask without a second floating panel.
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
-  ctx.fillStyle = PALETTE.textLabel;
-  ctx.fillText(clip(ctx, n.summary, w - 20), x + 10, y + h - 12);
+  ctx.fillStyle = active?.taskTitle ? activeStroke : PALETTE.textLabel;
+  ctx.fillText(clip(ctx, active?.taskTitle ?? n.summary, w - 20), x + 10, y + h - 12);
 
   // Active progress already visualizes the one token occupying this state.
   // Showing the numeric badge at the same time duplicates that signal and,

@@ -1828,6 +1828,35 @@ export default function WorkflowsPage() {
           label: replayLabel,
           tone,
         };
+      } else if (isStateMachineWorkflow && !workflowRun && !viewingInstanceRef.current) {
+        // No single instance is open, but the AMBIENT board may still have
+        // a real task working a step on this canvas right now -- the same
+        // occupancy liveRunning/conductorRowLiveness already read. Owner's
+        // fix for task 0b5dd37c's own follow-up bug report ("this is cute
+        // ... but impossible to look at", "if we are doing something like
+        // this it belongs to the NODE that is doing it"): this is that
+        // node-attached detail, replacing the page-level floating ticker
+        // that used to carry it. Most-recently-updated wins when more than
+        // one step is occupied at once -- same precedence conductorPillTone
+        // already gives its own "most recent" pill.
+        const activeTask = conductorManaged
+          .filter((task) => conductorStepIds.has(task.workflow_step ?? "")
+            && (task.activity?.state === "working" || task.activity?.state === "driving"))
+          .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0];
+        if (activeTask?.workflow_step && activeTask.updated_at) {
+          const step = selectedWorkflow?.steps.find((candidate) => candidate.id === activeTask.workflow_step);
+          const elapsedSeconds = Math.max(0, (Date.now() - Date.parse(activeTask.updated_at)) / 1000);
+          const pacing = step?.average_duration_seconds ?? null;
+          activeProgress = {
+            nodeId: activeTask.workflow_step,
+            progress: Math.min(1, pacing && pacing > 0 ? elapsedSeconds / pacing : 0),
+            indeterminate: !(pacing && pacing > 0),
+            elapsedSeconds,
+            averageSeconds: pacing && pacing > 0 ? pacing : null,
+            overrunRatio: pacing && pacing > 0 && elapsedSeconds > pacing ? elapsedSeconds / pacing : null,
+            taskTitle: activeTask.title,
+          };
+        }
       } else if (tier === "settling" && lastOutcome) {
         // Task 0b5dd37c item 5: the last node sweeps ONCE in pass/fail
         // colour while the board settles -- the canvas's own share of the
@@ -1854,7 +1883,7 @@ export default function WorkflowsPage() {
     };
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
-  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts, runView, runTrace, runMotionSeconds, tier, lastOutcome, liveEndedAt]);
+  }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts, runView, runTrace, runMotionSeconds, tier, lastOutcome, liveEndedAt, isStateMachineWorkflow, conductorManaged, conductorStepIds]);
 
   // Rehydrate the directory's own saved child order whenever the project
   // changes -- a client-side arrangement preference, same tier as node
@@ -2474,7 +2503,16 @@ export default function WorkflowsPage() {
           className={`relative z-10 w-1.5 shrink-0 border-l border-[color:var(--nav-line)] bg-[color:var(--surface-1)] outline-none ${directoryOpen ? "cursor-col-resize hover:bg-[color:var(--accent-solid)] focus:bg-[color:var(--accent-solid)]" : ""}`}
         />
         <div className="relative min-w-0 flex-1">
-        <div className="absolute right-4 top-4 z-20 flex items-center gap-2">
+        {/* ONE column anchors every top-right chrome element (breadcrumb/
+            run controls, the catalog-stats toggle, the status+activity
+            strip) so they stack in flow and can never occupy the same
+            corner at once -- previously three independently `absolute`-
+            positioned pieces (this row at right-4/top-4, "Show catalog
+            stats" at right-3/top-3, the status ticker at right-4/top-14)
+            sat on top of one another (owner: "impossible to look at ...
+            look at all the overlaps and confusion"). */}
+        <div className="absolute right-4 top-4 z-20 flex flex-col items-end gap-2 max-w-[380px]">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {workflowPath.length > 0 && (
             <nav
               aria-label="Workflow breadcrumb"
@@ -2544,6 +2582,38 @@ export default function WorkflowsPage() {
               {startingWorkflow ? "Starting…" : "Run workflow"}
             </button>
           )}
+        </div>
+        {runTrace && (
+          <button
+            type="button"
+            onClick={() => setCatalogStatsOpen((open) => !open)}
+            className="rounded border border-white/15 bg-[#08090b]/90 px-2 py-1 text-2xs uppercase tracking-wide text-[color:var(--text-muted)] hover:text-white"
+          >
+            {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
+          </button>
+        )}
+        {/* Task 0b5dd37c: "sees which step is active, what moves between
+            steps, and the last three things that happened, within 5
+            seconds and with no click." ALWAYS rendered -- unlike the
+            top-left run-instance box below, which only appears once a run
+            exists -- so a quiet board still says so plainly instead of
+            showing nothing. Stacked here, in flow under the header row,
+            instead of a separately floating panel that used to land right
+            on top of it. */}
+        <div className="w-full border border-[color:var(--border-strong)] bg-[color:var(--surface-1)] px-3 py-2 text-xs text-[color:var(--text-secondary)]">
+          <div>{statusLineText}</div>
+          <div aria-label="Recent workflow activity" className="mt-2 flex flex-col gap-1 text-[color:var(--text-muted)]">
+            {recentEvents.length === 0 ? (
+              <div>No recent activity</div>
+            ) : (
+              recentEvents.map((event) => (
+                <div key={event.id} className="line-clamp-2" title={event.text}>
+                  {event.text} · {relativeTime(event.iso)} ago
+                </div>
+              ))
+            )}
+          </div>
+        </div>
         </div>
         {(workflowRun || workflowRunError) && (
           <div className={`absolute left-4 top-4 z-20 ${conductorLivePhase ? "w-[420px]" : "max-w-[620px]"} border bg-[color:var(--surface-1)] px-3 py-2 text-xs ${
@@ -2642,37 +2712,6 @@ export default function WorkflowsPage() {
           onWheel={onWheel}
           className={`w-full h-full touch-none ${grabbing ? "cursor-grabbing" : "cursor-pointer"}`}
         />
-        {runTrace ? (
-          <button
-            type="button"
-            onClick={() => setCatalogStatsOpen((open) => !open)}
-            className="absolute right-3 top-3 z-20 rounded border border-white/15 bg-[#08090b]/90 px-2 py-1 text-2xs uppercase tracking-wide text-[color:var(--text-muted)] hover:text-white"
-          >
-            {catalogStatsOpen ? "Focus this run" : "Show catalog stats"}
-          </button>
-        ) : null}
-        {/* Task 0b5dd37c: "sees which step is active, what moves between
-            steps, and the last three things that happened, within 5
-            seconds and with no click." ALWAYS rendered -- unlike the
-            top-left run-instance box above, which only appears once a run
-            exists -- so a quiet board still says so plainly instead of
-            showing nothing. */}
-        <div
-          className="absolute right-4 top-14 z-20 max-w-[300px] border border-[color:var(--border-strong)] bg-[color:var(--surface-1)] px-3 py-2 text-xs text-[color:var(--text-secondary)]"
-        >
-          <div>{statusLineText}</div>
-          <div aria-label="Recent workflow activity" className="mt-2 flex flex-col gap-1 text-[color:var(--text-muted)]">
-            {recentEvents.length === 0 ? (
-              <div>No recent activity</div>
-            ) : (
-              recentEvents.map((event) => (
-                <div key={event.id} className="truncate" title={event.text}>
-                  {event.text} · {relativeTime(event.iso)} ago
-                </div>
-              ))
-            )}
-          </div>
-        </div>
         <div className="absolute bottom-0 left-0 right-0 z-10 h-10 border-t border-white/10 bg-[#08090b]">
           <div
             role="progressbar"

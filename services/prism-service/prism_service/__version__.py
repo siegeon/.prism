@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.295"
+PRISM_VERSION = "7.13.296"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9028,4 +9028,32 @@ PRISM_VERSION_NOTES += (
     "task's own history, the existing Trace surface -- no new UI. Both "
     "new seat-startup env vars default OFF: PRISM_DISPATCH_REAPER_INTERVAL "
     "and PRISM_DISPATCH_CEILING (default 12)."
+)
+
+PRISM_VERSION_NOTES += (
+    " | 7.13.296 fixes 7.13.294's own /workflows live-activity ship: it "
+    "landed as a page-level floating panel (right-4/top-14) plus a "
+    "separately absolute 'Show catalog stats' toggle (right-3/top-3) on "
+    "top of the existing header row (right-4/top-4) -- three independent "
+    "absolute-positioned pieces stacked on the same corner. Owner, live: "
+    "'this is cute ... but impossible to look at ... look at all the "
+    "overlaps and confusion', then the direction: 'if we are doing "
+    "something like this it belongs to the NODE that is doing it.' Two "
+    "changes. (1) WorkflowsPage.tsx: the three pieces now share ONE flex "
+    "column anchored once at right-4/top-4, stacking header row / catalog-"
+    "stats toggle / status+activity strip in flow instead of overlapping; "
+    "the activity ticker's entries switched from single-line `truncate` "
+    "(which cut mid-word inside a 300px box) to `line-clamp-2` in a wider "
+    "box, so no entry is cut off without an ellipsis or a second line. "
+    "(2) live/workflowGraph.ts: ActiveNodeProgress gained `taskTitle`, and "
+    "WorkflowsPage's rAF loop gained an AMBIENT branch (no single instance "
+    "open, but a real task is working/driving a step on this canvas) that "
+    "feeds it the most-recently-updated such task -- drawNode paints it "
+    "on the node's own summary line in place of the generic preview, so "
+    "the occupied node itself now answers 'which task, how long' (the "
+    "elapsed clock beside it already answered 'how long'), which is the "
+    "node-attached replacement for what the floating panel used to carry. "
+    "All 22 tests_workflows_page_live_tiers.py assertions still pass "
+    "unmodified -- none of them pinned the panel's screen position. "
+    "Verified with a real `npm run build` (rc=0)."
 )
