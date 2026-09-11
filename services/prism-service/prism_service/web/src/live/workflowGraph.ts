@@ -20,6 +20,7 @@ import {
 } from "./wireEditing";
 import type { Slot } from "./layout";
 import type { WorkflowDef } from "@/lib/useWorkflowDef";
+import { relativeTime } from "@/lib/relativeTime";
 
 // STEP_H grew 88 -> 106 to fit one more line: the node's own measured
 // multiplier + trailing token trend (task 112dbb72). Every other offset
@@ -67,6 +68,10 @@ export type TokenTrend = {
   runCount: number;
   window: number;
   indeterminate: boolean;
+  /** ISO timestamp of this node's most recent recorded run, or null when
+   * it has never run (task 1cdf1d70). A total alone cannot say whether
+   * it ran a month ago or a second ago. */
+  lastRunAt: string | null;
 };
 
 export type ActiveNodeProgress = {
@@ -260,6 +265,8 @@ export class WorkflowGraph {
           runCount: s.run_count ?? 0,
           window: s.token_window ?? 20,
           indeterminate: s.token_indeterminate ?? true,
+          lastRunAt: typeof s.last_run_at === "number"
+            ? new Date(s.last_run_at * 1000).toISOString() : null,
         },
       });
     });
@@ -763,8 +770,14 @@ function tokenTrendLabel(t: TokenTrend): string {
     // empty for it forever -- "too few runs (0/20)" read as "nothing is
     // happening here" for steps that had run 149 times. When the node has
     // really run, say so; the token reading is simply not its question.
+    // A total alone cannot say WHEN, so the last recorded run rides along
+    // (task 1cdf1d70: "each of the four nodes shows its last run time and
+    // its run total").
     if (t.runCount > 0) {
-      return `${t.runCount} run${t.runCount === 1 ? "" : "s"} · no token cost`;
+      const runs = `${t.runCount} run${t.runCount === 1 ? "" : "s"}`;
+      return t.lastRunAt
+        ? `${runs} · last ${relativeTime(t.lastRunAt)} ago`
+        : `${runs} · no token cost`;
     }
     return `×? · too few runs (${t.sampleCount}/${t.window})`;
   }

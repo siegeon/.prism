@@ -85,6 +85,10 @@ export type WorkflowStepDef = {
    * runs — this is the question such a node can answer. Present on
    * behaviour sub-steps; absent on an older service. */
   run_count?: number;
+  /** Epoch seconds of this node's most recent recorded run, or null when
+   * it has never run (task 1cdf1d70: a run total alone cannot say
+   * whether it ended a month ago or a second ago). */
+  last_run_at?: number | null;
 };
 
 /** A bot: a role card that drives the conductor's FSM. */

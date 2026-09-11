@@ -207,6 +207,17 @@ _DRAFT_ONLY_WITHOUT_CHAIN = frozenset({"write_failing_tests"})
 # general-agent path, because its declared prompt only DRAFTS.
 _BUILD_ROUTES = ("write-test-file", "run-pinned-suite", "commit-tests-only")
 
+# Routes that now record their OWN agent_runs row from inside the route
+# handler itself (api/workflows.py's _record_node_run, task 1cdf1d70) --
+# a direct HTTP call needed the SAME row a declared-chain dispatch left,
+# so recording moved to the one seam both paths go through. Recording
+# again here would double the count for a task_runner-dispatched run, so
+# the loop below skips these three by name. "reason-loop" stays OUT of
+# this set deliberately: it is a real model call (tokens, cost), unlike
+# the three deterministic build routes, and instrumenting it is separate
+# follow-up work, not this ticket's measured misfire.
+_SELF_RECORDING_ROUTES = frozenset(_BUILD_ROUTES)
+
 # Steps where a red test can meaningfully exist. The stall mechanism
 # (task 404ef4ce) reads codified red test ids to name the next action
 # instead of parking for a human. That read is meaningful ONLY at steps
@@ -1784,8 +1795,11 @@ def _run_one_step(project: str, task_id: str) -> dict:
                 variables={"taskHint": narrow_prompt, "taskId": task_id,
                            "project": project})
             for row in dispatched:
+                route = row.get("route") or "?"
+                if route in _SELF_RECORDING_ROUTES:
+                    continue  # the route already recorded its own run
                 _record_codified_run(
-                    project, task_id, row.get("route") or "?", run_id,
+                    project, task_id, route, run_id,
                     bool(row.get("ok")),
                     row.get("reason") or "ran as a declared step")
             result = _result_from_dispatch(dispatched)

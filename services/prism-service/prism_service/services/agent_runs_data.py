@@ -324,6 +324,39 @@ def node_run_counts(scores_db: str, steps: list[str]) -> dict[str, int]:
     return out
 
 
+def node_last_run(scores_db: str, steps: list[str]) -> dict[str, float | None]:
+    """The most recent started_at for each of `steps`, or None when it has
+    never run.
+
+    node_run_counts answers "how often"; this answers "how recently" -- a
+    node's own history is both together (task 1cdf1d70: "each of the four
+    nodes shows its last run time and its run total"), and a total alone
+    cannot date itself: 149 runs last month reads the same as 149 runs
+    ending a second ago.
+    """
+    if not steps:
+        return {}
+    out: dict[str, float | None] = {s: None for s in steps}
+    try:
+        conn = sqlite_db.connect(scores_db, timeout=5.0)
+        try:
+            marks = ",".join("?" for _ in steps)
+            rows = conn.execute(
+                f"SELECT step, MAX(started_at) FROM agent_runs "
+                f"WHERE step IN ({marks}) AND started_at IS NOT NULL "
+                f"GROUP BY step", tuple(steps))
+            for step, last in rows:
+                try:
+                    out[str(step)] = float(last)
+                except (TypeError, ValueError):
+                    continue
+        finally:
+            conn.close()
+    except Exception:
+        return out           # an unreadable db reports "never ran", never raises
+    return out
+
+
 def node_token_trend(
     scores_db: str, steps: list[str],
     window: int = NODE_TREND_WINDOW, min_samples: int = NODE_MIN_SAMPLES,

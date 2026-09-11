@@ -44,6 +44,7 @@ from prism_service.services.context_builder import ROLE_CARDS, ContextBuilder
 from prism_service.services import sqlite_db
 from prism_service.services.agent_runs_data import (
     NODE_TREND_WINDOW,
+    node_last_run,
     node_recent_runs,
     node_run_counts,
     node_token_trend,
@@ -1105,9 +1106,18 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
         recent = node_recent_runs(str(scores_db), keys) if scores_db else {}
     except Exception:
         recent = {}
+    # WHEN DID IT LAST RUN. A count alone cannot answer "how recently" --
+    # 149 runs last month reads the same as 149 runs ending a second ago
+    # (task 1cdf1d70: "each of the four nodes shows its last run time and
+    # its run total").
+    try:
+        last_run = node_last_run(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        last_run = {}
     for step in steps:
         step["run_count"] = counts.get(_key(step), 0)
         step["running_now"] = bool(recent.get(_key(step), 0))
+        step["last_run_at"] = last_run.get(_key(step))
         t = trend.get(_key(step)) or {}
         step["token_multiplier"] = t.get("multiplier")
         step["avg_tokens"] = t.get("avg_tokens")
@@ -3391,6 +3401,43 @@ def _inside(root, candidate: str) -> bool:
         return False
 
 
+def _record_node_run(project: str, task_id: str, route: str, ok: bool,
+                     summary: str) -> None:
+    """Self-record THIS route's own run (task 1cdf1d70).
+
+    Before this, an agent_runs row for a codified node only existed when
+    task_runner's declared-chain dispatch called the route in-process --
+    a caller that hit the SAME route directly (a curl, a test, the
+    conductor-adjudicator probing red) left no row at all, so the
+    Workflows canvas read the node as never having run however many times
+    it had actually fired. Measured live 2026-09-10 on task ab9166d5:
+    write-test-file wrote 9701 bytes, run-pinned-suite returned rc=1,
+    commit-tests-only made a real commit the adjudicator accepted as the
+    red anchor -- and run_count stayed 0 for all three the whole time.
+
+    Recording HERE, at the one seam every caller goes through (in-process
+    dispatch and a raw HTTP call both land in this function body), is what
+    makes the count mean "this route ran", not "task_runner drove it".
+    task_runner's own dispatch loop no longer double-records these routes
+    (see task_runner._SELF_RECORDING_ROUTES) now that this is the single
+    source of truth.
+
+    Never raises: a broken recorder must never break the node's real work,
+    the same rule _record_codified_run already keeps.
+    """
+    if not task_id:
+        return   # nothing to key a node card's history on
+    try:
+        import uuid as _uuid
+
+        from prism_service.services import task_runner as _task_runner
+
+        _task_runner._record_codified_run(
+            project, task_id, route, str(_uuid.uuid4()), ok, summary)
+    except Exception:
+        pass
+
+
 @router.post("/steps/write-test-file")
 def workflow_step_write_test_file(
     body: WriteTestFileRequest, project: str = Query(...),
@@ -3405,33 +3452,42 @@ def workflow_step_write_test_file(
     out = {"kind": "conductor.write_test_file", "node_id": "write-test-file",
            "task_id": body.task_id, "outcome": "refused", "written": False,
            "path": body.test_file_path, "bytes": 0, "reason": ""}
-    with _tracer.start_as_current_span("workflow.step.write_test_file") as sp:
-        sp.set_attribute("workflow.project", project)
-        sp.set_attribute("workflow.task.id", body.task_id)
-        root, why = _task_worktree(body.task_id)
-        if root is None:
-            out["reason"] = why
+    try:
+        with _tracer.start_as_current_span("workflow.step.write_test_file") as sp:
+            sp.set_attribute("workflow.project", project)
+            sp.set_attribute("workflow.task.id", body.task_id)
+            root, why = _task_worktree(body.task_id)
+            if root is None:
+                out["reason"] = why
+                return out
+            rel = body.test_file_path.lstrip("/")
+            if not _inside(root, rel):
+                out["reason"] = f"path escapes the worktree: {rel}"
+                return out
+            name = rel.rsplit("/", 1)[-1]
+            if not (name.startswith("test_") and name.endswith(".py")):
+                out["reason"] = (
+                    f"not a test file: {name} must match test_*.py, because "
+                    f"the red anchor carries tests and nothing else")
+                return out
+            target = root / rel
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(body.test_code, encoding="utf-8")
+            except OSError as exc:
+                out["reason"] = f"write failed: {type(exc).__name__}: {exc}"
+                return out
+            out.update(outcome="ok", written=True,
+                       bytes=len(body.test_code.encode("utf-8")))
             return out
-        rel = body.test_file_path.lstrip("/")
-        if not _inside(root, rel):
-            out["reason"] = f"path escapes the worktree: {rel}"
-            return out
-        name = rel.rsplit("/", 1)[-1]
-        if not (name.startswith("test_") and name.endswith(".py")):
-            out["reason"] = (
-                f"not a test file: {name} must match test_*.py, because "
-                f"the red anchor carries tests and nothing else")
-            return out
-        target = root / rel
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(body.test_code, encoding="utf-8")
-        except OSError as exc:
-            out["reason"] = f"write failed: {type(exc).__name__}: {exc}"
-            return out
-        out.update(outcome="ok", written=True,
-                   bytes=len(body.test_code.encode("utf-8")))
-        return out
+    finally:
+        # ANY caller of this route -- task_runner's in-process dispatch or
+        # a direct HTTP call -- leaves the SAME agent_runs row, so a
+        # node's history means "this route ran" (task 1cdf1d70).
+        _record_node_run(
+            project, out["task_id"], "write-test-file",
+            out["outcome"] == "ok",
+            out["reason"] or f"wrote {out['bytes']} byte(s) to {out['path']}")
 
 
 @router.post("/steps/run-pinned-suite")
@@ -3449,39 +3505,45 @@ def workflow_step_run_pinned_suite(
     out = {"kind": "conductor.run_pinned_suite", "node_id": "run-pinned-suite",
            "task_id": body.task_id, "outcome": "refused", "rc": None,
            "paths": [], "tail": "", "reason": ""}
-    with _tracer.start_as_current_span("workflow.step.run_pinned_suite") as sp:
-        sp.set_attribute("workflow.project", project)
-        sp.set_attribute("workflow.task.id", body.task_id)
-        root, why = _task_worktree(body.task_id)
-        if root is None:
-            out["reason"] = why
+    try:
+        with _tracer.start_as_current_span("workflow.step.run_pinned_suite") as sp:
+            sp.set_attribute("workflow.project", project)
+            sp.set_attribute("workflow.task.id", body.task_id)
+            root, why = _task_worktree(body.task_id)
+            if root is None:
+                out["reason"] = why
+                return out
+            paths = list(body.paths)
+            if not paths:
+                task = get_project(project).task_svc.get(body.task_id)
+                paths = list(getattr(task, "verify", None) or [])
+            paths = [p for p in paths if _inside(root, p.lstrip("/"))]
+            if not paths:
+                out["reason"] = (
+                    "no pinned suite: task.verify is empty or names a path "
+                    "outside the worktree")
+                return out
+            out["paths"] = paths
+            cmd = ["python3", "-m", "pytest", *paths, "-q",
+                   "-o", "faulthandler_timeout=120"]
+            try:
+                proc = subprocess.run(cmd, cwd=str(root), capture_output=True,
+                                      text=True, timeout=body.timeout_s)
+            except subprocess.TimeoutExpired:
+                out["reason"] = f"suite exceeded {body.timeout_s}s"
+                return out
+            except OSError as exc:
+                out["reason"] = f"could not run pytest: {exc}"
+                return out
+            combined = (proc.stdout or "") + (proc.stderr or "")
+            out.update(outcome="ok", rc=proc.returncode,
+                       tail="\n".join(combined.splitlines()[-30:]))
             return out
-        paths = list(body.paths)
-        if not paths:
-            task = get_project(project).task_svc.get(body.task_id)
-            paths = list(getattr(task, "verify", None) or [])
-        paths = [p for p in paths if _inside(root, p.lstrip("/"))]
-        if not paths:
-            out["reason"] = (
-                "no pinned suite: task.verify is empty or names a path "
-                "outside the worktree")
-            return out
-        out["paths"] = paths
-        cmd = ["python3", "-m", "pytest", *paths, "-q",
-               "-o", "faulthandler_timeout=120"]
-        try:
-            proc = subprocess.run(cmd, cwd=str(root), capture_output=True,
-                                  text=True, timeout=body.timeout_s)
-        except subprocess.TimeoutExpired:
-            out["reason"] = f"suite exceeded {body.timeout_s}s"
-            return out
-        except OSError as exc:
-            out["reason"] = f"could not run pytest: {exc}"
-            return out
-        combined = (proc.stdout or "") + (proc.stderr or "")
-        out.update(outcome="ok", rc=proc.returncode,
-                   tail="\n".join(combined.splitlines()[-30:]))
-        return out
+    finally:
+        _record_node_run(
+            project, out["task_id"], "run-pinned-suite",
+            out["outcome"] == "ok",
+            out["reason"] or f"pytest rc={out['rc']} over {out['paths']}")
 
 
 @router.post("/steps/commit-tests-only")
@@ -3506,44 +3568,50 @@ def workflow_step_commit_tests_only(
         return subprocess.run(["git", *args], cwd=str(root),
                               capture_output=True, text=True, timeout=120)
 
-    with _tracer.start_as_current_span("workflow.step.commit_tests_only") as s:
-        s.set_attribute("workflow.project", project)
-        s.set_attribute("workflow.task.id", body.task_id)
-        root, why = _task_worktree(body.task_id)
-        if root is None:
-            out["reason"] = why
+    try:
+        with _tracer.start_as_current_span("workflow.step.commit_tests_only") as s:
+            s.set_attribute("workflow.project", project)
+            s.set_attribute("workflow.task.id", body.task_id)
+            root, why = _task_worktree(body.task_id)
+            if root is None:
+                out["reason"] = why
+                return out
+            try:
+                changed = _git("status", "--porcelain")
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                out["reason"] = f"git status failed: {exc}"
+                return out
+            files = [ln[3:].strip() for ln in
+                     (changed.stdout or "").splitlines() if ln[3:].strip()]
+            if not files:
+                out["reason"] = "nothing to commit: the worktree is clean"
+                return out
+            stray = [f for f in files
+                     if not f.rsplit("/", 1)[-1].startswith("test_")]
+            if stray:
+                out["files"] = files
+                out["reason"] = (
+                    f"not tests-only: {len(stray)} non-test path(s) are dirty "
+                    f"({', '.join(stray[:3])}). The red anchor must carry tests "
+                    f"and nothing else, so nothing was committed.")
+                return out
+            msg = body.message or f"test: pin the failing case [task:{body.task_id[:8]}]"
+            if f"[task:{body.task_id[:8]}]" not in msg:
+                msg = f"{msg} [task:{body.task_id[:8]}]"
+            add = _git("add", *files)
+            if add.returncode != 0:
+                out["reason"] = f"git add failed: {(add.stderr or '').strip()[:200]}"
+                return out
+            made = _git("commit", "-m", msg)
+            if made.returncode != 0:
+                out["reason"] = f"git commit failed: {(made.stderr or '').strip()[:200]}"
+                return out
+            sha = _git("rev-parse", "HEAD")
+            out.update(outcome="ok", committed=True, files=files,
+                       sha=(sha.stdout or "").strip()[:40])
             return out
-        try:
-            changed = _git("status", "--porcelain")
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            out["reason"] = f"git status failed: {exc}"
-            return out
-        files = [ln[3:].strip() for ln in
-                 (changed.stdout or "").splitlines() if ln[3:].strip()]
-        if not files:
-            out["reason"] = "nothing to commit: the worktree is clean"
-            return out
-        stray = [f for f in files
-                 if not f.rsplit("/", 1)[-1].startswith("test_")]
-        if stray:
-            out["files"] = files
-            out["reason"] = (
-                f"not tests-only: {len(stray)} non-test path(s) are dirty "
-                f"({', '.join(stray[:3])}). The red anchor must carry tests "
-                f"and nothing else, so nothing was committed.")
-            return out
-        msg = body.message or f"test: pin the failing case [task:{body.task_id[:8]}]"
-        if f"[task:{body.task_id[:8]}]" not in msg:
-            msg = f"{msg} [task:{body.task_id[:8]}]"
-        add = _git("add", *files)
-        if add.returncode != 0:
-            out["reason"] = f"git add failed: {(add.stderr or '').strip()[:200]}"
-            return out
-        made = _git("commit", "-m", msg)
-        if made.returncode != 0:
-            out["reason"] = f"git commit failed: {(made.stderr or '').strip()[:200]}"
-            return out
-        sha = _git("rev-parse", "HEAD")
-        out.update(outcome="ok", committed=True, files=files,
-                   sha=(sha.stdout or "").strip()[:40])
-        return out
+    finally:
+        _record_node_run(
+            project, out["task_id"], "commit-tests-only",
+            out["outcome"] == "ok",
+            out["reason"] or f"committed {out['sha'][:12]}: {', '.join(out['files'])}")
