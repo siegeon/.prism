@@ -12,6 +12,7 @@ import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
 import { relativeTime } from "@/lib/relativeTime";
+import { useWorkflowLive, type WorkflowLiveNode } from "@/lib/useWorkflowLive";
 import Editor from "@monaco-editor/react";
 
 /** /workflows — the conductor's FSM and the bots that drive it, per project.
@@ -684,6 +685,33 @@ export default function WorkflowsPage() {
     load();
     return () => { cancel = true; window.clearTimeout(timer); };
   }, [project]);
+
+  // The 1-second live channel (services/workflow_live.py), overlaid on top
+  // of the LAST full definition the poll above stored. This never fetches
+  // structure on its own -- only occupancy and a `live` detail map change,
+  // so a node's real position reaches the screen in about a second instead
+  // of the catalog poll's own 10s cadence (which itself measured 21-52s
+  // under load). Same freeze guard as that poll, reused verbatim: a
+  // deliberately-chosen instance overlay (replay, or a conductor task's own
+  // synthetic occupancy) must never be stomped by this tick either.
+  const liveWorkflows = useWorkflowLive(project);
+  useEffect(() => {
+    if (!liveWorkflows) return;
+    const selected = workflows.find((workflow) => workflow.id === selectedWorkflowId);
+    if (selected && (!viewingInstanceRef.current || selected.parent_id)) {
+      const overlay = selected.id === "conductor"
+        ? liveWorkflows.conductor
+        : liveWorkflows.entries[selected.id];
+      if (overlay) {
+        const overlaid: WorkflowCatalogEntry & { live?: Record<string, WorkflowLiveNode> } = {
+          ...selected,
+          occupancy: overlay.occupancy,
+          live: overlay.live,
+        };
+        graphRef.current.setDef(workflowForGraph(overlaid));
+      }
+    }
+  }, [liveWorkflows, workflows, selectedWorkflowId]);
 
   const selectWorkflow = useCallback((
     workflow: WorkflowCatalogEntry,
