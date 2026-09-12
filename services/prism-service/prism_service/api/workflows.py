@@ -3190,8 +3190,16 @@ _STEP_FOR_BEHAVIOUR: dict[str, str] = {
 # beat immediately before that same call (task_runner.py:1827). Anything
 # else lit the node but never opened a dispatch, so the canvas must not
 # paint it as RUNNING -- only WAITING.
+#
+# RECONCILED WITH THE SEAT FIX shipped in the same release (resume_actuator.
+# dispatch_once now acquires the claim FIRST and beats only once it holds
+# it -- a deferred attempt writes no beat at all): "resume_actuator_dispatch"
+# can therefore only be written by a seat that holds the task's claim and
+# is about to invoke, so it is an open-dispatch signal too. Without it a
+# genuine actuator dispatch read WAITING for its first 60s, until the
+# DispatchTicket's own re-beat took over (observed live 06:46:33 -> 06:47:33).
 _OPEN_DISPATCH_TOOLS: frozenset[str] = frozenset(
-    {"dispatch_guard_live", "claude_cli.invoke"})
+    {"dispatch_guard_live", "claude_cli.invoke", "resume_actuator_dispatch"})
 
 
 class WorkflowInstance(BaseModel):

@@ -311,10 +311,14 @@ def test_live_is_empty_when_nothing_is_lit(tmp_path, monkeypatch):
     assert entry["live"] == {}, entry["live"]
 
 
-def test_a_resume_actuator_precheck_beat_is_not_dispatching(tmp_path, monkeypatch):
-    """resume_actuator's pre-check beats every 180s BEFORE it knows whether
-    the task's claim is even held by a live process -- it lights the node
-    (occupancy) but must not claim a dispatch is actually open."""
+def test_a_resume_actuator_dispatch_beat_is_dispatching(tmp_path, monkeypatch):
+    """SUPERSEDED PREMISE (same release): this beat used to be the seat's
+    180s PRE-CHECK, written before it knew whether the claim was held, so
+    the canvas had to read it as WAITING. resume_actuator.dispatch_once now
+    acquires the claim FIRST and beats only while holding it, immediately
+    before invoke -- a deferred attempt writes no beat at all. The beat
+    therefore means a dispatch is genuinely opening, and the driver/tool
+    truth still rides on the node."""
     from prism_service.services import drive_heartbeat
 
     svc = _Svc([_mk_task(workflow_step="implement_tasks")])
@@ -330,10 +334,31 @@ def test_a_resume_actuator_precheck_beat_is_not_dispatching(tmp_path, monkeypatc
     entry = _entry(result, "implement-tasks-loop")
     assert entry["occupancy"]["loop"] == 1, entry["occupancy"]
     live = entry["live"]["loop"]
-    assert live["dispatching"] is False, live
+    assert live["dispatching"] is True, live
     assert live["driver"] == "prism-resume-actuator"
     assert live["tool"] == "resume_actuator_dispatch"
     assert live["task_id"] == "t-1"
+
+
+def test_a_beat_from_an_unknown_tool_is_not_dispatching(tmp_path, monkeypatch):
+    """The WAITING contract survives the reconcile: a beat whose tool is not
+    one of the open-dispatch tools lights the node but must not read as a
+    dispatch in flight."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5,
+        "last_tool": "some-precheck", "work_units": 1,
+        "driver": "some-seat",
+    })
+
+    result = workflows_api.get_workflows(project="prism")
+
+    live = _entry(result, "implement-tasks-loop")["live"]["loop"]
+    assert live["dispatching"] is False, live
+    assert live["tool"] == "some-precheck"
 
 
 def test_a_dispatch_guard_live_beat_is_dispatching(tmp_path, monkeypatch):
