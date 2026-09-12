@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.305"
+PRISM_VERSION = "7.13.306"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9252,4 +9252,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.305: the write_failing_tests inference call stops shipping 85 percent noise, and its Validate stage turns on. Measured live on one real call at 7.13.304: the prompt was 22,736 bytes (about 5,684 tokens), of which 19,440 bytes (about 4,860 tokens, 85.5 percent) was the Project conventions block. reason-loop built that block by f-string interpolating a LIST OF DATACLASS OBJECTS, so every call shipped raw ExpertiseEntry reprs carrying recall_count, last_recalled, evidence source_file paths and owner_user_id. The entries themselves were chosen by importance only: context_builder _recall_conventions pulls every active feedback memory and sorts by importance, and they all carry importance 7, so a task asking for a failing test received notes about version bumping and Claude Code permissions. _render_conventions now emits name and description only, under a total character budget (PRISM_CONTEXT_CONVENTIONS_CHARS, default 1500) that says plainly when it drops or truncates. Relevance-based selection is NOT addressed here and remains open. Second: the node declared an empty rubric, so Validate was skipped and a drafted test was never checked. It now declares test_drafted, and score_test_drafted checks the draft by AST, not by grep: it parses, it finds a test_ function (async counts), it finds a real assert statement (an assert inside a comment or a string does not count), it checks the path, and it refuses a draft that would raise before any assert, because the red gate wants pytest rc 1 and refuses rc 2 and rc 4. That last guard exempts the body of a pytest raises block, where the raise IS the assertion. Third: the declared prompt was nested inside its own placeholder. _run_step passed the already-substituted prompt back as the taskHint variable, so the dispatcher substituted it a second time and the instruction appeared twice, for verify_plan as well. It now passes the raw task material. 38 tests across four files. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.306: score_test_drafted refuses a draft whose imports do not resolve. 7.13.305 shipped the checker and a live call immediately proved it too weak: the node had drafted a test opening with from prism.models import TaskRun, there is no top-level prism package in this repo (it is prism_service), so pytest fails at COLLECTION with rc 2. The red gate wants rc 1 and refuses rc 2 and rc 4, and the node prompt already says never an import error. The checker returned ok True on it, which is the shape of a check that cannot fail: it verified the draft LOOKED like a test and missed the one thing that decides whether it runs. It now walks Import and ImportFrom, takes the top-level name, and resolves it with importlib.util.find_spec, which never executes the drafted code. It stays conservative on purpose: a relative import is never refused, anything that resolves in stdlib or site-packages passes, and an undetermined resolution passes. A checker that rejects good tests is worse than no checker. The real draft now returns imports unresolvable module or modules: prism. 15 tests, including a negative control proving the checker does not execute module-level code. '
 )
