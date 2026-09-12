@@ -67,6 +67,38 @@ def _is_agent_step(step_id: str) -> bool:
         return False
 
 
+def _foreign_driver_on(task_id: str, project: str) -> str:
+    """The name of a live driver already on `task_id`, or "" when this
+    seat may drive it (task ad38e421/7180de77).
+
+    A session driving a task through `conductor_work` posts drive
+    heartbeats exactly like task_runner does (POST /api/drive-heartbeat/
+    beat), under its OWN driver name. `task_runner.eligible_tasks` already
+    stands down for a live foreign beat before its periodic sweep --
+    `_drive_now` is a SECOND path onto the exact same seat
+    (`task_runner._run_one_step`), reached the instant a step advances
+    (dispatch.after_step) or a task first goes in_progress
+    (dispatch.on_started), and it called `_run_one_step` directly, never
+    passing through `eligible_tasks` at all. So the instant handoff had no
+    foreign-driver check whatsoever: a session's own report could be
+    immediately raced by the daemon driving the very same step, each
+    unaware of the other -- measured live on 4d86db87 (a session's 8-AC
+    story overwritten within 2s) and 87cb620e (a `<think>` preamble
+    written into plan_doc mid-drive).
+
+    There must be exactly ONE definition of "somebody else is driving
+    this" -- delegates to task_runner's own beat/age/driver-name check
+    rather than re-implementing it here, so the sweep and the instant
+    handoff can never quietly disagree about who is live on a task.
+    """
+    try:
+        from prism_service.services import task_runner
+
+        return task_runner._foreign_driver_on(project, task_id)
+    except Exception:
+        return ""
+
+
 def _drive_now(task_id: str, project: str) -> None:
     """Drive `task_id`'s current step immediately, off the request thread.
 
@@ -222,6 +254,11 @@ def after_step(task_id: str, project: str, advanced: bool = True) -> dict:
 
     step = str(getattr(t, "workflow_step", "") or "")
     if getattr(t, "status", "") == "in_progress" and _is_agent_step(step):
+        foreign = _foreign_driver_on(task_id, project)
+        if foreign:
+            return {"kind": "conductor.handoff", "from": task_id,
+                    "started": [], "step": step, "drove": False,
+                    "reason": f"driver {foreign!r} is live on this task"}
         _drive_now(task_id, project)
         return {"kind": "conductor.handoff", "from": task_id,
                 "started": [task_id], "step": step, "drove": True}
@@ -246,6 +283,11 @@ def on_started(task_id: str, project: str) -> dict:
         return {"kind": "conductor.handoff", "from": task_id, "started": []}
     if t is None or getattr(t, "status", "") != "in_progress":
         return {"kind": "conductor.handoff", "from": task_id, "started": []}
+    foreign = _foreign_driver_on(task_id, project)
+    if foreign:
+        return {"kind": "conductor.handoff", "from": task_id, "started": [],
+                "drove": False,
+                "reason": f"driver {foreign!r} is live on this task"}
     _drive_now(task_id, project)
     return {"kind": "conductor.handoff", "from": task_id,
             "started": [task_id], "drove": True}

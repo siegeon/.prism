@@ -1811,6 +1811,23 @@ def _run_one_step(project: str, task_id: str) -> dict:
     from prism_service.project_context import get_project
     from prism_service.services import task_workspace
 
+    # A LIVE SESSION MAY ALREADY BE DRIVING THIS TASK (task ad38e421/
+    # 7180de77). eligible_tasks already stands down for a live foreign beat
+    # before the periodic sweep even picks a task -- but dispatch._drive_now
+    # calls THIS function directly, the instant a step advances or a task
+    # first goes in_progress, bypassing eligible_tasks entirely. Checked
+    # here too, and FIRST -- before flow_start, before this seat's own
+    # heartbeat, before anything that could report and clobber plan_doc --
+    # so a direct call (a race between dispatch's own check and this
+    # running, a test, or any future caller) refuses just as fast, and
+    # never reaches dispatch_guard's chokepoint: a refusal here writes no
+    # dispatch_guard_dispatch row, because no real dispatch was attempted.
+    foreign = _foreign_driver_on(project, task_id)
+    if foreign:
+        return {"ok": False, "task_id": task_id,
+                "reason": f"a live driver ({foreign!r}) is already on "
+                          "this task"}
+
     task_svc = get_project(project).task_svc
     started = flow.flow_start(
         flow.Ident(task_id=task_id, session_id=SEAT_ID), project=project)
