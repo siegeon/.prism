@@ -2617,9 +2617,23 @@ class ConductorService:
         explicit human recovery decision, not an unsupervised loop, so it
         is never bound by MAX_AUTO_REWINDS."""
         self._task_svc.update(task_id, gate_state="failed", gate_reason=reason)
+        details = f"gate={gate_step_id}; action=reject; reason={reason}"
+        if gate_step_id == "plan_gate":
+            # task c2e6edaf: a machine seat must never re-approve the SAME
+            # plan text a human just rejected. Stamp the plan_doc's own
+            # content hash onto the reject row so a later seat can compare
+            # against the CURRENT plan_doc without needing a separate
+            # snapshot store — plan_gate_checks.manual_reject_stands reads
+            # this back.
+            try:
+                _t = self._task_svc.get(task_id)
+                _plan_doc = (getattr(_t, "plan_doc", "") or "") if _t else ""
+            except Exception:
+                _plan_doc = ""
+            details += ("; plan_doc_sha256="
+                       + hashlib.sha256(_plan_doc.encode("utf-8")).hexdigest())
         self._task_svc.record_history(
-            task_id, action="gate_decide",
-            details=f"gate={gate_step_id}; action=reject; reason={reason}",
+            task_id, action="gate_decide", details=details,
             actor=decided_by("conductor"))
         self._record_agent_run(
             task_id, gate_step_id, session_id, model=model,

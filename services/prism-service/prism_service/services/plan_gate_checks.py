@@ -37,7 +37,8 @@ from typing import Any, Callable, Optional
 
 
 CHECKS: tuple[str, ...] = (
-    "absent_file_claim", "stop_if_pinned", "already_green_ac")
+    "absent_file_claim", "stop_if_pinned", "already_green_ac",
+    "manual_reject_stands")
 
 LABELS: dict[str, str] = {
     "absent_file_claim":
@@ -46,6 +47,8 @@ LABELS: dict[str, str] = {
         "Every test named in stop_if is pinned by verify",
     "already_green_ac":
         "An AC offered as an oracle observation fails at the base commit",
+    "manual_reject_stands":
+        "No standing human reject of this same plan_doc",
 }
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -404,6 +407,91 @@ def already_green_ac(plan_doc: str, root: Optional[Path], base_ref: str,
 
 
 # ----------------------------------------------------------------------
+# 4. manual_reject_stands
+# ----------------------------------------------------------------------
+# Task c2e6edaf, observed on task d0b392b3: a distinct reviewer rejected
+# plan_gate with named findings; plan_doc did not change; two minutes later
+# the certainty seat (design_packet.adjudicate_root_plan_gate) approved the
+# SAME text because an unrelated field (task.oracle) had gained enough
+# content to move the score. Neither machine seat ever asked "did a human
+# just refuse this exact plan?" This tooth asks it. It never blocks a human
+# Approve (gate_decide is untouched); it blocks the MACHINE seats that read
+# CHECKS via run_all/refusal, which is every machine path that can approve
+# a plan_gate (conductor_flow's entry autoclear, gate_adjudicator's sweep,
+# and the certainty seat gate_adjudicator.sweep_once calls only when this
+# tooth is silent).
+_MACHINE_REJECT_ACTORS = frozenset({"conductor-adjudicator",
+                                    "conductor-autoclear"})
+_PLAN_REJECT_HASH_RE = re.compile(
+    r"gate=plan_gate;\s*action=reject.*?plan_doc_sha256=([0-9a-f]{64})",
+    re.IGNORECASE | re.DOTALL)
+_PLAN_REJECT_REASON_RE = re.compile(
+    r"reason=(.*?)(?:;\s*plan_doc_sha256=|$)", re.DOTALL)
+
+
+def _plan_doc_sha256(plan_doc: str) -> str:
+    return hashlib.sha256((plan_doc or "").encode("utf-8")).hexdigest()
+
+
+def _latest_manual_plan_reject(history: list) -> Any:
+    """The newest gate_decide row that rejected plan_gate from a NON-machine
+    actor, or None. A machine seat never rejects a gate today (it only
+    approves or leaves pending), but the check is defensive: a machine
+    seat's own decline must never count as "a human said no"."""
+    for row in reversed(list(history or [])):
+        if str(getattr(row, "action", "") or "") != "gate_decide":
+            continue
+        details = str(getattr(row, "details", "") or "")
+        if "gate=plan_gate" not in details or "action=reject" not in details:
+            continue
+        if str(getattr(row, "actor", "") or "") in _MACHINE_REJECT_ACTORS:
+            continue
+        return row
+    return None
+
+
+def manual_reject_stands(task, project: str = "default",
+                         history: Optional[list] = None) -> str:
+    """Refusal string while the LATEST human reject of plan_gate still
+    stands against the CURRENT plan_doc -- i.e. plan_doc has not changed,
+    byte for byte, since that reject. "" once plan_doc changes (a fresh
+    round earns a fresh look) or when there is no standing manual reject.
+    Degrades to PASS ("") when history cannot be read, or when an older
+    reject row carries no plan_doc_sha256 (nothing to compare)."""
+    tid = str(getattr(task, "id", "") or "")
+    if not tid:
+        return ""
+    rows = history
+    if rows is None:
+        try:
+            from prism_service.project_context import get_project
+            ctx = get_project(project)
+            rows = list(ctx.task_svc.history(tid) or [])
+        except Exception:
+            return ""
+    latest = _latest_manual_plan_reject(rows)
+    if latest is None:
+        return ""
+    details = str(getattr(latest, "details", "") or "")
+    m = _PLAN_REJECT_HASH_RE.search(details)
+    if not m:
+        return ""
+    if m.group(1) != _plan_doc_sha256(getattr(task, "plan_doc", "") or ""):
+        return ""
+    actor = str(getattr(latest, "actor", "") or "a reviewer")
+    when = str(getattr(latest, "timestamp", "") or "")
+    rm = _PLAN_REJECT_REASON_RE.search(details)
+    finding = rm.group(1).strip() if rm else ""
+    first_finding = re.split(r"[;\n]", finding)[0].strip()[:200]
+    where = f" at {when}" if when else ""
+    what = f" ({first_finding})" if first_finding else ""
+    return (f"plan_checks: {actor} rejected plan_gate{where}{what} and "
+            "plan_doc has not changed since -- a machine seat may not "
+            "re-approve the same text a human just rejected; revise "
+            "plan_doc to earn a fresh look")
+
+
+# ----------------------------------------------------------------------
 # Task-facing surface
 # ----------------------------------------------------------------------
 def repo_root_for(task, project: str) -> Optional[Path]:
@@ -500,9 +588,11 @@ def run_all(task, project: str = "default", *,
             elif check_id == "stop_if_pinned":
                 reason = stop_if_pinned(getattr(task, "stop_if", None),
                                         getattr(task, "verify", None), root)
-            else:
+            elif check_id == "already_green_ac":
                 reason = already_green_ac(plan, root, base, measure=measure,
                                           runner=runner)
+            else:
+                reason = manual_reject_stands(task, project)
         except Exception:
             reason = ""
         out.append({"id": check_id, "label": LABELS[check_id],

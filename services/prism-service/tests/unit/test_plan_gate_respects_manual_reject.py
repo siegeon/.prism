@@ -60,13 +60,12 @@ from prism_service.services import plan_gate_checks as pgc  # noqa: E402
 _RICH_PLAN = "\n".join([
     "## Summary",
     "A machine seat must not re-approve a plan a human just rejected "
-    "unchanged, regardless of what an unrelated field's score does.",
-    "",
-    "## Acceptance Criteria (plan coverage)",
-    "AC-1: a standing manual reject withholds the gate.",
-    "oracle: pytest tests/unit/test_plan_gate_respects_manual_reject.py",
-    "AC-2: a plan_doc edit clears the standing reject.",
-    "oracle: pytest tests/unit/test_plan_gate_respects_manual_reject.py",
+    "unchanged, regardless of what an unrelated field's score does. No "
+    "acceptance-criteria block here on purpose: this fixture is exercised "
+    "with the plan_coverage rubric stubbed green, so it must not also trip "
+    "the already_green_ac tooth's own AC-shaped parsing, which would refuse "
+    "it for a reason that has nothing to do with the manual-reject tooth "
+    "these tests pin.",
 ])
 
 

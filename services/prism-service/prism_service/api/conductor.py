@@ -451,6 +451,20 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
     # status IS the live parked reason - self-diagnosable without a stale
     # gate_reason relay, mirroring the red_gate branch below.
     if getattr(task, "workflow_step", "") == "plan_gate":
+        # DETERMINISTIC PLAN TEETH FIRST (task c2e6edaf), same order as the
+        # entry-time autoclear and the adjudicator sweep: a standing manual
+        # reject (or any other plan_gate_checks refusal) is why the gate is
+        # not ready, on EVERY task at plan_gate -- root or child -- so a
+        # reader never sees "design packet needs approval" while the real
+        # blocker is a human's own unaddressed reject of this same text.
+        from prism_service.services import plan_gate_checks as _pgc
+        _cr = _pgc.refusal(task, project)
+        if _cr:
+            return {"receipt_ok": False, "receipt_refusal": _cr,
+                    "manual_review": True,
+                    "receipt": {"adapter": "plan-checks", "passed": False,
+                                "status": "pending", "ended_at": "",
+                                "reason": _cr}}
         # Owner 2026-08-27 (task 3c774abd): the design-packet approval IS the
         # owner's plan stop on a root task (adapter design-packet, below); a
         # child task never parks here because its autoclear skips the ledger.
