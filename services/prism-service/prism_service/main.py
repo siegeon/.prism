@@ -618,6 +618,19 @@ async def lifespan(_app: FastAPI):
         )
         start_gate_adjudicator()
 
+        # Task b490fabc (2026-09-11) — drop stale leases from a prior
+        # process BEFORE either seat below can take a new one. A restart
+        # kills prism-task-runner/prism-resume-actuator mid-lease, and their
+        # holder_id survives in the claims table as `released_at IS NULL`
+        # even though the process holding it is gone — the fresh seats
+        # started below would otherwise read their OWN dead lease as "held
+        # by another driver" and defer to it for up to MAX_LEASE_S. Once,
+        # at startup, never per-sweep; never touches an external holder.
+        from prism_service.services.task_runner import (
+            release_stale_seat_leases,
+        )
+        release_stale_seat_leases()
+
         # Epic 0784729f, AC-4 — the terminal-less task-drive seat: a task
         # advances even when no human's Claude Code session is looping on
         # conductor_work. NEVER decides a gate (gate_adjudicator's seat).

@@ -1773,6 +1773,39 @@ def _claim_service(project: str):
         return None
 
 
+def release_stale_seat_leases() -> int:
+    """Drop every unreleased claim this PROCESS'S OWN daemon seats could
+    not possibly still hold, across every project. Call exactly ONCE at
+    daemon startup, before start_task_runner/start_resume_actuator.
+
+    Live incident (task b490fabc, 2026-09-11): `prism-task-runner` leased a
+    task at 06:14:59 (a 30-min lease) and was killed by a daemon restart
+    before it released — `released_at` stayed NULL, so the fresh process
+    that started seconds later found its OWN seat id already "holding" the
+    task for the next 30 minutes, and resume_actuator deferred to that dead
+    lease every 180s sweep. A lease held by `prism-task-runner` or
+    `prism-resume-actuator` cannot be a live hold the instant this process
+    starts, since neither seat exists yet before this point in startup.
+    Never touches a lease held by any OTHER holder_id (an external
+    session's claim) -- only this process's own two seat identities.
+    """
+    from prism_service.project_context import get_all_projects
+    from prism_service.services.resume_actuator import SEAT as _RESUME_SEAT
+
+    total = 0
+    for pid in get_all_projects():
+        claim = _claim_service(pid)
+        if claim is None:
+            continue
+        for seat in (SEAT_ID, _RESUME_SEAT):
+            n = claim.release_by_holder(seat)
+            if n:
+                total += n
+                _log(f"released {n} stale lease(s) held by {seat} from a "
+                     "previous process")
+    return total
+
+
 def _run_one_step(project: str, task_id: str) -> dict:
     from prism_service.api import conductor_flow as flow
     from prism_service.project_context import get_project

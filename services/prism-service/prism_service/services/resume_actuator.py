@@ -321,12 +321,23 @@ def _dispatch_count(task_svc, task_id: str) -> int:
 
 
 def dispatch_once(project: str, task_id: str) -> dict:
-    """Dispatch one driver tick for `task_id`: an attributable history row
-    and a heartbeat fire FIRST (AC-2/AC-4 -- the tile moves off 'stalled'
-    the instant dispatch fires, whatever the outcome), then the SAME
-    invoke/report plumbing task_runner.py uses. A report that genuinely
+    """Dispatch one driver tick for `task_id`: claim the task's lease FIRST,
+    then fire the attributable history row and heartbeat (AC-2/AC-4 -- the
+    tile moves off 'stalled' the instant a REAL dispatch fires), then the
+    SAME invoke/report plumbing task_runner.py uses. A report that genuinely
     advances the workflow_step resets the retry budget; anything else
-    increments it (AC-5)."""
+    increments it (AC-5).
+
+    Mirrors task_runner._run_one_step's own ordering (task b490fabc,
+    2026-09-11): a beat recorded BEFORE the claim check is a beat for work
+    that never started. Live incident on b490fabc showed both seats reading
+    the OTHER seat's pre-check beat as "a live driver" and yielding to it —
+    two seats, each deferring to the other's ghost, for a whole 30-minute
+    lease, with no agent_runs row and no claude -p process behind either
+    beat. A deferred attempt (the claim already held by another driver)
+    therefore writes NO heartbeat and NO DISPATCH_ACTION history row: it
+    never charges toward the 12-dispatch total ceiling either, since that
+    ceiling counts DISPATCH_ACTION rows."""
     from prism_service.api import conductor_flow as flow
     from prism_service.project_context import get_project
     from prism_service.services import drive_heartbeat
@@ -339,29 +350,6 @@ def dispatch_once(project: str, task_id: str) -> dict:
     ctx = get_project(project)
     task_svc = ctx.task_svc
     scores_db = _scores_db_for(project)
-
-    task = task_svc.get(task_id)
-    step_id = getattr(task, "workflow_step", "") or ""
-
-    task_svc.record_history(task_id, action=DISPATCH_ACTION,
-                            details=f"seat={SEAT}; step={step_id}",
-                            actor=SEAT)
-    # work_units MUST STRICTLY INCREASE ACROSS DISPATCHES. record_heartbeat
-    # is monotonic: a beat repeating the previously stored counter does NOT
-    # advance last_progress_at, so a hardcoded 1 refreshed this seat's own
-    # liveness exactly once, on the very first dispatch, and never again.
-    # This docstring promises "the tile moves off 'stalled' the instant
-    # dispatch fires" -- with a constant it moved off once and the task read
-    # stalled again 180s later, every time, no matter how often the seat
-    # rescued it. The dispatch count from this task's own history always
-    # increases and survives a daemon restart.
-    _beats = _dispatch_count(task_svc, task_id)
-    drive_heartbeat.record_heartbeat(scores_db, {
-        "task_id": task_id, "step": step_id or "unknown", "elapsed_s": 0,
-        "last_tool": "resume_actuator_dispatch",
-        "work_units": max(1, _beats),
-        "driver": SEAT,
-    })
 
     def _no_advance(reason: str, **extra) -> dict:
         rad.record_attempt(scores_db, task_id)
@@ -387,6 +375,13 @@ def dispatch_once(project: str, task_id: str) -> dict:
     # that one seat honours is not a lock. This is the ticket's own named
     # misfire, shipped: "the lock covers only task_runner, so resume_actuator,
     # ship_worker and an operator agent still enter."
+    #
+    # ACQUIRE BEFORE ANY BEAT (task b490fabc, 2026-09-11). This used to write
+    # the DISPATCH_ACTION row and heartbeat ABOVE, before this claim check --
+    # so a claim held by another driver still landed a heartbeat/history row
+    # for work that never ran, and the two seats read each other's pre-check
+    # beats as a live driver forever (see docstring). Beat only once the
+    # lease is actually held.
     from prism_service.services import task_runner as _tr
 
     claim = _tr._claim_service(project)
@@ -405,10 +400,33 @@ def dispatch_once(project: str, task_id: str) -> dict:
             # driver holding the lease is evidence that work IS happening
             # — the opposite of the stall this seat exists to rescue — so
             # defer without charging an attempt and pick it up on a later
-            # sweep if it really does go quiet.
+            # sweep if it really does go quiet. NO heartbeat, NO
+            # DISPATCH_ACTION row: this attempt never ran (task b490fabc).
             return {"ok": False, "task_id": task_id, "step": job["step"],
                     "deferred": True,
                     "reason": f"already driving: held by {holder}"}
+
+    # THE LEASE IS HELD -- this is a real dispatch. Beat and record it now,
+    # not before (task b490fabc).
+    task_svc.record_history(task_id, action=DISPATCH_ACTION,
+                            details=f"seat={SEAT}; step={job['step']}",
+                            actor=SEAT)
+    # work_units MUST STRICTLY INCREASE ACROSS DISPATCHES. record_heartbeat
+    # is monotonic: a beat repeating the previously stored counter does NOT
+    # advance last_progress_at, so a hardcoded 1 refreshed this seat's own
+    # liveness exactly once, on the very first dispatch, and never again.
+    # This docstring promises "the tile moves off 'stalled' the instant
+    # dispatch fires" -- with a constant it moved off once and the task read
+    # stalled again 180s later, every time, no matter how often the seat
+    # rescued it. The dispatch count from this task's own history always
+    # increases and survives a daemon restart.
+    _beats = _dispatch_count(task_svc, task_id)
+    drive_heartbeat.record_heartbeat(scores_db, {
+        "task_id": task_id, "step": job["step"] or "unknown", "elapsed_s": 0,
+        "last_tool": "resume_actuator_dispatch",
+        "work_units": max(1, _beats),
+        "driver": SEAT,
+    })
 
     from prism_service.inference import claude_cli
 

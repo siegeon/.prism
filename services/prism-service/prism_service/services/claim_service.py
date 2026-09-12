@@ -208,6 +208,27 @@ class ClaimService:
         except Exception:
             pass
 
+    def release_by_holder(self, holder_id: str) -> int:
+        """Release every unreleased lease held by `holder_id`. Returns the
+        number of rows released.
+
+        For a daemon seat's startup use ONLY (task b490fabc, 2026-09-11): a
+        process that just started cannot still be the process that took an
+        earlier lease, so any unreleased row under its own seat id is dead
+        weight from a crashed prior run, not a live hold to respect. Scoped
+        to one holder_id on purpose -- a live external session's claim
+        (a different holder_id) must survive this call untouched.
+        """
+        try:
+            conn = self._db
+            cur = conn.execute(
+                "UPDATE claims SET released_at=? WHERE holder_id=? "
+                "AND released_at IS NULL", (time.time(), holder_id))
+            conn.commit()
+            return cur.rowcount if cur.rowcount is not None else 0
+        except Exception:
+            return 0
+
     def seconds_remaining(self, task_id: str) -> float:
         """Seconds left on the live lease for `task_id`, or 0.0 when free."""
         try:
