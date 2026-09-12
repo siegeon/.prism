@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.303"
+PRISM_VERSION = "7.13.304"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9244,4 +9244,8 @@ PRISM_VERSION_NOTES += (
     'Falls back to the bare command where setpriv has no --pdeathsig. '
     'test_claude_cli_child_dies_with_parent.py, 4 tests, one of which kills a '
     'real parent and asserts the grandchild dies. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.304: write_failing_tests can finally REACH its declared node. The node write-failing-tests-loop.json declares the whole chain (reason-loop, write-test-file, run-pinned-suite, commit-tests-only), the step is in _PLANNED_STEPS, and _runs_as_declared_steps admits it. But the dispatch gate reads `if narrow_prompt and _runs_as_declared_steps(...)` and _declared_agentic_prompt had no branch for the step, so narrow_prompt was always empty and the and short-circuited. The chain was unreachable and every run fell through to the wide step brief at 30 turns with the full toolset. Observed on task b490fabc: the fallback ran 901 s, was SIGKILLed at the 900 s wall with no agent_runs row, and was reported as exit=1 crash/auth/truncated. The same test file already records the sibling symptom on d5808cd1, a 133,780-token envelope against a 131,072 window, where the call failed before inference. One line: the verify_plan branch now also admits write_failing_tests, reading its prompt from the declaration in the same way. _DRAFT_ONLY_WITHOUT_CHAIN still clears the prompt when the chain leaves no tests-only commit, so the full brief stays the fallback and this can only be cheaper, never worse. 3 tests in test_verify_plan_node_runs_its_declared_plan.py. '
 )

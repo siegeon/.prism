@@ -188,3 +188,38 @@ def test_draft_story_routing_is_unchanged():
 
     assert svc.fields["plan_doc"] == _REPORT
     assert "plan_diagram" not in svc.fields
+
+
+# ----------------------------------------------------------------------
+# AC-4 -- write_failing_tests gets the same prompt dispatch as verify_plan
+# ----------------------------------------------------------------------
+
+def test_write_failing_tests_is_a_planned_step():
+    """Regression: write_failing_tests must be in _PLANNED_STEPS so that
+    _declared_agentic_prompt can dispatch to it and enable narrow_prompt."""
+    assert "write_failing_tests" in task_runner._PLANNED_STEPS
+    plan = task_runner._node_plan("prism", "write_failing_tests")
+    assert plan is not None, "write-failing-tests-loop.json declares a real plan"
+
+
+def test_write_failing_tests_sends_the_declared_narrow_prompt():
+    """Regression: _declared_agentic_prompt must return a non-empty prompt
+    for write_failing_tests when given a plan with a prompt body and a task
+    with material."""
+    plan = task_runner._node_plan("prism", "write_failing_tests")
+    prompt = task_runner._declared_agentic_prompt(
+        "write_failing_tests", _Task(), [], plan=plan)
+
+    assert prompt, (
+        "write_failing_tests must have a narrow prompt, not the step brief; "
+        "the dispatch gate short-circuits when narrow_prompt is empty")
+    assert _Task.title in prompt, "the task material is substituted in"
+    assert "${taskHint}" not in prompt, "the placeholder must be filled"
+
+
+def test_write_failing_tests_falls_back_to_full_brief_with_no_declaration():
+    """Same guard as verify_plan: no plan or empty prompt = fall back."""
+    assert task_runner._declared_agentic_prompt(
+        "write_failing_tests", _Task(), [], plan=None) == ""
+    assert task_runner._declared_agentic_prompt(
+        "write_failing_tests", _Task(), [], plan={"prompt": ""}) == ""

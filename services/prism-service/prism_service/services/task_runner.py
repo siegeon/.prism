@@ -703,6 +703,11 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
       no prompt. Its prompt is read from the DECLARATION rather than copied
       into this module, so verify-plan-loop.json stays the single source of
       truth for it and cannot drift from what the canvas shows.
+    - write_failing_tests: same rule as verify_plan -- its prompt is read from
+      write-failing-tests-loop.json, and the declared chain (write -> run ->
+      commit) is what advances the step; _DRAFT_ONLY_WITHOUT_CHAIN still drops
+      this prompt when the chain leaves no tests-only commit, so the full brief
+      stays the fallback.
 
     Every refusal ensures the full brief is the fallback, not a
     materially-hollow narrow prompt.
@@ -739,7 +744,7 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
             "carry an id like AC-1 and end with an oracle marker, e.g. "
             "'\u2014 oracle: <observable check>'."
         )
-    if step_id == "verify_plan":
+    if step_id in ("verify_plan", "write_failing_tests"):
         declared = str((plan or {}).get("prompt") or "")
         task_hint = (f"{getattr(task, 'title', '') or ''}\n\n"
                      f"{getattr(task, 'description', '') or ''}").strip()
