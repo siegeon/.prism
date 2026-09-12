@@ -60,6 +60,13 @@ def test_live_occupancy_is_the_default_view_when_nothing_is_working():
     """With no instance open the definition poll re-applies the board's
     real occupancy -- the honest whole-board view."""
     src = _PAGE.read_text(encoding="utf-8")
-    assert "if (selected && !viewingInstanceRef.current) {" in src, (
+    # SUPERSEDED LITERAL (7.13.309, "a drilled behaviour layer's own
+    # occupancy poll never froze"): the guard grew `|| selected.parent_id`
+    # so a nested behaviour layer keeps polling live occupancy during a
+    # replay. The property this test pins still holds -- with no instance
+    # open (`!viewingInstanceRef.current`) the poll re-applies the board's
+    # real occupancy -- the condition merely gained a second way in.
+    assert ("if (selected && (!viewingInstanceRef.current || "
+            "selected.parent_id)) {") in src, (
         "the live-occupancy branch guard changed; the board would no longer "
         "fall back to whole-board occupancy")
