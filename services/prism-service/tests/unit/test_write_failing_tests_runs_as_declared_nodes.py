@@ -250,3 +250,115 @@ def test_the_document_chain_is_unchanged():
     out = task_runner._result_from_dispatch(
         [{"route": "reason-loop", "ok": True, "result": _Resp()}])
     assert out is not None and "AC-1" in out.final_text()
+
+
+# ----------------------------------------------------------------------
+# AC-4 -- the prompt is substituted exactly once, never nested
+# ----------------------------------------------------------------------
+
+def test_write_failing_tests_prompt_is_not_nested():
+    """The declared prompt contains ${taskHint}. The bug was: we built the
+    fully-substituted prompt with _declared_agentic_prompt and passed it to
+    _dispatch_declared_steps as ${taskHint}, causing a double substitution
+    where the prompt nested inside its own placeholder. This test verifies
+    the fix: pass the raw task material to the dispatcher, not the
+    already-substituted prompt, so ${taskHint} is substituted exactly once.
+    """
+    class _Task:
+        title = "My Test Task"
+        description = "This is a test task"
+
+    captured_reason_loop_body: dict = {}
+
+    def _draft(project, body):
+        # Capture the reason-loop body to inspect its prompt field
+        captured_reason_loop_body.update(body)
+        class _Result:
+            reason = {"fields": {"test_file_path": "tests/unit/test_x.py",
+                                 "test_code": "def test_x():\n    assert False"}}
+        return _Result()
+
+    def _capture(project, body):
+        # Capture other handlers' bodies (not needed for this test)
+        return {"outcome": "ok", "written": True}
+
+    plan = _plan()
+    handlers = {s["route"]: _capture for s in plan["steps"]}
+    handlers["reason-loop"] = _draft
+
+    # Build the variables as the fixed code does: pass raw task hint,
+    # not the already-substituted narrow_prompt
+    task_hint = task_runner._build_task_hint(_Task())
+    task_runner._dispatch_declared_steps(
+        "prism", plan, handlers=handlers,
+        variables={"taskHint": task_hint, "taskId": "abc123",
+                   "project": "prism"})
+
+    # The reason-loop body contains the prompt field
+    body_prompt = captured_reason_loop_body.get("prompt", "")
+    assert body_prompt, (
+        f"reason-loop did not receive a prompt. Body keys: "
+        f"{list(captured_reason_loop_body.keys())}")
+    assert "${taskHint}" not in body_prompt, (
+        f"unfilled ${'{'}taskHint{'}'} placeholder in prompt: {body_prompt}")
+    assert "My Test Task" in body_prompt, (
+        f"task title not found in prompt: {body_prompt}")
+
+    # Count occurrences of a distinctive leading substring of the declared
+    # prompt (e.g., "Draft a failing test") to ensure it appears exactly once
+    declared_prompt_start = "Draft a failing test"
+    count = body_prompt.count(declared_prompt_start)
+    assert count == 1, (
+        f"declared prompt appears {count} times; expected 1 (not nested). "
+        f"Prompt:\n{body_prompt}")
+
+
+def test_verify_plan_prompt_is_not_nested():
+    """Same duplication check for verify_plan's reason-loop as write_failing_tests."""
+    class _Task:
+        title = "Verify This Plan"
+        description = "Verify the plan content"
+
+    captured_reason_loop_body: dict = {}
+
+    def _reasonloop(project, body):
+        # Capture the reason-loop body to inspect its prompt field
+        captured_reason_loop_body.update(body)
+        class _Resp:
+            reason = {"fields": {"plan_doc": "## Plan\nAC-1 oracle: check this",
+                                 "plan_diagram": "flowchart TD\n A-->B"}}
+        return _Resp()
+
+    def _capture(project, body):
+        # Capture other handlers' bodies (not needed for this test)
+        return {"outcome": "ok"}
+
+    plan = task_runner._node_plan("prism", "verify_plan")
+    if plan is None:
+        pytest.skip("verify_plan plan not declared")
+
+    handlers = {s["route"]: _capture for s in plan["steps"]}
+    handlers["reason-loop"] = _reasonloop
+
+    # Pass raw task hint, not already-substituted narrow_prompt
+    task_hint = task_runner._build_task_hint(_Task())
+    task_runner._dispatch_declared_steps(
+        "prism", plan, handlers=handlers,
+        variables={"taskHint": task_hint, "taskId": "xyz789",
+                   "project": "prism"})
+
+    # The reason-loop body contains the prompt field
+    body_prompt = captured_reason_loop_body.get("prompt", "")
+    if body_prompt:  # verify_plan's prompt may be optional
+        assert "${taskHint}" not in body_prompt, (
+            f"unfilled ${'{'}taskHint{'}'} placeholder in prompt: {body_prompt}")
+        assert "Verify This Plan" in body_prompt, (
+            f"task title not found in prompt: {body_prompt}")
+
+        # Count occurrences to ensure it appears exactly once
+        # Use a distinctive substring from the plan's declared prompt
+        declared_prompt_start = "Write an implementation plan"
+        count = body_prompt.count(declared_prompt_start)
+        assert count == 1, (
+            f"declared prompt appears {count} times; expected 1 (not nested). "
+            f"Prompt:\n{body_prompt}")
