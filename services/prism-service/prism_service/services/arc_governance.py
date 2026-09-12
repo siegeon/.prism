@@ -736,9 +736,11 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
                 "reason": f"test_drafted: test_code does not parse as Python "
                           f"({type(e).__name__}: {e.msg})"}
 
-    # Check for at least one test_* function.
+    # Check for at least one test_* function. AsyncFunctionDef counts too:
+    # an async test is a legitimate test and must never be refused here.
     test_funcs = [node.name for node in ast_module.walk(tree)
-                  if isinstance(node, ast_module.FunctionDef)
+                  if isinstance(node, (ast_module.FunctionDef,
+                                       ast_module.AsyncFunctionDef))
                   and node.name.startswith("test_")]
     if not test_funcs:
         return {"ok": False,
@@ -753,8 +755,31 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
 
     # Check for statements that would raise before any assert.
     # This catches bare .index( calls and subscript lookups as statements.
+    #
+    # EXEMPT anything inside a `with pytest.raises(...)` block. There the
+    # raise IS the assertion -- `with pytest.raises(KeyError): d["nope"]` is
+    # a correct test, and refusing it would reject exactly the tests this
+    # rubric exists to encourage. Conservative by rule: when in doubt, pass.
+    exempt: set = set()
+    for node in ast_module.walk(tree):
+        if isinstance(node, (ast_module.With, ast_module.AsyncWith)):
+            raises_ctx = False
+            for item in node.items:
+                call = item.context_expr
+                if not isinstance(call, ast_module.Call):
+                    continue
+                fn = call.func
+                name = getattr(fn, "attr", None) or getattr(fn, "id", None)
+                if name == "raises":
+                    raises_ctx = True
+            if raises_ctx:
+                for inner in ast_module.walk(node):
+                    exempt.add(id(inner))
+
     problems = []
     for node in ast_module.walk(tree):
+        if id(node) in exempt:
+            continue
         if isinstance(node, ast_module.Expr):  # A bare statement
             value = node.value
             # Bare subscript: x[y] as a statement (no assignment)

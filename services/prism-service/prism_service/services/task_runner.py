@@ -1880,9 +1880,13 @@ def _run_one_step(project: str, task_id: str) -> dict:
         dispatched = None
         if narrow_prompt and _runs_as_declared_steps(job["step"], plan):
             # Pass the raw task material to the dispatcher, not the
-            # already-substituted prompt. _dispatch_declared_steps will
-            # substitute ${taskHint} once; if we pass the substituted prompt
-            # it will nest inside its own placeholder (task ???).
+            # already-substituted prompt. _dispatch_declared_steps substitutes
+            # ${taskHint} once; handing it the substituted prompt nests the
+            # whole instruction inside its own placeholder. Observed live in
+            # /proc/<pid>/cmdline on task b490fabc: the prompt opened "Draft a
+            # failing test ... for this task: Draft a failing test ... for this
+            # task: A running step agent ...". verify_plan shares this path and
+            # had the same duplication.
             task_hint = _build_task_hint(task)
             dispatched = _dispatch_declared_steps(
                 project, plan,
