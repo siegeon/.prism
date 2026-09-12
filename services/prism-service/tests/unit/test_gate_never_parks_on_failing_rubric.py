@@ -290,3 +290,73 @@ def test_rubric_scored_exactly_once_per_park_decision(tmp_path, monkeypatch):
 
     assert len(calls) == 1, (
         f"score_plan_coverage ran {len(calls)} times for one park decision")
+
+
+# ---------------------------------------------------------------------------
+# AC(h) — stop_if: "Verification fails twice." The SAME rubric failure
+# recurring at the same gate PARKS instead of rewinding a second time, so
+# a producing step that resubmits unchanged content (e.g. a headless
+# worker/fixture that never actually fixes anything) cannot bounce a task
+# between the gate and its producing step forever
+# (test_worker_contract_enforced.py and test_conductor_work_honest_green.py
+# hit exactly this against fixtures with no real story/plan content).
+# ---------------------------------------------------------------------------
+
+
+def test_same_rubric_failure_twice_parks_instead_of_rewinding_again(
+        tmp_path):
+    task_svc, cond = _services(tmp_path)
+    task = _plan_gate_task(task_svc)
+
+    from prism_service.api import conductor_flow as cf
+    first = cf._autoclear_machine_gate(cond, task.id)
+    assert first is not None and first.get("ok") is True, first
+    assert first.get("rewound_to") == "verify_plan", first
+    after_first = task_svc.get(task.id)
+    assert after_first.workflow_step == "verify_plan"
+    assert after_first.gate_state == "none"
+
+    # The producing step is "re-reported" with the SAME broken content
+    # (nothing changed) and lands back at plan_gate — the shape a headless
+    # drive loop produces when nobody fixes the plan in between.
+    task_svc.update(task.id, workflow_step="plan_gate", gate_state="pending")
+
+    second = cf._autoclear_machine_gate(cond, task.id)
+
+    assert second is None, (
+        "a repeat of the identical rubric failure must PARK, not rewind "
+        f"again: {second}")
+    after_second = task_svc.get(task.id)
+    assert after_second.workflow_step == "plan_gate", after_second.workflow_step
+    assert after_second.gate_state == "pending"
+    assert len(_rewind_rows(task_svc, task.id)) == 1, (
+        "exactly one rewind should have happened, not a second")
+
+
+def test_a_different_rubric_failure_still_rewinds_a_second_time(tmp_path):
+    """A CHANGED failure reason (real, if partial, progress) still earns
+    another rewind — only an IDENTICAL repeat parks."""
+    task_svc, cond = _services(tmp_path)
+    task = _plan_gate_task(task_svc)
+
+    from prism_service.api import conductor_flow as cf
+    first = cf._autoclear_machine_gate(cond, task.id)
+    assert first is not None and first.get("ok") is True, first
+
+    task_svc.update(task.id, workflow_step="plan_gate", gate_state="pending")
+
+    real_verify_gate = cond._verify_gate
+
+    def _once_different(t, step_id, proof_type=None):
+        res = real_verify_gate(t, step_id, proof_type=proof_type)
+        return {**res, "reason": "a different, new rubric complaint"}
+
+    cond._verify_gate = _once_different
+    try:
+        second = cf._autoclear_machine_gate(cond, task.id)
+    finally:
+        cond._verify_gate = real_verify_gate
+
+    assert second is not None and second.get("ok") is True, second
+    assert second.get("rewound_to") == "verify_plan", second
+    assert len(_rewind_rows(task_svc, task.id)) == 2

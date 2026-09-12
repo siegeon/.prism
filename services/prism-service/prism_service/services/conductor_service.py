@@ -3749,6 +3749,18 @@ class ConductorService:
         behind a broken scorer (e.g. an unseeded principle store a person,
         not a rewind, must fix).
 
+        This ticket's OWN second stop_if — "Verification fails twice" —
+        is the other loop guard: if the SAME gate already rewound once for
+        this EXACT reason (`_last_rubric_rewind_reason` finds a prior
+        auto_rewind row `f"{gate_step_id} -> "` carrying it), rewinding
+        again would just bounce forever between the gate and a producing
+        step that never actually changed (test_worker_contract_enforced.py
+        and test_conductor_work_honest_green.py surfaced this against
+        fixtures that resubmit identical content) — so a REPEAT of the
+        identical failure PARKS instead. A DIFFERENT failure reason still
+        rewinds once more: the producing step made real progress toward a
+        different problem, so it deserves another pass.
+
         Returns {"ok": True, "rewound_to": <step id>, "reason": ...} on a
         rewind, or {"ok": False, "scorer_error": bool, "reason": ...} on a
         park. Never raises — an unresolvable step falls back to parking
@@ -3767,6 +3779,8 @@ class ConductorService:
 
         if check.get("verifier") is None:
             return _park()  # scorer error — never loop a task on it
+        if self._last_rubric_rewind_reason(task_id, gate_step_id) == reason:
+            return _park()  # same failure recurring — stop_if: fails twice
         from prism_service.models.task import normalize_workflow
         task = self._task_svc.get(task_id)
         if task is None:
@@ -3787,6 +3801,27 @@ class ConductorService:
     def _current_gate_reason(self, task_id: str) -> str:
         task = self._task_svc.get(task_id)
         return str(getattr(task, "gate_reason", "") or "") if task else ""
+
+    def _last_rubric_rewind_reason(self, task_id: str,
+                                   gate_step_id: str) -> Optional[str]:
+        """The reason string of the MOST RECENT `auto_rewind` FROM this
+        exact gate (`rubric_gate_failure_outcome`'s own rewinds record
+        their `from_step` as `f"{gate_step_id} -> {target}"`), or None if
+        this gate has never rewound a task before. Scans the WHOLE history,
+        not just the tail after the newest row — an `advance_task` row from
+        re-reporting the producing step sits between every pair of rewinds
+        for this shape, so a recency-window scan would never see past it."""
+        marker = f"{gate_step_id} -> "
+        for r in reversed(list(self._task_svc.history(task_id) or [])):
+            if getattr(r, "action", "") != "auto_rewind":
+                continue
+            details = str(getattr(r, "details", ""))
+            if not details.startswith(marker):
+                continue
+            if "; reason=" in details:
+                return details.split("; reason=", 1)[1]
+            return ""
+        return None
 
     def _verify_gate(self, task, gate_step_id: str,
                      proof_type: object = None) -> dict:
