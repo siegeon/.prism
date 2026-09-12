@@ -691,6 +691,90 @@ def score_green_outcome(evidence: dict, rubric: dict) -> dict:
 # Intended-vs-observed conformance (d1) — pure function
 # ----------------------------------------------------------------------
 
+def score_test_drafted(evidence: dict, rubric: dict) -> dict:
+    """PURE rubric verdict for the write_failing_tests Validate stage.
+
+    evidence: {"test_code": <python source>, "test_file_path": <file path>};
+    rubric: the test_drafted entry from governance_rubrics.yaml.
+    Returns {"ok": bool, "reason": str}. A compliant drafted test has:
+
+    (1) test_code non-empty and parses as valid Python;
+    (2) defines at least one function whose name starts with 'test_';
+    (3) contains at least one assert statement (via AST walk, not text grep);
+    (4) test_file_path non-empty, ends with '.py', and basename starts with
+        'test_';
+    (5) REFUSES a test that would raise an exception before any assert runs
+        (e.g. a bare .index( call or subscript lookup as a bare statement).
+    """
+    import ast as ast_module
+
+    test_code = str(evidence.get("test_code") or "").strip()
+    test_file_path = str(evidence.get("test_file_path") or "").strip()
+
+    # Check file path first.
+    if not test_file_path:
+        return {"ok": False, "reason": "test_drafted: test_file_path is empty"}
+    if not test_file_path.endswith(".py"):
+        return {"ok": False,
+                "reason": "test_drafted: test_file_path must end with .py"}
+    # Extract basename, handling both / and \ as path separators.
+    basename = test_file_path.replace("\\", "/").split("/")[-1]
+    if not basename.startswith("test_"):
+        return {"ok": False,
+                "reason": ("test_drafted: test file basename must start with "
+                           "test_ (got: " + basename + ")")}
+
+    # Check test code.
+    if not test_code:
+        return {"ok": False, "reason": "test_drafted: test_code is empty"}
+
+    # Parse as Python.
+    try:
+        tree = ast_module.parse(test_code)
+    except SyntaxError as e:
+        return {"ok": False,
+                "reason": f"test_drafted: test_code does not parse as Python "
+                          f"({type(e).__name__}: {e.msg})"}
+
+    # Check for at least one test_* function.
+    test_funcs = [node.name for node in ast_module.walk(tree)
+                  if isinstance(node, ast_module.FunctionDef)
+                  and node.name.startswith("test_")]
+    if not test_funcs:
+        return {"ok": False,
+                "reason": "test_drafted: no function starting with test_ found"}
+
+    # Check for at least one assert statement.
+    has_assert = any(isinstance(node, ast_module.Assert)
+                     for node in ast_module.walk(tree))
+    if not has_assert:
+        return {"ok": False,
+                "reason": "test_drafted: no assert statement found"}
+
+    # Check for statements that would raise before any assert.
+    # This catches bare .index( calls and subscript lookups as statements.
+    problems = []
+    for node in ast_module.walk(tree):
+        if isinstance(node, ast_module.Expr):  # A bare statement
+            value = node.value
+            # Bare subscript: x[y] as a statement (no assignment)
+            if isinstance(value, ast_module.Subscript):
+                problems.append("bare subscript lookup used as a statement")
+            # Bare method call that might raise: x.index(...)
+            elif (isinstance(value, ast_module.Call) and
+                  isinstance(value.func, ast_module.Attribute) and
+                  value.func.attr == "index"):
+                problems.append("bare .index() call that would raise on failure")
+    if problems:
+        return {"ok": False,
+                "reason": ("test_drafted: test would raise before any assert: "
+                           + "; ".join(problems))}
+
+    return {"ok": True,
+            "reason": (f"test_drafted: {len(test_funcs)} test function(s) "
+                       "defined; test code parses; assert statement present")}
+
+
 def compute_violations(principles: list[dict], layers: dict) -> dict:
     """Diff INTENDED principles against OBSERVED layer edges (pure).
 

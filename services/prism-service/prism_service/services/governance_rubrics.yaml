@@ -84,3 +84,12 @@ green_outcome:
   # meaningful word (>= misfire_word_min_len chars) with the recorded misfire.
   require_misfire_addressed: true
   misfire_word_min_len: 5
+
+test_drafted:
+  # write_failing_tests Validate tooth: a drafted test must parse as Python,
+  # define at least one test_* function, contain at least one assert
+  # statement, and carry a valid test file path (ends .py, basename starts
+  # test_). Refuses tests that would raise an exception before any assert
+  # runs (bare .index( call or subscript as a bare statement).
+  parse_required: true
+  assert_required: true
