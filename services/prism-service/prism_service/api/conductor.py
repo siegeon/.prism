@@ -920,16 +920,26 @@ def park_release(project: str = Query("default"),
     Two independent seats can park a task `blocked` with a prefixed
     `blocked_reason`: `resume_actuator` (`resume-actuator:`, a spent retry
     budget) and `dispatch_guard` (`dispatch-guard:`, the per-task dispatch
-    ceiling — "parked for a person"). Each seat owns its own `release()`,
-    the "the cause is fixed, try again" affordance that resets its own
-    counter, but only `resume_actuator`'s had an HTTP route
-    (`/resume/release`) — a task parked by `dispatch_guard` had NO
-    person-facing action able to lift it (task b490fabc-5067-4d08-a8cc-
-    0d46dbfe1332, 2026-09-11). This route reads the task's CURRENT
-    `blocked_reason` and dispatches to whichever seat's prefix matches,
-    via `dispatch_guard.is_governance_park`'s shared predicate. A
-    `blocked_reason` that carries neither prefix is left untouched — this
-    route never flips a task some other mechanism blocked.
+    ceiling — "parked for a person"). Each seat keeps its OWN dispatch
+    counter, reset ONLY by that seat's own `release()` writing its own
+    RELEASED_ACTION history row (`dispatch_guard_released` /
+    `resume_actuator_released`) — and each `release()` writes that row
+    unconditionally, regardless of whether the park it finds was its own
+    (it only flips `status`/`blocked_reason` when the park was its own).
+    Releasing only the seat named by the CURRENT `blocked_reason` prefix
+    therefore leaves the SIBLING seat's counter unreset: a person clicks
+    Release, the task unparks and dispatches once, and the sibling seat —
+    already at/over its own ceiling from earlier — re-parks it on the very
+    next sweep (task b490fabc-5067-4d08-a8cc-0d46dbfe1332, 2026-09-11: the
+    owner had to click Release twice). A person's release is "try again"
+    for the TASK, not for one seat, so this route calls BOTH seats'
+    `release()` — the one matching the current `blocked_reason` prefix
+    FIRST (so it performs the actual unpark), then the other (which resets
+    its own counter but finds the task no longer `blocked` and leaves
+    status alone). A `blocked_reason` that carries neither prefix
+    (`dispatch_guard.is_governance_park`'s shared predicate) is left
+    untouched — this route never flips a task some other mechanism
+    blocked.
     """
     task_id = (body or {}).get("task_id") or ""
     if not task_id:
@@ -944,15 +954,28 @@ def park_release(project: str = Query("default"),
     actor = (body or {}).get("actor") or (body or {}).get("session_id") or "human"
 
     if reason.startswith("dispatch-guard:"):
-        result = dispatch_guard.release(project, task_id, actor=str(actor))
-        result["module"] = "dispatch_guard"
-        return result
-    if reason.startswith("resume-actuator:"):
-        result = resume_actuator.release(project, task_id, actor=str(actor))
-        result["module"] = "resume_actuator"
-        return result
-    raise HTTPException(
-        409, f"not a governance park: {reason or '(no blocked_reason)'}")
+        primary = "dispatch_guard"
+    elif reason.startswith("resume-actuator:"):
+        primary = "resume_actuator"
+    else:
+        raise HTTPException(
+            409, f"not a governance park: {reason or '(no blocked_reason)'}")
+
+    seats = {"dispatch_guard": dispatch_guard, "resume_actuator": resume_actuator}
+    order = [primary] + [name for name in seats if name != primary]
+    results: dict[str, dict] = {}
+    for name in order:
+        results[name] = seats[name].release(project, task_id, actor=str(actor))
+
+    unparked = any(bool(results[name].get("unparked")) for name in order)
+    return {
+        "ok": all(bool(results[name].get("ok", True)) for name in order),
+        "unparked": unparked,
+        "released": ["dispatch_guard", "resume_actuator"],
+        "primary": primary,
+        "module": primary,
+        "results": results,
+    }
 
 
 @router.post("/fanout")

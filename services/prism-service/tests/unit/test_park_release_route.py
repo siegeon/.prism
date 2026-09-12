@@ -57,62 +57,92 @@ def _parked_task(project, prefix, reason_tail="parked for a person"):
     return t.id
 
 
-def test_dispatch_guard_park_releases_via_dispatch_guard(project, monkeypatch):
-    from prism_service.services import dispatch_guard
+def test_dispatch_guard_park_releases_both_seats(project, monkeypatch):
+    from prism_service.services import dispatch_guard, resume_actuator
 
     tid = _parked_task(project, "dispatch-guard:")
-    calls = []
-    real_release = dispatch_guard.release
+    dg_calls = []
+    ra_calls = []
+    real_dg_release = dispatch_guard.release
+    real_ra_release = resume_actuator.release
 
-    def _spy(proj, task_id, actor="human"):
-        calls.append((proj, task_id, actor))
-        return real_release(proj, task_id, actor=actor)
+    def _dg_spy(proj, task_id, actor="human"):
+        dg_calls.append((proj, task_id, actor))
+        return real_dg_release(proj, task_id, actor=actor)
 
-    monkeypatch.setattr(dispatch_guard, "release", _spy)
+    def _ra_spy(proj, task_id, actor="human"):
+        ra_calls.append((proj, task_id, actor))
+        return real_ra_release(proj, task_id, actor=actor)
+
+    monkeypatch.setattr(dispatch_guard, "release", _dg_spy)
+    monkeypatch.setattr(resume_actuator, "release", _ra_spy)
 
     client = _client()
     r = client.post(f"/api/conductor/park/release?project={project}",
                      json={"task_id": tid, "actor": "owner"})
     assert r.status_code == 200
     body = r.json()
-    assert body["module"] == "dispatch_guard"
     assert body["ok"] is True
     assert body["unparked"] is True
-    assert calls == [(project, tid, "owner")]
+    assert sorted(body["released"]) == ["dispatch_guard", "resume_actuator"]
+    assert body["primary"] == "dispatch_guard"
+    # Both seats' release() ran, so both counters' resets landed —
+    # never just the seat named by the current blocked_reason prefix.
+    assert dg_calls == [(project, tid, "owner")]
+    assert ra_calls == [(project, tid, "owner")]
 
     from prism_service.project_context import get_project
     task = get_project(project).task_svc.get(tid)
     assert task.status == "in_progress"
     assert task.blocked_reason == ""
 
+    history = get_project(project).task_svc.history(tid)
+    actions = [str(getattr(h, "action", "")) for h in history]
+    assert "dispatch_guard_released" in actions
+    assert "resume_actuator_released" in actions
 
-def test_resume_actuator_park_releases_via_resume_actuator(project, monkeypatch):
-    from prism_service.services import resume_actuator
+
+def test_resume_actuator_park_releases_both_seats(project, monkeypatch):
+    from prism_service.services import dispatch_guard, resume_actuator
 
     tid = _parked_task(project, "resume-actuator:",
                         "at the ceiling of 12 dispatches")
-    calls = []
-    real_release = resume_actuator.release
+    dg_calls = []
+    ra_calls = []
+    real_dg_release = dispatch_guard.release
+    real_ra_release = resume_actuator.release
 
-    def _spy(proj, task_id, actor="human"):
-        calls.append((proj, task_id, actor))
-        return real_release(proj, task_id, actor=actor)
+    def _dg_spy(proj, task_id, actor="human"):
+        dg_calls.append((proj, task_id, actor))
+        return real_dg_release(proj, task_id, actor=actor)
 
-    monkeypatch.setattr(resume_actuator, "release", _spy)
+    def _ra_spy(proj, task_id, actor="human"):
+        ra_calls.append((proj, task_id, actor))
+        return real_ra_release(proj, task_id, actor=actor)
+
+    monkeypatch.setattr(dispatch_guard, "release", _dg_spy)
+    monkeypatch.setattr(resume_actuator, "release", _ra_spy)
 
     client = _client()
     r = client.post(f"/api/conductor/park/release?project={project}",
                      json={"task_id": tid})
     assert r.status_code == 200
     body = r.json()
-    assert body["module"] == "resume_actuator"
     assert body["ok"] is True
     assert body["unparked"] is True
-    assert calls == [(project, tid, "human")]
+    assert sorted(body["released"]) == ["dispatch_guard", "resume_actuator"]
+    assert body["primary"] == "resume_actuator"
+    assert dg_calls == [(project, tid, "human")]
+    assert ra_calls == [(project, tid, "human")]
 
     from prism_service.project_context import get_project
     task = get_project(project).task_svc.get(tid)
     assert task.status == "in_progress"
+
+    history = get_project(project).task_svc.history(tid)
+    actions = [str(getattr(h, "action", "")) for h in history]
+    assert "dispatch_guard_released" in actions
+    assert "resume_actuator_released" in actions
 
 
 def test_non_governance_blocked_reason_is_409_and_nothing_called(
