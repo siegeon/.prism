@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Check plan coverage",
-  "version": 4,
+  "version": 5,
   "steps": [
     {
       "id": "rubric",
@@ -38,6 +38,13 @@
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
       "body": "{\"task_id\": \"${taskId}\", \"check\": \"manual_reject_stands\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "plan_diagram_parses",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"plan_diagram_parses\"}",
       "timeoutSeconds": 30
     },
     {

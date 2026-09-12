@@ -38,7 +38,7 @@ from typing import Any, Callable, Optional
 
 CHECKS: tuple[str, ...] = (
     "absent_file_claim", "stop_if_pinned", "already_green_ac",
-    "manual_reject_stands")
+    "manual_reject_stands", "plan_diagram_parses")
 
 LABELS: dict[str, str] = {
     "absent_file_claim":
@@ -49,6 +49,9 @@ LABELS: dict[str, str] = {
         "An AC offered as an oracle observation fails at the base commit",
     "manual_reject_stands":
         "No standing human reject of this same plan_doc",
+    "plan_diagram_parses":
+        "plan_diagram is structurally valid mermaid, not just a known "
+        "diagram-type keyword",
 }
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -492,6 +495,87 @@ def manual_reject_stands(task, project: str = "default",
 
 
 # ----------------------------------------------------------------------
+# 5. plan_diagram_parses
+# ----------------------------------------------------------------------
+# Task a65c66e5: arc_governance.mermaid_parses (the plan_coverage rubric's
+# "e2" tooth) only checks that the FIRST non-empty line names a known
+# mermaid diagram type -- it never looks at the body. That task's
+# plan_diagram had a node label whose "[" was never closed
+# ("E[Validate change with gate tests" with no trailing "]", and no more
+# edges after it), so the rubric said ok=true while PlanView showed the
+# owner "Diagram failed to render: Parse error ..." on the very screen
+# plan_gate exists to let them review it. This is NOT a full mermaid
+# grammar (arc_governance already declines to embed one, for the same
+# reason the DEGRADE RULE at the top of this module exists) -- it is the
+# cheapest check that is still unambiguous: [], (), {} and quotes must
+# balance and must not cross-match. Anything past that (a shape mermaid's
+# own parser rejects for a reason no bracket count would catch) is left
+# to the human reviewing the rendered PlanView, same as always.
+_BRACKET_OPENERS = {"[": "]", "(": ")", "{": "}"}
+_BRACKET_CLOSERS = {v: k for k, v in _BRACKET_OPENERS.items()}
+
+
+def _mermaid_bracket_error(diagram: str) -> str:
+    """The first unambiguous bracket/quote break, naming its 1-based line,
+    or "" when none is found. Quotes are tracked per-character across the
+    whole source (a mermaid label is not required to close its quote on
+    the same line it opens one), brackets likewise via a single stack so
+    a mismatched TYPE ("A[Node (oops]") is caught, not just a raw count
+    mismatch."""
+    stack: list[tuple[str, int]] = []
+    in_quote = False
+    quote_start = 0
+    for lineno, line in enumerate(diagram.splitlines(), start=1):
+        for ch in line:
+            if ch == '"':
+                in_quote = not in_quote
+                if in_quote:
+                    quote_start = lineno
+                continue
+            if in_quote:
+                continue
+            if ch in _BRACKET_OPENERS:
+                stack.append((ch, lineno))
+            elif ch in _BRACKET_CLOSERS:
+                if not stack:
+                    return (f"line {lineno}: a closing '{ch}' has no "
+                            "matching open bracket")
+                open_ch, open_line = stack.pop()
+                if _BRACKET_OPENERS[open_ch] != ch:
+                    return (f"line {lineno}: '{ch}' does not match the "
+                            f"'{open_ch}' opened on line {open_line}")
+    if in_quote:
+        return f"line {quote_start}: an opening \" is never closed"
+    if stack:
+        ch, lineno = stack[-1]
+        return (f"line {lineno}: '{ch}' opened here is never closed")
+    return ""
+
+
+def plan_diagram_parses(plan_diagram: str) -> str:
+    """Refusal string when plan_diagram cannot possibly render as mermaid.
+    Degrades to PASS on an empty diagram (arc_governance's own
+    require_plan_diagram tooth owns "missing") and on a diagram whose
+    first line does not even name a known diagram type (arc_governance's
+    mermaid_parses tooth owns that failure so the two never double-refuse
+    the same defect with two different messages)."""
+    diagram = str(plan_diagram or "")
+    if not diagram.strip():
+        return ""
+    try:
+        from prism_service.services import arc_governance as gov
+        if not gov.mermaid_parses(diagram):
+            return ""
+    except Exception:
+        return ""
+    error = _mermaid_bracket_error(diagram)
+    if not error:
+        return ""
+    return (f"plan_checks: plan_diagram is not valid mermaid ({error}) -- "
+            "PlanView cannot render it for the owner's plan_gate review")
+
+
+# ----------------------------------------------------------------------
 # Task-facing surface
 # ----------------------------------------------------------------------
 def repo_root_for(task, project: str) -> Optional[Path]:
@@ -591,6 +675,9 @@ def run_all(task, project: str = "default", *,
             elif check_id == "already_green_ac":
                 reason = already_green_ac(plan, root, base, measure=measure,
                                           runner=runner)
+            elif check_id == "plan_diagram_parses":
+                reason = plan_diagram_parses(
+                    getattr(task, "plan_diagram", "") or "")
             else:
                 reason = manual_reject_stands(task, project)
         except Exception:

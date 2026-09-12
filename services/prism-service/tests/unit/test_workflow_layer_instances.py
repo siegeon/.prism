@@ -186,24 +186,27 @@ def test_the_response_names_the_definitions_current_version(monkeypatch):
     what its instances ran against.
 
     Was pinned at 3; task c2e6edaf bumped plan-gate-check.json to 4 to
-    declare manual_reject_stands as a real codified step, so the LIVE
-    repo source this test reads now legitimately reports 4."""
+    declare manual_reject_stands as a real codified step. The mermaid
+    plan_diagram fix bumped it again to 5 to declare plan_diagram_parses
+    as a real codified step (task a65c66e5's unclosed-bracket defect), so
+    the LIVE repo source this test reads now legitimately reports 5."""
     monkeypatch.setattr(wf, "get_project", lambda p: _ctx([]))
     # the behaviour files live in the repo, not in the test data dir
     _pin_repo_source(monkeypatch)
     out = wf.workflow_instances("plan-gate-check", project="prism", task_id="", version=None)
-    assert out["current_version"] == 4, out
+    assert out["current_version"] == 5, out
 
 
 def test_the_inference_seat_stamps_the_version_it_ran(monkeypatch):
     """Nothing stamped this before: 2,016 gate_decide rows on file, zero
     carrying a flow_version. Going forward a seat records it.
 
-    Was pinned at 3; task c2e6edaf bumped plan-gate-check.json to 4 (see
+    Was pinned at 3; task c2e6edaf bumped plan-gate-check.json to 4, and
+    the mermaid plan_diagram fix bumped it again to 5 (see
     test_the_response_names_the_definitions_current_version above)."""
     from prism_service.services import gate_agent as ga
     _pin_repo_source(monkeypatch)
-    assert ga._flow_version("prism", "plan_gate") == 4
+    assert ga._flow_version("prism", "plan_gate") == 5
     assert ga._flow_version("prism", "not_a_gate") is None
     src = (Path(__file__).resolve().parent.parent.parent
            / "prism_service/services/gate_agent.py").read_text(encoding="utf-8")
