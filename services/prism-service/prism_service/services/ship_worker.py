@@ -641,8 +641,24 @@ def ship_task(task_id: str, project: str = "default", *,
     # replaced. It reads the project's own stores, never the task worktree,
     # so it is safe beside reap.
     _refresh_maps_after_land(task_svc, task_id, project)
+    # THE ACTUAL LAST STEP (task 13cfe8ee): reach the running dev instance
+    # with the build that just landed -- off by default
+    # (PRISM_DEPLOY_ON_LAND), same posture as this seat's own SHIP_ENV.
+    _deploy_after_land(task_svc, task_id, project)
     return {"ok": True, "stage": "merged", "error": "", "pr": pr,
             "replayed": replayed}
+
+
+def _deploy_after_land(task_svc, task_id: str, project: str) -> None:
+    """Best-effort toward the SHIP itself, same as reap/brain-health/
+    refresh-maps: a deploy attempt never fails or re-runs an already-
+    successful ship. Imported lazily so an environment without
+    deploy_worker's own module import chain never breaks shipping."""
+    try:
+        from prism_service.services import deploy_worker
+        deploy_worker.deploy_after_land(task_svc, task_id, project)
+    except Exception:  # noqa: BLE001 - a deploy attempt never fails a ship
+        pass
 
 
 def _refresh_maps_after_land(task_svc, task_id: str, project: str) -> None:

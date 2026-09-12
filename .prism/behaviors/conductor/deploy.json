@@ -1,0 +1,23 @@
+{
+  "id": "deploy",
+  "fsmId": "pipeline",
+  "botId": "conductor",
+  "name": "Deploy a landed build to the dev instance",
+  "version": 1,
+  "steps": [
+    {
+      "id": "deploy",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/deploy?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 900
+    },
+    {
+      "id": "verify-version",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/deploy-verify?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 200
+    }
+  ]
+}

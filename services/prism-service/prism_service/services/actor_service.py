@@ -31,8 +31,14 @@ try:
 except Exception:  # pragma: no cover - defensive; see MACHINE_SEATS fallback
     SHIPPER_SEAT = "conductor-shipper"
 
+try:
+    # Task 13cfe8ee: the deploy seat, same reason as SHIPPER_SEAT above.
+    from prism_service.services.deploy_worker import SEAT_ID as DEPLOYER_SEAT
+except Exception:  # pragma: no cover - defensive; see MACHINE_SEATS fallback
+    DEPLOYER_SEAT = "conductor-deployer"
+
 MACHINE_SEATS = frozenset({ADJUDICATOR_SEAT, "conductor-autoclear",
-                            "gate-card-rerun", SHIPPER_SEAT})
+                            "gate-card-rerun", SHIPPER_SEAT, DEPLOYER_SEAT})
 
 
 class ActorService:

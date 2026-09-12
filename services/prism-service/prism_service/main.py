@@ -658,6 +658,16 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.ship_worker import start_ship_worker
         start_ship_worker()
 
+        # Task 13cfe8ee (owner 2026-08-27) — the deploy seat: a shipped
+        # build reaches the dev instance without a hand. ship_worker's own
+        # post-land hook calls deploy_worker.deploy_once synchronously (no
+        # thread of its own needed there); this thread only confirms a
+        # PENDING deploy on later ticks, including after the restart this
+        # same seat requested. Deterministic code, no model calls. Default
+        # OFF — PRISM_DEPLOY_ON_LAND=1 opts an environment in.
+        from prism_service.services.deploy_worker import start_deploy_worker
+        start_deploy_worker()
+
         # Task 7a72ebcb — the stalled-drive actuator seat: activity_for
         # already DETECTS a stalled task (task_motion_s stale, session_quiet_s
         # stale/absent, no drive_heartbeat); this is what ACTS on it, dispatching

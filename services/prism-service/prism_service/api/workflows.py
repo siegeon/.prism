@@ -1727,9 +1727,19 @@ def get_workflows(project: str = Query("default")) -> dict:
         # was created to catch -- four such mechanisms shipped on
         # 2026-08-30 with no caller at all.
         "brain-health",
-        # reap stays LAST: it deletes the worktree, so the knowledge-side
-        # node must run before the workspace is destroyed.
+        # reap stays before deploy: it deletes the worktree, so the
+        # knowledge-side node must run before the workspace is destroyed.
         "reap",
+        # "deploy" (task 13cfe8ee): the seat that reaches the running dev
+        # instance with the build ship_worker just landed -- a session did
+        # this exact pull+build+restart+poll by hand four times in one day
+        # (owner: "a lot of this flow should have been part of the
+        # conductor flow in the app, not up to you"). It nests through this
+        # set for the same structural reason land/reap/brain-health do:
+        # green_gate is the terminal WORKFLOW_STEPS entry, so there is no
+        # step to hang a linked_workflow_id on. Genuinely LAST: it is the
+        # only node whose job is to make the OTHERS' work visible/live.
+        "deploy",
     )
     for entry in conductor_behaviors:
         if entry["id"] in _CONDUCTOR_LINKED_BEHAVIOR_IDS:
@@ -3586,6 +3596,67 @@ def workflow_step_reap(
         return task_reaper.reap_task(
             body.task_id, status=str(getattr(task, "status", "") or ""),
             mode=chosen, is_live=_is_live)
+
+
+class DeployRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+@router.post("/steps/deploy")
+def workflow_step_deploy(
+    body: DeployRequest, project: str = Query(...),
+) -> dict:
+    """Run the configured deploy command once ship_worker has landed a
+    branch on origin/main (task 13cfe8ee).
+
+    Always HTTP 200, same contract as /steps/reap: a refusal (a dirty
+    checkout, a failed pull/build) is a REPORTED fact, never a callback
+    failure, so the behaviour reaches its next step and the reason reaches
+    a person. `ship_worker`'s own post-land hook calls the identical
+    `deploy_worker.deploy_once` -- one implementation, two entry points,
+    same as brain-health/refresh-maps.
+    """
+    from prism_service.services import deploy_worker
+
+    ctx = get_project(project)
+    with _tracer.start_as_current_span("workflow.step.deploy") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        result = deploy_worker.deploy_once(
+            task_svc=ctx.task_svc, task_id=body.task_id, project=project)
+    ok = bool(result.get("ok"))
+    _record_node_run(project, body.task_id, "steps/deploy", ok,
+                     str(result.get("stage") or ""))
+    return {"kind": "conductor.deploy", "node_id": "deploy",
+           "task_id": body.task_id, **result}
+
+
+class DeployVerifyRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+@router.post("/steps/deploy-verify")
+def workflow_step_deploy_verify(
+    body: DeployVerifyRequest, project: str = Query(...),
+) -> dict:
+    """Poll /api/version for the version this task's own deploy requested,
+    confirming or parking -- "the seat on its next tick", run as this
+    behaviour's second step so a FRESH process (after the restart the
+    first step asked for) still resolves a deploy it requested in its
+    previous life. Always HTTP 200, same contract as /steps/deploy."""
+    from prism_service.services import deploy_worker
+
+    ctx = get_project(project)
+    with _tracer.start_as_current_span("workflow.step.deploy_verify") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        result = deploy_worker.confirm_pending_deploy(
+            task_svc=ctx.task_svc, task_id=body.task_id)
+    ok = bool(result.get("ok"))
+    _record_node_run(project, body.task_id, "steps/deploy-verify", ok,
+                     str(result.get("stage") or ""))
+    return {"kind": "conductor.deploy_verify", "node_id": "verify-version",
+           "task_id": body.task_id, **result}
 
 
 # ----------------------------------------------------------------------
