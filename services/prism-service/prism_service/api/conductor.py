@@ -912,6 +912,49 @@ def resume_release(project: str = Query("default"),
     return resume_actuator.release(project, task_id, actor=str(actor))
 
 
+@router.post("/park/release")
+def park_release(project: str = Query("default"),
+                  body: dict = Body(...)) -> dict:
+    """Release a task PARKED by a governance seat, back to the drive.
+
+    Two independent seats can park a task `blocked` with a prefixed
+    `blocked_reason`: `resume_actuator` (`resume-actuator:`, a spent retry
+    budget) and `dispatch_guard` (`dispatch-guard:`, the per-task dispatch
+    ceiling — "parked for a person"). Each seat owns its own `release()`,
+    the "the cause is fixed, try again" affordance that resets its own
+    counter, but only `resume_actuator`'s had an HTTP route
+    (`/resume/release`) — a task parked by `dispatch_guard` had NO
+    person-facing action able to lift it (task b490fabc-5067-4d08-a8cc-
+    0d46dbfe1332, 2026-09-11). This route reads the task's CURRENT
+    `blocked_reason` and dispatches to whichever seat's prefix matches,
+    via `dispatch_guard.is_governance_park`'s shared predicate. A
+    `blocked_reason` that carries neither prefix is left untouched — this
+    route never flips a task some other mechanism blocked.
+    """
+    task_id = (body or {}).get("task_id") or ""
+    if not task_id:
+        raise HTTPException(422, "task_id required")
+    from prism_service.services import dispatch_guard, resume_actuator
+
+    ctx = get_project(project)
+    task = ctx.task_svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, f"no such task: {task_id}")
+    reason = str(getattr(task, "blocked_reason", "") or "")
+    actor = (body or {}).get("actor") or (body or {}).get("session_id") or "human"
+
+    if reason.startswith("dispatch-guard:"):
+        result = dispatch_guard.release(project, task_id, actor=str(actor))
+        result["module"] = "dispatch_guard"
+        return result
+    if reason.startswith("resume-actuator:"):
+        result = resume_actuator.release(project, task_id, actor=str(actor))
+        result["module"] = "resume_actuator"
+        return result
+    raise HTTPException(
+        409, f"not a governance park: {reason or '(no blocked_reason)'}")
+
+
 @router.post("/fanout")
 def fanout(project: str = Query("default"), body: FanoutBody = Body(...)) -> dict:
     """Record per-step sub-agent fanout (dispatched vs returned) for the SPA.
