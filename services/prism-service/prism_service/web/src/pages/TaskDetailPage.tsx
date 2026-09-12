@@ -1143,6 +1143,12 @@ export default function TaskDetailPage() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A governance park (dispatch-guard:/resume-actuator: prefix on
+  // blocked_reason) has no owner-facing lever from the generic status
+  // buttons — POST /api/conductor/park/release is the only door back in
+  // (task: a parked task gets a real Release button).
+  const [parkReleaseBusy, setParkReleaseBusy] = useState(false);
+  const [parkReleaseError, setParkReleaseError] = useState<string | null>(null);
   // Bumped ONLY inside gateDecide's success branch, after both
   // approveDesignPacket() and the gate POST resolve (task fa7735bd) - lets
   // the Design tab's own <DesignPacket> card refetch and drop its
@@ -1563,6 +1569,33 @@ export default function TaskDetailPage() {
     }
   };
 
+  // Release a governance park (dispatch-guard:/resume-actuator:) so the
+  // task can be dispatched again — the generic status buttons cannot do
+  // this (task: a parked task gets a real Release button). A non-2xx
+  // (e.g. 409 for a non-governance block) surfaces inline, never a toast.
+  const releasePark = async () => {
+    setParkReleaseBusy(true);
+    setParkReleaseError(null);
+    try {
+      const r = await fetch(`/api/conductor/park/release?project=${project}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task_id: id, actor: "owner" }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok || body.ok === false) {
+        setParkReleaseError(`Release failed: ${body.detail || body.error || body.reason || `HTTP ${r.status}`}`);
+        return;
+      }
+      setNotice(`Park released${body.module ? ` (${body.module})` : ""} — try the transition again.`);
+      load();
+    } catch (e) {
+      setParkReleaseError(`Release failed: ${(e as Error).message ?? e}`);
+    } finally {
+      setParkReleaseBusy(false);
+    }
+  };
+
   // Rename the task. Blank/whitespace drafts are ignored (the server also
   // guards) so a rename can never blank a title.
   const renameTitle = async () => {
@@ -1832,6 +1865,11 @@ export default function TaskDetailPage() {
   // render twice on one page); PlanView keeps it for every other state.
   const gatePanelOwnsOracle = conductorOn && (task.gate_state === "pending" || task.gate_state === "failed") &&
     task.status !== "cancelled" && task.status !== "archived" && task.status !== "deleted";
+  // A governance park (dispatch-guard:/resume-actuator:) is not released
+  // by the generic status buttons — clicking "→ in_progress" here left the
+  // task blocked (verified live). Route through Release · try again instead.
+  const governancePark = task.status === "blocked" &&
+    (task.blocked_reason?.startsWith("dispatch-guard:") || task.blocked_reason?.startsWith("resume-actuator:"));
   // Repo-relative code paths capped at 8 rows with a "N more" expander.
   const CODE_CAP = 8;
   const codeShown = codeExpanded ? codePaths : codePaths.slice(0, CODE_CAP);
@@ -1987,17 +2025,24 @@ export default function TaskDetailPage() {
           )}
         </div>
         <div className="flex flex-wrap gap-2 shrink-0">
-          {transitions.map((target) => (
-            <button
-              id={`status-transition-${target}`}
-              key={target}
-              disabled={busy}
-              onClick={() => setStatus(target)}
-              className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)] disabled:opacity-40"
-            >
-              → {target}
-            </button>
-          ))}
+          {transitions.map((target) => {
+            // Disabled, not rerouted: a governance park is released by its
+            // own dedicated button, so the generic transition just says why
+            // it won't work rather than silently doing the release's job.
+            const parkedTransition = governancePark && target === "in_progress";
+            return (
+              <button
+                id={`status-transition-${target}`}
+                key={target}
+                disabled={busy || parkedTransition}
+                onClick={() => setStatus(target)}
+                title={parkedTransition ? "parked by a governance guard — use Release · try again" : undefined}
+                className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)] disabled:opacity-40"
+              >
+                → {target}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -2005,6 +2050,23 @@ export default function TaskDetailPage() {
         <Card>
           <SectionLabel>Blocked because</SectionLabel>
           <div className="text-sm text-[color:var(--accent-rose-fg)] mt-1"><LinkedText text={task.blocked_reason} /></div>
+          {governancePark && (
+            <div className="mt-2 flex items-center gap-2 flex-wrap">
+              <button
+                id="park-release"
+                type="button"
+                aria-label="Release this park and try again"
+                disabled={parkReleaseBusy}
+                onClick={releasePark}
+                className="text-xs font-medium px-3 py-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--surface-2)] text-[color:var(--text-secondary)] hover:border-[color:var(--border-strong)] hover:text-[color:var(--text-primary)] disabled:opacity-40"
+              >
+                {parkReleaseBusy ? "releasing…" : "Release · try again"}
+              </button>
+              {parkReleaseError && (
+                <span className="text-2xs" style={{ color: "var(--accent-rose-fg)" }}>{parkReleaseError}</span>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
