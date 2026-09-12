@@ -336,6 +336,83 @@ def test_opted_in_deploy_after_land_calls_deploy_once(monkeypatch):
     assert called[0]["project"] == "prism"
 
 
+def test_sweep_new_land_deploys_a_bare_land_with_no_task(tmp_path):
+    """THE GAP: ship_worker's post-land hook only fires from ship_task, so
+    a branch that reaches origin/main by a DIRECT push (this repo's own
+    self-dev carve-out; see CLAUDE.md) or any other route never calls
+    deploy_after_land -- nothing else would ever notice the land. This is
+    the seat's own tick: no task in the loop, it still fetches, sees the
+    upstream ahead of HEAD, pulls, and requests exactly one restart."""
+    origin, work = _make_repo(tmp_path)
+    _land_from_elsewhere(tmp_path, origin, version="1.3.0", touch_web=False)
+
+    run = FakeRunner()
+    restarted = []
+
+    result = deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: restarted.append(1))
+
+    assert result["ok"] is True
+    assert result["target_version"] == "1.3.0"
+    assert restarted == [1]
+    assert any(c[0][:2] == ["git", "rev-list"] for c in run.calls)
+
+
+def test_sweep_new_land_is_a_noop_when_head_already_matches_upstream(tmp_path):
+    """No new land -> the upstream-ahead count is 0 -> skipped, and the
+    restart primitive (and npm) are never touched -- this must not restart
+    the daemon every single tick."""
+    _origin, work = _make_repo(tmp_path)
+
+    run = FakeRunner()
+    restarted = []
+
+    result = deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: restarted.append(1))
+
+    assert result == {"ok": True, "stage": "skipped",
+                      "reason": "upstream not ahead of HEAD"}
+    assert not restarted
+    assert not any(c[0][0] == "npm" for c in run.calls)
+
+
+def test_sweep_new_land_parks_on_dirty_checkout_without_fetching(tmp_path):
+    """The same security tooth deploy_once applies: a dirty POLICY_FILES
+    entry parks BEFORE any fetch, so a checkout that cannot prove it is
+    running the code it claims to is never even compared against the
+    remote."""
+    _origin, work = _make_repo(tmp_path)
+    _write(work, _POLICY_REL, "# an uncommitted edit\n")
+
+    run = FakeRunner()
+    restarted = []
+
+    result = deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: restarted.append(1))
+
+    assert result["ok"] is False
+    assert result["stage"] == "dirty_checkout"
+    assert _POLICY_REL in result["error"]
+    assert not restarted
+    assert not any(c[0][:2] == ["git", "fetch"] for c in run.calls)
+
+
+def test_tick_starts_new_land_before_confirming_pending(monkeypatch):
+    """The sweep thread's own loop body: on every tick it must check for a
+    land the sweep hasn't seen yet BEFORE it confirms anything already
+    pending -- split out of the infinite `_loop` so this is pinned without
+    running a real loop or sleeping."""
+    order = []
+    monkeypatch.setattr(deploy_worker, "sweep_new_land",
+                        lambda: order.append("new_land"))
+    monkeypatch.setattr(deploy_worker, "sweep_pending",
+                        lambda: order.append("pending"))
+
+    deploy_worker._tick()
+
+    assert order == ["new_land", "pending"]
+
+
 def test_deployer_seat_is_a_registered_machine_seat():
     """AC(e): an unregistered actor writing history resolves to
     ActorKind.UNKNOWN -- the audited defect ship_worker's own suite already
