@@ -246,13 +246,37 @@ def _with_parent_death_signal(cmd: list[str]) -> list[str]:
     whole life of the child -- the thread cannot exit first. Do not reuse
     this helper behind Popen without re-checking that.
 
+    THE ARM-VS-CHECK RACE (task 4465ee72, reproduced 2026-09-12 under
+    synthetic CPU load: 48 busy loops on 24 cores). setpriv's own
+    prctl(PR_SET_PDEATHSIG) call is a plain step early in its startup, not
+    an atomic fork-time property -- if the real parent dies in the window
+    between fork() and that prctl() actually running, the signal is simply
+    never armed and the child becomes a permanent, ordinary orphan (it
+    still runs to completion; nothing ever kills it). That window is a few
+    microseconds under normal scheduling, but stretched past 15+ seconds
+    under load in testing (`ps` showed the leaked `sleep` reparented and
+    still `S (sleeping)`, never signalled). `man 2 prctl` names this exact
+    race and its standard closure: re-check the parent with getppid()
+    immediately after arming, before doing any real work, and refuse to
+    proceed if it already changed. setpriv has no such check (confirmed:
+    not in its --help, not in its manpage), so this adds one as a second
+    exec stage. `sh` reads $PPID fresh at ITS OWN startup -- a real
+    getppid(), not a value cached before the race window -- so the check
+    lands after setpriv has already had however long it needed to arm the
+    signal, and only execs the real payload when the parent is still the
+    one this call started with. If the parent already died (whether before
+    or after the signal was armed), $PPID no longer matches and the shell
+    exits without ever running the payload -- no bare orphan either way.
+
     Falls back to the bare command when setpriv is unavailable, so a host
     without util-linux keeps today's behaviour instead of failing to spawn.
     """
     setpriv = _setpriv_path()
     if not setpriv:
         return cmd
-    return [setpriv, "--pdeathsig", "TERM", "--", *cmd]
+    expected_ppid = os.getpid()
+    guard = f'if [ "$PPID" = "{expected_ppid}" ]; then exec "$@"; fi'
+    return [setpriv, "--pdeathsig", "TERM", "--", "sh", "-c", guard, "sh", *cmd]
 
 
 def _narrow_context_dir() -> Path:
