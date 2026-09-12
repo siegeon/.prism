@@ -386,17 +386,31 @@ def test_resolution_multiplier_is_advisory(tmp_path):
 
 
 def test_the_slice_edits_no_policy_file():
-    """FR-11 and this task's own stop_if: a slice that edits a gate-policy
-    file fails its own gates on the candidate-controls-judge tooth."""
+    """FR-11 and task e6d76007's own stop_if: the task_score MODULE itself
+    never reaches into gate-policy internals -- score_task must stay a
+    read of agent_runs/git/tags, not a second judge over conductor_service
+    or arc_governance.
+
+    SUPERSEDED 2026-09-12 (task c2e6edaf): this test originally diffed the
+    CURRENT branch (`git diff origin/main...HEAD`) against
+    control_plane.POLICY_FILES and refused any run where that live branch
+    touched a policy file. That worked for e6d76007's own PR, but it has
+    no escape hatch -- unlike the real candidate-controls-judge gate
+    (control_plane.candidate_policy_edit_reason, which honors
+    PRISM_POLICY_CHANGE_APPROVED / a policy-change-tagged task), so it
+    would permanently fail this whole pinned suite on ANY future branch
+    that legitimately edits a POLICY_FILES entry -- exactly what task
+    c2e6edaf's own fix does to conductor_service.py (stamping a
+    plan_doc_sha256 onto a plan_gate reject row). A source-scan of "this
+    branch's diff" is not this module's invariant; what task_score.py
+    itself imports is."""
     from prism_service.services.control_plane import POLICY_FILES
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", "origin/main...HEAD"],
-        cwd=str(_REPO_ROOT), capture_output=True, text=True,
-    ).stdout.split()
-    policy_names = {Path(p).name for p in POLICY_FILES}
-    offenders = [p for p in changed if Path(p).name in policy_names]
+    src = (Path(__file__).resolve().parent.parent.parent
+          / "prism_service/services/task_score.py").read_text(encoding="utf-8")
+    policy_stems = {Path(p).stem for p in POLICY_FILES}
+    offenders = [stem for stem in policy_stems if stem in src]
     assert offenders == [], (
-        f"this slice edits a control_plane.POLICY_FILES entry: {offenders}")
+        f"task_score.py names a control_plane.POLICY_FILES module: {offenders}")
 
 
 # ---------------------------------------------------------------------

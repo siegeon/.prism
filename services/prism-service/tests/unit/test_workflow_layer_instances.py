@@ -183,20 +183,27 @@ def test_filtering_by_version_never_sweeps_in_unknown_runs(monkeypatch):
 
 def test_the_response_names_the_definitions_current_version(monkeypatch):
     """The rail needs to say which version the layer IS, to contrast with
-    what its instances ran against."""
+    what its instances ran against.
+
+    Was pinned at 3; task c2e6edaf bumped plan-gate-check.json to 4 to
+    declare manual_reject_stands as a real codified step, so the LIVE
+    repo source this test reads now legitimately reports 4."""
     monkeypatch.setattr(wf, "get_project", lambda p: _ctx([]))
     # the behaviour files live in the repo, not in the test data dir
     _pin_repo_source(monkeypatch)
     out = wf.workflow_instances("plan-gate-check", project="prism", task_id="", version=None)
-    assert out["current_version"] == 3, out
+    assert out["current_version"] == 4, out
 
 
 def test_the_inference_seat_stamps_the_version_it_ran(monkeypatch):
     """Nothing stamped this before: 2,016 gate_decide rows on file, zero
-    carrying a flow_version. Going forward a seat records it."""
+    carrying a flow_version. Going forward a seat records it.
+
+    Was pinned at 3; task c2e6edaf bumped plan-gate-check.json to 4 (see
+    test_the_response_names_the_definitions_current_version above)."""
     from prism_service.services import gate_agent as ga
     _pin_repo_source(monkeypatch)
-    assert ga._flow_version("prism", "plan_gate") == 3
+    assert ga._flow_version("prism", "plan_gate") == 4
     assert ga._flow_version("prism", "not_a_gate") is None
     src = (Path(__file__).resolve().parent.parent.parent
            / "prism_service/services/gate_agent.py").read_text(encoding="utf-8")
