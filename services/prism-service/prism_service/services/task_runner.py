@@ -674,6 +674,13 @@ def _codified_step_proof(step_id: str, task, facts) -> str:
         return ""            # a broken shortcut must fall back, never halt
 
 
+def _build_task_hint(task) -> str:
+    """Build the task material string (title and description) for prompts."""
+    task_title = getattr(task, "title", "") or ""
+    task_desc = getattr(task, "description", "") or ""
+    return f"{task_title}\n\n{task_desc}".strip()
+
+
 def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
     """The NARROW prompt the node's agentic middle is written for, or "".
 
@@ -728,9 +735,7 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
             f"Gathered material:\n{facts_md}"
         )
     if step_id == "draft_story":
-        task_title = getattr(task, "title", "") or ""
-        task_desc = getattr(task, "description", "") or ""
-        task_hint = f"{task_title}\n\n{task_desc}".strip()
+        task_hint = _build_task_hint(task)
         # REFUSE when the task material is empty: a narrow prompt with no
         # task to draft about is strictly worse than the full brief, which at
         # least includes task details. The fallback wide prompt is honest.
@@ -746,8 +751,7 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
         )
     if step_id in ("verify_plan", "write_failing_tests"):
         declared = str((plan or {}).get("prompt") or "")
-        task_hint = (f"{getattr(task, 'title', '') or ''}\n\n"
-                     f"{getattr(task, 'description', '') or ''}").strip()
+        task_hint = _build_task_hint(task)
         if not declared or not task_hint:
             return ""
         return declared.replace("${taskHint}", task_hint)
@@ -1875,9 +1879,14 @@ def _run_one_step(project: str, task_id: str) -> dict:
         # than today.
         dispatched = None
         if narrow_prompt and _runs_as_declared_steps(job["step"], plan):
+            # Pass the raw task material to the dispatcher, not the
+            # already-substituted prompt. _dispatch_declared_steps will
+            # substitute ${taskHint} once; if we pass the substituted prompt
+            # it will nest inside its own placeholder (task ???).
+            task_hint = _build_task_hint(task)
             dispatched = _dispatch_declared_steps(
                 project, plan,
-                variables={"taskHint": narrow_prompt, "taskId": task_id,
+                variables={"taskHint": task_hint, "taskId": task_id,
                            "project": project})
             for row in dispatched:
                 route = row.get("route") or "?"
