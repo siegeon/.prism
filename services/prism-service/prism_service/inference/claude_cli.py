@@ -373,6 +373,20 @@ def _ensure_trusted(home: Path, work_dir: Path | str) -> None:
             pass
 
 
+# The harness's documented switches for everything that is not the model
+# call: no auto-updater, no telemetry, no error reporting, no /bug uploads,
+# and the umbrella that also covers version checks and other prefetches.
+# Applied to every local-backend child so a drive's only sockets are the
+# local engine and PRISM's own MCP.
+_NONESSENTIAL_TRAFFIC_OFF: dict[str, str] = {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_BUG_COMMAND": "1",
+}
+
+
 def _backend_env(work_dir: Path | str | None = None) -> dict:
     """Return the redirect that points `claude -p` at the chosen model.
 
@@ -400,6 +414,15 @@ def _backend_env(work_dir: Path | str | None = None) -> dict:
     if work_dir is not None:
         _ensure_trusted(home, work_dir)
     env["CLAUDE_CONFIG_DIR"] = str(home)
+    # STILL REACHED ANTHROPIC WITH NO CREDENTIALS (7.13.312, measured on
+    # the first child spawned after that release: pid 1404909 carried this
+    # isolated CLAUDE_CONFIG_DIR -- no oauthAccount, no .credentials.json --
+    # and still held an ESTABLISHED socket to 160.79.104.10:443 beside its
+    # 127.0.0.1:8087 and :7777 ones). The isolation closed the OAuth path;
+    # the harness's own non-essential traffic (telemetry, statsig, the
+    # auto-updater, error reporting) never needed a credential and is gated
+    # by these documented Claude Code variables, not by the base URL.
+    env.update(_NONESSENTIAL_TRAFFIC_OFF)
     return env
 
 

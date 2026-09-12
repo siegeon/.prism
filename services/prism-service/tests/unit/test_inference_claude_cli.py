@@ -455,6 +455,42 @@ def test_default_backend_never_isolates_claude_config_dir(monkeypatch):
     assert "CLAUDE_CONFIG_DIR" not in env
 
 
+_TRAFFIC_KNOBS = (
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "DISABLE_TELEMETRY",
+    "DISABLE_ERROR_REPORTING", "DISABLE_AUTOUPDATER", "DISABLE_BUG_COMMAND",
+)
+
+
+def test_local_backend_switches_off_the_harness_nonessential_traffic(monkeypatch, tmp_path):
+    """7.13.312 isolated the config dir and the very next child (no
+    oauthAccount, no .credentials.json) STILL held a socket to Anthropic's
+    edge: the harness's telemetry/updater/error-reporting traffic needs no
+    credential. Those are switched off by name on every local child."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    for k in _TRAFFIC_KNOBS:
+        monkeypatch.delenv(k, raising=False)
+
+    env = claude_cli._strip_env(work_dir=tmp_path / "workspace")
+
+    for k in _TRAFFIC_KNOBS:
+        assert env.get(k) == "1", (k, env.get(k))
+
+
+def test_default_backend_leaves_the_harness_traffic_knobs_alone(monkeypatch):
+    """Byte-identical default: the claude backend must not start setting
+    these -- the owner's own harness settings govern there."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "claude")
+    for k in _TRAFFIC_KNOBS:
+        monkeypatch.delenv(k, raising=False)
+
+    env = claude_cli._strip_env(work_dir="/some/workspace")
+
+    for k in _TRAFFIC_KNOBS:
+        assert k not in env, k
+
+
 def test_local_backend_home_seeds_trust_for_the_work_dir(monkeypatch, tmp_path):
     """A fresh isolated CLAUDE_CONFIG_DIR has no trust history; `-p` on an
     untrusted cwd can hang on a prompt nothing will answer. `_backend_env`
