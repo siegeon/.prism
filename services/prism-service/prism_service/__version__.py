@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.313"
+PRISM_VERSION = "7.13.314"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9284,4 +9284,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.313: the local-backend child stops talking to Anthropic at all. 7.13.312 was checked on the first child it spawned (pid 1404909, 07:12 UTC): it carried the isolated CLAUDE_CONFIG_DIR, which held no oauthAccount and no .credentials.json, and it still had an ESTABLISHED socket to 160.79.104.10:443 next to its 127.0.0.1:8087 (engine) and :7777 (PRISM MCP) sockets. The isolation closed the OAuth path; the harness own non-essential traffic (telemetry, statsig, the auto-updater, error reporting, the bug command upload) needs no credential and is gated by the documented Claude Code variables, not by the base URL. _backend_env now sets CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, DISABLE_TELEMETRY, DISABLE_ERROR_REPORTING, DISABLE_AUTOUPDATER and DISABLE_BUG_COMMAND to 1 on every local-backend child; the claude backend stays byte-identical. 2 tests in test_inference_claude_cli.py pin both. Proof of the fix is the next child own socket table, read after this deploy, and is recorded in the session, not assumed here.'
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.314: CI stops failing on Install SPA deps. react 19.3.0 published 2026-09-11T16:28Z, and @react-three/fiber@9.7.0 peers on react ">=19 <19.3"; pr-checks.yml runs npm install with no committed package-lock.json, so npm was free to resolve the caret range ^19.2.7 up to 19.3.0 and every PR check exited ERESOLVE in about 47 seconds (run 34712058484 on PR #5972). react and react-dom in the web package.json move from caret to tilde (~19.2.7), which still takes patch releases but cannot cross into 19.3.x. Pinned by test_web_react_pin.py (services/prism-service/tests/unit), committed tests-first and red against the old caret range. A clean npm install resolved react and react-dom to 19.2.8 and npm run build succeeded.'
 )
