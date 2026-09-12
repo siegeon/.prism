@@ -1343,7 +1343,15 @@ def test_live_occupancy_poll_skips_reapplying_def_while_an_instance_is_open():
     page = _read("pages", "WorkflowsPage.tsx")
 
     poll_load = _function_body(page, "const load = () => {\n      fetchWorkflowDef(project)")
-    guard = poll_load.index("if (selected && !viewingInstanceRef.current) {")
+    # SUPERSEDED LITERAL (7.13.309, "a drilled behaviour layer's own
+    # occupancy poll never froze"): the guard grew `|| selected.parent_id`
+    # so a nested behaviour layer -- which no replay path ever writes
+    # synthetic occupancy onto -- keeps polling while a flat root canvas
+    # (conductor/validation) stays frozen during a replay. The invariant
+    # this test pins is unchanged: that guard, whatever its exact
+    # condition, must still wrap BOTH the reapply and the refit below.
+    guard = poll_load.index(
+        "if (selected && (!viewingInstanceRef.current || selected.parent_id)) {")
     set_def = poll_load.index("graphRef.current.setDef(workflowForGraph(selected));")
     fit_call = poll_load.index('graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);')
     # The guard must wrap BOTH the occupancy reapply and the camera refit --
