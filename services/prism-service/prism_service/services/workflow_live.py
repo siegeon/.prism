@@ -58,6 +58,9 @@ _STEP_FOR_BEHAVIOUR: dict[str, str] = {
 # api/workflows.py -- see module docstring.
 OPEN_DISPATCH_TOOLS: frozenset[str] = frozenset({
     "dispatch_guard_live", "claude_cli.invoke",
+    # resume_actuator.dispatch_once beats only after it holds the claim
+    # (same release), so its beat is an opening dispatch too.
+    "resume_actuator_dispatch",
 })
 
 # Parsed behaviour step lists, cached per (path, mtime) so a poll every
