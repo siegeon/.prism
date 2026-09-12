@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.307"
+PRISM_VERSION = "7.13.308"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9260,4 +9260,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.307: a behaviour node can finally light up WHILE its own agentic call is still running, not only after it returns. Live on task b490fabc: implement-tasks-loop stayed at 000 occupancy on the Workflows canvas for the entire 90-plus minutes and 108 turns its reason-loop dispatch actually ran, because the prior fix (7.13.252, node_recent_runs) only reads scores.db rows written when a route call RETURNS, and this one call had not returned yet. get_workflows now also lights the behaviour entry node from drive_heartbeat.latest for any live, non-stale task parked at the FSM step that behaviour answers for (_STEP_FOR_BEHAVIOUR), the same liveness signal /api/conductor/state already trusts for its own driving badge. A done or cancelled task, a stale heartbeat, or a heartbeat for a different step all still read idle. 5 tests in test_behaviour_node_lights_on_live_heartbeat.py.'
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.308: 7.13.307 shipped and was reverted within minutes of the first live measurement. It called drive_heartbeat.latest inside a nested loop -- once per behaviour entry, per active task standing on that entry own FSM step -- and each call opened its own sqlite connection (drive_heartbeat._connect runs a schema check and, on an old table, an ALTER TABLE, every single time). On this instance real tasks and real write contention from the very task_runner drive the fix exists to surface, GET /api/workflows went from a normal 5 to 50 seconds to still not returned past 90 seconds, confirmed by reverting to the prior commit under identical load and getting 52 seconds back. drive_heartbeat gains latest_many: one connection, one IN query, for every task_id asked about at once. get_workflows now lists active tasks and calls latest_many exactly once per request, however many behaviour entries the catalog holds, and looks up each entry own occupancy from the in-memory result instead of hitting the database again. A synthetic 2,000-task check (about 40 times this instance own real count) answers in under 6 milliseconds. 7 new tests: 6 in test_drive_heartbeat_latest_many.py pin latest_many against latest, an empty task list opening no connection at all, and duplicate or blank ids being ignored; a 7th in test_behaviour_node_lights_on_live_heartbeat.py pins the call count itself at exactly one across two behaviour entries. Measure under real load before calling a fix done -- a green suite proved the LOGIC right and said nothing about the COST.'
 )

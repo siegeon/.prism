@@ -61,6 +61,23 @@ def _behavior_entry():
     }
 
 
+def _behavior_entry_2():
+    """A second, unrelated behaviour -- its FSM step (draft_story) has no
+    active task in the tests that use it, so it must stay idle while
+    proving the heartbeat lookup still ran only once overall."""
+    return {
+        "id": "draft-story-loop",
+        "name": "Draft story",
+        "description": "Runs on the 'pipeline' fsm.",
+        "steps": [
+            {"id": "gather", "agent": "conductor", "type": "behavior",
+             "agentic": False, "route": "premise-gather"},
+        ],
+        "bots": [],
+        "occupancy": {"gather": 0},
+    }
+
+
 def _scripted_validation(project="prism"):
     return {
         "id": "validation", "name": "Build and test", "description": "v",
@@ -68,7 +85,7 @@ def _scripted_validation(project="prism"):
     }
 
 
-def _wire(monkeypatch, svc, data_dir):
+def _wire(monkeypatch, svc, data_dir, entries=None):
     from prism_service.api import workflows as workflows_api
 
     monkeypatch.setattr(
@@ -76,8 +93,9 @@ def _wire(monkeypatch, svc, data_dir):
         lambda p: types.SimpleNamespace(task_svc=svc, _data_dir=data_dir))
     monkeypatch.setattr(workflows_api, "_project_validation_workflow",
                         _scripted_validation)
+    _entries = entries if entries is not None else [_behavior_entry()]
     monkeypatch.setattr(workflows_api, "_conductor_behavior_workflows",
-                        lambda project: [_behavior_entry()])
+                        lambda project: _entries)
     return workflows_api
 
 
@@ -158,6 +176,39 @@ def test_a_heartbeat_for_a_different_step_does_not_light_this_node(tmp_path, mon
 
     entry = _entry(result, "implement-tasks-loop")
     assert entry["occupancy"]["loop"] == 0, entry["occupancy"]
+
+
+def test_the_heartbeat_lookup_runs_once_regardless_of_entry_count(tmp_path, monkeypatch):
+    """The first version of this fix called drive_heartbeat.latest() once
+    per behaviour entry per candidate task -- measured >90s (still not
+    returned) on a live, write-contended instance. get_workflows must call
+    the batched latest_many exactly once per request, however many
+    behaviour entries are in the catalog."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(
+        monkeypatch, svc, tmp_path,
+        entries=[_behavior_entry(), _behavior_entry_2()])
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "dispatch_guard_live", "work_units": 108,
+        "driver": "prism-task-runner",
+    })
+    calls = []
+    real_latest_many = drive_heartbeat.latest_many
+
+    def _counting(scores_db, task_ids):
+        calls.append(list(task_ids))
+        return real_latest_many(scores_db, task_ids)
+
+    monkeypatch.setattr(drive_heartbeat, "latest_many", _counting)
+
+    result = workflows_api.get_workflows(project="prism")
+
+    assert len(calls) == 1, calls
+    assert _entry(result, "implement-tasks-loop")["occupancy"]["loop"] == 1
+    assert _entry(result, "draft-story-loop")["occupancy"]["gather"] == 0
 
 
 def test_a_done_task_never_lights_the_node_even_with_a_fresh_heartbeat(tmp_path, monkeypatch):

@@ -156,6 +156,47 @@ def latest(scores_db: str, task_id: str):
     return row
 
 
+def latest_many(scores_db: str, task_ids) -> dict:
+    """Batched form of ``latest()``: one connection, one query, for every
+    task_id in ``task_ids`` that has a recorded heartbeat.
+
+    Exists because get_workflows (task b490fabc) called ``latest()`` inside
+    a nested loop -- once per behaviour entry, per active task on that
+    entry's FSM step -- to light a behaviour node from live drive activity.
+    On a real instance under real write contention that measured >90s
+    (still not returned) against ~5-50s for the same endpoint before, so
+    it shipped once and was reverted on the very first live timing check.
+    Same age_s computation as ``latest()``, keyed by task_id; a task_id
+    with no row is simply absent from the result.
+    """
+    ids = [t for t in dict.fromkeys(task_ids) if t]
+    if not ids:
+        return {}
+    conn = _connect(scores_db)
+    try:
+        placeholders = ",".join("?" for _ in ids)
+        rows = conn.execute(
+            "SELECT task_id, step, elapsed_s, last_tool, work_units, "
+            "last_progress_at, recorded_at, driver "
+            f"FROM drive_heartbeats WHERE task_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+    finally:
+        conn.close()
+    now = datetime.now(timezone.utc)
+    out = {}
+    for r in rows:
+        if not r["last_progress_at"]:
+            continue
+        ts = datetime.fromisoformat(r["last_progress_at"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        row = {k: r[k] for k in r.keys()}
+        row["age_s"] = (now - ts).total_seconds()
+        out[r["task_id"]] = row
+    return out
+
+
 def heartbeat_age_s(scores_db: str, task_id: str):
     """Seconds since the recorded heartbeat's last_progress_at for THIS
     task_id, or None when no (accepted) heartbeat has been recorded for it

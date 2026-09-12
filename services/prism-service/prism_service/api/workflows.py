@@ -1606,6 +1606,40 @@ def get_workflows(project: str = Query("default")) -> dict:
     # nothing for either. The rows were always there; nobody read them.
     # Stamped HERE, off the path this view already resolved, so the project
     # is still resolved exactly once per request.
+    #
+    # LIVE-HEARTBEAT LOOKUP, COMPUTED ONCE (task b490fabc, second pass).
+    # `running_now` below is retrospective only: node_recent_runs reads a
+    # route's row in scores.db, written once the call RETURNS -- so a long
+    # agentic dispatch (implement-tasks-loop's reason-loop ran 90+ minutes
+    # and 108 turns on a single still-open HTTP call) reads idle for the
+    # entire time it is actually running, because there is no completed
+    # row yet to find. The owner watched this exact node paint "000" the
+    # whole time (2026-09-11/12). The task's own drive heartbeat is the
+    # same live signal /api/conductor/state's "driving" badge already
+    # trusts -- so light a behaviour's entry node whenever a live,
+    # non-stale task is parked at the FSM step that behaviour answers for
+    # (_STEP_FOR_BEHAVIOUR), the same fallback the canvas itself already
+    # documents: on a drilled layer with no per-step WorkflowCore run
+    # behind it, occupancy is the only answer to "where is the work"
+    # (workflowGraph.ts). FIRST VERSION of this called drive_heartbeat.
+    # latest() and svc.list() inside the entry loop -- one sqlite connect
+    # (with its own schema-check/ALTER TABLE) and one full task listing PER
+    # BEHAVIOUR ENTRY PER CANDIDATE TASK. Measured live against this same
+    # instance under real write contention: >90s, still not returned,
+    # against ~5-50s for the same endpoint before -- reverted within
+    # minutes of shipping it. Both loops now run exactly once, before the
+    # per-entry pass, however many behaviour entries there are.
+    _active_task_steps: dict[str, str] = {}
+    for _t in _svc.list():
+        if getattr(_t, "status", "") in ("done", "cancelled", "deleted"):
+            continue
+        _tid = getattr(_t, "id", "")
+        if _tid:
+            _active_task_steps[_tid] = getattr(_t, "workflow_step", "") or ""
+    _heartbeats = (
+        drive_heartbeat.latest_many(
+            str(_scores_db / "scores.db"), _active_task_steps.keys())
+        if _scores_db is not None and _active_task_steps else {})
     for _entry in conductor_behaviors:
         _steps = _entry.get("steps") or []
         _attach_node_trend(
@@ -1616,35 +1650,13 @@ def get_workflows(project: str = Query("default")) -> dict:
         # that had just run still drew as idle.
         _entry["occupancy"] = {
             s["id"]: (1 if s.get("running_now") else 0) for s in _steps}
-        # `running_now` ABOVE IS RETROSPECTIVE ONLY: node_recent_runs reads
-        # a route's row in scores.db, and that row is written once the
-        # call RETURNS -- so a long agentic dispatch (task b490fabc:
-        # implement-tasks-loop's reason-loop ran 90+ minutes and 108 turns
-        # on a single still-open HTTP call) reads idle for the entire time
-        # it is actually running, because there is no completed row yet to
-        # find. The owner watched this exact node paint "000" the whole
-        # time (2026-09-11/12). The task's own drive heartbeat is the same
-        # live signal /api/conductor/state's "driving" badge already
-        # trusts and it IS current (drive_heartbeat.latest, updated as the
-        # step's own tool calls land) -- so light the behaviour's entry
-        # node whenever a live, non-stale task is parked at the FSM step
-        # this behaviour answers for (_STEP_FOR_BEHAVIOUR), the same
-        # fallback the canvas itself already documents: on a drilled layer
-        # with no per-step WorkflowCore run behind it, occupancy is the
-        # only answer to "where is the work" (workflowGraph.ts).
         _fsm_step = _STEP_FOR_BEHAVIOUR.get(_entry.get("id"))
-        if _fsm_step and _steps and _scores_db is not None:
+        if _fsm_step and _steps:
             _entry_point_id = _steps[0]["id"]
-            for _t in _svc.list():
-                if getattr(_t, "status", "") in ("done", "cancelled", "deleted"):
+            for _tid, _step in _active_task_steps.items():
+                if _step != _fsm_step:
                     continue
-                if getattr(_t, "workflow_step", "") != _fsm_step:
-                    continue
-                try:
-                    _beat = drive_heartbeat.latest(
-                        str(_scores_db / "scores.db"), getattr(_t, "id", ""))
-                except Exception:
-                    _beat = None
+                _beat = _heartbeats.get(_tid)
                 if _beat is not None and _beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
                     _entry["occupancy"][_entry_point_id] = 1
                     break
