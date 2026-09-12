@@ -104,6 +104,23 @@ export type WorkflowDef = {
   bots: WorkflowBot[];
   /** step id -> count of non-done tasks standing there right now. */
   occupancy: Record<string, number>;
+  /** step id -> who and what is actually beating on a lit node (task
+   * b490fabc, "THE VISIBLE LIE"): occupancy alone cannot tell a genuinely
+   * open dispatch apart from a seat's pre-check that beat once and then
+   * deferred. `dispatching` is true only for last_tool values in the
+   * server's own _OPEN_DISPATCH_TOOLS (api/workflows.py) --
+   * "dispatch_guard_live" or "claude_cli.invoke". Absent only for an
+   * older service; a lit step with no entry here should read as WAITING,
+   * never RUNNING. */
+  live?: Record<string, {
+    task_id: string;
+    driver: string;
+    tool: string;
+    node: string;
+    age_s: number;
+    since: string;
+    dispatching: boolean;
+  }>;
   /** Selectable project workflows. Absent only for an older service. */
   workflows?: WorkflowCatalogEntry[];
   /** The SDLC roles (Steward, Verifier, Builder) and their cards. */
