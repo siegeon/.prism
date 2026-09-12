@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.302"
+PRISM_VERSION = "7.13.303"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9225,4 +9225,23 @@ PRISM_VERSION_NOTES += (
     'their own, so that boundary is a separate decision. '
     'test_stall_budget_ignores_outage_attempts.py, 4 tests, red at the '
     'tests-only commit before this one. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.303: a dispatched claude -p child can no longer outlive the process '
+    'that spawned it. Measured on the dev host 2026-09-11: ten live children '
+    'with no parent, seven of them running inside fixture directories that had '
+    'already been deleted, the oldest 32 minutes old, each still holding a '
+    'max-budget-usd and still spending. subprocess.run reaps a child on its own '
+    'timeout but never runs at all when the PARENT dies hard (a pytest session '
+    'under timeout 3000, or a killed daemon), so the child is reparented to '
+    'init and runs to its budget with nobody reading the result. claude_cli now '
+    'spawns through setpriv --pdeathsig TERM, so the kernel signals the child '
+    'the moment the parent goes away. setpriv rather than a preexec_fn because '
+    'the daemon is threaded and CPython warns a preexec_fn can deadlock a '
+    'forked child there. setpriv EXECS the wrapped program, so /proc/pid/cmdline '
+    'still reads claude -p and dispatch_guard reaper prefix match is unchanged. '
+    'Falls back to the bare command where setpriv has no --pdeathsig. '
+    'test_claude_cli_child_dies_with_parent.py, 4 tests, one of which kills a '
+    'real parent and asserts the grandchild dies. '
 )

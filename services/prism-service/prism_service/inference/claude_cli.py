@@ -13,8 +13,10 @@ the single enforcement point.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -174,6 +176,64 @@ def _build_cmd(
         # callers passing json_schema should budget max_turns >= 3.
         cmd += ["--json-schema", json.dumps(json_schema)]
     return cmd
+
+
+@functools.lru_cache(maxsize=1)
+def _setpriv_path() -> str:
+    """Absolute path to setpriv, or "" when this host has no usable one.
+
+    Cached: the answer cannot change inside one process, and `invoke` runs
+    on every step of every drive.
+    """
+    path = shutil.which("setpriv") or ""
+    if not path:
+        return ""
+    # Old util-linux builds have setpriv without --pdeathsig. Ask the binary
+    # instead of assuming, because a wrong guess turns every dispatch into an
+    # immediate usage error and stops the daemon dead.
+    try:
+        probe = subprocess.run(
+            [path, "--help"], capture_output=True, timeout=5,
+        )
+    except Exception:
+        return ""
+    helptext = (probe.stdout or b"") + (probe.stderr or b"")
+    return path if b"--pdeathsig" in helptext else ""
+
+
+def _with_parent_death_signal(cmd: list[str]) -> list[str]:
+    """Wrap `cmd` so the kernel kills the child when THIS process dies.
+
+    THE ORPHAN (measured 2026-09-11). `subprocess.run` cleans a child up on
+    its own timeout, but it never runs when the PARENT dies hard -- a pytest
+    session under `timeout 3000`, or a killed daemon. The `claude -p` child
+    is then reparented to init and runs to its own budget with nobody
+    collecting the result. Ten were live on this host, seven of them inside
+    fixture directories that had already been deleted, the oldest 32 minutes
+    old. Each carried --max-budget-usd, so each was still spending.
+
+    PR_SET_PDEATHSIG closes that: the kernel sends SIGTERM the moment the
+    parent goes away. We set it through setpriv rather than a preexec_fn
+    because the daemon is threaded, and the CPython docs warn that a
+    preexec_fn can deadlock a forked child in a threaded parent.
+
+    setpriv EXECS the wrapped program, so it replaces its own process image
+    and `/proc/<pid>/cmdline` still reads "claude -p ...". That matters:
+    dispatch_guard's reaper finds its children by that exact prefix. The
+    setting survives the exec because claude is not setuid.
+
+    The signal fires on death of the parent THREAD, not the process. That is
+    safe here only because `subprocess.run` blocks the calling thread for the
+    whole life of the child -- the thread cannot exit first. Do not reuse
+    this helper behind Popen without re-checking that.
+
+    Falls back to the bare command when setpriv is unavailable, so a host
+    without util-linux keeps today's behaviour instead of failing to spawn.
+    """
+    setpriv = _setpriv_path()
+    if not setpriv:
+        return cmd
+    return [setpriv, "--pdeathsig", "TERM", "--", *cmd]
 
 
 def _narrow_context_dir() -> Path:
@@ -435,7 +495,7 @@ def invoke(
     with open(out_path, "w", encoding="utf-8") as fh:
         try:
             result = subprocess.run(
-                cmd, cwd=str(work_dir), env=env,
+                _with_parent_death_signal(cmd), cwd=str(work_dir), env=env,
                 stdout=fh, stderr=subprocess.PIPE,
                 **run_kwargs,
             )
