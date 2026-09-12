@@ -463,7 +463,9 @@ def _exported_variables(result) -> dict:
 
 def _dispatch_declared_steps(project: str, plan: Optional[dict],
                              *, handlers: Optional[dict] = None,
-                             variables: Optional[dict] = None) -> list[dict]:
+                             variables: Optional[dict] = None,
+                             task_id: Optional[str] = None,
+                             step: Optional[str] = None) -> list[dict]:
     """Run every step the node declares, in file order.
 
     A route with no handler is REPORTED, never skipped. Silence is what let
@@ -472,20 +474,37 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
 
     Each step's output is exported into the variables the NEXT step
     interpolates, so a declaration can name a real pipeline.
+
+    ``task_id``/``step`` are OPTIONAL and default to None so every existing
+    call (unit tests included) keeps working unchanged. When ``task_id`` is
+    given, this beats a drive_heartbeat.node row naming the declared route
+    IMMEDIATELY BEFORE it runs, and beats node="" once after the whole loop
+    finishes -- an empty node means no declared sub-step is executing, i.e.
+    the agentic middle (or the FSM step itself) is what's running. This is
+    what lets get_workflows light the SPECIFIC declared node presently in
+    flight instead of only ever the behaviour's entry node (task b490fabc,
+    third pass): before this, a two-step behaviour like verify-plan-loop
+    (reason-loop then text-challenge) could only ever show "step 1 is live"
+    on the canvas, even while text-challenge was the one actually running.
     """
     if not plan:
         return []
     table = _step_handlers() if handlers is None else handlers
     live = dict(variables or {})
     out: list[dict] = []
-    for step in plan.get("steps") or []:
-        route = step.get("route") or ""
+    scores_db = _scores_db_for(project) if task_id else None
+    for decl in plan.get("steps") or []:
+        route = decl.get("route") or ""
+        if scores_db is not None:
+            from prism_service.services import drive_heartbeat
+            drive_heartbeat.beat_node(
+                scores_db, task_id, step or "", route, driver=RUNNER_DRIVER)
         fn = table.get(route)
         if fn is None:
             out.append({"ok": False, "route": route,
                         "reason": f"no handler for declared route {route!r}"})
             continue
-        body = _subst(step.get("body") or {}, live)
+        body = _subst(decl.get("body") or {}, live)
         try:
             result = fn(project, body)
         except Exception as exc:
@@ -494,6 +513,10 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
             continue
         out.append({"ok": True, "route": route, "result": result})
         live.update(_exported_variables(result))
+    if scores_db is not None:
+        from prism_service.services import drive_heartbeat
+        drive_heartbeat.beat_node(
+            scores_db, task_id, step or "", "", driver=RUNNER_DRIVER)
     return out
 
 
@@ -1891,7 +1914,8 @@ def _run_one_step(project: str, task_id: str) -> dict:
             dispatched = _dispatch_declared_steps(
                 project, plan,
                 variables={"taskHint": task_hint, "taskId": task_id,
-                           "project": project})
+                           "project": project},
+                task_id=task_id, step=job["step"])
             for row in dispatched:
                 route = row.get("route") or "?"
                 if route in _SELF_RECORDING_ROUTES:

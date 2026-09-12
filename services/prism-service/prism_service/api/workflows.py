@@ -1653,12 +1653,25 @@ def get_workflows(project: str = Query("default")) -> dict:
         _fsm_step = _STEP_FOR_BEHAVIOUR.get(_entry.get("id"))
         if _fsm_step and _steps:
             _entry_point_id = _steps[0]["id"]
+            # WHICH declared sub-node, not just "the behaviour is live"
+            # (task b490fabc, third pass). A live beat's `node` names the
+            # route currently executing inside _dispatch_declared_steps
+            # (e.g. "text-challenge") -- map it to the step that declares
+            # that route and light THAT one, so a two-step behaviour draws
+            # its real position instead of always freezing on step one.
+            _route_to_id = {s.get("route"): s["id"] for s in _steps
+                            if s.get("route")}
             for _tid, _step in _active_task_steps.items():
                 if _step != _fsm_step:
                     continue
                 _beat = _heartbeats.get(_tid)
                 if _beat is not None and _beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
-                    _entry["occupancy"][_entry_point_id] = 1
+                    _node = str(_beat.get("node") or "")
+                    # Empty, or a node naming no step of THIS behaviour,
+                    # falls back to the entry node -- the pre-existing
+                    # behaviour for a beat that carries no sub-node signal.
+                    _lit = _route_to_id.get(_node, _entry_point_id) if _node else _entry_point_id
+                    _entry["occupancy"][_lit] = 1
                     break
     # Same rule as validation above: nest only the behavior(s) an actual
     # conductor state links to. story_gate now links to "story-gate-check"
@@ -2207,6 +2220,34 @@ def workflow_step_reason_loop(
         from prism_service.services.claude_transcripts import _project_source_path
         from prism_service.inference import claude_cli
 
+        # BEAT THE DECLARED NODE AT ENTRY (task b490fabc, third pass). This
+        # endpoint IS "reason-loop" -- the long-running declared step
+        # task_runner.py's _dispatch_declared_steps hands off to, whose
+        # single claude_cli.invoke call below can run for many minutes on
+        # one still-open HTTP call. There is no separate per-turn point to
+        # beat from out here: max_turns bounds claude_cli's OWN internal
+        # tool loop, invisible to this endpoint, so a beat at entry and one
+        # at exit is the whole story this call can honestly tell.
+        if body.task_id:
+            try:
+                from prism_service.services import drive_heartbeat
+                from prism_service.services.task_runner import RUNNER_DRIVER
+
+                # flow_run_recorder's work_units progress-pct only counts a
+                # beat whose `step` matches the task's OWN FSM step -- so
+                # this reads the task's real workflow_step rather than
+                # beating an empty one, which would silently degrade that
+                # calculation to a wall-time fallback for every task_id-
+                # carrying call to this endpoint.
+                _task = ctx.task_svc.get(body.task_id)
+                _fsm_step = getattr(_task, "workflow_step", "") or ""
+                _scores_db = str(get_project(project)._data_dir / "scores.db")
+                drive_heartbeat.beat_node(
+                    _scores_db, body.task_id, _fsm_step, "reason-loop",
+                    driver=RUNNER_DRIVER)
+            except Exception:
+                pass
+
         configured = Path(_project_source_path(project))
         fallback = Path.home() / "projects" / project
         root = configured if configured.is_absolute() and configured.exists() else fallback
@@ -2233,6 +2274,23 @@ def workflow_step_reason_loop(
             validation = {"ok": verdict.get("ok", False), "reason": verdict.get("reason", "")}
         else:
             validation = {"ok": None, "reason": "no rubric specified -- Validate skipped"}
+
+        # BEAT node="" AT EXIT: reason-loop itself has finished, so no
+        # declared sub-node is executing until the next step's own beat
+        # (or _dispatch_declared_steps' own before/after pair) says otherwise.
+        if body.task_id:
+            try:
+                from prism_service.services import drive_heartbeat
+                from prism_service.services.task_runner import RUNNER_DRIVER
+
+                _task = ctx.task_svc.get(body.task_id)
+                _fsm_step = getattr(_task, "workflow_step", "") or ""
+                _scores_db = str(get_project(project)._data_dir / "scores.db")
+                drive_heartbeat.beat_node(
+                    _scores_db, body.task_id, _fsm_step, "",
+                    driver=RUNNER_DRIVER)
+            except Exception:
+                pass
 
         return ReasonLoopResponse(observe=observe, reason=reason, validation=validation)
 
