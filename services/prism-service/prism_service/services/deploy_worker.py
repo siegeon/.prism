@@ -14,6 +14,16 @@ hand click and an automatic land can never disagree about what "deploy"
 does (the same "one implementation, two entry points" shape brain-health
 and refresh-maps already use).
 
+A LAND `deploy_after_land` NEVER SEES is still covered: that hook only
+fires from ship_worker.ship_task, so a branch that reaches origin/main by
+a direct push (this repo's own self-dev carve-out) or any other route
+never calls it. `sweep_new_land` is the standing sweep thread's OWN tick
+(`_tick`, run before `sweep_pending` on every interval): it fetches, and
+whenever the checkout's upstream is ahead of a clean HEAD it runs the
+identical `deploy_once` pipeline with no task in the loop -- a bare land
+observed only via git has no task to attribute evidence to, but the
+outcome is always logged, never silently skipped.
+
 THE RESTART PRIMITIVE. `auto_updater.perform_restart()` (main-thread
 os.execv, issue #66's guard) is reached only through
 `auto_updater.request_restart()` -- a daemon-thread flag the uvicorn main
@@ -417,6 +427,65 @@ def deploy_after_land(task_svc, task_id: str, project: str = "default") -> None:
         pass
 
 
+def _upstream_ahead_count(run: Runner, repo_root: Path) -> int:
+    """Commits the checkout's upstream (`@{u}`) is ahead of HEAD, after
+    fetching origin for real. -1 on any git failure -- no upstream
+    configured, a detached HEAD, an unreachable remote -- so an ambiguous
+    comparison never triggers a deploy attempt."""
+    rc, _out, _err = run(["git", "fetch", "origin"], repo_root)
+    if rc != 0:
+        return -1
+    rc, out, _err = run(["git", "rev-list", "--count", "HEAD..@{u}"], repo_root)
+    if rc != 0:
+        return -1
+    try:
+        return int((out or "").strip())
+    except ValueError:
+        return -1
+
+
+def sweep_new_land(*, repo_root: Optional[Path] = None,
+                   runner: Optional[Runner] = None,
+                   request_restart: Optional[Callable[[], None]] = None) -> dict:
+    """THE GAP `deploy_after_land` never covers: that hook only fires from
+    ship_worker.ship_task, so a branch that reaches origin/main by a DIRECT
+    push (this repo's own self-dev carve-out, see CLAUDE.md) or by any
+    route other than ship_task never deploys at all -- the standing sweep
+    thread used to only CONFIRM an already-`requested` deploy
+    (`sweep_pending`), never START one. This is the seat's own tick: a
+    dirty checkout still parks with a reason, checked BEFORE any fetch (the
+    same security tooth `deploy_once` itself applies -- a checkout that
+    cannot prove it runs the code it claims to is never compared against
+    the remote at all); a clean checkout whose upstream is ahead of HEAD
+    gets the identical `deploy_once` pull+build+restart pipeline a
+    task-scoped land would have gotten. No task_id -- a bare land observed
+    only via git has no task to attribute evidence to -- but every non-ok
+    outcome is still logged (never a silent skip) so a user can see why
+    nothing happened."""
+    run = runner or _default_runner
+    root = repo_root if repo_root is not None else _repo_root()
+    if root is None or not root.is_dir():
+        return {"ok": True, "stage": _STAGE_SKIPPED,
+               "reason": "no PRISM checkout resolves for the deploy seat"}
+
+    reason = dirty_checkout_reason(run, root)
+    if reason:
+        _log(f"sweep: parked, {reason}")
+        return _fail("dirty_checkout", reason)
+
+    ahead = _upstream_ahead_count(run, root)
+    if ahead <= 0:
+        return {"ok": True, "stage": _STAGE_SKIPPED,
+               "reason": "upstream not ahead of HEAD"}
+
+    _log(f"sweep: upstream is {ahead} commit(s) ahead of HEAD; deploying")
+    result = deploy_once(repo_root=root, runner=run, request_restart=request_restart)
+    if not result.get("ok"):
+        _log(f"sweep: deploy failed at stage={result.get('stage')}: "
+             f"{result.get('error')}")
+    return result
+
+
 def sweep_pending() -> None:
     """Confirm every task with a still-pending deploy request, across every
     project -- the durable, cross-restart half of the pipeline. A fresh
@@ -446,24 +515,37 @@ def sweep_pending() -> None:
                     pass
 
 
+def _tick() -> None:
+    """One iteration of the sweep loop, split out of `_loop` so a test can
+    pin the order without running an infinite loop. Starts a deploy for a
+    land the sweep has not seen yet BEFORE confirming anything a previous
+    tick (or a task-scoped land) already requested -- either half's own
+    exception never stops the other, same as the loop's own posture."""
+    try:
+        sweep_new_land()
+    except Exception as exc:
+        _log(f"sweep new-land error: {exc}")
+    try:
+        sweep_pending()
+    except Exception as exc:
+        _log(f"sweep error: {exc}")
+
+
 def _loop(interval_s: int) -> None:
     _log(f"started; interval={interval_s}s")
     while True:
-        try:
-            sweep_pending()
-        except Exception as exc:
-            _log(f"sweep error: {exc}")
+        _tick()
         time.sleep(interval_s)
 
 
 def start_deploy_worker() -> Optional[threading.Thread]:
-    """Spawn the deploy-confirmation sweep thread, unless this environment
-    did not opt in (the default). Mirrors start_ship_worker/
-    start_task_runner: same shape, same off-by-default posture. The
-    initial `deploy_once` call itself needs no thread of its own -- it
-    runs synchronously from ship_worker's post-land hook or the
-    /api/deploy/run trigger -- this thread only exists to confirm a
-    PENDING deploy on later ticks (including after a restart this same
+    """Spawn the deploy sweep thread, unless this environment did not opt
+    in (the default). Mirrors start_ship_worker/start_task_runner: same
+    shape, same off-by-default posture. Each tick (`_tick`) both STARTS a
+    deploy for a land the seat has not seen yet (`sweep_new_land` -- the
+    gap left by any land that never went through ship_worker's post-land
+    hook or the /api/deploy/run trigger) and CONFIRMS a still-pending
+    deploy request (`sweep_pending`, including after a restart this same
     module requested)."""
     if not is_enabled():
         _log(f"disabled (default OFF; set {DEPLOY_ENV}=1 to opt this "

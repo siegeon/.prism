@@ -3,8 +3,15 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Deploy a landed build to the dev instance",
-  "version": 1,
+  "version": 2,
   "steps": [
+    {
+      "id": "sweep-new-land",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/deploy-sweep?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 60
+    },
     {
       "id": "deploy",
       "kind": "http-callback",
