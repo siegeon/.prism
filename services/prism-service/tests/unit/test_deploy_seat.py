@@ -93,6 +93,16 @@ def _land_from_elsewhere(tmp_path: Path, origin: Path, *, version: str,
     putting `work` one fast-forward behind."""
     other = tmp_path / "other"
     _git(tmp_path, "clone", "-q", str(origin), str(other))
+    # `origin`'s HEAD symref was set at `init --bare` time, before `main`
+    # ever existed there, so it still names an unborn ref (commonly
+    # "master") that a plain clone cannot check out -- CI runners default
+    # `init.defaultBranch` to that builtin fallback, landing `other` on
+    # the wrong (unborn) local branch and turning the push below into
+    # "src refspec main does not match any" (reproduced on a fresh
+    # ubuntu:24.04 container; masked on a machine whose global
+    # `init.defaultBranch` happens to already be "main"). `origin/main`
+    # was fetched during the clone regardless, so check it out explicitly.
+    _git(other, "checkout", "-q", "main")
     _write(other, _VERSION_REL, _version_text(version))
     if touch_web:
         _write(other, _WEB_TSX_REL, "export const App = () => null;\n")
