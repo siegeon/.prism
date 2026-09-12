@@ -1982,6 +1982,84 @@ def workflow_step_plan_gate_check(
         return PlanGateCheckResponse(ok=ok, reason=reason, checks=checks)
 
 
+# Default character budget for rendered conventions (env PRISM_CONTEXT_CONVENTIONS_CHARS).
+DEFAULT_CONVENTIONS_CHARS = 1500
+
+
+def _render_conventions(conventions: list | None) -> str:
+    """Render a conventions list to compact plain text suitable for an
+    inference prompt. Mirrors context_builder._conventions_cap pattern.
+
+    Takes a list of convention objects (dataclass-like with getattr or dict
+    with .get()) and produces one-line summaries: NAME | DESCRIPTION.
+    Entries may be truncated or omitted if total budget is exceeded.
+    Silently handles missing fields and gracefully degrades on errors.
+
+    Returns empty string if conventions is None/empty, never a dangling
+    "Project conventions:" header."""
+    if not conventions:
+        return ""
+
+    # Read the character budget from env, defaulting to the module constant.
+    try:
+        budget = int(os.environ.get("PRISM_CONTEXT_CONVENTIONS_CHARS", ""))
+        if budget <= 0:
+            budget = DEFAULT_CONVENTIONS_CHARS
+    except (TypeError, ValueError):
+        budget = DEFAULT_CONVENTIONS_CHARS
+
+    max_desc_len = 200  # Truncate individual descriptions to this length.
+    lines = []
+    dropped = 0
+    truncated_count = 0
+    total_chars = 0
+
+    for entry in conventions:
+        # Handle both dataclass-like objects and dicts.
+        if isinstance(entry, dict):
+            name = entry.get("name", "") or ""
+            description = entry.get("description", "") or ""
+        else:
+            name = getattr(entry, "name", "") or ""
+            description = getattr(entry, "description", "") or ""
+
+        if not name:
+            continue
+
+        # Truncate description if necessary and mark truncation.
+        desc_truncated = False
+        if len(description) > max_desc_len:
+            description = description[:max_desc_len].rstrip() + "…"
+            desc_truncated = True
+            truncated_count += 1
+
+        line = f"• {name}: {description}".strip() if description else f"• {name}"
+
+        # Check if adding this line would exceed the budget.
+        line_len = len(line) + 1  # +1 for newline
+        if total_chars + line_len > budget:
+            dropped += 1
+        else:
+            lines.append(line)
+            total_chars += line_len
+
+    result = "\n".join(lines)
+
+    # Append a note if entries were dropped or truncated. Reserve a small
+    # buffer in the budget for the note itself (~100 chars).
+    if dropped > 0 or truncated_count > 0:
+        note_lines = []
+        if dropped > 0:
+            note_lines.append(f"({dropped} more entries omitted to stay within budget)")
+        if truncated_count > 0:
+            note_lines.append("(some descriptions truncated)")
+        if note_lines:
+            note_text = " ".join(note_lines)
+            result = f"{result}\n\n{note_text}" if result else note_text
+
+    return result
+
+
 def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
     """Dispatch to the right existing PURE scorer by rubric name, mapping
     the Reason stage's structured_output fields onto each scorer's own
@@ -2012,6 +2090,9 @@ def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
             "plan_diagram": fields.get("plan_diagram", ""),
         }
         return gov.score_plan_coverage(evidence, rubric, principles)
+    if rubric_name == "test_drafted":
+        return gov.score_test_drafted({"test_code": fields.get("test_code", ""),
+                                        "test_file_path": fields.get("test_file_path", "")}, rubric)
     return {"ok": False, "reason": f"unknown rubric: {rubric_name!r}"}
 
 
@@ -2084,7 +2165,8 @@ def workflow_step_reason_loop(
         configured = Path(_project_source_path(project))
         fallback = Path.home() / "projects" / project
         root = configured if configured.is_absolute() and configured.exists() else fallback
-        full_prompt = f"{body.prompt}\n\nProject conventions:\n{bundle.get('conventions')}"
+        conventions_text = _render_conventions(bundle.get("conventions"))
+        full_prompt = f"{body.prompt}\n\nProject conventions:\n{conventions_text}" if conventions_text else body.prompt
         invoke_kwargs = {"allowed_tools": ()} if body.narrow else {}
         result = claude_cli.invoke(
             full_prompt, work_dir=root, plugin_dir=root,
