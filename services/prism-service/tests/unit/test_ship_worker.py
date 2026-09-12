@@ -95,13 +95,18 @@ class FakeGh:
     """
 
     def __init__(self, origin: Path, branch: str, *, fail_at: str = "",
-                 fail_err: str = "", checks_rc: int = 0):
+                 fail_err: str = "", checks_rc: int = 0,
+                 run_log_failed: str = "", run_view_rc: int = 0):
         self.origin = origin
         self.branch = branch
         self.calls: list[list] = []
         self.fail_at = fail_at
         self.fail_err = fail_err
         self.checks_rc = checks_rc
+        # `gh run view <id> --log-failed` -- the ci_wait failure-detail
+        # lookup's own boundary.
+        self.run_log_failed = run_log_failed
+        self.run_view_rc = run_view_rc
 
     def __call__(self, argv, cwd=None):
         self.calls.append(list(argv))
@@ -120,6 +125,9 @@ class FakeGh:
 
         if argv[0] != "gh":
             raise AssertionError(f"pipeline shelled out to {argv[0]!r}: {argv}")
+
+        if "run view" in head:
+            return self.run_view_rc, self.run_log_failed, ""
 
         if "pr create" in head:
             if self.fail_at == "pr_create":
@@ -281,6 +289,69 @@ def test_stage_failure_parks_with_verbatim_error(
         "dropped refusal is the e0149f1f defect class this repo already "
         f"named. got: {res.get('error')!r}")
     assert not _shipped(work), "a failed pipeline must not have landed anything"
+
+
+# ---------------------------------------------------------------------------
+# A genuine (non-pending) ci_wait failure names the failing TEST, not only
+# the failing job/check -- PR #5972 (task d0b392b3) sat FAILURE for 8
+# straight CI runs and every one of them named only "checks fail ... <run
+# url>"; a driver had to open the run log by hand to learn it was
+# test_deploy_seat.py that broke.
+# ---------------------------------------------------------------------------
+
+
+def test_ci_wait_failure_names_the_failing_test(tmp_path, monkeypatch):
+    from prism_service.services import ship_worker
+
+    origin, work, branch = _unshipped_workspace(tmp_path)
+    _wire_ws(monkeypatch, work, branch)
+
+    checks_err = ("checks\tfail\t11m29s\t"
+                  "https://github.com/siegeon/.prism/actions/runs/999/job/111")
+    log_failed = (
+        "FAILED tests/unit/test_deploy_seat.py::"
+        "test_happy_path_rebuilds_web_and_requests_restart_once - "
+        "subprocess.CalledProcessError\n"
+        "FAILED tests/unit/test_deploy_seat.py::"
+        "test_non_web_landing_skips_the_rebuild - "
+        "subprocess.CalledProcessError\n"
+        "2 failed, 4731 passed in 581.64s\n")
+    gh = FakeGh(origin, branch, fail_at="ci_wait", fail_err=checks_err,
+                run_log_failed=log_failed)
+    res = ship_worker.ship_task(TASK_ID, runner=gh, poll_interval_s=0)
+
+    assert res["ok"] is False, res
+    assert res["stage"] == "ci_wait", res
+    assert checks_err in res["error"], (
+        "the verbatim gh pr checks text must still survive unchanged")
+    assert ("tests/unit/test_deploy_seat.py::"
+            "test_happy_path_rebuilds_web_and_requests_restart_once"
+            in res["error"]), (
+        f"the parked reason must name the actual failing test, not only "
+        f"the failing job/check: {res.get('error')!r}")
+    assert not _shipped(work), "a failed pipeline must not have landed anything"
+
+
+def test_ci_wait_failure_without_a_run_url_is_unchanged(tmp_path, monkeypatch):
+    """The AC-5 contract test above already pins this (`err in res["error"]`
+    with no run url in `err`), but pin the miss path by name too: no run
+    url anywhere in the checks text means no `gh run view` call at all."""
+    from prism_service.services import ship_worker
+
+    origin, work, branch = _unshipped_workspace(tmp_path)
+    _wire_ws(monkeypatch, work, branch)
+
+    err = "check 'build' failed: exit 1"
+    gh = FakeGh(origin, branch, fail_at="ci_wait", fail_err=err,
+                run_log_failed="FAILED tests/unit/test_unrelated.py::test_x\n")
+    res = ship_worker.ship_task(TASK_ID, runner=gh, poll_interval_s=0)
+
+    assert res["ok"] is False, res
+    assert res["error"] == err, res
+    assert not any("run view" in " ".join(str(a) for a in c[:3])
+                   for c in gh.calls), (
+        "no run id to look up -- ship_task must not have called "
+        f"`gh run view` at all: {gh.calls}")
 
 
 # ---------------------------------------------------------------------------
