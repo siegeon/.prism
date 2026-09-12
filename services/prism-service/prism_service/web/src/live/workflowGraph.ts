@@ -51,6 +51,15 @@ export type WfNode = {
    * (task 112dbb72). Undefined for __start__/__complete__/bot nodes,
    * which carry no agent_runs of their own. */
   tokenTrend?: TokenTrend;
+  /** When this node is currently occupied by a behaviour-layer run with
+   * NO WorkflowCore progress behind it (isOccupiedLit true, no
+   * ActiveNodeProgress) -- when this node was first seen running, in the
+   * same clock `now` is drawn in (performance.now() ms). Server-reported
+   * (def.occupancy_since, once a sibling adds it) when present, else the
+   * canvas's own "first seen lit" bookkeeping (WorkflowGraph.litSeenSince)
+   * so the elapsed clock counts up from first sight rather than resetting
+   * on every poll. Null while idle. */
+  runningSince?: number | null;
 };
 
 /** A node's own measured token economics — GET /api/workflows'
@@ -213,6 +222,12 @@ export class WorkflowGraph {
    * changes instantly, same frame), it just never travels there. Never a
    * broken layout, never a frozen-mid-flight marker. */
   private reducedMotion = false;
+  /** step id -> performance.now() ms this canvas FIRST saw it occupied
+   * with no server-reported occupancy_since -- the fallback half of
+   * WfNode.runningSince (see setDef). Cleared the moment occupancy drops
+   * to zero, so a node that goes idle and later runs again gets a fresh
+   * elapsed clock, not the last run's. */
+  private litSeenSince = new Map<string, number>();
   /** How the shared interaction layer reads THIS board. The only wire
    * behaviour that is ours to answer: the FSM chain keeps its plain
    * edge-midpoint elbow while untouched, and this canvas simplifies every
@@ -261,11 +276,36 @@ export class WorkflowGraph {
       slot: this.place("__start__", 0, STEP_Y, STEP_W, STEP_H),
     });
 
+    // def.occupancy_since is speculative plumbing -- no server payload sets
+    // it yet ("a sibling may add it later"). Read via a locally-widened
+    // type rather than growing WorkflowDef itself, which is out of this
+    // file's scope; a server value always wins over the fallback below.
+    const occupancySince = (def as WorkflowDef & {
+      occupancy_since?: Record<string, number | null | undefined>;
+    }).occupancy_since;
     steps.forEach((s, i) => {
       const gate = s.type === "gate";
       const linkedWorkflowLabel = s.linked_workflow_id === "validation"
         ? "Build and test"
         : s.linked_workflow_id ? title(s.linked_workflow_id) : null;
+      // "First seen lit" bookkeeping for the RUNNING elapsed clock (task
+      // b490fabc follow-up): a node with no live WorkflowCore run behind
+      // it has no started-at timestamp of its own, so the canvas keeps
+      // one, keyed on real occupancy -- the SAME signal that lights the
+      // node (isOccupiedLit already requires n.count > 0).
+      const occupiedNow = (def.occupancy[s.id] ?? 0) > 0;
+      let runningSince: number | null = null;
+      if (occupiedNow) {
+        const serverSince = occupancySince?.[s.id];
+        if (typeof serverSince === "number") {
+          runningSince = serverSince;
+        } else {
+          runningSince = this.litSeenSince.get(s.id) ?? performance.now();
+          this.litSeenSince.set(s.id, runningSince);
+        }
+      } else {
+        this.litSeenSince.delete(s.id);
+      }
       this.nodes.push({
         id: s.id,
         kind: "step",
@@ -292,6 +332,7 @@ export class WorkflowGraph {
           lastRunAt: typeof s.last_run_at === "number"
             ? new Date(s.last_run_at * 1000).toISOString() : null,
         },
+        runningSince,
       });
     });
 
@@ -451,6 +492,13 @@ export class WorkflowGraph {
   setReducedMotion(reduced: boolean): void {
     this.reducedMotion = reduced;
     if (reduced) this.packets = [];
+  }
+
+  /** Read by drawNode (a plain function, not a method) so a RUNNING node's
+   * glow can skip its pulse without a second plumbing path -- the flag
+   * itself still lives only here, set once by setReducedMotion. */
+  get isReducedMotion(): boolean {
+    return this.reducedMotion;
   }
 
   /** Ambient motion, driven by real occupancy only: a bot->step wire whose
@@ -626,6 +674,8 @@ export function drawWorkflows(
     nodeVerdicts?.[n.id] ?? null,
     runView,
     litIds.has(n.id),
+    now,
+    g.isReducedMotion,
   );
 
   ctx.restore();
@@ -649,6 +699,15 @@ function drawTransitionLabel(ctx: CanvasRenderingContext2D, label: string, at: P
  * this is a steady stream, several units on the wire at once, not one
  * marker riding start to finish. */
 export const FLOW_UNIT_SPEED = 90;
+
+/** Breath, not urgency: how long one full pulse of a RUNNING behaviour
+ * node's glow takes. Slow enough to read as "alive", never a flashing
+ * alarm -- "idle"/"stalled" are the alarm words this product reserves for
+ * something the owner must act on, and this node is neither. */
+const RUNNING_PULSE_PERIOD_MS = 2200;
+/** PALETTE.teal (#2dd4bf) as r,g,b -- the pulse modulates ALPHA, so it
+ * needs the channel triple rather than the locked hex constant. */
+const PALETTE_TEAL_RGB = "45, 212, 191";
 
 /** How many units sit on one live edge at a time -- enough to read as a
  * conveyor belt, not a lonely dot. */
@@ -692,7 +751,7 @@ function drawFlowUnits(
   }
 }
 
-function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null, runView: RunView | null = null, occupiedLit = false): void {
+function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, active: ActiveNodeProgress | null = null, verdict: NodeVerdict | null = null, runView: RunView | null = null, occupiedLit = false, now = 0, reducedMotion = false): void {
   const { x, y, w, h } = n.slot;
 
   // A live run wins: `active` is what is happening RIGHT NOW, a verdict is
@@ -701,6 +760,14 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // conflict. The lit node (isOccupiedLit) is live work too, so it wins the
   // same way: a PASSED paint must never out-shine where the agent is now.
   const verdictLook = !active && !occupiedLit && verdict ? verdictPaint(verdict) : null;
+  // The behaviour-layer case this slice fixes: occupied, but no
+  // WorkflowCore ActiveNodeProgress behind it (a declarative FSM behaviour
+  // has none). occupiedLit already forces verdictLook to null above, so
+  // "no active and no verdict" reduces to exactly this. Two screenshots of
+  // such a node minutes apart used to look identical to idle -- same card,
+  // same static glow, same stale token-trend line -- because nothing on
+  // the card said work was actually happening right now.
+  const behaviourRunning = occupiedLit && !active;
   // In runMode every lane this run did not walk drops to the SAME dim draw
   // path a not-reached verdict already uses -- dimmed, never removed, so the
   // catalog-wide picture survives behind the run being foregrounded. The
@@ -784,6 +851,16 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
     ctx.shadowColor = activeStroke;
     ctx.shadowBlur = 14;
   }
+  if (behaviourRunning && !reducedMotion) {
+    // A gentle sin()-driven ALPHA pulse, never a sawtooth -- a sawtooth
+    // reads as measured progress with nothing behind it (the exact
+    // 7.13.174/175 mistake verdictPaint's own stop_if forbids repeating).
+    // reducedMotion skips this block entirely and keeps the steady glow
+    // set above, per the OS accessibility preference.
+    const pulse = 0.55 + 0.35 * Math.sin((now * 2 * Math.PI) / RUNNING_PULSE_PERIOD_MS);
+    ctx.shadowColor = `rgba(${PALETTE_TEAL_RGB}, ${pulse.toFixed(2)})`;
+    ctx.shadowBlur = 12 + 6 * pulse;
+  }
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   ctx.shadowBlur = 0;
   if (selected) {
@@ -824,8 +901,9 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
         ? `RUN ${shortDuration(active.elapsedSeconds)} / ~${shortDuration(active.averageSeconds)}`
         : `RUN ${shortDuration(active.elapsedSeconds)}`
       : `RUN ${shortDuration(active.elapsedSeconds)}`)
-    : verdictLook ? verdictLook.label
-      : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
+    : behaviourRunning ? "RUNNING"
+      : verdictLook ? verdictLook.label
+        : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
   ctx.fillText(runLabel, x + w - 8, y + 10);
   ctx.textAlign = "left";
 
@@ -864,9 +942,19 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // line instead of the generic "what happens next" preview -- the
   // elapsed clock at top-right already answers "how long", so together
   // the two answer the owner's ask without a second floating panel.
+  //
+  // A behaviour-running node has no task title to show (no WorkflowCore
+  // run backs it) and its `summary` line is the STALE run_count/last_run_at
+  // token-trend preview, which never changes mid-execution -- the exact
+  // thing that made two screenshots of `loop` running look identical to
+  // idle. RUNNING · <elapsed> replaces it instead, counted from
+  // n.runningSince (task-level bookkeeping in setDef/litSeenSince).
+  const runningElapsed = behaviourRunning && typeof n.runningSince === "number"
+    ? `RUNNING · ${shortDuration(Math.max(0, (now - n.runningSince) / 1000))}`
+    : null;
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
-  ctx.fillStyle = active?.taskTitle ? activeStroke : PALETTE.textLabel;
-  ctx.fillText(clip(ctx, active?.taskTitle ?? n.summary, w - 20), x + 10, y + h - 12);
+  ctx.fillStyle = active?.taskTitle || runningElapsed ? activeStroke : PALETTE.textLabel;
+  ctx.fillText(clip(ctx, active?.taskTitle ?? runningElapsed ?? n.summary, w - 20), x + 10, y + h - 12);
 
   // Active progress already visualizes the one token occupying this state.
   // Showing the numeric badge at the same time duplicates that signal and,
