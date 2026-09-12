@@ -45,6 +45,18 @@ _REQUIRED_FIELDS = ("task_id", "step", "elapsed_s", "last_tool", "work_units")
 # driver is on, and must NOT skip a task it beat for itself.
 _DRIVER_COLUMN = "driver"
 
+# WHICH declared sub-node is executing right now (task b490fabc, third pass).
+# Optional and defaulted to "" so every existing caller keeps working. The
+# Workflows canvas could only ever light a behaviour's ENTRY node, because
+# nothing recorded which of its declared steps (the route named in the
+# behaviour's own JSON, e.g. "text-challenge") is the one presently running
+# inside _dispatch_declared_steps -- so a two-step behaviour always drew as
+# "step 1 is live" even while step 2 was the one actually executing. This
+# column is the missing signal: get_workflows lights the step whose "route"
+# equals the live beat's `node`, falling back to the entry node when `node`
+# is empty/unmatched, exactly as before this column existed.
+_NODE_COLUMN = "node"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS drive_heartbeats (
     task_id TEXT PRIMARY KEY,
@@ -62,14 +74,21 @@ CREATE TABLE IF NOT EXISTS drive_heartbeats (
 def _connect(scores_db: str) -> sqlite3.Connection:
     conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.execute(_SCHEMA)
-    # A table created before the driver column existed is ALTERed in place --
-    # the column is NOT NULL DEFAULT '' so every historical row reads as an
-    # unattributed beat, which is exactly what it was.
+    # A table created before the driver/node column existed is ALTERed in
+    # place -- both are NOT NULL DEFAULT '' so every historical row reads as
+    # an unattributed beat with no declared sub-node, which is exactly what
+    # it was. conductor_service.py (a control_plane.POLICY_FILES entry) only
+    # ever READS this module's public functions, so this stays purely
+    # additive -- a new nullable-by-default column, not a schema rewrite.
     cols = {r["name"] for r in conn.execute(
         "PRAGMA table_info(drive_heartbeats)")}
     if _DRIVER_COLUMN not in cols:
         conn.execute("ALTER TABLE drive_heartbeats ADD COLUMN "
                      "driver TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    if _NODE_COLUMN not in cols:
+        conn.execute("ALTER TABLE drive_heartbeats ADD COLUMN "
+                     "node TEXT NOT NULL DEFAULT ''")
         conn.commit()
     return conn
 
@@ -86,6 +105,14 @@ def record_heartbeat(scores_db: str, row: dict) -> dict:
     recorded value for this task, ``last_progress_at`` is NOT advanced --
     a wedged/looping process resending the same counter cannot pass for
     driving just by pinging again.
+
+    A beat whose ``node`` (optional, defaults to "") DIFFERS from the
+    previously recorded ``node`` counts as progress and DOES advance
+    ``last_progress_at``, even when ``work_units`` repeats. The declared
+    sub-node moving from one route to the next ("reason-loop" ->
+    "text-challenge") is itself real, observable forward motion inside a
+    step whose own work_units counter may not have moved yet -- the same
+    reason a stall detector should not read that transition as wedged.
     """
     missing = [f for f in _REQUIRED_FIELDS if row.get(f) in (None, "")]
     if missing:
@@ -93,36 +120,72 @@ def record_heartbeat(scores_db: str, row: dict) -> dict:
 
     task_id = row["task_id"]
     work_units = row["work_units"]
+    node = str(row.get("node") or "")
     now = datetime.now(timezone.utc).isoformat()
 
     conn = _connect(scores_db)
     try:
         existing = conn.execute(
-            "SELECT work_units, last_progress_at FROM drive_heartbeats "
+            "SELECT work_units, last_progress_at, node FROM drive_heartbeats "
             "WHERE task_id = ?",
             (task_id,),
         ).fetchone()
-        if existing is not None and existing["work_units"] == work_units:
+        if (existing is not None and existing["work_units"] == work_units
+                and existing["node"] == node):
             progress_at = existing["last_progress_at"]
         else:
             progress_at = now
         conn.execute(
             "INSERT INTO drive_heartbeats "
             "(task_id, step, elapsed_s, last_tool, work_units, "
-            " last_progress_at, recorded_at, driver) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            " last_progress_at, recorded_at, driver, node) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(task_id) DO UPDATE SET "
             "step=excluded.step, elapsed_s=excluded.elapsed_s, "
             "last_tool=excluded.last_tool, work_units=excluded.work_units, "
             "last_progress_at=excluded.last_progress_at, "
-            "recorded_at=excluded.recorded_at, driver=excluded.driver",
+            "recorded_at=excluded.recorded_at, driver=excluded.driver, "
+            "node=excluded.node",
             (task_id, row["step"], row["elapsed_s"], row["last_tool"],
-             work_units, progress_at, now, str(row.get("driver") or "")),
+             work_units, progress_at, now, str(row.get("driver") or ""),
+             node),
         )
         conn.commit()
     finally:
         conn.close()
     return {"ok": True, "task_id": task_id, "last_progress_at": progress_at}
+
+
+def beat_node(scores_db: str, task_id: str, step: str, node: str,
+              driver: str = "") -> dict:
+    """Record one beat announcing "declared node ``node`` is starting now"
+    for ``task_id`` at ``step`` (task b490fabc, third pass).
+
+    Reads the task's currently recorded ``work_units`` (0 when no row yet
+    exists) and passes it back incremented by one, so every call looks
+    like a fresh progress bump on its own -- and, independently, a `node`
+    change from the previous beat advances ``last_progress_at`` on its own
+    per the monotonic rule in ``record_heartbeat`` above, even on a tick
+    where the caller cannot otherwise prove work_units moved. Refusal shape
+    matches ``record_heartbeat`` (a bare/refused ping is never silent).
+    """
+    conn = _connect(scores_db)
+    try:
+        existing = conn.execute(
+            "SELECT work_units FROM drive_heartbeats WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    work_units = (existing["work_units"] if existing is not None else 0) + 1
+    return record_heartbeat(scores_db, {
+        "task_id": task_id, "step": step,
+        "elapsed_s": 0,
+        "last_tool": f"node:{node}" if node else "node_cleared",
+        "work_units": work_units,
+        "node": node,
+        "driver": driver,
+    })
 
 
 def latest(scores_db: str, task_id: str):
@@ -140,7 +203,7 @@ def latest(scores_db: str, task_id: str):
     try:
         r = conn.execute(
             "SELECT step, elapsed_s, last_tool, work_units, "
-            "last_progress_at, recorded_at, driver "
+            "last_progress_at, recorded_at, driver, node "
             "FROM drive_heartbeats WHERE task_id = ?",
             (task_id,),
         ).fetchone()
@@ -177,7 +240,7 @@ def latest_many(scores_db: str, task_ids) -> dict:
         placeholders = ",".join("?" for _ in ids)
         rows = conn.execute(
             "SELECT task_id, step, elapsed_s, last_tool, work_units, "
-            "last_progress_at, recorded_at, driver "
+            "last_progress_at, recorded_at, driver, node "
             f"FROM drive_heartbeats WHERE task_id IN ({placeholders})",
             ids,
         ).fetchall()

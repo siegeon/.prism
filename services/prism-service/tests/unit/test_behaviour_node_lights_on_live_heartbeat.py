@@ -211,6 +211,93 @@ def test_the_heartbeat_lookup_runs_once_regardless_of_entry_count(tmp_path, monk
     assert _entry(result, "draft-story-loop")["occupancy"]["gather"] == 0
 
 
+def test_a_live_beat_naming_the_second_declared_route_lights_that_step(tmp_path, monkeypatch):
+    """task b490fabc, third pass: the live beat's `node` names the SPECIFIC
+    declared route currently executing, not just "the behaviour is live" --
+    so text-challenge lights, not loop, and loop must go dark."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "node:text-challenge", "work_units": 109,
+        "driver": "prism-task-runner", "node": "text-challenge",
+    })
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    assert entry["occupancy"]["text-challenge"] == 1, entry["occupancy"]
+    assert entry["occupancy"]["loop"] == 0, entry["occupancy"]
+
+
+def test_an_empty_node_falls_back_to_lighting_the_entry_node(tmp_path, monkeypatch):
+    """An empty node (the agentic middle itself is running, no declared
+    sub-step) keeps the pre-existing fallback: light the entry node."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "dispatch_guard_live", "work_units": 108,
+        "driver": "prism-task-runner", "node": "",
+    })
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    assert entry["occupancy"]["loop"] == 1, entry["occupancy"]
+    assert entry["occupancy"]["text-challenge"] == 0, entry["occupancy"]
+
+
+def test_a_node_naming_a_route_outside_this_behaviour_falls_back_to_entry(tmp_path, monkeypatch):
+    """A node that does not match ANY step's route in this behaviour must
+    not crash or light nothing -- it falls back to the entry node, same
+    as an empty node."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "node:premise-gather", "work_units": 108,
+        "driver": "prism-task-runner", "node": "premise-gather",
+    })
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    assert entry["occupancy"]["loop"] == 1, entry["occupancy"]
+
+
+def test_a_stale_beat_naming_a_route_still_does_not_light_anything(tmp_path, monkeypatch):
+    """Staleness is checked BEFORE node is read -- an old beat must not
+    light any step, declared route or not."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "node:text-challenge", "work_units": 109,
+        "driver": "prism-task-runner", "node": "text-challenge",
+    })
+    conn = drive_heartbeat._connect(str(tmp_path / "scores.db"))
+    conn.execute(
+        "UPDATE drive_heartbeats SET last_progress_at = ? WHERE task_id = ?",
+        ("2000-01-01T00:00:00+00:00", "t-1"))
+    conn.commit()
+    conn.close()
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    assert entry["occupancy"]["loop"] == 0, entry["occupancy"]
+    assert entry["occupancy"]["text-challenge"] == 0, entry["occupancy"]
+
+
 def test_a_done_task_never_lights_the_node_even_with_a_fresh_heartbeat(tmp_path, monkeypatch):
     from prism_service.services import drive_heartbeat
 
