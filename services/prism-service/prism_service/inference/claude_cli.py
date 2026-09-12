@@ -36,6 +36,25 @@ _STRIP_VARS = frozenset({
 TIMEOUT_EXIT_CODE = -9
 
 
+class LocalBackendUnconfiguredError(RuntimeError):
+    """PRISM_INFERENCE_BACKEND=local but no base URL is configured.
+
+    Raised BEFORE any `claude -p` child is spawned -- a silent fallback
+    here would either hang (no endpoint to answer) or, worse, let the CLI's
+    own default routing reach real Anthropic on a call the operator
+    explicitly asked to run local-only. Remediation: set
+    PRISM_LOCAL_INFERENCE_BASE_URL, or set PRISM_INFERENCE_BACKEND=claude.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "PRISM_INFERENCE_BACKEND=local but PRISM_LOCAL_INFERENCE_BASE_URL "
+            "is empty -- refusing to invoke claude -p rather than risk it "
+            "reaching Anthropic. Set PRISM_LOCAL_INFERENCE_BASE_URL or "
+            "PRISM_INFERENCE_BACKEND=claude."
+        )
+
+
 class ClaudeNotLoggedInError(RuntimeError):
     """Raised when the Claude CLI reports an unauthenticated state.
 
@@ -276,7 +295,85 @@ def _narrow_context_dir() -> Path:
     return d
 
 
-def _backend_env() -> dict:
+def _local_backend_active() -> bool:
+    """True when PRISM_INFERENCE_BACKEND=local (case/space-insensitive).
+
+    Single predicate shared by the refusal guard in `invoke` and the
+    redirect in `_backend_env`, so the two can never disagree about which
+    mode is active.
+    """
+    from prism_service import config
+
+    return (config.INFERENCE_BACKEND or "").strip().lower() == "local"
+
+
+def _local_backend_home_dir() -> Path:
+    """A PRISM-owned CLAUDE_CONFIG_DIR for local-backend children, carrying
+    NO credentials of its own.
+
+    THE LEAK (found live, task b490fabc, 2026-09-12). `_backend_env` sets
+    ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN and INV-1 strips
+    ANTHROPIC_API_KEY, but neither touches the child's OAuth session --
+    `claude -p` inherits the daemon's real $HOME (or CLAUDE_CONFIG_DIR) by
+    default, `.claude.json`'s `oauthAccount` and all. `ss -tnp` on the live
+    task_runner child (pid 1336742, PRISM_INFERENCE_BACKEND=local,
+    ANTHROPIC_BASE_URL=http://localhost:8087 confirmed via
+    /proc/<pid>/environ) showed an ESTABLISHED connection to
+    160.79.104.10:443 -- api.anthropic.com's real edge -- alongside the
+    correct 127.0.0.1:8087 one. `claude -p`'s own background features
+    (connectors, usage, telemetry, update checks -- see `--bare`'s help
+    text: "keychain reads" and "background prefetches" are NOT gated by
+    ANTHROPIC_BASE_URL) reach Anthropic on the OWNER'S real OAuth identity
+    on every local-backend invocation, narrow or not.
+
+    Pointing CLAUDE_CONFIG_DIR at a directory that never holds a real
+    `.credentials.json` or `oauthAccount` removes that identity: with no
+    OAuth session and no API key (INV-1), the CLI has nothing to
+    authenticate a background call WITH, regardless of whether it still
+    tries the connection.
+
+    STABLE, never per-call -- same reasoning as `_narrow_context_dir`: a
+    path that changed per call would defeat trust-state reuse across
+    invocations (see `_ensure_trusted`).
+    """
+    from prism_service.config import DATA_DIR
+
+    d = Path(DATA_DIR) / "local_backend_home"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _ensure_trusted(home: Path, work_dir: Path | str) -> None:
+    """Best-effort: mark `work_dir` trusted in `home`'s `.claude.json`.
+
+    A freshly isolated CLAUDE_CONFIG_DIR has no trust history, and `-p`
+    mode with an untrusted cwd can block on a trust prompt no automation
+    will ever answer. This seeds exactly the one flag a real "yes, trust
+    this folder" click would set (`hasTrustDialogAccepted`), scoped to the
+    single directory this call actually uses -- never a blanket bypass.
+    Failure here must never block a real drive: swallow and proceed: a
+    missed trust entry degrades to the CLI's own prompt behaviour, not a
+    crash, and the caller cannot do anything safer with the exception than
+    this function already does.
+    """
+    cfg_path = home / ".claude.json"
+    try:
+        data = json.loads(cfg_path.read_text(encoding="utf-8")) if cfg_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data.setdefault("hasCompletedOnboarding", True)
+    projects = data.setdefault("projects", {})
+    key = str(work_dir)
+    entry = projects.setdefault(key, {})
+    if entry.get("hasTrustDialogAccepted") is not True:
+        entry["hasTrustDialogAccepted"] = True
+        try:
+            cfg_path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass
+
+
+def _backend_env(work_dir: Path | str | None = None) -> dict:
     """Return the redirect that points `claude -p` at the chosen model.
 
     PRISM keeps the claude harness on both settings. The harness owns the
@@ -285,30 +382,42 @@ def _backend_env() -> dict:
 
     The default backend is "claude" and returns an empty mapping, so the
     child environment is byte-identical to the behaviour before this
-    setting existed. The "local" backend sets ANTHROPIC_BASE_URL.
+    setting existed. The "local" backend sets ANTHROPIC_BASE_URL AND
+    isolates CLAUDE_CONFIG_DIR (see `_local_backend_home_dir`) so the
+    child cannot authenticate anything with the owner's real OAuth session.
 
     This never sets ANTHROPIC_API_KEY. INV-1 strips that variable, and the
     local engine needs no credential.
     """
+    if not _local_backend_active():
+        return {}
     from prism_service import config
 
-    if (config.INFERENCE_BACKEND or "").strip().lower() != "local":
-        return {}
     env = {"ANTHROPIC_BASE_URL": config.LOCAL_INFERENCE_BASE_URL}
     if config.LOCAL_INFERENCE_AUTH_TOKEN:
         env["ANTHROPIC_AUTH_TOKEN"] = config.LOCAL_INFERENCE_AUTH_TOKEN
+    home = _local_backend_home_dir()
+    if work_dir is not None:
+        _ensure_trusted(home, work_dir)
+    env["CLAUDE_CONFIG_DIR"] = str(home)
     return env
 
 
-def _strip_env(base_env: dict | None = None) -> dict:
+def _strip_env(
+    base_env: dict | None = None, work_dir: Path | str | None = None,
+) -> dict:
     """Return a copy of base_env (or os.environ) with INV-1 vars removed.
 
     The configured backend redirect applies last, so the setting wins over
     an ANTHROPIC_BASE_URL that the parent environment already carries.
+    `work_dir` is the resolved cwd the child will actually run from --
+    passed through so the local backend's OAuth-isolated home can pre-trust
+    it (see `_backend_env`); omit it only from call sites that never spawn
+    a real child (existing tests calling `_strip_env()` bare).
     """
     src = os.environ if base_env is None else base_env
     env = {k: v for k, v in src.items() if k not in _STRIP_VARS}
-    env.update(_backend_env())
+    env.update(_backend_env(work_dir))
     return env
 
 
@@ -456,7 +565,17 @@ def invoke(
     Raises:
         ClaudeNotLoggedInError: when the CLI reports auth failure.
             Remediation: run `docker exec -it prism-service claude login`.
+        LocalBackendUnconfiguredError: backend=local with no base URL
+            configured. Checked FIRST, before any run-log allocation or
+            subprocess spawn -- a misconfigured local backend must never
+            silently fall through to whatever `claude -p` would otherwise
+            reach on its own.
     """
+    from prism_service import config
+
+    if _local_backend_active() and not (config.LOCAL_INFERENCE_BASE_URL or "").strip():
+        raise LocalBackendUnconfiguredError()
+
     # Try to land the stream-json directly in the persistent run log
     # dir; fall back to a tempfile if that volume isn't writable (e.g.
     # in unit tests with no /data mount).
@@ -487,7 +606,7 @@ def invoke(
         allowed_tools=allowed_tools, json_schema=json_schema,
         session_id=session_id,
     )
-    env = _strip_env()
+    env = _strip_env(work_dir=work_dir)
 
     run_kwargs = {} if timeout_s is None else {"timeout": timeout_s}
 

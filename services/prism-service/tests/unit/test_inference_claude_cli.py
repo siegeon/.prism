@@ -414,3 +414,114 @@ def test_the_setting_wins_over_an_inherited_base_url(monkeypatch):
     env = claude_cli._strip_env()
 
     assert env["ANTHROPIC_BASE_URL"] == "http://localhost:8087"
+
+
+# ---------------------------------------------------------------------------
+# The Anthropic leak (task b490fabc, 2026-09-12): a live local-backend
+# `claude -p` child had an ESTABLISHED TCP connection to api.anthropic.com's
+# real edge alongside the correct one to the local proxy -- background
+# CLI features (connectors/usage/telemetry) reach Anthropic on the owner's
+# real OAuth identity, unrelated to ANTHROPIC_BASE_URL. Fix: isolate
+# CLAUDE_CONFIG_DIR so the child has no OAuth session to authenticate any
+# of that with.
+# ---------------------------------------------------------------------------
+
+def test_local_backend_isolates_claude_config_dir(monkeypatch, tmp_path):
+    """The child must never see the daemon's real CLAUDE_CONFIG_DIR/HOME
+    (and its oauthAccount) when backend=local -- that credential is exactly
+    what lets background CLI features authenticate to real Anthropic."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+
+    env = claude_cli._strip_env(work_dir=tmp_path / "workspace")
+
+    assert "CLAUDE_CONFIG_DIR" in env
+    isolated = Path(env["CLAUDE_CONFIG_DIR"])
+    assert isolated.is_dir()
+    assert isolated != Path.home()
+    # Never a real credentials file -- this is a fresh PRISM-owned dir.
+    assert not (isolated / ".credentials.json").exists()
+
+
+def test_default_backend_never_isolates_claude_config_dir(monkeypatch):
+    """The claude backend (default) must be byte-identical to pre-existing
+    behaviour -- no CLAUDE_CONFIG_DIR override at all."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "claude")
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    env = claude_cli._strip_env(work_dir="/some/workspace")
+
+    assert "CLAUDE_CONFIG_DIR" not in env
+
+
+def test_local_backend_home_seeds_trust_for_the_work_dir(monkeypatch, tmp_path):
+    """A fresh isolated CLAUDE_CONFIG_DIR has no trust history; `-p` on an
+    untrusted cwd can hang on a prompt nothing will answer. `_backend_env`
+    must pre-trust the exact work_dir the child will run from."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    work_dir = tmp_path / "task_workspaces" / "abc123"
+
+    env = claude_cli._backend_env(work_dir)
+
+    cfg = json.loads((Path(env["CLAUDE_CONFIG_DIR"]) / ".claude.json").read_text())
+    assert cfg["projects"][str(work_dir)]["hasTrustDialogAccepted"] is True
+    assert cfg["hasCompletedOnboarding"] is True
+
+
+def test_invoke_isolates_config_dir_before_subprocess(monkeypatch, tmp_path):
+    """End-to-end through invoke(): the captured child env must carry the
+    isolated CLAUDE_CONFIG_DIR, not the real one, when backend=local."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    real_home = tmp_path / "real_home"
+    real_home.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(real_home))
+    work_dir = tmp_path / "workspace"
+    work_dir.mkdir()
+
+    captured = {}
+
+    def fake_run(cmd, cwd, env, stdout, stderr, **kwargs):
+        captured["env"] = env
+        return _completed(exit_code=0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        claude_cli.invoke(
+            "hi", work_dir, work_dir, max_turns=1, parse_events=False,
+            allowed_tools=("Read",),
+        )
+
+    assert captured["env"]["CLAUDE_CONFIG_DIR"] != str(real_home)
+
+
+def test_invoke_refuses_when_local_backend_has_no_base_url(monkeypatch, tmp_path):
+    """AC: backend=local with an empty base URL must refuse BY NAME,
+    without ever reaching subprocess.run."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "")
+
+    with patch("prism_service.inference.claude_cli.subprocess.run") as mock_run:
+        with pytest.raises(claude_cli.LocalBackendUnconfiguredError):
+            claude_cli.invoke("hi", tmp_path, tmp_path, max_turns=1)
+
+    mock_run.assert_not_called()
+
+
+def test_invoke_proceeds_when_local_backend_base_url_is_set(monkeypatch, tmp_path):
+    """Negative case: a properly configured local backend must not trip
+    the new refusal guard."""
+    monkeypatch.setattr(config, "INFERENCE_BACKEND", "local")
+    monkeypatch.setattr(config, "LOCAL_INFERENCE_BASE_URL", "http://localhost:8087")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+
+    def fake_run(cmd, cwd, env, stdout, stderr, **kwargs):
+        return _completed(exit_code=0)
+
+    with patch("prism_service.inference.claude_cli.subprocess.run", side_effect=fake_run):
+        res = claude_cli.invoke("hi", tmp_path, tmp_path, max_turns=1, parse_events=False)
+
+    assert res.exit_code == 0
