@@ -688,6 +688,30 @@ def score_green_outcome(evidence: dict, rubric: dict) -> dict:
 
 
 # ----------------------------------------------------------------------
+# Import resolution check (task — closing a gap)
+# ----------------------------------------------------------------------
+
+def _module_resolvable(module_name: str) -> bool:
+    """Check if a module can be resolved without importing it.
+
+    Returns True if the module can be found via importlib.util.find_spec.
+    Conservative: any exception (ImportError, ModuleNotFoundError, ValueError,
+    AttributeError) means the module is treated as unresolvable. A real
+    test must import only resolvable modules."""
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec(module_name)
+        return spec is not None
+    except (ImportError, ModuleNotFoundError, ValueError, AttributeError):
+        # Module cannot be resolved.
+        return False
+    except Exception:
+        # Any other exception: conservative — treat as resolvable to avoid
+        # false rejections when resolution cannot be confidently determined.
+        return True
+
+
+# ----------------------------------------------------------------------
 # Intended-vs-observed conformance (d1) — pure function
 # ----------------------------------------------------------------------
 
@@ -704,9 +728,12 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
     (4) test_file_path non-empty, ends with '.py', and basename starts with
         'test_';
     (5) REFUSES a test that would raise an exception before any assert runs
-        (e.g. a bare .index( call or subscript lookup as a bare statement).
+        (e.g. a bare .index( call or subscript lookup as a bare statement);
+    (6) REFUSES a test that imports an unresolvable module (e.g. a bare
+        import 'prism' that does not exist).
     """
     import ast as ast_module
+    import importlib.util
 
     test_code = str(evidence.get("test_code") or "").strip()
     test_file_path = str(evidence.get("test_file_path") or "").strip()
@@ -794,6 +821,34 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
         return {"ok": False,
                 "reason": ("test_drafted: test would raise before any assert: "
                            + "; ".join(problems))}
+
+    # Check for unresolvable imports (avoid collecting errors like rc==2/4).
+    # Walk Import and ImportFrom nodes; extract top-level module name.
+    # Skip relative imports (ImportFrom with level > 0) — they cannot be
+    # resolved without the package context.
+    unresolvable: list[str] = []
+    for node in ast_module.walk(tree):
+        if isinstance(node, ast_module.Import):
+            for alias in node.names:
+                # Extract top-level module name (before first dot).
+                top_level = alias.name.split(".")[0]
+                if not _module_resolvable(top_level):
+                    if top_level not in unresolvable:
+                        unresolvable.append(top_level)
+        elif isinstance(node, ast_module.ImportFrom):
+            # Skip relative imports (level > 0 means from . or from .. etc).
+            if node.level > 0:
+                continue
+            if node.module:
+                top_level = node.module.split(".")[0]
+                if not _module_resolvable(top_level):
+                    if top_level not in unresolvable:
+                        unresolvable.append(top_level)
+    if unresolvable:
+        shown = ", ".join(unresolvable)
+        return {"ok": False,
+                "reason": (f"test_drafted: imports unresolvable module(s): "
+                           f"{shown}")}
 
     return {"ok": True,
             "reason": (f"test_drafted: {len(test_funcs)} test function(s) "
