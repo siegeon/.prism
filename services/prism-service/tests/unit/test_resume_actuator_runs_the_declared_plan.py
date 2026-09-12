@@ -11,7 +11,29 @@ planned steps (like draft_story) and unplanned steps (like implement_tasks).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+from prism_service.services import task_runner as _tr
+
+# Same hermetic resolution as test_task_runner_honors_declared_node_plan.py
+# and test_draft_story_node_runs_its_declared_plan.py (task a2bc8c88):
+# _behavior_dir's fallback is Path.home()/projects/<project>, which exists
+# only on a dev machine whose home directory happens to hold a real PRISM
+# checkout there. Without this fixture, resume_actuator.dispatch_once's own
+# call to _tr._node_plan(...) silently returned None on CI (no such
+# fallback directory exists on a runner), so draft_story's declared model
+# ("haiku") never reached claude_cli.invoke -- CI saw model="" while a dev
+# box with ~/projects/prism on disk saw the real declaration by accident.
+# The catalog under test is the COMMITTED one in this checkout.
+_REPO_BEHAVIORS = (Path(__file__).resolve().parents[4]
+                   / ".prism" / "behaviors" / "conductor")
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_behavior_dir(monkeypatch):
+    monkeypatch.setattr(_tr, "_behavior_dir", lambda project: _REPO_BEHAVIORS)
 
 
 def test_draft_story_dispatch_uses_declared_plan(monkeypatch):

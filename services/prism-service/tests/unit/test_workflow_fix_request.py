@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import subprocess
 import types
+import uuid
 from pathlib import Path
 
 import pytest
@@ -56,8 +57,24 @@ class _TaskSvc:
 
     def create(self, **kw):
         self.created.append(kw)
-        return types.SimpleNamespace(id=f"task-{len(self.created)}",
-                                     status="pending")
+        # A REAL, globally-unique id, matching production TaskService --
+        # never a deterministic "task-1" (task 4465ee72). task_workspace's
+        # on-disk index is keyed by this id and lives under the session-wide
+        # PRISM_DATA_DIR (pinned once for the whole pytest run, see root
+        # conftest.py), not per-test: a repeated literal id here let a LATER
+        # test's ensure_workspace() self-heal onto an EARLIER test's real
+        # git worktree instead of building its own. Locally the three tests
+        # that reach ensure_workspace() run inside the same wall-clock
+        # second, so capture_source_snapshot's timestamp-derived commit sha
+        # was coincidentally identical across all of them and the stale
+        # reuse was invisible. On a slower CI runner (git worktree add is
+        # real disk + git-object I/O) execution crossed a second boundary,
+        # the freshly-computed snapshot commit genuinely differed from the
+        # one recorded at first creation, and test_the_result_names_where_
+        # its_evidence_lives caught the mismatch: reproduced deterministically
+        # by forcing a 1.1s gap between two same-id calls, and confirmed fixed
+        # by switching to unique ids under the same forced gap.
+        return types.SimpleNamespace(id=str(uuid.uuid4()), status="pending")
 
     def update(self, tid, **kw):
         self.updated.append((tid, kw))
@@ -180,6 +197,57 @@ def test_the_result_names_where_its_evidence_lives(repo, svc, monkeypatch):
     assert out["source_snapshot"]["tree"] == snap["tree"]
     assert out["workspace"]["baseline"] == snap["snapshotCommit"], (
         "the repair workspace must be built at the RECORDED snapshot commit")
+
+
+def test_two_repair_tasks_never_share_a_workspace(repo, monkeypatch, tmp_path):
+    """Regression for task 4465ee72: each queued repair gets ITS OWN
+    workspace, keyed off a real unique task id.
+
+    task_workspace.ensure_workspace self-heals onto an EXISTING on-disk
+    record for a task id it has already seen -- correct for a genuine
+    retry of the SAME task, wrong for two UNRELATED repairs that happen to
+    share an id. Uses two SEPARATE `_TaskSvc()` instances (never the
+    shared `svc` fixture), because that is the actual shape that produced
+    the bug: two independent callers (here, two separate test functions
+    sharing the session-wide PRISM_DATA_DIR pinned in root conftest.py),
+    each starting its own id counter at 1. With the old
+    f"task-{len(self.created)}" scheme this reproduces the real collision
+    deterministically, in-process, with no reliance on the two calls
+    landing in different wall-clock seconds (which is what made the
+    original bug flaky rather than deterministic in CI)."""
+    snap1 = _snapshot_payload(repo)
+    _wire_engine(monkeypatch, snap1)
+    svc1 = _TaskSvc()
+    monkeypatch.setattr(wf, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=svc1))
+    out1 = wf.queue_workflow_fix("prism", "validation", _request())
+
+    second_repo = tmp_path / "second-repo"
+    second_repo.mkdir()
+    _git(second_repo, "init", "-q", "-b", "main")
+    _git(second_repo, "config", "user.email", "t2@t")
+    _git(second_repo, "config", "user.name", "t2")
+    (second_repo / "b.txt").write_text("second repo original\n", encoding="utf-8")
+    _git(second_repo, "add", "b.txt")
+    _git(second_repo, "commit", "-qm", "base2")
+    (second_repo / "b.txt").write_text("second repo dirty\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "prism_service.services.claude_transcripts._project_source_path",
+        lambda project: str(second_repo))
+    snap2 = _snapshot_payload(second_repo)
+    _wire_engine(monkeypatch, snap2)
+    svc2 = _TaskSvc()
+    monkeypatch.setattr(wf, "get_project",
+                        lambda p: types.SimpleNamespace(task_svc=svc2))
+    out2 = wf.queue_workflow_fix("prism", "validation", _request())
+
+    assert out1["task_id"] != out2["task_id"], (
+        "two separate repairs must never be queued under the same task id")
+    assert out1["workspace"]["baseline"] == snap1["snapshotCommit"]
+    assert out2["workspace"]["baseline"] == snap2["snapshotCommit"], (
+        "the second repair's workspace must be built from its OWN recorded "
+        "snapshot, never inherited from an earlier task's workspace")
+    assert out1["workspace"]["path"] != out2["workspace"]["path"]
 
 
 # --- AC-4 (epic 4e6e7417): an unreconstructable snapshot is refused -------

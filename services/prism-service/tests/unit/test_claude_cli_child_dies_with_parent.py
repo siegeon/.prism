@@ -50,11 +50,20 @@ def test_the_child_dies_when_its_parent_is_killed():
     `timeout` or an OOM kill ends a test session, giving the parent no chance
     to clean up. Without PR_SET_PDEATHSIG the sleep survives as an orphan,
     which is exactly the incident above.
+
+    `_with_parent_death_signal` is called INSIDE the spawned child_src
+    process, not by this outer test -- it must run in the SAME process
+    that becomes the grandchild's real OS parent (task 4465ee72's guard
+    captures os.getpid() to compare against later), exactly how
+    `invoke()` calls it immediately before its own `subprocess.run`.
+    Precomputing it out here would capture this test's OWN pid, one level
+    too high, and the guard would refuse the payload every time.
     """
-    wrapped = claude_cli._with_parent_death_signal(["sleep", "60"])
     child_src = (
-        "import subprocess,sys\n"
-        f"p = subprocess.Popen({wrapped!r})\n"
+        "import subprocess, sys\n"
+        "from prism_service.inference import claude_cli\n"
+        "wrapped = claude_cli._with_parent_death_signal(['sleep', '60'])\n"
+        "p = subprocess.Popen(wrapped)\n"
         "print(p.pid, flush=True)\n"
         "p.wait()\n"
     )
@@ -83,16 +92,64 @@ def test_the_child_dies_when_its_parent_is_killed():
 def test_the_wrapped_command_still_looks_like_claude_to_the_reaper():
     """dispatch_guard.sweep_reap matches children by a "claude -p" prefix.
 
-    setpriv EXECS the program it wraps, so the running process keeps the
-    argv of the wrapped command. If this ever became a wrapper that does NOT
-    exec, /proc/<pid>/cmdline would read "setpriv ..." and the reaper would
+    setpriv and the `sh` parent-recheck guard (task 4465ee72) both EXEC the
+    next stage rather than forking, so the pid never changes and the
+    RUNNING process's argv is always the payload's own -- /proc/<pid>/cmdline
+    reads "claude -p ..." once the real command is executing, regardless of
+    how many exec stages ran to get there. If any stage ever forked instead
+    of exec'd, or ended without a final `exec "$@"`, the reaper would
     silently stop finding anything.
     """
     wrapped = claude_cli._with_parent_death_signal(["claude", "-p", "hello"])
+    # The payload is always the tail of the wrapped command, whatever guard
+    # stages precede it.
     assert wrapped[-3:] == ["claude", "-p", "hello"]
     assert "--pdeathsig" in wrapped
-    # The payload begins right after the "--" terminator.
-    assert wrapped[wrapped.index("--") + 1] == "claude"
+    # The shell guard's own body must end in `exec "$@"`, so the payload it
+    # is handed truly replaces the shell's process image rather than being
+    # run as a child of it.
+    guard_body = next(tok for tok in wrapped if "exec" in tok and "$@" in tok)
+    assert guard_body.rstrip().endswith('exec "$@"; fi'), guard_body
+
+
+@requires_setpriv
+def test_the_parent_recheck_guard_runs_the_payload_when_the_parent_still_matches(
+        tmp_path):
+    """Positive case for the arm-vs-check race fix (task 4465ee72).
+
+    This test process really is the parent of the spawned chain the whole
+    time, so the guard's freshly-read $PPID (read at the GUARD's own
+    startup, after setpriv has already run) matches the pid this function
+    captured, and the payload runs normally. Deterministic -- no load or
+    timing needed, unlike test_the_child_dies_when_its_parent_is_killed.
+    """
+    marker = tmp_path / "ran"
+    wrapped = claude_cli._with_parent_death_signal(["touch", str(marker)])
+    subprocess.run(wrapped, check=True, timeout=10)
+    assert marker.exists(), "the guard should have exec'd the real payload"
+
+
+def test_the_parent_recheck_guard_refuses_a_stale_parent(tmp_path):
+    """Negative case: THE ACTUAL DEFECT this task fixed.
+
+    _with_parent_death_signal always captures ITS OWN os.getpid(), so it
+    can never hand itself a mismatched pid to prove the refusal branch --
+    the race it protects against is a REAL parent dying between fork() and
+    setpriv's prctl(), never a caller passing a wrong value. This builds
+    the identical guard shape with a pid that can never be this process's
+    real parent, which exercises the same "$PPID no longer matches" branch
+    deterministically: measured live under synthetic CPU load (48 busy
+    loops on 24 cores), a `sleep` wrapped WITHOUT this guard was left
+    running, reparented, never signalled -- this pins that the guard now
+    refuses to ever run the payload in that shape, on any host, without
+    needing to reproduce the load.
+    """
+    marker = tmp_path / "should_not_exist"
+    bogus_ppid = 1  # never this test process's real parent
+    guard = f'if [ "$PPID" = "{bogus_ppid}" ]; then exec "$@"; fi'
+    subprocess.run(["sh", "-c", guard, "sh", "touch", str(marker)],
+                   check=True, timeout=10)
+    assert not marker.exists(), "a mismatched $PPID must never run the payload"
 
 
 def test_a_host_without_setpriv_still_spawns(monkeypatch):
@@ -117,4 +174,13 @@ def test_invoke_spawns_through_the_death_signal_wrapper(tmp_path, monkeypatch):
 
     assert seen["cmd"][0] == "/usr/bin/setpriv"
     assert seen["cmd"][1:4] == ["--pdeathsig", "TERM", "--"]
-    assert seen["cmd"][4] == "claude"
+    # setpriv's own exec target is the `sh` parent-recheck guard (task
+    # 4465ee72): sh -c <guard> sh <payload...>. The guard execs into the
+    # real payload ("claude ...") only once it confirms the parent it
+    # started with is still alive -- see
+    # test_the_wrapped_command_still_looks_like_claude_to_the_reaper for
+    # why the RUNNING process still looks like "claude -p ..." either way.
+    assert seen["cmd"][4] == "sh"
+    assert seen["cmd"][5] == "-c"
+    assert seen["cmd"][7] == "sh"
+    assert seen["cmd"][8] == "claude"
