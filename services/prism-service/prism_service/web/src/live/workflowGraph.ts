@@ -29,6 +29,18 @@ const STEP_W = 184, STEP_H = 106, STEP_GAP = 58;
 const BOT_W = 148, BOT_H = 58;
 const STEP_Y = 300, BOT_Y = 40;
 
+// The floor fit() and the wheel-zoom-out handler both clamp to. 0.35 (the
+// old floor) drew the conductor canvas's 12-node width auto-fit at 1440x900
+// with its 12px node label rendering at ~4px on screen -- unreadable (owner,
+// screenshot ui-2-conductor-flow.png: "the node boxes on the canvas are tiny
+// and unreadable"). 0.55 keeps the label legible (12px * 0.55 ~= 6.6px, the
+// bold 600-weight name a further step up) at the cost of not always fitting
+// the WHOLE conductor canvas in view on first paint -- the canvas already
+// supports drag-to-pan and wheel-to-zoom for the rest, so trading "see
+// everything at once" for "read what you do see" is the right side of that
+// trade for a board meant to be watched, not squinted at.
+export const MIN_ZOOM = 0.55;
+
 export type WfNode = {
   id: string;
   kind: "step" | "bot";
@@ -609,7 +621,7 @@ export class WorkflowGraph {
     const maxX = Math.max(...xs.map((s) => s.x + s.w)) + 40;
     const minY = Math.min(...xs.map((s) => s.y)) - 40;
     const maxY = Math.max(...xs.map((s) => s.y + s.h)) + 40;
-    this.zoom = Math.max(0.35, Math.min(1.4, Math.min(w / (maxX - minX), h / (maxY - minY))));
+    this.zoom = Math.max(MIN_ZOOM, Math.min(1.4, Math.min(w / (maxX - minX), h / (maxY - minY))));
     this.pan.x = minX - (w / this.zoom - (maxX - minX)) / 2;
     this.pan.y = minY - (h / this.zoom - (maxY - minY)) / 2;
     this.fitted = true;

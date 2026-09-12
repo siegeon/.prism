@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowDef, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
 import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
-import { WorkflowGraph, drawWorkflows, type ActiveNodeProgress, type NodeVerdict, type RunView } from "@/live/workflowGraph";
+import { WorkflowGraph, drawWorkflows, MIN_ZOOM, type ActiveNodeProgress, type NodeVerdict, type RunView } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
 import type { Point, WirePort } from "@/live/wires";
 import { relativeTime } from "@/lib/relativeTime";
@@ -260,6 +260,29 @@ function conductorRunGenuinelyActive(conductorTask?: WorkflowRun["data"]["conduc
   if (conductorTask.gateState === "pending" || conductorTask.gateState === "failed") return true;
   const state = (conductorTask.activity as { state?: string } | null | undefined)?.state;
   return state === "working" || state === "driving";
+}
+
+/** The SAME genuine-occupancy question as conductorRunGenuinelyActive above,
+ * asked of a board row (ManagedTask) instead of a synthesized run's single
+ * conductorTask. This drifted out of sync with that check and with
+ * conductorPillTone's own identical fuchsia-pulse test (line ~1131): the
+ * page-wide `liveRunning`/status-line banner and the canvas's ambient
+ * node-highlight (drawWorkflows' activeProgress, "no instance open" branch)
+ * each independently asked only `activity.state === "working" ||
+ * "driving"`, which conductor_service.py's activity_for deliberately does
+ * NOT report for a task standing at a gate with `gate_state` pending/failed
+ * -- that state answers "awaiting_gate" instead ("a WAIT for review, not
+ * work"). A task the daemon's own gate_adjudicator seat is actively
+ * re-sweeping every PRISM_GATE_ADJUDICATOR_INTERVAL therefore read as
+ * completely idle here: the Workflows banner said "No run in progress" and
+ * the canvas lit no node, while the task board showed it genuinely
+ * `in_progress` at plan_gate (owner, live, on task a65c66e5: "real time
+ * progress moving items... it just looks exactly the same"). Route every
+ * such check through this one function so the three surfaces can't drift
+ * apart again. */
+function conductorTaskGenuinelyActive(task: ManagedTask): boolean {
+  if (task.gate_state === "pending" || task.gate_state === "failed") return true;
+  return task.activity?.state === "working" || task.activity?.state === "driving";
 }
 
 type FailureEvidence = { location: string | null; lines: string[] };
@@ -870,8 +893,7 @@ export default function WorkflowsPage() {
     for (const workflow of workflows) {
       const stepIds = conductorStepIdsFor(workflow, workflows);
       map.set(workflow.id, stepIds.size > 0 && conductorManaged.some((task) =>
-        stepIds.has(task.workflow_step ?? "")
-        && (task.activity?.state === "working" || task.activity?.state === "driving")));
+        stepIds.has(task.workflow_step ?? "") && conductorTaskGenuinelyActive(task)));
     }
     return map;
   }, [workflows, conductorManaged]);
@@ -882,8 +904,7 @@ export default function WorkflowsPage() {
   // canvas read the same, which defeats "which step is active").
   const liveRunning = workflowRun?.runtime?.status === "running"
     || (isStateMachineWorkflow && conductorManaged.some((task) =>
-      conductorStepIds.has(task.workflow_step ?? "")
-      && (task.activity?.state === "working" || task.activity?.state === "driving")));
+      conductorStepIds.has(task.workflow_step ?? "") && conductorTaskGenuinelyActive(task)));
   // `runtime.ended_at` doesn't exist on this codebase's WorkflowRun type --
   // completeTime (scripted runs) / the last closed timeline entry
   // (conductor-synthesized runs, which carry no completeTime) are the real
@@ -1229,11 +1250,24 @@ export default function WorkflowsPage() {
   const statusLineText = useMemo(() => {
     if (tier === "disconnected") return "Connection interrupted";
     if (tier === "running") {
-      const step = workflowRun?.runtime?.currentStep
-        ?? conductorRailTasks.find((task) =>
-          task.activity?.state === "working" || task.activity?.state === "driving")?.workflow_step
-        ?? "";
-      return `running · ${step.replace(/_/g, " ") || "working"}`;
+      if (workflowRun?.runtime?.status === "running") {
+        const step = workflowRun.runtime.currentStep ?? "";
+        return `running · ${step.replace(/_/g, " ") || "working"}`;
+      }
+      // No single instance is open -- name the ambient board task the
+      // daemon is actually driving right now (conductorTaskGenuinelyActive,
+      // same as liveRunning above), not just its step: a bare "running ·
+      // plan gate" says a step is occupied but not WHO or WHAT, which is
+      // exactly the "looks exactly the same" complaint that named a specific
+      // task and seat (owner, live, task a65c66e5: "real time progress
+      // moving items... it just looks exactly the same").
+      const activeTask = conductorRailTasks.find(conductorTaskGenuinelyActive);
+      if (activeTask) {
+        const step = (activeTask.workflow_step ?? "").replace(/_/g, " ") || "working";
+        const seat = activeTask.activity?.seat;
+        return `Driving ${activeTask.id.slice(0, 8)} · ${step}${seat ? ` · ${seat}` : ""}`;
+      }
+      return "running · working";
     }
     if (tier === "settling" && lastOutcome
       && liveEndedAt && Date.now() - Date.parse(liveEndedAt) < SETTLE_WINDOW_MS) {
@@ -1926,8 +1960,7 @@ export default function WorkflowsPage() {
         // one step is occupied at once -- same precedence conductorPillTone
         // already gives its own "most recent" pill.
         const activeTask = conductorManaged
-          .filter((task) => conductorStepIds.has(task.workflow_step ?? "")
-            && (task.activity?.state === "working" || task.activity?.state === "driving"))
+          .filter((task) => conductorStepIds.has(task.workflow_step ?? "") && conductorTaskGenuinelyActive(task))
           .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""))[0];
         if (activeTask?.workflow_step && activeTask.updated_at) {
           const step = selectedWorkflow?.steps.find((candidate) => candidate.id === activeTask.workflow_step);
@@ -2392,7 +2425,7 @@ export default function WorkflowsPage() {
     const rect = canvas.getBoundingClientRect();
     const g = graphRef.current;
     const before = g.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-    g.zoom = Math.max(0.35, Math.min(2.2, g.zoom * Math.exp(-ev.deltaY * 0.001)));
+    g.zoom = Math.max(MIN_ZOOM, Math.min(2.2, g.zoom * Math.exp(-ev.deltaY * 0.001)));
     const after = g.toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
     g.pan.x += before.x - after.x;
     g.pan.y += before.y - after.y;
