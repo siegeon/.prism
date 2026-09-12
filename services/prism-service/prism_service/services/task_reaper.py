@@ -43,10 +43,39 @@ THE FIVE SAFETY RULES, each with the line that keeps it:
 FAILS CLOSED. Any error probing the repo keeps everything. A leaked
 directory costs disk; a wrongly-reaped one costs work that has no other
 copy.
+
+THE SWEEP (task ab: reap-node-non-task-worktrees, ops incident 2026-09-12).
+`reap_task` above only ever runs for the ONE task_id a land just finished
+(`ship_worker._reap_after_land`), keyed off the workspace index. An agent
+worktree (`.claude/worktrees/agent-*`), a QA/fixer worktree
+(`/home/siegeon/wt-*`, a job's own scratch worktree) or a `prism/ws/*`
+branch whose task row was later deleted has no matching task_id, so it is
+INVISIBLE to that hook forever, however clean and however long dead.
+Measured live: 173 registered git worktrees, disk at 98%, 93 of them
+already landed on origin/main and clean.
+
+`sweep_worktrees` is the task-agnostic net: `git worktree list
+--porcelain` is the ground truth, never the workspace index, so it finds
+every worktree regardless of who created it or whether any task row still
+names it. Reuses rules 1 (dirty) and 4 (main checkout, locked, in-use) from
+above unchanged, adds an age grace window (a worktree with no dirty files
+YET, between two commands, is not proof of abandonment), and answers rule 3
+differently: there is no task row here to read a `[task:<id>]` trailer
+for, so this is the one place in this module that asks git directly
+whether a branch is an ancestor of origin/main -- the is-ancestor
+prohibition on `reap_task` is about misattributing SHIPPEDNESS to a
+specific task when the trailer disagrees with the graph; with no task to
+attribute to, the graph question is the only one there is to ask, and a
+worktree that fails it is kept, never removed on a guess.
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import threading
+import time as _time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -316,3 +345,375 @@ def _delete_branch(root: Path, branch: str) -> dict:
     if _branch_exists(root, branch):
         return {"ok": False, "reason": f"{branch} still exists after delete"}
     return {"ok": True, "reason": ""}
+
+
+# ---------------------------------------------------------------------------
+# The sweep: every registered worktree, no task row required.
+# ---------------------------------------------------------------------------
+
+SWEEP_NODE = "reap_sweep"
+
+#: PRISM_REAP_SWEEP_MIN_AGE_H overrides the age grace window (hours).
+SWEEP_MIN_AGE_ENV = "PRISM_REAP_SWEEP_MIN_AGE_H"
+DEFAULT_SWEEP_MIN_AGE_H = 24.0
+
+
+def _sweep_min_age_h() -> float:
+    raw = os.environ.get(SWEEP_MIN_AGE_ENV, "")
+    try:
+        return float(raw) if raw.strip() else DEFAULT_SWEEP_MIN_AGE_H
+    except ValueError:
+        return DEFAULT_SWEEP_MIN_AGE_H
+
+
+def _worktree_list(root: Path) -> list[dict]:
+    """Parse `git worktree list --porcelain` -- the ground truth for what
+    is actually registered, independent of task_workspace's own index."""
+    try:
+        out = task_workspace._git_out(root, "worktree", "list", "--porcelain")
+    except (RuntimeError, OSError):
+        return []
+    entries: list[dict] = []
+    cur: dict = {}
+    for line in out.splitlines():
+        if line.startswith("worktree "):
+            if cur:
+                entries.append(cur)
+            cur = {"path": line[len("worktree "):].strip()}
+        elif line.startswith("HEAD "):
+            cur["head"] = line[len("HEAD "):].strip()
+        elif line.startswith("branch "):
+            ref = line[len("branch "):].strip()
+            cur["branch"] = ref[len("refs/heads/"):] if ref.startswith(
+                "refs/heads/") else ref
+        elif line == "bare":
+            cur["bare"] = True
+        elif line == "detached":
+            cur["detached"] = True
+        elif line.startswith("locked"):
+            cur["locked"] = True
+    if cur:
+        entries.append(cur)
+    return entries
+
+
+def _is_ancestor(root: Path, ref: str, upstream: str) -> Optional[bool]:
+    """True/False from `merge-base --is-ancestor`'s own exit code (0/1),
+    None on anything else (a bad ref, a timeout) -- the caller treats None
+    as "cannot tell", i.e. keep it. Raw subprocess, never `_git_out`:
+    `_git_out` raises on a non-zero exit, which cannot distinguish "not an
+    ancestor" (rc 1, a real, common answer) from a genuine error."""
+    try:
+        r = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ref, upstream],
+            cwd=str(root), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode == 0:
+        return True
+    if r.returncode == 1:
+        return False
+    return None
+
+
+def _older_than(path: Path, hours: float) -> bool:
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return False
+    return (_time.time() - mtime) >= hours * 3600.0
+
+
+def _proc_cwd_is_under(path: Path) -> bool:
+    """True if any process on this host has its cwd inside `path` --
+    /proc/*/cwd, Linux-only (this daemon runs on WSL2/Linux). Missing
+    /proc (a non-Linux host) answers False, not an error: the dirty/age/
+    ancestor checks are the primary safety net here, this is a best-effort
+    extra layer on top of them, not the only one."""
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return False
+    try:
+        target = path.resolve()
+    except OSError:
+        return False
+    try:
+        pids = [p for p in proc.iterdir() if p.name.isdigit()]
+    except OSError:
+        return False
+    for entry in pids:
+        try:
+            cwd = (entry / "cwd").resolve()
+        except OSError:
+            continue
+        try:
+            cwd.relative_to(target)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def _forget_paths(gone: set[str]) -> None:
+    """Drop any workspace index row pointing at a path the sweep just
+    removed -- the same bookkeeping `_forget` does for `reap_task`, just
+    keyed by path instead of task_id since a sweep target may have no
+    task_id at all."""
+    if not gone:
+        return
+    try:
+        idx = task_workspace._load_index()
+        changed = False
+        for tid, rec in list(idx.items()):
+            if str(rec.get("path") or "") in gone:
+                idx.pop(tid, None)
+                changed = True
+        if changed:
+            task_workspace._save_index(idx)
+    except Exception:  # noqa: BLE001 - bookkeeping never fails a sweep
+        pass
+
+
+def sweep_worktrees(
+    repo_root: Optional[str] = None,
+    *,
+    mode: str = "reap",
+    min_age_h: Optional[float] = None,
+    is_path_live: Optional[Callable[[Path], bool]] = None,
+) -> dict:
+    """Reap every registered worktree that is clean, old enough, unused,
+    and already landed -- whether or not any task row ever pointed at it.
+
+    A worktree survives (is kept, never removed) unless ALL of:
+      - it is not the main checkout and not a bare repo entry
+      - it is not git-locked
+      - `git status --porcelain` is empty (ignored files do not count --
+        that flag already excludes them)
+      - its directory mtime is at least `min_age_h` old (default
+        `DEFAULT_SWEEP_MIN_AGE_H`, overridable via
+        `PRISM_REAP_SWEEP_MIN_AGE_H`)
+      - no process on the host has its cwd inside it (`is_path_live`, or
+        `_proc_cwd_is_under` by default)
+      - its branch (or, detached, its HEAD) is an ancestor of origin/main
+
+    `mode="survey"` computes every verdict and removes nothing. A missing
+    worktree directory is pruned either way (`git worktree prune`), and a
+    branch is deleted only once its own worktree has actually been
+    removed (or was already gone) AND it is confirmed merged.
+
+    Fails closed exactly like `reap_task`: any error reading a candidate
+    keeps it. Returns a summary dict with a `items` list, one entry per
+    registered worktree, so a caller (or a test) can inspect why any one
+    of them was kept or reaped.
+    """
+    root = Path(repo_root) if repo_root else task_workspace._prism_repo_root()
+    age_h = DEFAULT_SWEEP_MIN_AGE_H if min_age_h is None else float(min_age_h)
+    live_check = is_path_live or _proc_cwd_is_under
+
+    try:
+        task_workspace._git_out(root, "fetch", "origin")
+    except (RuntimeError, OSError):
+        pass  # best-effort refresh; a stale origin/main just keeps more
+
+    upstream = _upstream_ref(root)
+    try:
+        root_resolved = root.resolve()
+    except OSError:
+        root_resolved = root
+
+    items: list[dict] = []
+    reaped_paths: set[str] = set()
+
+    for entry in _worktree_list(root):
+        path_str = str(entry.get("path") or "")
+        item = {"path": path_str, "branch": str(entry.get("branch") or ""),
+                "outcome": "kept", "reason": "", "would_reap": False,
+                "reaped": False, "worktree_removed": False,
+                "branch_deleted": False}
+        if not path_str:
+            continue
+        path = Path(path_str)
+
+        if entry.get("bare"):
+            item["reason"] = "bare repository entry, not a task worktree"
+            items.append(item)
+            continue
+        try:
+            if path.resolve() == root_resolved:
+                item["reason"] = "the main checkout"
+                items.append(item)
+                continue
+        except OSError:
+            item["reason"] = "could not resolve the path, keeping it"
+            items.append(item)
+            continue
+        if entry.get("locked"):
+            item["reason"] = "the worktree is locked"
+            items.append(item)
+            continue
+        if not path.exists():
+            item["reason"] = "directory already gone (pruned)"
+            items.append(item)
+            continue
+
+        try:
+            dirty = task_workspace._git_out(path, "status",
+                                            "--porcelain").strip()
+        except (RuntimeError, OSError) as exc:
+            item["reason"] = f"could not read status, keeping it: {exc}"
+            items.append(item)
+            continue
+        if dirty:
+            item["reason"] = (f"uncommitted changes "
+                              f"({len(dirty.splitlines())} path(s))")
+            items.append(item)
+            continue
+
+        if not _older_than(path, age_h):
+            item["reason"] = f"younger than {age_h}h, keeping it"
+            items.append(item)
+            continue
+
+        try:
+            if live_check(path):
+                item["reason"] = "a process is using this worktree right now"
+                items.append(item)
+                continue
+        except Exception:  # noqa: BLE001 - fail closed
+            item["reason"] = "could not check for live use, keeping it"
+            items.append(item)
+            continue
+
+        ref = item["branch"] or str(entry.get("head") or "")
+        if not ref:
+            item["reason"] = "no branch or HEAD to check ancestry, keeping it"
+            items.append(item)
+            continue
+        ancestor = _is_ancestor(root, ref, upstream)
+        if ancestor is None:
+            item["reason"] = (f"could not compare {ref} against {upstream}, "
+                              "keeping it")
+            items.append(item)
+            continue
+        if not ancestor:
+            item["reason"] = f"not yet merged into {upstream}"
+            items.append(item)
+            continue
+
+        item["would_reap"] = True
+        if mode == "survey":
+            item["outcome"] = "pass"
+            item["reason"] = "clean, old, merged; the sweep will remove this"
+            items.append(item)
+            continue
+
+        removed = _remove_worktree(root, path)
+        if not removed["ok"]:
+            item["reason"] = removed["reason"]
+            items.append(item)
+            continue
+        item["worktree_removed"] = True
+        reaped_paths.add(path_str)
+
+        branch_deleted = True
+        if item["branch"]:
+            deleted = _delete_branch(root, item["branch"])
+            branch_deleted = deleted["ok"]
+            if not deleted["ok"]:
+                item["reason"] = f"worktree removed; {deleted['reason']}"
+        item["branch_deleted"] = branch_deleted
+        item["reaped"] = True
+        item["outcome"] = "pass"
+        if not item["reason"]:
+            item["reason"] = "reaped: clean, merged, past the age window"
+        items.append(item)
+
+    _forget_paths(reaped_paths)
+    try:
+        task_workspace._git_out(root, "worktree", "prune")
+    except (RuntimeError, OSError):
+        pass
+
+    return {
+        "kind": "conductor.reap_sweep",
+        "node_id": SWEEP_NODE,
+        "workflow_id": "conductor",
+        "outcome": "pass",
+        "mode": mode,
+        "considered": len(items),
+        "reaped": sum(1 for i in items if i["reaped"]),
+        "would_reap": sum(1 for i in items if i["would_reap"]),
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------------------
+# The periodic pass -- catches what accumulates BETWEEN lands.
+# ---------------------------------------------------------------------------
+#
+# `ship_worker._sweep_after_land` runs `sweep_worktrees` on every successful
+# land, which is enough to stop the backlog from growing again -- but the
+# 173-worktree incident this was built for had gaps of hours between lands,
+# during which agent/QA/fixer worktrees still landed and went stale with
+# nobody's land event to piggyback on. This thread is that gap's own timer.
+# Default OFF, same posture as dispatch_guard/resume_actuator/deploy_worker:
+# PRISM_WORKTREE_SWEEP_INTERVAL=<seconds> opts an environment in.
+
+SWEEP_INTERVAL_ENV = "PRISM_WORKTREE_SWEEP_INTERVAL"
+
+
+def _log(msg: str) -> None:
+    print(f"[worktree-sweep] {msg}", file=sys.stderr, flush=True)
+
+
+def _sweep_interval_s() -> int:
+    raw = os.environ.get(SWEEP_INTERVAL_ENV, "")
+    try:
+        return int(raw) if raw.strip() else 0
+    except ValueError:
+        return 0
+
+
+def sweep_worktrees_once(repo_root: Optional[str] = None) -> dict:
+    """One periodic pass, logged -- the daemon-wide counterpart to the
+    per-land call, using the SAME `sweep_worktrees`. Deliberately allowed
+    to fall back to the bare-checkout default (unlike
+    `ship_worker._sweep_after_land`, which never does): this runs from a
+    live daemon thread, not a test, so "the repo this process actually
+    serves" is exactly the right default."""
+    result = sweep_worktrees(repo_root=repo_root)
+    reaped = [i for i in result.get("items", []) if i.get("reaped")]
+    if reaped:
+        _log(f"reaped {len(reaped)}/{result.get('considered', 0)}: " +
+            ", ".join(i["path"] for i in reaped))
+    return result
+
+
+def _sweep_loop(interval_s: int,
+                stop_event: Optional[threading.Event] = None) -> None:
+    _log(f"started; interval={interval_s}s")
+    while stop_event is None or not stop_event.is_set():
+        try:
+            sweep_worktrees_once()
+        except Exception as exc:  # noqa: BLE001 - never kill the thread
+            _log(f"sweep error: {exc}")
+        if stop_event is not None:
+            if stop_event.wait(interval_s):
+                break
+        else:
+            _time.sleep(interval_s)
+
+
+def start_worktree_sweep_worker() -> Optional[threading.Thread]:
+    """Spawn the periodic sweep thread, unless disabled via
+    PRISM_WORKTREE_SWEEP_INTERVAL<=0/unset (the default). Mirrors
+    dispatch_guard.start_dispatch_reaper / deploy_worker.start_deploy_worker."""
+    interval = _sweep_interval_s()
+    if interval <= 0:
+        _log(f"disabled (default OFF; set {SWEEP_INTERVAL_ENV}=<seconds> to "
+            "opt this environment in)")
+        return None
+    t = threading.Thread(target=_sweep_loop, args=(interval,),
+                         name="prism-worktree-sweep", daemon=True)
+    t.start()
+    return t

@@ -3598,6 +3598,49 @@ def workflow_step_reap(
             mode=chosen, is_live=_is_live)
 
 
+class ReapSweepRequest(BaseModel):
+    """Task-agnostic -- unlike ReapRequest, there is no single task_id this
+    step is about; `task_id` is accepted only as an optional hint for the
+    run's own history/trace row, never used to look anything up."""
+
+    task_id: str = Field(default="")
+    mode: str = Field(default="reap", pattern="^(reap|survey)$")
+
+
+@router.post("/steps/reap-sweep")
+def workflow_step_reap_sweep(
+    body: ReapSweepRequest, project: str = Query(...),
+    mode: str = Query(""),
+) -> dict:
+    """Reap every REGISTERED worktree this repo has, task row or not.
+
+    CODIFIED (ops incident 2026-09-12). `/steps/reap` above only ever
+    answers for the ONE task_id a land just finished -- an agent worktree,
+    a QA/fixer worktree, or a `prism/ws/*` branch whose task row was later
+    deleted has no task_id to be reached through. Same always-200 contract
+    as `/steps/reap`: a refusal per-worktree is a REPORTED fact inside the
+    result's `items`, never a callback failure.
+
+    `ship_worker._sweep_after_land` calls the same `task_reaper.
+    sweep_worktrees` on every land (one implementation, two entry points,
+    same shape as brain-health/refresh-maps/reap itself); this route is
+    the manual/canvas-triggered entry point, and the periodic
+    `start_worktree_sweep_worker` thread is the third, timer-driven one.
+    """
+    from prism_service.services import task_reaper
+
+    with _tracer.start_as_current_span("workflow.step.reap_sweep") as span:
+        span.set_attribute("workflow.project", project)
+        chosen = str(mode or body.mode or "reap")
+        span.set_attribute("workflow.mode", chosen)
+
+        # No per-task workspace record to read a repo_root from here (this
+        # step is task-agnostic) -- sweep_worktrees' own default (the repo
+        # this daemon process actually runs from) is exactly right for a
+        # live route call.
+        return task_reaper.sweep_worktrees(mode=chosen)
+
+
 class DeployRequest(BaseModel):
     task_id: str = Field(min_length=1)
 

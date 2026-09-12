@@ -18,6 +18,13 @@
       "url": "${prismBackendUrl}/api/workflows/steps/reap?project=${project}&mode=reap",
       "body": "{\"task_id\": \"${taskId}\", \"mode\": \"reap\"}",
       "timeoutSeconds": 120
+    },
+    {
+      "id": "sweep",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/reap-sweep?project=${project}&mode=reap",
+      "body": "{\"task_id\": \"${taskId}\", \"mode\": \"reap\"}",
+      "timeoutSeconds": 120
     }
   ]
 }

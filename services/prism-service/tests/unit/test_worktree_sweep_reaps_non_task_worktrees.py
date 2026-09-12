@@ -204,9 +204,8 @@ def test_a_locked_worktree_survives(repo: Path) -> None:
 
 def test_the_main_checkout_is_never_in_the_sweep_results(repo: Path) -> None:
     result = task_reaper.sweep_worktrees(repo_root=str(repo))
-    paths = {i["path"] for i in result["items"]}
-    assert str(repo) not in paths or \
-        {i for i in result["items"] if i["path"] == str(repo)}.pop()["reaped"] is False
+    main_entries = [i for i in result["items"] if i["path"] == str(repo)]
+    assert not main_entries or main_entries[0]["reaped"] is False
 
 
 def test_the_sweep_reaps_a_task_worktree_too_when_orphaned(repo: Path,
@@ -272,3 +271,54 @@ def test_the_sweep_never_uses_the_task_trailer(repo: Path) -> None:
     # It is allowed to use is-ancestor -- unlike reap_task, there is no task
     # row here to misattribute a trailer to.
     assert "is-ancestor" in source or "is_ancestor" in source
+
+
+# ---------------------------------------------------------------------------
+# AC-7 -- the seat is useless unwired (mirrors test_ship_worker.py /
+# test_resume_actuator_stall_dispatch.py's identical trio): a periodic
+# worker with no caller anywhere outside its own test file never runs
+# against a real repo, however green its unit tests are.
+# ---------------------------------------------------------------------------
+def test_periodic_worker_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PRISM_WORKTREE_SWEEP_INTERVAL", raising=False)
+    assert task_reaper._sweep_interval_s() == 0
+    assert task_reaper.start_worktree_sweep_worker() is None, (
+        "mirrors start_dispatch_reaper/start_deploy_worker: no opt-in, no "
+        "thread, no cost")
+
+
+def test_periodic_worker_env_opts_the_environment_in(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    # Never let the spawned thread touch a real repo: it fires its first
+    # sweep immediately, before its 3600s sleep, and this process has no
+    # business running a real `sweep_worktrees` against whatever checkout
+    # this test happens to execute inside (this repo's own shared, live
+    # worktree registration among them).
+    calls: list = []
+    monkeypatch.setattr(task_reaper, "sweep_worktrees_once",
+                        lambda repo_root=None: calls.append(1) or
+                        {"considered": 0, "reaped": 0, "items": []})
+    monkeypatch.setenv("PRISM_WORKTREE_SWEEP_INTERVAL", "3600")
+    assert task_reaper._sweep_interval_s() == 3600
+    t = task_reaper.start_worktree_sweep_worker()
+    assert t is not None and t.daemon is True
+
+
+def test_lifespan_wires_the_periodic_worker() -> None:
+    import prism_service.main as m
+
+    src = Path(m.__file__).read_text(encoding="utf-8")
+    assert "start_worktree_sweep_worker" in src, (
+        "start_worktree_sweep_worker() must be called from the real "
+        "lifespan, or the sweep never runs against a live daemon")
+
+
+def test_the_sweep_runs_after_every_land_too() -> None:
+    """`ship_worker._sweep_after_land` is the OTHER half -- the periodic
+    thread fills the gap between lands, but every land already pays for a
+    reap pass and must not skip the task-agnostic sweep."""
+    from prism_service.services import ship_worker
+
+    src = Path(ship_worker.__file__).read_text(encoding="utf-8")
+    assert "_sweep_after_land" in src
+    assert "sweep_worktrees" in src

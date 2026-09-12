@@ -218,11 +218,31 @@ def test_a_shipped_orphan_branch_is_reaped_without_a_worktree(repo: Path) -> Non
 
 
 def test_the_reap_never_asks_git_whether_a_branch_is_an_ancestor() -> None:
-    """stop_if: 'the reap cannot prove shippedness without is-ancestor'."""
-    source = Path(task_reaper.__file__).read_text(encoding="utf-8")
-    assert "is-ancestor" not in source
-    assert "merge_base" not in source.replace("merge_base(", "")
+    """stop_if: 'the reap cannot prove shippedness without is-ancestor'.
+
+    SUPERSEDED (narrowed) 2026-09-12 by the task-agnostic worktree sweep
+    (task_reaper.sweep_worktrees): a whole-FILE string check stopped being
+    the right invariant once a second function landed in this module with
+    a DIFFERENT, deliberately-allowed relationship to is-ancestor -- there
+    is no task row for an orphan worktree to misattribute a trailer to, so
+    the graph question is the only one sweep_worktrees can ask (see its own
+    docstring and test_the_sweep_never_uses_the_task_trailer). The real
+    invariant -- reap_task, which DOES have a task row and a trailer to
+    read, must never fall back to is-ancestor -- still holds and is what
+    this now pins, scoped to reap_task's own call chain rather than the
+    file as a whole."""
+    import inspect
+
+    chain = "".join(
+        inspect.getsource(fn) for fn in (
+            task_reaper.reap_task, task_reaper._shipped_sha,
+            task_reaper._unique_commits, task_reaper._upstream_ref,
+            task_reaper._locked_worktrees, task_reaper._branch_exists,
+        ))
+    assert "is-ancestor" not in chain
+    assert "merge_base" not in chain.replace("merge_base(", "")
     # It reuses the gate's OWN squash-safe reader, never a second copy.
+    source = Path(task_reaper.__file__).read_text(encoding="utf-8")
     assert "_shipped_sha_on_main" in source
     assert "def _shipped_sha_on_main" not in source
 
@@ -250,7 +270,14 @@ def test_reap_is_the_conductors_terminal_node_after_land() -> None:
 
     reap = _behavior("reap")
     assert reap["fsmId"] == "pipeline" and reap["botId"] == "conductor"
-    assert [s["id"] for s in reap["steps"]] == ["survey", "reap"]
+    # SUPERSEDED 2026-09-12 by the task-agnostic worktree sweep (ops
+    # incident: 173 registered worktrees, disk at 98%, 93 landed+clean but
+    # invisible to the per-task `reap` step above). The node's per-task
+    # survey/reap pair is unchanged; `sweep` is a third, ADDITIONAL step
+    # that runs on every pass regardless of task_id, reaping worktrees no
+    # task row ever pointed at. See test_worktree_sweep_reaps_non_task_
+    # worktrees.py for the sweep's own contract.
+    assert [s["id"] for s in reap["steps"]] == ["survey", "reap", "sweep"]
 
     from prism_service.services import flow_run_recorder as rec
     assert rec.CONDUCTOR_NODES[-3:] == ("green_gate", "land", rec.REAP_NODE)

@@ -691,6 +691,20 @@ async def lifespan(_app: FastAPI):
         from prism_service.services.dispatch_guard import start_dispatch_reaper
         start_dispatch_reaper()
 
+        # Ops incident 2026-09-12 — the worktree sweep: 173 registered git
+        # worktrees, disk at 98%, 93 of them already landed on origin/main
+        # and clean but invisible to task_reaper.reap_task, which only ever
+        # runs for the ONE task_id a land just finished. Agent worktrees
+        # (.claude/worktrees/*), QA/fixer worktrees and prism/ws/* branches
+        # whose task row was deleted have no matching task_id.
+        # ship_worker._sweep_after_land already runs the same
+        # task_reaper.sweep_worktrees on every land; this thread is the
+        # gap-filler for the hours that can pass between lands. Own thread
+        # (same footprint as dispatch_guard/resume_actuator); default OFF —
+        # PRISM_WORKTREE_SWEEP_INTERVAL=<seconds> opts an environment in.
+        from prism_service.services.task_reaper import start_worktree_sweep_worker
+        start_worktree_sweep_worker()
+
         # Task dd1e8871 — the server-side, observed-activity heartbeat
         # producer: a SECOND, harness-guaranteed source onto the SAME
         # drive_heartbeats store the implement.js prompt text already

@@ -790,7 +790,8 @@ def _reap_after_land(task_svc, task_id: str, project: str) -> None:
         from datetime import datetime as _dt, timezone as _tz
 
         from prism_service.project_context import get_project
-        from prism_service.services import drive_heartbeat, task_reaper
+        from prism_service.services import (drive_heartbeat, task_reaper,
+                                            task_workspace)
         from prism_service.services.flow_run_recorder import (
             record_node_execution as _record)
         scores = str(get_project(project)._data_dir / "scores.db")
@@ -798,6 +799,12 @@ def _reap_after_land(task_svc, task_id: str, project: str) -> None:
         def _live(tid: str) -> bool:
             age = drive_heartbeat.heartbeat_age_s(scores, tid)
             return age is not None and age < 900.0
+
+        # Resolved BEFORE reap_task runs: a successful reap pops this same
+        # task_id's own index row (task_reaper._forget), so reading it again
+        # afterward would come back empty even in production.
+        repo_root = str((task_workspace.workspace_record(task_id) or {})
+                        .get("repo_root") or "") or None
 
         verdict = task_reaper.reap_task(task_id, status="done", is_live=_live)
         _audit(task_svc, task_id, "reap", str(verdict.get("reason") or "")[:200])
@@ -810,8 +817,64 @@ def _reap_after_land(task_svc, task_id: str, project: str) -> None:
                  "reason": str(verdict.get("reason") or ""),
                  "started_at": now, "ended_at": now},
                 project=project)
+        _sweep_after_land(task_svc, task_id, project, scores, repo_root)
     except Exception:  # noqa: BLE001 - a reap never fails a completed ship
         pass
+
+
+def _sweep_after_land(task_svc, task_id: str, project: str, scores: str,
+                      repo_root: Optional[str]) -> None:
+    """Runs immediately after `reap_task` above, same land trigger: catches
+    every worktree `reap_task` structurally cannot see (task
+    ab-reap-node-non-task-worktrees, ops incident 2026-09-12).
+
+    `reap_task` only ever answers for the ONE `task_id` this land just
+    finished, keyed off the workspace index -- an agent worktree, a QA/
+    fixer worktree, or a `prism/ws/*` branch whose task row was later
+    deleted has no matching task_id and is invisible to it forever. A land
+    is the one moment this process is already paying for a `reap` pass, so
+    it is also the moment to run the task-agnostic sweep
+    (`task_reaper.sweep_worktrees`) over every OTHER registered worktree.
+
+    `repo_root` MUST be the caller's own already-resolved value (read from
+    the workspace record BEFORE `reap_task` popped it) -- this function
+    never falls back to `sweep_worktrees`'s own bare-checkout default. That
+    default resolves relative to wherever this module happens to be
+    imported FROM, which in a test (or an unusual embedding) can be a
+    worktree that shares registration with, but is not, the repo under
+    test; a caller with no genuine repo_root gets a skipped sweep, never a
+    guess at one.
+
+    Best-effort, same posture as `_reap_after_land`: a sweep error never
+    affects the ship, and each reaped path is recorded on THIS task's
+    history (the closest thing to "a run a person can see") even though
+    most of what it reaps belongs to no task at all.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+
+    from prism_service.services import task_reaper
+    from prism_service.services.flow_run_recorder import (
+        record_node_execution as _record)
+
+    if not repo_root:
+        _audit(task_svc, task_id, "reap_sweep",
+              "skipped: no repo_root resolved for this land")
+        return
+
+    result = task_reaper.sweep_worktrees(repo_root=repo_root)
+    reaped = [i for i in result.get("items", []) if i.get("reaped")]
+    detail = (f"considered={result.get('considered', 0)} "
+             f"reaped={len(reaped)}: " +
+             "; ".join(f"{i['path']} ({i.get('branch') or 'no branch'})"
+                       for i in reaped))[:2000]
+    _audit(task_svc, task_id, "reap_sweep", detail)
+    now = _dt.now(_tz.utc).isoformat()
+    _record(scores,
+            {"task_id": task_id, "node_id": task_reaper.SWEEP_NODE,
+             "actor": "ship-worker", "workflow_id": "conductor",
+             "outcome": "pass", "reason": detail,
+             "started_at": now, "ended_at": now},
+            project=project)
 
 
 def _replay_owner_approval(task_svc, cond, task_id: str) -> bool:
