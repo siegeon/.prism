@@ -99,6 +99,15 @@ _PENDING_STATUS_RE = re.compile(
 
 _PR_NUM_RE = re.compile(r"/pull/(\d+)")
 
+# task <ship-ci-red-names-tests>: a genuine (non-pending) `gh pr checks`
+# failure names the failing JOB/CHECK ("checks  fail  11m29s  <run url>"),
+# never the failing TEST -- a human or driving agent then has to open the
+# run log by hand to find out what actually broke. The row's own URL names
+# the run; pytest's own summary line in that run's failed-step log names
+# the test.
+_RUN_URL_RE = re.compile(r"/actions/runs/(\d+)")
+_FAILED_TEST_RE = re.compile(r"^FAILED\s+(\S+)", re.MULTILINE)
+
 
 def _default_runner(argv: list, cwd: Optional[str] = None) -> tuple:
     cmd = [str(a) for a in argv]
@@ -159,6 +168,37 @@ def is_enabled() -> bool:
 
 def _fail(stage: str, error: str, pr: Optional[int] = None) -> dict:
     return {"ok": False, "stage": stage, "error": str(error).strip(), "pr": pr}
+
+
+def _ci_failure_test_detail(run: Runner, text: str, repo_flag: list,
+                            path: str) -> str:
+    """Best-effort addition to a genuine ci_wait failure: pull the run id
+    out of the checks row's own URL and grep its failed-step log for
+    pytest's `FAILED <nodeid>` lines, so the parked reason is
+    self-diagnosable without a second round trip through `gh`. Never
+    raises and never changes the caller's message on any miss (no run
+    url, `gh run view` unavailable/fails, no matching lines) -- an empty
+    string leaves the verbatim `gh pr checks` text exactly as it was."""
+    m = _RUN_URL_RE.search(text or "")
+    if not m:
+        return ""
+    try:
+        rc, out, _err = _run(
+            run, ["gh", "run", "view", m.group(1), "--log-failed", *repo_flag],
+            path)
+    except Exception:  # noqa: BLE001 - diagnosis detail must never crash ci_wait
+        return ""
+    if rc != 0:
+        return ""
+    seen: list[str] = []
+    for name in _FAILED_TEST_RE.findall(out or ""):
+        if name not in seen:
+            seen.append(name)
+    if not seen:
+        return ""
+    shown = seen[:5]
+    more = f" (+{len(seen) - 5} more)" if len(seen) > 5 else ""
+    return f"; failing tests: {', '.join(shown)}{more}"
 
 
 def _run(runner: Runner, argv: list, cwd: Optional[str] = None) -> tuple:
@@ -585,8 +625,12 @@ def ship_task(task_id: str, project: str = "default", *,
                 _park(task_svc, task_id, res["stage"], res["error"])
                 return res
             # Any OTHER ci_wait failure (a real check that ran and failed)
-            # still fails immediately on its first poll -- unchanged.
-            res = _fail("ci_wait", text or f"gh pr checks exited {rc}", pr)
+            # still fails immediately on its first poll -- unchanged, plus
+            # a best-effort naming of the actual failing test(s) so a
+            # driving agent never has to open the run log by hand.
+            base = text or f"gh pr checks exited {rc}"
+            detail = _ci_failure_test_detail(run, text, repo_flag, path)
+            res = _fail("ci_wait", base + detail, pr)
             _park(task_svc, task_id, res["stage"], res["error"])
             return res
         if time.monotonic() >= deadline:
