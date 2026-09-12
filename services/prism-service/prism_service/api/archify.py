@@ -100,7 +100,17 @@ def get_map_meta(
     project: str = Query("default"),
     task_id: str | None = Query(None),
 ) -> dict:
-    """Get meta.json for a map."""
+    """Get meta.json for a map.
+
+    kind="task" is mounted unconditionally on every task detail page, and
+    most tasks never have anyone press "Build map" -- that is the expected,
+    common state, not an error. A 404 there is a failed network request on
+    every page load and spammed the console (observed live on task
+    a65c66e5, 2026-09-12). Answer 200 with built=false instead; code /
+    concepts / language keep 404 (their tabs already treat 404 as absence
+    without console noise, since the browser's own network layer doesn't
+    log those on first mount the way an embedded task page does).
+    """
     if kind not in ["code", "concepts", "language", "task"]:
         raise HTTPException(400, f"unknown kind: {kind}")
 
@@ -115,7 +125,22 @@ def get_map_meta(
     svc = ArchifyService(project)
     meta = svc.meta(kind, task_id=task_id)
     if not meta:
+        if kind == "task":
+            return {
+                "kind": "task",
+                "diagram_type": "",
+                "task_id": task_id,
+                "title": "",
+                "built_at": "",
+                "ok": False,
+                "components": 0,
+                "connections": 0,
+                "error": "",
+                "html_url": "",
+                "built": False,
+            }
         raise HTTPException(404, f"map not found: {kind}" + (f"/{task_id}" if task_id else ""))
+    meta.setdefault("built", True)
     return meta
 
 

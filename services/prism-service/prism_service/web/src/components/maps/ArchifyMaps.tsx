@@ -36,6 +36,10 @@ type ArchifyMeta = {
   // component id -> the real repository path that box stands for. The code
   // map sends a directory; {} for maps whose builder claims no target.
   targets?: Record<string, string>;
+  // false only for kind="task": the server answers 200 with this shape
+  // (rather than 404) when no map has been built yet, so an unbuilt task
+  // map never reads as a failed request. Absent/true for every other kind.
+  built?: boolean;
 };
 
 type ArchifyReceipt = {
@@ -127,7 +131,10 @@ export default function ArchifyMaps({
   }, [project, kind, taskId]);
 
   useEffect(() => {
-    if (!meta || meta.ok) { setFirstDiagnostic(""); return; }
+    // built===false (kind="task", nothing built yet) has ok:false but there
+    // is no receipt to explain -- fetching one just trades the old 404 (bare
+    // meta lookup) for a new one (receipt lookup) on every unbuilt task map.
+    if (!meta || meta.ok || meta.built === false) { setFirstDiagnostic(""); return; }
     api
       .get<ArchifyReceipt>(`/api/archify/maps/${kind}/receipt?project=${encodeURIComponent(project)}${taskQuery}`)
       .then((r) => setFirstDiagnostic(r.diagnostics?.[0]?.message ?? meta.error ?? ""))
@@ -228,7 +235,7 @@ export default function ArchifyMaps({
 
       {kind === "task" && !taskId ? null : !loaded ? (
         <Empty>Loading map…</Empty>
-      ) : !meta ? (
+      ) : !meta || meta.built === false ? (
         <div className="space-y-2">
           <Empty>No {kind} map built yet.</Empty>
           <button

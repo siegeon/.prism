@@ -58,3 +58,19 @@ def test_archify_maps_treats_built_false_as_not_built():
     assert 'meta.built === false' in src, \
         "the empty/build-button branch must also fire on a 200 built:false response, " \
         "not only on a null meta from a 404"
+
+
+def test_archify_maps_skips_receipt_fetch_for_an_unbuilt_task_map():
+    """Regression guard: once meta stops being null for an unbuilt task map
+    (built:false is now a truthy object), the diagnostic-fetching effect's
+    `!meta || meta.ok` guard alone no longer skips it -- meta.ok is false on
+    the not-built shape too, so it fired a SECOND 404 (GET .../receipt) that
+    the null-meta 404 never used to trigger. Caught live via Playwright on
+    the built SPA (console showed the receipt 404 the first time this
+    landed); the guard must also check meta.built === false."""
+    src = _read(_ARCHIFY_MAPS)
+    start = src.index("useEffect(() => {\n    // built===false")
+    end = src.index("}, [meta]);", start)
+    block = src[start:end]
+    assert "meta.built === false" in block, \
+        "the receipt-fetching effect's own early-return must also skip an unbuilt task map"

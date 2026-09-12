@@ -24,6 +24,13 @@ type SessionDetail = {
   tokens_per_file?: number | null;
   files_read_paths?: string[];
   files_modified_paths?: string[];
+  // false when this session is linked to a task (task_sessions) but no
+  // Claude transcript has been parsed for it yet — a background job can
+  // link a session id before its transcript exists on disk. GET
+  // /api/sessions/{id} answers 200 with this false and every metric zeroed
+  // rather than 404ing; render that as "no transcript yet", never as a
+  // session that genuinely used zero tokens.
+  has_transcript?: boolean;
 };
 
 const fmtTs = (s?: string) =>
@@ -85,6 +92,22 @@ export default function SessionDetailPage() {
       <Page>
         {back}
         <Card><Empty>Loading…</Empty></Card>
+      </Page>
+    );
+  }
+
+  if (session.has_transcript === false) {
+    return (
+      <Page>
+        {back}
+        <div>
+          <div className="font-mono text-lg break-all text-[color:var(--text-primary)]">
+            {session.session_id ?? id}
+          </div>
+        </div>
+        <Card><Empty>No transcript yet. This session is linked to a task but its
+          transcript has not been parsed — check back once it starts writing,
+          or once the background import sweep picks it up.</Empty></Card>
       </Page>
     );
   }

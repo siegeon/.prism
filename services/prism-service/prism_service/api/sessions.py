@@ -1,6 +1,7 @@
 """Sessions API — recent session outcomes and skill usage."""
 
 import json
+import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -44,7 +45,17 @@ def detail(session_id: str, project: str = Query("default")) -> dict:
     """One session's outcome row + the file paths it touched. Backs the SPA's
     /sessions/{id} detail page. Returns the session_outcomes scalar fields plus
     files_read_paths / files_modified_paths as JSON arrays ([] for legacy rows
-    imported before path capture). 404s on an unknown id."""
+    imported before path capture).
+
+    A session can be LINKED to a task (task_sessions, written by POST
+    /api/tasks/{task_id}/sessions) before its transcript is ever parsed --
+    a background job links the session id before a Claude transcript exists
+    on disk for it. That linked-but-unscored session used to 404 here (only
+    session_outcomes was consulted), which broke the task page's session
+    link and spammed the console with failed requests on every load
+    (observed live on task a65c66e5, 2026-09-12). Answer 200 with
+    has_transcript=false instead; 404 is reserved for a session_id that is
+    not even linked anywhere."""
     try:
         ctx = get_project(project)
     except Exception as exc:
@@ -55,20 +66,45 @@ def detail(session_id: str, project: str = Query("default")) -> dict:
     except Exception as exc:
         raise HTTPException(500, f"scores.db unavailable: {exc}")
     try:
-        cols = {r[1] for r in conn.execute(
-            "PRAGMA table_info(session_outcomes)").fetchall()}
-        row = conn.execute(
-            "SELECT * FROM session_outcomes WHERE session_id = ? LIMIT 1",
-            (session_id,),
-        ).fetchone()
+        has_outcomes = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='session_outcomes'"
+        ).fetchone() is not None
+        row = None
+        cols: set = set()
+        if has_outcomes:
+            cols = {r[1] for r in conn.execute(
+                "PRAGMA table_info(session_outcomes)").fetchall()}
+            row = conn.execute(
+                "SELECT * FROM session_outcomes WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            try:
+                linked = conn.execute(
+                    "SELECT session_id, started_at, ended_at FROM task_sessions "
+                    "WHERE session_id = ? ORDER BY started_at ASC LIMIT 1",
+                    (session_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                linked = None
+            if linked is None:
+                raise HTTPException(404, f"unknown session: {session_id}")
+            return {"session": {
+                "session_id": linked["session_id"],
+                "started_at": linked["started_at"],
+                "ended_at": linked["ended_at"],
+                "has_transcript": False,
+                "files_read_paths": [],
+                "files_modified_paths": [],
+            }}
     finally:
         conn.close()
-    if row is None:
-        raise HTTPException(404, f"unknown session: {session_id}")
     d = dict(row)
     session = {k: v for k, v in d.items()
                if k not in ("files_read_paths", "files_modified_paths")}
     session["session_id"] = d.get("session_id")
+    session["has_transcript"] = True
     session["files_read_paths"] = (
         _json_paths(d.get("files_read_paths")) if "files_read_paths" in cols else []
     )
