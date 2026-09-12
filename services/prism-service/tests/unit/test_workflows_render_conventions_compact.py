@@ -180,13 +180,18 @@ def test_write_failing_tests_node_json_valid():
     assert node["id"] == "write-failing-tests-loop"
     assert len(node["steps"]) > 0
 
-    # The first step should have the reason-loop call with test_drafted rubric
-    first_step = node["steps"][0]
-    assert first_step["kind"] == "http-callback"
-    assert "reason-loop" in first_step["url"]
+    # SUPERSEDED 2026-09-12 (task d0b392b3): the node's true FIRST step is
+    # now "oracle-route-check" (a browser-adapter demo task branches away
+    # from the pytest draft before it ever reaches this one), so the
+    # reason-loop step is located by its URL rather than assumed to be
+    # steps[0]. The invariant this test actually pins -- the drafting step
+    # calls reason-loop with the test_drafted rubric -- is unchanged.
+    reason_loop_step = next(
+        s for s in node["steps"] if "reason-loop" in s.get("url", ""))
+    assert reason_loop_step["kind"] == "http-callback"
 
     # Parse the nested JSON string to verify rubric field
-    body_json = json.loads(first_step["body"])
+    body_json = json.loads(reason_loop_step["body"])
     assert body_json["rubric"] == "test_drafted", \
         f"Expected rubric='test_drafted', got {body_json['rubric']!r}"
     assert body_json["model"] == "haiku"
