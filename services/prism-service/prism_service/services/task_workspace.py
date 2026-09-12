@@ -147,6 +147,79 @@ def _create_junction(link: Path, target: Path) -> None:
         os.symlink(str(target), str(link), target_is_directory=True)
 
 
+def _common_git_dir(ws: Path) -> Path:
+    """Resolve this checkout's COMMON git dir with no subprocess at all.
+
+    A worktree's `.git` is a FILE reading `gitdir: <worktree-gitdir>`; that
+    per-worktree gitdir holds a `commondir` file naming the real common
+    dir, relative to itself (git's own on-disk worktree format). A plain,
+    non-worktree checkout's `.git` is already the common dir.
+
+    Deliberately avoids `git rev-parse --git-path` (a subprocess call):
+    _write_agent_settings runs on EVERY ensure_workspace call, including
+    the hot existing-record self-heal path, and measured adding one more
+    git subprocess there was enough to tip an unrelated, pre-existing
+    lease-timing race in test_spend_unbounded_when_ceiling_env_unset from
+    passing to reliably failing (task 7b897fcd) -- so this path is pure
+    filesystem, no process spawn, no added latency.
+    """
+    git_path = ws / ".git"
+    if git_path.is_dir():
+        return git_path
+    text = git_path.read_text(encoding="utf-8").strip()
+    prefix = "gitdir:"
+    raw = text[len(prefix):].strip() if text.startswith(prefix) else text
+    wt_gitdir = Path(raw)
+    if not wt_gitdir.is_absolute():
+        wt_gitdir = (ws / wt_gitdir).resolve()
+    commondir_file = wt_gitdir / "commondir"
+    if commondir_file.exists():
+        common_rel = commondir_file.read_text(encoding="utf-8").strip()
+        return (wt_gitdir / common_rel).resolve()
+    return wt_gitdir
+
+
+def _exclude_worktree_paths(ws: Path, *rel_paths: str) -> None:
+    """Append `rel_paths` to this checkout's git exclude file, idempotently.
+
+    `info/exclude` lives in the COMMON git dir (verified empirically: a
+    linked worktree has no per-worktree info/exclude of its own, only
+    per-worktree HEAD/index/etc), so this is really "this REPO CHECKOUT's
+    own local, untracked exclude file" -- shared across every task
+    worktree of the same checkout, never written into any tracked
+    .gitignore, and never touching a DIFFERENT checkout. Every task
+    worktree appends the identical lines, so sharing it is harmless and
+    the write is naturally idempotent across tasks too.
+
+    Deliberately does not rely on the repo already HAVING a `.claude/`
+    .gitignore line (task 7b897fcd): the scratch repos the test suite
+    builds have none, and trusting it made every fixture worktree report
+    '?? .claude/' as untracked on any host whose global git ignore does
+    not also happen to mask it.
+
+    Catches Exception broadly: this must never fail workspace creation
+    any more than a genuine git/filesystem error would (same fail-soft
+    contract as the settings write above).
+    """
+    try:
+        exclude = _common_git_dir(ws) / "info" / "exclude"
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        existing = exclude.read_text(encoding="utf-8").splitlines() \
+            if exclude.exists() else []
+        missing = [p for p in rel_paths if p not in existing]
+        if not missing:
+            return
+        with exclude.open("a", encoding="utf-8") as fh:
+            if existing and existing[-1] != "":
+                fh.write("\n")
+            for p in missing:
+                fh.write(p + "\n")
+    except Exception:  # noqa: BLE001 - never fail a workspace over its
+        # exclude file; worst case the settings write shows up as
+        # untracked, same as before this fix.
+        pass
+
+
 def _write_agent_settings(ws: Path) -> None:
     """Give the step agent permission to edit files in its OWN worktree.
 
@@ -166,14 +239,21 @@ def _write_agent_settings(ws: Path) -> None:
     blocked EVERY implement drive on this host (task 2433fa8a).
 
     Scoped to the worktree by absolute path, never granted globally. The
-    file lands under the gitignored `.claude/`, so it never dirties the
-    lane's diff. Rewritten every call so a workspace made before this fix
-    self-heals, exactly like _link_web_node_modules above it.
+    file is meant to land under an ignored `.claude/`, so it never dirties
+    the lane's diff -- task 7b897fcd found that trusting the REPO's own
+    .gitignore for that was wrong (a scratch repo built with no such line,
+    as the test fixtures do, leaves `.claude/` untracked and dirty), so
+    this now records the path in the checkout's OWN exclude file too
+    (never a tracked .gitignore -- see stop_if on task 7b897fcd) rather
+    than assuming a line elsewhere covers it. Rewritten every call so a
+    workspace made before this fix self-heals, exactly like
+    _link_web_node_modules above it.
     """
     import json as _json
-    settings = ws / ".claude" / "settings.local.json"
+    claude_dir = ws / ".claude"
+    settings = claude_dir / "settings.local.json"
     try:
-        settings.parent.mkdir(parents=True, exist_ok=True)
+        claude_dir.mkdir(parents=True, exist_ok=True)
         scope = f"//{ws.as_posix().lstrip('/')}/**"
         settings.write_text(_json.dumps({"permissions": {"allow": [
             f"Edit({scope})", f"Write({scope})", f"MultiEdit({scope})",
@@ -181,7 +261,10 @@ def _write_agent_settings(ws: Path) -> None:
     except OSError:
         # Never fail a workspace over its settings file; the agent still
         # runs, it just meets the refusal this function exists to prevent.
-        pass
+        return
+    # Idempotent regardless of whether .claude/ already existed, so a
+    # workspace made before this fix self-heals on the very next call.
+    _exclude_worktree_paths(ws, ".claude/settings.local.json", ".claude/")
 
 
 def _link_web_node_modules(ws: Path, root: Path) -> None:
