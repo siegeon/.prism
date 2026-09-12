@@ -1702,7 +1702,13 @@ def test_write_failing_tests_loop_forbids_uncaught_exception_red():
     path = (Path(__file__).resolve().parent.parent.parent.parent.parent
            / ".prism" / "behaviors" / "conductor" / "write-failing-tests-loop.json")
     data = json.loads(path.read_text(encoding="utf-8"))
-    body = json.loads(data["steps"][0]["body"])
+    # SUPERSEDED 2026-09-12 (task d0b392b3): steps[0] is now
+    # "oracle-route-check" (a browser-adapter demo task branches away
+    # before ever reaching the drafting prompt this test pins), so the
+    # reason-loop step is located by its URL rather than by position.
+    reason_loop_step = next(
+        s for s in data["steps"] if "reason-loop" in s.get("url", ""))
+    body = json.loads(reason_loop_step["body"])
     prompt = body["prompt"]
 
     assert "genuine assertion failure" in prompt.lower() or "assertion failure" in prompt, (

@@ -403,10 +403,20 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_commit_tests_only(
             _wf.CommitTestsOnlyRequest(**body), project=project)
 
+    # THE ADAPTER BRANCH (task d0b392b3): a browser-adapter, proof_type=demo
+    # task has no test suite by design, so this codified check runs BEFORE
+    # the build nodes and can stop the chain there (see the `stop_chain`
+    # handling in _dispatch_declared_steps) instead of always drafting a
+    # pytest file no such task can ever make green.
+    def _oracle_route_check(project: str, body: dict):
+        return _wf.workflow_step_oracle_route_check(
+            _wf.OracleRouteCheckRequest(**body), project=project)
+
     return {"reason-loop": _reason_loop, "text-challenge": _text_challenge,
             "write-test-file": _write_test_file,
             "run-pinned-suite": _run_pinned_suite,
-            "commit-tests-only": _commit_tests_only}
+            "commit-tests-only": _commit_tests_only,
+            "oracle-route-check": _oracle_route_check}
 
 
 def _subst(value, variables: dict):
@@ -513,6 +523,14 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
             continue
         out.append({"ok": True, "route": route, "result": result})
         live.update(_exported_variables(result))
+        # GENERIC EARLY-EXIT (task d0b392b3): a declared step's own typed
+        # result may say the rest of THIS node's chain does not apply --
+        # e.g. oracle-route-check routing a browser-adapter demo task away
+        # from the pytest write/run/commit steps. Keyed on the step's own
+        # output, never on a route NAME, so a node can branch without a
+        # bare Python `if` that no node file declares.
+        if getattr(result, "stop_chain", False):
+            break
     if scores_db is not None:
         from prism_service.services import drive_heartbeat
         drive_heartbeat.beat_node(
@@ -594,20 +612,49 @@ def _result_from_build_chain(rows: list) -> Optional["_CodifiedResult"]:
     return out
 
 
+def _result_from_demo_route(rows: list) -> Optional["_CodifiedResult"]:
+    """The report for a browser-adapter, proof_type=demo task whose
+    write_failing_tests chain stopped at oracle-route-check (task
+    d0b392b3): the demo rubric is this task's red evidence, not a pytest
+    draft. None when no such row exists (or it routed to "pytest"), so
+    callers fall through to the pytest build chain / general fallback
+    exactly as before."""
+    for row in rows or []:
+        if row.get("route") != "oracle-route-check" or not row.get("ok"):
+            continue
+        result = row.get("result")
+        if getattr(result, "route", "") != "demo":
+            return None
+        text = (getattr(result, "report", "") or
+                getattr(result, "reason", "")).strip()
+        if not text:
+            return None
+        out = _CodifiedResult(text)
+        out.structured_output = {"route": "demo",
+                                 "reason": getattr(result, "reason", "")}
+        return out
+    return None
+
+
 def _result_from_dispatch(rows: list) -> Optional["_CodifiedResult"]:
     """The declared chain's artifact, as a claude_cli-shaped result, or None.
 
-    TWO CHAINS DECLARE TWO PRODUCTS: verify_plan's reason-loop returns a
-    DOCUMENT (plan_doc + plan_diagram), and write_failing_tests' write ->
-    run -> commit leaves a RED ANCHOR. Harvesting only the document is what
-    made the build chain report None even after it had written, run and
-    committed -- the caller then set dispatched=None and ran the inline
-    call whose envelope 400s.
+    THREE CHAINS DECLARE THREE PRODUCTS: verify_plan's reason-loop returns a
+    DOCUMENT (plan_doc + plan_diagram), write_failing_tests' write -> run ->
+    commit leaves a RED ANCHOR, and a browser-adapter demo task's
+    oracle-route-check leaves a DEMO-RUBRIC REPORT with no pytest artifact
+    at all (task d0b392b3). Harvesting only the document is what made the
+    build chain report None even after it had written, run and committed --
+    the caller then set dispatched=None and ran the inline call whose
+    envelope 400s.
 
     None still means "the chain produced nothing", and every caller then
     falls back -- a declared flow that misfires must never advance a step
     on nothing.
     """
+    demo = _result_from_demo_route(rows)
+    if demo is not None:
+        return demo
     built = _result_from_build_chain(rows)
     if built is not None:
         return built
@@ -1539,6 +1586,25 @@ def _codified_red_test_ids(project: str, task_id: str) -> tuple[list[str], str]:
         return [], f"codified red-test-id read failed: {exc}"
 
 
+def _demo_rubric_already_satisfied(task) -> bool:
+    """True iff `task` is a browser-adapter, proof_type=demo ticket whose
+    red_gate is (or will be) satisfied by the demo rubric rather than a
+    pytest run (task d0b392b3) -- the honest reason _handle_stall must
+    never blame "no pytest node ids to name" for a task that structurally
+    never had pytest ids to begin with. Pure read, mirrors the same
+    OracleSpec.from_task check oracle-route-check and red-test-ids use;
+    never touches proof_type=test tasks (stop_if #3)."""
+    try:
+        from prism_service.services import oracle_spec as osp
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if pt != "demo":
+            return False
+        spec = osp.OracleSpec.from_task(task)
+        return spec.adapter == osp.ADAPTER_BROWSER
+    except Exception:
+        return False
+
+
 def _handle_stall(task_svc, task_id: str, step_id: str,
                   project: str = "") -> dict:
     """Fourth tick on a stalled step: close if shipped, else decompose or
@@ -1716,6 +1782,18 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
                    f"this step has to run: check that its declared node "
                    f"plan is in force, because a step handed tools it does "
                    f"not need spends the budget on them")
+    elif step_id in _RED_TEST_STEPS and _demo_rubric_already_satisfied(parent):
+        # AC-3 (task d0b392b3): this ticket structurally never had pytest
+        # node ids to name -- its red_gate is (or will be) settled by the
+        # demo rubric, not a test run, so blaming "no pytest node ids to
+        # name" sends a driver hunting for a test problem that cannot
+        # exist. Name the real state and point at the step itself.
+        reason += (
+            "this is a browser-adapter, proof_type=demo ticket -- its "
+            "red_gate is satisfied by the demo rubric, not a pytest run, "
+            "so no pytest node id was ever going to exist here. The "
+            f"{step_id} step itself needs a different push, not a "
+            "red-test-id retry.")
     elif step_id in _RED_TEST_STEPS and codified_reason:
         # Says what the DETERMINISTIC read found, not just what the prose
         # lacked -- the real answer is one of the codified node's own reasons

@@ -2,9 +2,16 @@
   "id": "write-failing-tests-loop",
   "fsmId": "pipeline",
   "botId": "conductor",
-  "name": "Write failing tests (Observe-Reason-Write-Run-Commit)",
-  "version": 2,
+  "name": "Write failing tests (Route-Observe-Reason-Write-Run-Commit)",
+  "version": 3,
   "steps": [
+    {
+      "id": "route",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/oracle-route-check?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    },
     {
       "id": "loop",
       "kind": "http-callback",

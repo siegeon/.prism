@@ -2796,6 +2796,89 @@ def workflow_step_red_gate_status(
         )
 
 
+class OracleRouteCheckRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+
+
+class OracleRouteCheckResponse(BaseModel):
+    route: str = "pytest"     # "pytest" | "demo"
+    reason: str = ""
+    stop_chain: bool = False
+    report: str = ""
+
+
+@router.post("/steps/oracle-route-check")
+def workflow_step_oracle_route_check(
+    body: OracleRouteCheckRequest, project: str = Query(...),
+) -> OracleRouteCheckResponse:
+    """CODIFIED branch for write_failing_tests (task d0b392b3): a
+    proof_type=demo task whose derived OracleSpec adapter is "browser" has
+    no test suite BY DESIGN (CLAUDE.md doctrine -- its red_gate is already
+    auto-approved from the demo rubric by
+    conductor_service.adjudicate_demo_red_gate/_verify_gate, untouched
+    here since both live in pinned control-plane policy). Drafting,
+    writing and running a pytest file for such a task is dead work that
+    either fails to import (b490fabc's tests/prism/test_blocked_tasks.py)
+    or leaves nothing implement_tasks can ever make green, stranding the
+    task at the stall splitter before it ever reaches red_gate.
+
+    PURE READ over oracle_spec.OracleSpec.from_task -- never runs pytest,
+    never invokes a model. When the oracle is pytest-backed (or any
+    adapter OTHER than browser, or a browser oracle that is not
+    proof_type=demo -- out of this ticket's scope, stop_if #3), routes to
+    "pytest" and the declared write/run/commit chain runs exactly as
+    before. Only a browser-adapter, proof_type=demo task routes to "demo"
+    with stop_chain=True: task_runner._dispatch_declared_steps stops the
+    chain here, and the demo rubric is recorded to task history as this
+    task's red evidence (AC: "the task history names the demo rubric as
+    the red evidence").
+    """
+    from prism_service.services import oracle_spec as osp
+
+    with _tracer.start_as_current_span("workflow.step.oracle_route_check") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+        if task is None:
+            return OracleRouteCheckResponse(
+                route="pytest", reason=f"no such task: {body.task_id}")
+
+        spec = osp.OracleSpec.from_task(task)
+        pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+        if spec.adapter != osp.ADAPTER_BROWSER or pt != "demo":
+            return OracleRouteCheckResponse(
+                route="pytest",
+                reason=(f"adapter={spec.adapter}, proof_type={pt or 'unset'!r} "
+                        "-- not a browser-adapter demo ticket, draft the "
+                        "failing test as usual"))
+
+        demo_reason = (
+            "demo rubric: this demo-proof ticket has no test suite by "
+            "design -- red state is the absent artifact; proof burden "
+            "carried by green_gate's demo-artifact teeth (the same demo "
+            "rubric conductor_service._verify_gate already uses to "
+            "auto-approve this task's red_gate)")
+        try:
+            ctx.task_svc.record_history(
+                body.task_id, action="red_step_demo_rubric",
+                details=("write_failing_tests: browser-adapter oracle "
+                          "routed to the demo rubric instead of a pytest "
+                          f"draft -- {demo_reason}"),
+                actor="conductor")
+        except Exception:
+            pass
+        report = (
+            "No pytest file drafted: this task's oracle is browser-adapter "
+            f"(adapter={spec.adapter}, proof_type=demo), so it carries no "
+            f"pinned test suite. {demo_reason} The demo rubric is this "
+            "task's red evidence; red_gate is adjudicated from it, not "
+            "from a test run.")
+        return OracleRouteCheckResponse(
+            route="demo", reason=demo_reason, stop_chain=True, report=report)
+
+
 class RedTestIdsRequest(BaseModel):
     task_id: str = Field(min_length=1)
 
@@ -2804,6 +2887,13 @@ class RedTestIdsResponse(BaseModel):
     red_test_ids: list[str] = []
     anchor_sha: str = ""
     reason: str = ""
+    # AC-2 (task d0b392b3): non-empty ONLY for a browser-adapter,
+    # proof_type=demo task -- names the demo rubric as this task's red
+    # evidence instead of a bare "no pytest node ids to name" refusal.
+    # Every other shape (pytest-backed, or a non-demo browser oracle)
+    # leaves this "" and the pre-existing `reason` text is unchanged
+    # (stop_if #3).
+    demo_rubric_evidence: str = ""
 
 
 @router.post("/steps/red-test-ids")
@@ -2843,6 +2933,25 @@ def workflow_step_red_test_ids(
 
         spec = osp.OracleSpec.from_task(task)
         if spec.adapter != osp.ADAPTER_PYTEST:
+            # AC-2 (task d0b392b3): a browser-adapter, proof_type=demo
+            # ticket has no pytest ids BY DESIGN -- that fact does not
+            # change -- but the bare refusal below sends a driver hunting
+            # for a test problem that will never exist. Name the demo
+            # rubric as the real red evidence instead. Every other
+            # non-pytest shape (a non-demo browser oracle, http_probe,
+            # etc.) keeps the pre-existing bare refusal unchanged
+            # (stop_if #3).
+            pt = str(getattr(task, "proof_type", "") or "").strip().lower()
+            if spec.adapter == osp.ADAPTER_BROWSER and pt == "demo":
+                return RedTestIdsResponse(
+                    reason="task's derived oracle spec is browser-adapter "
+                           "and proof_type=demo -- red evidence is the "
+                           "demo rubric, not pytest ids",
+                    demo_rubric_evidence=(
+                        "demo-proof ticket: no test suite by design -- "
+                        "red_gate is adjudicated from the demo rubric "
+                        "(conductor_service._verify_gate), not from "
+                        "pytest node ids"))
             return RedTestIdsResponse(
                 reason="task's derived oracle spec is not pytest-backed "
                        f"(adapter={spec.adapter}) -- no pytest node ids "
