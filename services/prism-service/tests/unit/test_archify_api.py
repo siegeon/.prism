@@ -140,6 +140,36 @@ def test_get_map_task_without_task_id_400(tmp_path, monkeypatch):
     assert r.status_code == 400
 
 
+def test_get_map_task_not_built_answers_200_built_false(tmp_path, monkeypatch):
+    """kind='task' is mounted on EVERY task detail page, and most tasks never
+    have anyone press "Build map" -- that is the common, expected state, not
+    an error. Unlike code/concepts/language (still 404, unchanged below),
+    an unbuilt task map must answer 200 with built=false so the task page
+    never logs a failed request just for existing (observed live on task
+    a65c66e5, 2026-09-12)."""
+    client = _make_client(tmp_path, monkeypatch)
+    if client is None:
+        return
+
+    r = client.get("/api/archify/maps/task?project=default&task_id=nope-1234")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["built"] is False
+    assert data["task_id"] == "nope-1234"
+    assert data["ok"] is False
+
+
+def test_get_map_code_not_built_still_404s(tmp_path, monkeypatch):
+    """The task-kind 200/built:false carve-out must not leak onto the other
+    kinds -- code/concepts/language still 404 on an unbuilt map."""
+    client = _make_client(tmp_path, monkeypatch)
+    if client is None:
+        return
+
+    r = client.get("/api/archify/maps/code?project=default")
+    assert r.status_code == 404
+
+
 def test_get_map_not_found_404(tmp_path, monkeypatch):
     """Test GET /api/archify/maps/{kind} returns 404 when map not built."""
     client = _make_client(tmp_path, monkeypatch)
