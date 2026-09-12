@@ -60,6 +60,12 @@ export type WfNode = {
    * so the elapsed clock counts up from first sight rather than resetting
    * on every poll. Null while idle. */
   runningSince?: number | null;
+  /** THE VISIBLE LIE fix (task b490fabc, fourth pass): WHO and WHAT is
+   * actually beating on this node, straight from def.live[id] -- a lit
+   * node with no entry here, or one whose `dispatching` is false, is only
+   * WAITING (a seat's pre-check beat), never RUNNING. Null/absent when the
+   * server has nothing to report (older service, or the node is idle). */
+  live?: NonNullable<WorkflowDef["live"]>[string] | null;
 };
 
 /** A node's own measured token economics — GET /api/workflows'
@@ -333,6 +339,7 @@ export class WorkflowGraph {
             ? new Date(s.last_run_at * 1000).toISOString() : null,
         },
         runningSince,
+        live: def.live?.[s.id] ?? null,
       });
     });
 
@@ -768,6 +775,13 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // same static glow, same stale token-trend line -- because nothing on
   // the card said work was actually happening right now.
   const behaviourRunning = occupiedLit && !active;
+  // THE VISIBLE LIE (task b490fabc, fourth pass): occupiedLit alone cannot
+  // tell a genuinely open dispatch apart from a seat's own pre-check beat
+  // that fired and then deferred (resume_actuator's 180s pre-check, e.g.).
+  // n.live (from def.live[stepId]) carries that truth server-side; a
+  // present-but-not-dispatching live record means the node is lit but
+  // nothing is actually running under it right now.
+  const waiting = behaviourRunning && !!n.live && !n.live.dispatching;
   // In runMode every lane this run did not walk drops to the SAME dim draw
   // path a not-reached verdict already uses -- dimmed, never removed, so the
   // catalog-wide picture survives behind the run being foregrounded. The
@@ -846,8 +860,11 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   ctx.strokeStyle = active || occupiedLit ? activeStroke
     : verdictLook ? verdictLook.stroke
       : n.gate ? PALETTE.magenta : PALETTE.border;
-  ctx.lineWidth = active || occupiedLit ? 2.5 : n.gate || verdictLook ? 1.5 : 1;
-  if (occupiedLit) {
+  // WAITING is the dimmer of the two treatments below: a thin accent
+  // stroke, no glow, no pulse -- a lit-but-not-dispatching node must never
+  // read as heavily as a genuinely running one (THE VISIBLE LIE fix).
+  ctx.lineWidth = waiting ? 1.5 : active || occupiedLit ? 2.5 : n.gate || verdictLook ? 1.5 : 1;
+  if (occupiedLit && !waiting) {
     ctx.shadowColor = activeStroke;
     ctx.shadowBlur = 14;
   }
@@ -857,9 +874,14 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
     // 7.13.174/175 mistake verdictPaint's own stop_if forbids repeating).
     // reducedMotion skips this block entirely and keeps the steady glow
     // set above, per the OS accessibility preference.
-    const pulse = 0.55 + 0.35 * Math.sin((now * 2 * Math.PI) / RUNNING_PULSE_PERIOD_MS);
-    ctx.shadowColor = `rgba(${PALETTE_TEAL_RGB}, ${pulse.toFixed(2)})`;
-    ctx.shadowBlur = 12 + 6 * pulse;
+    //
+    // WAITING never pulses -- a seat's pre-check beat is not a dispatch in
+    // flight, so this node keeps whatever dim/no glow it already has.
+    if (!waiting) {
+      const pulse = 0.55 + 0.35 * Math.sin((now * 2 * Math.PI) / RUNNING_PULSE_PERIOD_MS);
+      ctx.shadowColor = `rgba(${PALETTE_TEAL_RGB}, ${pulse.toFixed(2)})`;
+      ctx.shadowBlur = 12 + 6 * pulse;
+    }
   }
   ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
   ctx.shadowBlur = 0;
@@ -901,9 +923,10 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
         ? `RUN ${shortDuration(active.elapsedSeconds)} / ~${shortDuration(active.averageSeconds)}`
         : `RUN ${shortDuration(active.elapsedSeconds)}`
       : `RUN ${shortDuration(active.elapsedSeconds)}`)
-    : behaviourRunning ? "RUNNING"
-      : verdictLook ? verdictLook.label
-        : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
+    : waiting ? "WAITING"
+      : behaviourRunning ? "RUNNING"
+        : verdictLook ? verdictLook.label
+          : n.childCount ? `${n.childCount} ${n.actionLabel}` : n.actionLabel ?? "↗";
   ctx.fillText(runLabel, x + w - 8, y + 10);
   ctx.textAlign = "left";
 
@@ -949,9 +972,21 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
   // thing that made two screenshots of `loop` running look identical to
   // idle. RUNNING · <elapsed> replaces it instead, counted from
   // n.runningSince (task-level bookkeeping in setDef/litSeenSince).
-  const runningElapsed = behaviourRunning && typeof n.runningSince === "number"
-    ? `RUNNING · ${shortDuration(Math.max(0, (now - n.runningSince) / 1000))}`
-    : null;
+  // WAITING carries the tool that beat instead of an elapsed clock -- there
+  // is no dispatch running to time. RUNNING prefers the server's own
+  // n.live.since (real wall time) over the client-side n.runningSince
+  // bookkeeping when present, and appends WHO/WHAT is driving it (THE
+  // VISIBLE LIE fix) so the truth reaches the card, not just the corner.
+  const runningElapsed = waiting
+    ? `WAITING · ${n.live?.tool ?? ""}`
+    : behaviourRunning
+      ? (n.live?.since
+        ? `RUNNING · ${shortDuration(Math.max(0, (Date.now() - Date.parse(n.live.since)) / 1000))}` +
+          (n.live.driver || n.live.tool ? ` · ${n.live.driver}${n.live.tool ? ` · ${n.live.tool}` : ""}` : "")
+        : typeof n.runningSince === "number"
+          ? `RUNNING · ${shortDuration(Math.max(0, (now - n.runningSince) / 1000))}`
+          : null)
+      : null;
   ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
   ctx.fillStyle = active?.taskTitle || runningElapsed ? activeStroke : PALETTE.textLabel;
   ctx.fillText(clip(ctx, active?.taskTitle ?? runningElapsed ?? n.summary, w - 20), x + 10, y + h - 12);

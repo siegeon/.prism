@@ -1650,6 +1650,11 @@ def get_workflows(project: str = Query("default")) -> dict:
         # that had just run still drew as idle.
         _entry["occupancy"] = {
             s["id"]: (1 if s.get("running_now") else 0) for s in _steps}
+        # THE VISIBLE LIE fix (task b490fabc, fourth pass): every entry
+        # gets "live" so the SPA can rely on the key existing even when
+        # nothing is lit -- occupancy alone cannot say WHO or WHAT is
+        # running, only that some node is lit.
+        _entry["live"] = {}
         _fsm_step = _STEP_FOR_BEHAVIOUR.get(_entry.get("id"))
         if _fsm_step and _steps:
             _entry_point_id = _steps[0]["id"]
@@ -1672,6 +1677,18 @@ def get_workflows(project: str = Query("default")) -> dict:
                     # behaviour for a beat that carries no sub-node signal.
                     _lit = _route_to_id.get(_node, _entry_point_id) if _node else _entry_point_id
                     _entry["occupancy"][_lit] = 1
+                    # THE VISIBLE LIE fix: WHO and WHAT is actually beating,
+                    # so the canvas can tell a genuinely open dispatch apart
+                    # from a seat's pre-check that beat and then deferred.
+                    _entry["live"][_lit] = {
+                        "task_id": _tid,
+                        "driver": _beat.get("driver") or "",
+                        "tool": _beat.get("last_tool") or "",
+                        "node": _beat.get("node") or "",
+                        "age_s": round(_beat["age_s"], 1),
+                        "since": _beat.get("last_progress_at") or "",
+                        "dispatching": (_beat.get("last_tool") or "") in _OPEN_DISPATCH_TOOLS,
+                    }
                     break
     # Same rule as validation above: nest only the behavior(s) an actual
     # conductor state links to. story_gate now links to "story-gate-check"
@@ -3160,6 +3177,21 @@ _BEHAVIOUR_FOR_STEP: dict[str, str] = {
 }
 _STEP_FOR_BEHAVIOUR: dict[str, str] = {
     v: k for k, v in _BEHAVIOUR_FOR_STEP.items()}
+
+# THE VISIBLE LIE (task b490fabc, fourth pass, owner: "you left something
+# broken, get the subagent working on visible truths"): a beat with
+# last_tool="resume_actuator_dispatch" is resume_actuator's own PRE-CHECK,
+# written every 180s BEFORE it knows whether the task's claim is even held
+# by a live process (resume_actuator.py:361) -- it can fire while nothing
+# is actually running and the seat is about to defer. Only these two tools
+# mean an open dispatch is genuinely in flight: "dispatch_guard_live" is
+# the re-beat a held DispatchTicket writes every 60s while its `claude -p`
+# runs (dispatch_guard.py:195), and "claude_cli.invoke" is the runner's own
+# beat immediately before that same call (task_runner.py:1827). Anything
+# else lit the node but never opened a dispatch, so the canvas must not
+# paint it as RUNNING -- only WAITING.
+_OPEN_DISPATCH_TOOLS: frozenset[str] = frozenset(
+    {"dispatch_guard_live", "claude_cli.invoke"})
 
 
 class WorkflowInstance(BaseModel):

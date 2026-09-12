@@ -298,6 +298,64 @@ def test_a_stale_beat_naming_a_route_still_does_not_light_anything(tmp_path, mon
     assert entry["occupancy"]["text-challenge"] == 0, entry["occupancy"]
 
 
+def test_live_is_empty_when_nothing_is_lit(tmp_path, monkeypatch):
+    """THE VISIBLE LIE fix (task b490fabc, fourth pass): every behaviour
+    entry gets a `live` key, even with no heartbeat at all, so the SPA can
+    rely on it existing."""
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    assert entry["live"] == {}, entry["live"]
+
+
+def test_a_resume_actuator_precheck_beat_is_not_dispatching(tmp_path, monkeypatch):
+    """resume_actuator's pre-check beats every 180s BEFORE it knows whether
+    the task's claim is even held by a live process -- it lights the node
+    (occupancy) but must not claim a dispatch is actually open."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "resume_actuator_dispatch", "work_units": 1,
+        "driver": "prism-resume-actuator",
+    })
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    assert entry["occupancy"]["loop"] == 1, entry["occupancy"]
+    live = entry["live"]["loop"]
+    assert live["dispatching"] is False, live
+    assert live["driver"] == "prism-resume-actuator"
+    assert live["tool"] == "resume_actuator_dispatch"
+    assert live["task_id"] == "t-1"
+
+
+def test_a_dispatch_guard_live_beat_is_dispatching(tmp_path, monkeypatch):
+    """The open-dispatch re-beat a held DispatchTicket writes every 60s
+    while its `claude -p` runs -- this IS a genuine dispatch in flight."""
+    from prism_service.services import drive_heartbeat
+
+    svc = _Svc([_mk_task(workflow_step="implement_tasks")])
+    workflows_api = _wire(monkeypatch, svc, tmp_path)
+    drive_heartbeat.record_heartbeat(str(tmp_path / "scores.db"), {
+        "task_id": "t-1", "step": "implement_tasks", "elapsed_s": 5400,
+        "last_tool": "dispatch_guard_live", "work_units": 108,
+        "driver": "prism-task-runner",
+    })
+
+    result = workflows_api.get_workflows(project="prism")
+
+    entry = _entry(result, "implement-tasks-loop")
+    live = entry["live"]["loop"]
+    assert live["dispatching"] is True, live
+
+
 def test_a_done_task_never_lights_the_node_even_with_a_fresh_heartbeat(tmp_path, monkeypatch):
     from prism_service.services import drive_heartbeat
 
