@@ -28,6 +28,7 @@ services/work_stream.py's transcript ticker.
 
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import threading
 import time
@@ -52,6 +53,49 @@ _SESSION_RECENCY_S = 30 * 60
 _SPEND_CACHE_TTL_S = 5.0
 _TASK_SPEND_CACHE: dict[str, tuple[float, float]] = {}
 _TASK_SPEND_LOCK = threading.Lock()
+
+# Wall-clock budget for GET /api/work/graph's transcript-backed enrichment
+# (spend_usd + the session/token-motion scan below) -- the live defect this
+# guards against: live_spend_for_session/live_token_events_for_session walk
+# EVERY directory under ~/.claude/projects on a cold cache (440 on the live
+# instance) and parse whatever transcript files match (640MB+/358 files for
+# this project alone), with no bound of their own. One cold/slow session
+# used to block the whole request; N linked sessions blocked it N times over
+# (spend loop, then the session loop, calls the SAME session again) -- a
+# curl -m 60 to /api/work/graph?project=prism never returned while
+# /api/version answered instantly. `_GRAPH_CALL_TIMEOUT_S` bounds any ONE
+# transcript call so the deadline check between calls actually works (a
+# deadline alone can't preempt a call already in flight); `_GRAPH_TIME_
+# BUDGET_S` bounds the total. Both overridable for ops tuning / tests.
+_GRAPH_TIME_BUDGET_S = float(os.environ.get("PRISM_GRAPH_BUDGET_S", "1.5"))
+_GRAPH_CALL_TIMEOUT_S = float(os.environ.get("PRISM_GRAPH_CALL_TIMEOUT_S", "0.4"))
+
+# A call that times out is NOT cancelled -- Python threads can't be killed
+# -- it keeps running here in the background and, being the exact same
+# cached path (claude_transcripts._SPEND_CACHE / _token_events, keyed on
+# (mtime, size)) every other caller uses, warms the cache for whichever
+# request asks next. So a chronically-cold corpus degrades (missing/stale
+# spend, a session absent from one poll) rather than blocking, and
+# self-heals within a few polls as the abandoned reads land.
+_GRAPH_IO_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="work-graph-io")
+
+
+def _bounded(deadline: float, fn, *args, **kwargs):
+    """Run fn(*args, **kwargs) against a per-call timeout AND the shared
+    per-request `deadline`. Returns (value, True) on success, (None, False)
+    when the overall budget is already spent OR this one call didn't finish
+    in time -- the caller then falls back to a best-effort default instead
+    of blocking. See the module-level comment above for why an abandoned
+    call is safe to leave running."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None, False
+    try:
+        fut = _GRAPH_IO_POOL.submit(fn, *args, **kwargs)
+        return fut.result(timeout=min(_GRAPH_CALL_TIMEOUT_S, remaining)), True
+    except Exception:
+        return None, False
 
 
 def _task_node(task_id: str, title: str, status: str, workflow_step: str,
@@ -237,9 +281,19 @@ def _gate_actionability(project: str, task_id: str, workflow_step: str,
 
 
 def _task_spend_usd(project: str, task_id: str, task_svc,
-                     source_path: str, override_dir: str) -> float:
+                     source_path: str, override_dir: str,
+                     deadline: float | None = None) -> float:
     """Live USD spend summed over `task_id`'s linked sessions, cached per
-    (project, task_id) for _SPEND_CACHE_TTL_S. See module docstring."""
+    (project, task_id) for _SPEND_CACHE_TTL_S. See module docstring.
+
+    `deadline` (task: live-page transcript-I/O hang) bounds each session's
+    live_spend_for_session call via `_bounded` -- a session that can't
+    price within budget is skipped (its contribution is 0 this poll,
+    exactly like the pre-existing except-Exception-and-skip path below),
+    rather than blocking the request. The running total is still cached
+    under the SAME key, so a since-warmed session is picked up as soon as
+    its background read lands. `deadline=None` (tests, direct callers)
+    means "no bound" -- every call runs inline, unchanged from before."""
     key = f"{project}\x00{task_id}"
     now = time.time()
     with _TASK_SPEND_LOCK:
@@ -259,8 +313,15 @@ def _task_spend_usd(project: str, task_id: str, task_svc,
         if not sid:
             continue
         try:
-            spend = live_spend_for_session(
-                sid, source_path, override_dir=override_dir or None)
+            if deadline is None:
+                spend = live_spend_for_session(
+                    sid, source_path, override_dir=override_dir or None)
+            else:
+                spend, ok = _bounded(
+                    deadline, live_spend_for_session,
+                    sid, source_path, override_dir=override_dir or None)
+                if not ok:
+                    continue
             total += spend["total"]["usd"]
         except Exception:
             continue
@@ -299,6 +360,13 @@ def work_graph(project: str = Query("default")) -> dict:
         scores_db = str(ctx._data_dir / "scores.db")
     except Exception:
         scores_db = ""
+
+    # Wall-clock deadline for every transcript-backed lookup below (spend_usd
+    # + the session/token-motion scan) -- see the module-level comment on
+    # _GRAPH_TIME_BUDGET_S/_bounded. Computed ONCE per request so the budget
+    # is shared across every node, not reset per node (which would let N
+    # nodes each spend the full budget and still sum to an unbounded total).
+    _deadline = time.monotonic() + _GRAPH_TIME_BUDGET_S
 
     # Dirty-judge check hoisted to run AT MOST ONCE per /graph request
     # (task 356ffdd2 AC-3), lazily -- computed the first time a
@@ -359,7 +427,8 @@ def work_graph(project: str = Query("default")) -> dict:
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
                 spend_usd=_task_spend_usd(
-                    project, r["id"], task_svc, source_path, override_dir),
+                    project, r["id"], task_svc, source_path, override_dir,
+                    deadline=_deadline),
                 gate_waiting_s=(
                     conductor.gate_waiting_s(task_obj)
                     if task_obj is not None else None),
@@ -396,7 +465,8 @@ def work_graph(project: str = Query("default")) -> dict:
                 getattr(child, "gate_state", "none"),
                 c_activity,
                 spend_usd=_task_spend_usd(
-                    project, child.id, task_svc, source_path, override_dir),
+                    project, child.id, task_svc, source_path, override_dir,
+                    deadline=_deadline),
                 gate_waiting_s=conductor.gate_waiting_s(child),
                 queue_depth=_queue_depth(task_svc, child.id),
                 drive_started_at=_drive_started_map.get(child.id),
@@ -427,12 +497,17 @@ def work_graph(project: str = Query("default")) -> dict:
             sid = sess.get("session_id")
             if not sid or sid in seen_sessions:
                 continue
-            try:
-                events = live_token_events_for_session(
-                    sid, source_path, override_dir=override_dir or None)
-            except Exception:
-                events = []
-            if not events or (now - events[-1][0]) > _SESSION_RECENCY_S:
+            events, _ok = _bounded(
+                _deadline, live_token_events_for_session,
+                sid, source_path, override_dir=override_dir or None)
+            if not _ok or not events or (now - events[-1][0]) > _SESSION_RECENCY_S:
+                # A timed-out/exhausted-budget lookup (task: live-page
+                # transcript-I/O hang) is treated exactly like "no recent
+                # events" -- this session just doesn't render as active
+                # THIS poll. The abandoned call keeps running and warms
+                # claude_transcripts' own file cache, so a session that
+                # really is active shows up on the very next poll once
+                # that background read lands.
                 continue
             seen_sessions.add(sid)
             tokens_total = sum(int(tok or 0) for _, tok in events)
