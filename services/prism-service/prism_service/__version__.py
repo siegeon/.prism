@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.306"
+PRISM_VERSION = "7.13.307"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9256,4 +9256,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.306: score_test_drafted refuses a draft whose imports do not resolve. 7.13.305 shipped the checker and a live call immediately proved it too weak: the node had drafted a test opening with from prism.models import TaskRun, there is no top-level prism package in this repo (it is prism_service), so pytest fails at COLLECTION with rc 2. The red gate wants rc 1 and refuses rc 2 and rc 4, and the node prompt already says never an import error. The checker returned ok True on it, which is the shape of a check that cannot fail: it verified the draft LOOKED like a test and missed the one thing that decides whether it runs. It now walks Import and ImportFrom, takes the top-level name, and resolves it with importlib.util.find_spec, which never executes the drafted code. It stays conservative on purpose: a relative import is never refused, anything that resolves in stdlib or site-packages passes, and an undetermined resolution passes. A checker that rejects good tests is worse than no checker. The real draft now returns imports unresolvable module or modules: prism. 15 tests, including a negative control proving the checker does not execute module-level code. '
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.307: a behaviour node can finally light up WHILE its own agentic call is still running, not only after it returns. Live on task b490fabc: implement-tasks-loop stayed at 000 occupancy on the Workflows canvas for the entire 90-plus minutes and 108 turns its reason-loop dispatch actually ran, because the prior fix (7.13.252, node_recent_runs) only reads scores.db rows written when a route call RETURNS, and this one call had not returned yet. get_workflows now also lights the behaviour entry node from drive_heartbeat.latest for any live, non-stale task parked at the FSM step that behaviour answers for (_STEP_FOR_BEHAVIOUR), the same liveness signal /api/conductor/state already trusts for its own driving badge. A done or cancelled task, a stale heartbeat, or a heartbeat for a different step all still read idle. 5 tests in test_behaviour_node_lights_on_live_heartbeat.py.'
 )

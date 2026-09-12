@@ -1597,6 +1597,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     # the step that lights up when a task is standing at verify_green_state.
     validation["parent_id"] = "conductor"
     conductor_behaviors = _conductor_behavior_workflows(project)
+    from prism_service.services import drive_heartbeat
     # A BEHAVIOUR'S SUB-STEPS CARRY THEIR OWN MEASURED TREND. The trend
     # above is computed for the conductor's ten FSM steps only, so every
     # behaviour sub-node on the canvas read "too few runs (0/20)" however
@@ -1615,6 +1616,38 @@ def get_workflows(project: str = Query("default")) -> dict:
         # that had just run still drew as idle.
         _entry["occupancy"] = {
             s["id"]: (1 if s.get("running_now") else 0) for s in _steps}
+        # `running_now` ABOVE IS RETROSPECTIVE ONLY: node_recent_runs reads
+        # a route's row in scores.db, and that row is written once the
+        # call RETURNS -- so a long agentic dispatch (task b490fabc:
+        # implement-tasks-loop's reason-loop ran 90+ minutes and 108 turns
+        # on a single still-open HTTP call) reads idle for the entire time
+        # it is actually running, because there is no completed row yet to
+        # find. The owner watched this exact node paint "000" the whole
+        # time (2026-09-11/12). The task's own drive heartbeat is the same
+        # live signal /api/conductor/state's "driving" badge already
+        # trusts and it IS current (drive_heartbeat.latest, updated as the
+        # step's own tool calls land) -- so light the behaviour's entry
+        # node whenever a live, non-stale task is parked at the FSM step
+        # this behaviour answers for (_STEP_FOR_BEHAVIOUR), the same
+        # fallback the canvas itself already documents: on a drilled layer
+        # with no per-step WorkflowCore run behind it, occupancy is the
+        # only answer to "where is the work" (workflowGraph.ts).
+        _fsm_step = _STEP_FOR_BEHAVIOUR.get(_entry.get("id"))
+        if _fsm_step and _steps and _scores_db is not None:
+            _entry_point_id = _steps[0]["id"]
+            for _t in _svc.list():
+                if getattr(_t, "status", "") in ("done", "cancelled", "deleted"):
+                    continue
+                if getattr(_t, "workflow_step", "") != _fsm_step:
+                    continue
+                try:
+                    _beat = drive_heartbeat.latest(
+                        str(_scores_db / "scores.db"), getattr(_t, "id", ""))
+                except Exception:
+                    _beat = None
+                if _beat is not None and _beat["age_s"] <= drive_heartbeat.HEARTBEAT_WINDOW_S:
+                    _entry["occupancy"][_entry_point_id] = 1
+                    break
     # Same rule as validation above: nest only the behavior(s) an actual
     # conductor state links to. story_gate now links to "story-gate-check"
     # (linked_workflow_id above). "land" nests too (owner, 2026-08-21): it
