@@ -69,9 +69,15 @@ def test_story_gate_autoclears_on_compliant_story():
     assert t.gate_state in ("", "none"), t.gate_state
 
 
-def test_story_gate_stays_pending_when_rubric_fails():
-    """A non-compliant story parks the gate PENDING for a human — the
-    auto-clear must never approve (or fail) it on the machine's behalf."""
+def test_story_gate_rewinds_to_draft_story_when_rubric_fails():
+    """SUPERSEDED 2026-09-12 by task 3feaf956 ("A gate never parks for a
+    person while its own rubric fails"): a non-compliant story used to
+    park the gate PENDING for a human to judge a design packet the
+    machine already knew was incomplete (task 12029f92 reached plan_gate
+    five times this way). It now REWINDS to draft_story with the scorer's
+    own reason instead — the auto-clear must never approve it on the
+    machine's behalf, and must never leave it for a human either. See
+    test_gate_never_parks_on_failing_rubric.py for the full matrix."""
     cf = _flow()
     project, svc, task_id = _task_at_draft_story(plan_doc="")  # empty story
     cf.flow_report(
@@ -79,17 +85,25 @@ def test_story_gate_stays_pending_when_rubric_fails():
                  expected_step="draft_story", outcome="success"),
         project=project)
     t = svc._task_svc.get(task_id)
-    assert t.workflow_step == "story_gate", t.workflow_step
-    assert t.gate_state == "pending", t.gate_state
+    assert t.workflow_step == "draft_story", t.workflow_step
+    assert t.gate_state == "none", t.gate_state
 
 
 def test_failed_gate_recovers_on_evidence_recheck_without_override():
+    """SETUP adjusted 2026-09-12 for task 3feaf956: flow_report's own
+    advance into story_gate now rewinds a genuinely rubric-failing story
+    immediately (it never settles at story_gate/pending — see
+    test_story_gate_rewinds_to_draft_story_when_rubric_fails above), so an
+    empty-story task can no longer reach story_gate/pending through
+    flow_report alone. This test's real subject is the manual reject ->
+    evidence-recheck -> approve cycle at an ALREADY-parked gate — a
+    different code path (gate_decide's own approve-time rubric check,
+    unchanged by this ticket) — so it lands the task at story_gate/pending
+    directly rather than relying on flow_report to produce that state."""
     cf = _flow()
     project, svc, task_id = _task_at_draft_story(plan_doc="")
-    cf.flow_report(
-        cf.Ident(task_id=task_id, session_id="S1",
-                 expected_step="draft_story", outcome="success"),
-        project=project)
+    svc._task_svc.update(task_id, workflow_step="story_gate",
+                         gate_state="pending")
     # Blind approve on the empty story flips the gate to failed (rubric).
     svc.gate_decide(task_id, "approve", reason="blind approve",
                     session_id="reviewer")
