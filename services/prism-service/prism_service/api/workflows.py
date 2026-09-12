@@ -3783,6 +3783,43 @@ def workflow_step_deploy(
            "task_id": body.task_id, **result}
 
 
+class DeploySweepRequest(BaseModel):
+    task_id: str = Field(
+        default="",
+        description="Optional task context -- a bare sweep tick that "
+                    "starts a deploy for a land observed only via git has "
+                    "none to attribute evidence to.")
+
+
+@router.post("/steps/deploy-sweep")
+def workflow_step_deploy_sweep(
+    body: DeploySweepRequest, project: str = Query(...),
+) -> dict:
+    """The deploy seat's OWN sweep tick (task 13cfe8ee's own gap): starts a
+    deploy whenever the checkout's upstream is ahead of a clean HEAD,
+    independent of ship_task -- the case a branch reaches origin/main by a
+    direct push (this repo's self-dev carve-out) or any route other than
+    ship_worker's post-land hook, which `deploy_after_land` never sees at
+    all. Declared as a step in .prism/behaviors/conductor/deploy.json so
+    the standing sweep thread's own work is visible on /workflows, same as
+    every other codified node; the background thread (deploy_worker._tick)
+    calls `sweep_new_land` directly on its own interval -- no task drives a
+    bare land -- this route runs the identical implementation for a
+    task-scoped caller and the canvas. Always HTTP 200, same contract as
+    /steps/deploy."""
+    from prism_service.services import deploy_worker
+
+    with _tracer.start_as_current_span("workflow.step.deploy_sweep") as span:
+        span.set_attribute("workflow.project", project)
+        span.set_attribute("workflow.task.id", body.task_id)
+        result = deploy_worker.sweep_new_land()
+    ok = bool(result.get("ok"))
+    _record_node_run(project, body.task_id, "steps/deploy-sweep", ok,
+                     str(result.get("stage") or ""))
+    return {"kind": "conductor.deploy_sweep", "node_id": "sweep-new-land",
+           "task_id": body.task_id, **result}
+
+
 class DeployVerifyRequest(BaseModel):
     task_id: str = Field(min_length=1)
 
