@@ -3716,6 +3716,78 @@ class ConductorService:
                 "reason": str(res.get("reason", "")),
                 "verifier": res, "validation": validation}
 
+    def rubric_gate_failure_outcome(self, task_id: str, gate_step_id: str,
+                                    check: dict) -> dict:
+        """Decide REWIND vs PARK for a rubric gate (story_gate/plan_gate)
+        whose entry-time check already came back not-verified (task
+        3feaf956: "A gate never parks for a person while its own rubric
+        fails"). On 2026-08-28 task 12029f92 reached plan_gate five times
+        with a plan_doc the machine already knew was incomplete — nothing
+        ever bounced it back before a person looked at it.
+
+        Takes the ALREADY-SCORED `check` dict (from `_verify_gate`/
+        `_verify_rubric_gate`) rather than re-running the rubric itself —
+        this ticket's own likely_misfire names re-scoring at park as
+        exactly the mistake to avoid (it would double the gate's latency).
+        The SAME `check` this method consumes is what the caller (api/
+        conductor_flow._autoclear_machine_gate, or this method's own
+        HTTP-node twin at /steps/rubric-gate-park) computed via its own
+        single `_verify_gate` call.
+
+        A GENUINE rubric failure — `check["verifier"]` is a real scorer
+        dict (arc_governance always returns one, even on failure) — is
+        REWOUND to the producing step (the step immediately before this
+        gate), the same shape a manual gate reject uses (`_reject_gate`/
+        `_auto_rewind`), so the scorer's own reason rides the next job's
+        instructions (api/conductor_flow._job) exactly like a human
+        reject's reason would.
+
+        A SCORER ERROR — `_verify_rubric_gate`'s except branch sets
+        `verifier=None` when the rubric function itself raised — instead
+        just PARKS with the error, unchanged from before this method
+        existed: this ticket's own stop_if forbids looping a task forever
+        behind a broken scorer (e.g. an unseeded principle store a person,
+        not a rewind, must fix).
+
+        Returns {"ok": True, "rewound_to": <step id>, "reason": ...} on a
+        rewind, or {"ok": False, "scorer_error": bool, "reason": ...} on a
+        park. Never raises — an unresolvable step falls back to parking
+        with the check's own reason."""
+        reason = str(check.get("reason", "") or
+                     f"{gate_step_id}: not verified")
+
+        def _park() -> dict:
+            if reason != (self._current_gate_reason(task_id) or ""):
+                try:
+                    self._task_svc.update(task_id, gate_reason=reason)
+                except Exception:
+                    pass
+            return {"ok": False, "scorer_error": check.get("verifier") is None,
+                    "reason": reason}
+
+        if check.get("verifier") is None:
+            return _park()  # scorer error — never loop a task on it
+        from prism_service.models.task import normalize_workflow
+        task = self._task_svc.get(task_id)
+        if task is None:
+            return _park()
+        task_workflow = normalize_workflow(getattr(task, "workflow", "") or "")
+        idx = self._step_index(gate_step_id, task_workflow)
+        if idx <= 0:
+            return _park()  # no producing step to rewind to
+        steps = self._workflow_steps(task_workflow)
+        producing = steps[idx - 1]
+        if producing["type"] == "gate":
+            return _park()  # two gates back to back is not this shape
+        result = self._auto_rewind(task_id, producing["id"], reason,
+                                   "rubric failed at gate entry",
+                                   from_step=gate_step_id)
+        return {**result, "reason": reason}
+
+    def _current_gate_reason(self, task_id: str) -> str:
+        task = self._task_svc.get(task_id)
+        return str(getattr(task, "gate_reason", "") or "") if task else ""
+
     def _verify_gate(self, task, gate_step_id: str,
                      proof_type: object = None) -> dict:
         """Consult the attached VerifierService for the gate's expected

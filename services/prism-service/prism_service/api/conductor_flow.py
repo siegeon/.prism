@@ -544,17 +544,20 @@ def _autoclear_machine_gate(svc, task_id: str) -> Optional[dict]:
     check = svc._verify_gate(task, step["id"],
                              getattr(task, "proof_type", None))
     if check.get("verified") is not True:
-        # Park WITH the actionable reason NOW (owner 2026-07-19): a rubric gate
-        # must never sit pending with a BLANK gate_reason the driver can't act
-        # on. Previously the reason only appeared on the next ~20s adjudicator
-        # resweep, so the first poll saw 'pending' + '' and no signal.
-        _r = str(check.get("reason", "") or "")
-        if _r and _r != (getattr(task, "gate_reason", "") or ""):
-            try:
-                svc._task_svc.update(task_id, gate_reason=_r)
-            except Exception:
-                pass
-        return None
+        # Task 3feaf956: a rubric that ALREADY fails must never be left
+        # pending for a person to judge (task 12029f92 reached plan_gate
+        # five times this way). ConductorService.rubric_gate_failure_
+        # outcome decides REWIND (a genuine rubric failure, bounced to the
+        # producing step with the scorer's own reason) vs PARK (a scorer
+        # ERROR — never looped, this ticket's own stop_if) from the ONE
+        # `check` already computed above — never re-scored here, which is
+        # the ticket's own likely_misfire (re-scoring at park doubles the
+        # gate's latency). This is the SAME method the codified
+        # plan-gate-check/story-gate-check node calls (api/workflows.py
+        # /steps/rubric-gate-park), so the seat and the Workflows canvas
+        # node can never disagree about what happens to a failing gate.
+        outcome = svc.rubric_gate_failure_outcome(task_id, step["id"], check)
+        return outcome if outcome.get("ok") else None
     if step["id"] == "plan_gate":
         # DETERMINISTIC PLAN TEETH (2026-08-29): task 72ccaf94 needed five
         # rounds at plan_gate and a human caught every defect by hand -- a
