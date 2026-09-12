@@ -639,7 +639,22 @@ export default function WorkflowsPage() {
           // OTHER workflow's -- validation included -- is always {}, which
           // is exactly why "Build and test"'s own replay never showed this
           // and conductor's did).
-          if (selected && !viewingInstanceRef.current) {
+          // The freeze above only ever protects a FLAT root canvas
+          // (conductor or validation) from having its own synthetic,
+          // per-step occupancy stomped by a live re-poll -- replayHistoricalRun
+          // sets viewingInstanceRef for exactly those two rail-pill flows,
+          // and neither one ever writes onto a nested behaviour's own node
+          // ids (loop, text-challenge, ...). A drilled-in layer has no
+          // WorkflowCore run and no synthetic occupancy of its own -- its
+          // ONLY source of live state is this same poll's real
+          // def.occupancy (the behaviour entry-point heartbeat light,
+          // task b490fabc) -- so freezing it here just staled it forever:
+          // landing on `?task=<id>&workflow=implement-tasks-loop` froze the
+          // very poll that would have lit the occupied node, because the
+          // unrelated top-level task-instance effect also flips this same
+          // ref. `selected.parent_id` is exactly "is this a nested layer",
+          // so it is the one case safe to keep refreshing regardless.
+          if (selected && (!viewingInstanceRef.current || selected.parent_id)) {
             graphRef.current.setDef(workflowForGraph(selected));
             // Wire edits rehydrate AFTER setDef: both maps are keyed by wire,
             // and the wire list only exists once a definition has landed.

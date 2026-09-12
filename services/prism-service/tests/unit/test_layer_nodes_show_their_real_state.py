@@ -162,6 +162,43 @@ def test_a_live_run_still_wins_over_a_verdict():
         r"verdictPaint\(verdict\) : null;", node)
 
 
+def test_a_drilled_layers_own_occupancy_poll_is_never_frozen():
+    """The def+occupancy poll must keep refreshing a nested behaviour layer.
+
+    `viewingInstanceRef` freezes the poll's `setDef` call so a FLAT root
+    canvas's (conductor/validation) own synthetic per-step occupancy -- set
+    by replayHistoricalRun for a rail-pill click or an attached task
+    instance -- is never stomped by the next live-catalog re-poll. That
+    freeze is a global ref, so opening `?task=<id>&workflow=implement-tasks
+    -loop` (a nested layer, unrelated to the flat canvas the ref actually
+    protects) froze the ONLY mechanism that ever lights an occupied
+    behaviour node (def.occupancy -> WfNode.count -> isOccupiedLit,
+    workflowGraph.ts) at whatever it read before the freeze -- forever, on
+    a page that never stops polling. Two screenshots of a live-driven
+    "implement-tasks-loop" a few minutes apart rendered `loop` and
+    `text-challenge` identically because of this, even after the backend
+    (task b490fabc) started reporting real occupancy for it.
+
+    Nothing else ever writes synthetic occupancy onto a nested layer's own
+    node ids (replayHistoricalRun's synthetic occupancy always keys off
+    testWorkflowRef, set only from the FLAT workflow selected at a rail-pill
+    click), so `selected.parent_id` -- "this is a nested layer" -- is the
+    one case safe to keep refreshing regardless of the freeze.
+    """
+    src = _PAGE.read_text(encoding="utf-8")
+    poll = _block(src, "// Definition + live occupancy, polled.")
+    assert "viewingInstanceRef.current" in poll
+    assert "selected.parent_id" in poll, (
+        "the poll's freeze check does not know a nested behaviour layer is "
+        "exempt, so a task-instance viewer permanently stales its occupancy")
+    # The freeze must be RELAXED by parent_id, never replaced outright --
+    # the flat root canvas still needs its own protection.
+    import re
+    assert re.search(
+        r"!viewingInstanceRef\.current \|\| selected\.parent_id", poll), (
+        "parent_id must OR past the freeze, not gate it some other way")
+
+
 def test_a_refused_node_says_why_in_the_details_panel():
     src = _PAGE.read_text(encoding="utf-8")
     assert "selectedNodeVerdict.reason" in src, (
