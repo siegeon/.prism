@@ -779,6 +779,14 @@ from prism_service.api import api_router
 from prism_service.api.integration_webhooks import router as integration_webhooks_router
 from prism_service.routes import routes_router
 app.include_router(api_router)
+# The Workflows canvas's 1-second live channel (services/workflow_live.py) --
+# a standalone router, included here directly rather than nested under
+# api/__init__.py's own workflows_router include, so a node's live state
+# reaches the screen in about a second regardless of that catalog route's
+# own load (measured 21-52s under load; the live signal underneath it is
+# a single <6ms drive_heartbeat query).
+from prism_service.api.workflows_live import router as workflows_live_router
+app.include_router(workflows_live_router, prefix="/api/workflows", tags=["workflows-live"])
 # Provider webhooks authenticate by signature, not a bearer, so they mount at a
 # top-level path OUTSIDE /api — the app-level enforce_team_boundary dependency
 # only guards /api|/sse|/graph, leaving signature auth to own these endpoints
