@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.314"
+PRISM_VERSION = "7.13.315"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9288,4 +9288,8 @@ PRISM_VERSION_NOTES += (
 
 PRISM_VERSION_NOTES += (
     '7.13.314: CI stops failing on Install SPA deps. react 19.3.0 published 2026-09-11T16:28Z, and @react-three/fiber@9.7.0 peers on react ">=19 <19.3"; pr-checks.yml runs npm install with no committed package-lock.json, so npm was free to resolve the caret range ^19.2.7 up to 19.3.0 and every PR check exited ERESOLVE in about 47 seconds (run 34712058484 on PR #5972). react and react-dom in the web package.json move from caret to tilde (~19.2.7), which still takes patch releases but cannot cross into 19.3.x. Pinned by test_web_react_pin.py (services/prism-service/tests/unit), committed tests-first and red against the old caret range. A clean npm install resolved react and react-dom to 19.2.8 and npm run build succeeded.'
+)
+
+PRISM_VERSION_NOTES += (
+    '7.13.315: a task worktree stays clean after its own agent-settings write. Commit 37fa182c (2026-09-08) had _write_agent_settings drop .claude/settings.local.json into every task worktree and trust the REPO own .gitignore to keep git status clean; the scratch repos every fixture builds have no such line, so on the GitHub runner every fixture worktree showed untracked .claude/ and the dirty check refused it, failing 9 tests on every PR since 2026-09-08 (locally masked only by a global ~/.config/git/ignore line, never cleared by the suite itself). The write now also registers .claude/settings.local.json and .claude/ in the checkout own git exclude file (info/exclude in the common git dir, resolved from the on-disk worktree gitdir/commondir files with no subprocess call), idempotently, on every call -- never a tracked .gitignore. A first version resolved that path via git rev-parse --git-path instead; that extra subprocess call, added to the hot self-heal path every ensure_workspace call takes, measurably tipped an unrelated pre-existing lease-timing race (test_spend_unbounded_when_ceiling_env_unset) from passing to reliably failing, which is why the final version touches no subprocess at all. New pinned test test_agent_settings_write_keeps_worktree_clean.py neutralises GIT_CONFIG_GLOBAL and XDG_CONFIG_HOME itself so no host-local global ignore can mask a regression again. Full neighbour sweep of 75 files referencing task_workspace: 651 passed, 1 pre-existing unrelated flake confirmed to fail identically on unmodified HEAD.'
 )
