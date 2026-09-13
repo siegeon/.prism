@@ -32,11 +32,97 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
 
+from prism_service.__version__ import PRISM_VERSION
+
 CONTROL_PLANE_VERSION = "control-plane/1"
+
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _fast_head_sha(repo_dir: Path) -> Optional[str]:
+    """``repo_dir``'s current HEAD commit sha, read straight off the
+    filesystem -- no ``git rev-parse`` subprocess. Handles both a plain repo
+    (``.git`` is a directory) and a linked worktree (``.git`` is a file
+    pointing at the real gitdir, whose own HEAD/refs live under a
+    ``commondir``-relative path per git's worktree layout). Falls through to
+    None (never raises) on anything it doesn't recognise -- callers fall back
+    to the subprocess path on a miss, so a corrupt/exotic .git layout only
+    costs the one call it would have cost anyway, never a wrong answer."""
+    try:
+        git_path = repo_dir / ".git"
+        if git_path.is_dir():
+            gitdir = git_path
+        elif git_path.is_file():
+            content = git_path.read_text(encoding="utf-8").strip()
+            if not content.startswith("gitdir:"):
+                return None
+            gitdir = Path(content.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = (repo_dir / gitdir).resolve()
+        else:
+            return None
+        head_text = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+        if not head_text.startswith("ref:"):
+            return head_text if _SHA_RE.match(head_text) else None
+        ref_path = head_text.split(":", 1)[1].strip()
+        common_dir = gitdir
+        commondir_file = gitdir / "commondir"
+        if commondir_file.exists():
+            common_rel = commondir_file.read_text(encoding="utf-8").strip()
+            common_dir = (gitdir / common_rel).resolve()
+        ref_file = common_dir / ref_path
+        if ref_file.exists():
+            sha = ref_file.read_text(encoding="utf-8").strip()
+            return sha if _SHA_RE.match(sha) else None
+        packed = common_dir / "packed-refs"
+        if packed.exists():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line[0] in "#^":
+                    continue
+                parts = line.split(" ", 1)
+                if len(parts) == 2 and parts[1].strip() == ref_path:
+                    return parts[0] if _SHA_RE.match(parts[0]) else None
+        return None
+    except Exception:
+        return None
+
+
+# Tick-cost pass (external fixer, owner brief 2026-09-13, no PRISM ticket):
+# policy_hash() shells out to `git show <ref>:<path>` once per POLICY_FILES
+# entry (6 subprocess calls) EVERY call -- and pinned_policy/task_pin call it
+# once per pending-gate node on every GET /api/work/graph poll. The content
+# at a genuinely resolved commit sha is immutable, so this memoizes on
+# (PRISM_VERSION, resolved sha, repo_root) forever for the life of the
+# process: PRISM_VERSION changes on every redeploy (a fresh process, fresh
+# cache anyway); the sha is resolved via `_fast_head_sha` when `control_ref`
+# is the literal "HEAD" (the one ref that actually moves under a daemon
+# checkout other fixers push to tonight) and used as-is when it is already a
+# concrete sha (the common case -- a task worktree's stored baseline). A
+# non-sha, non-"HEAD" ref (a branch name from PRISM_CONTROL_REF) is cached
+# under its own literal name -- narrower correctness than the other two
+# cases, acceptable because that path is an explicit manual override, not
+# the polled hot path this pass targets.
+_POLICY_HASH_CACHE: dict[tuple, str] = {}
+
+
+def _policy_hash_cache_key(control_ref: str, repo_root: Optional[Path]) -> Optional[tuple]:
+    if not control_ref or repo_root is None:
+        return None
+    if _SHA_RE.match(control_ref):
+        resolved = control_ref
+    elif control_ref == "HEAD":
+        resolved = _fast_head_sha(repo_root)
+        if resolved is None:
+            return None
+    else:
+        resolved = control_ref
+    return (PRISM_VERSION, resolved, str(repo_root))
 
 # Repo-relative (POSIX) paths of the files that CONSTITUTE gate policy. A
 # candidate's worktree diff touching any of these is editing its own judge.
@@ -170,9 +256,19 @@ def load_pinned_rubrics(task_id: str = "",
 def policy_hash(control_ref: str, repo_root: Optional[Path]) -> str:
     """Stable content hash over the PINNED policy set. "" when nothing in the
     set resolves at ``control_ref`` (an unpinnable environment — the callers
-    then skip the policy-drift tooth rather than false-refuse)."""
+    then skip the policy-drift tooth rather than false-refuse).
+
+    Memoized per (PRISM_VERSION, resolved sha, repo_root) — see
+    ``_policy_hash_cache_key`` — since 6 ``git show`` subprocess calls
+    (one per POLICY_FILES entry) for the SAME immutable commit is dead work
+    on the polled /api/work/graph path (one pending-gate node = one call)."""
     if not control_ref or repo_root is None:
         return ""
+    cache_key = _policy_hash_cache_key(control_ref, repo_root)
+    if cache_key is not None:
+        hit = _POLICY_HASH_CACHE.get(cache_key)
+        if hit is not None:
+            return hit
     payload: dict[str, str] = {}
     for pf in POLICY_FILES:
         text = load_pinned_text(pf, control_ref, repo_root)
@@ -181,7 +277,10 @@ def policy_hash(control_ref: str, repo_root: Optional[Path]) -> str:
     if not payload:
         return ""
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    result = "sha256:" + hashlib.sha256(blob.encode("utf-8")).hexdigest()
+    if cache_key is not None:
+        _POLICY_HASH_CACHE[cache_key] = result
+    return result
 
 
 def pinned_policy(task_id: str = "", ctx: Optional[dict] = None) -> dict:

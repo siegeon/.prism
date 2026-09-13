@@ -463,9 +463,26 @@ def fresh_red_receipt(project: str, task_id: str, red_sha: str,
 def current_tree_sha(workspace: Optional[str]) -> str:
     """HEAD commit of the task's workspace checkout, or '' when there is no
     workspace / git is unavailable. This is the candidate commit a receipt is
-    bound to — the freshness key."""
+    bound to — the freshness key.
+
+    Tick-cost pass (external fixer, owner brief 2026-09-13, no PRISM
+    ticket): tries a subprocess-free read off the worktree's own .git/HEAD
+    chain first (control_plane._fast_head_sha, the same resolver
+    policy_hash's cache key uses) -- this runs once per pending-gate node
+    on every GET /api/work/graph poll, so a `git rev-parse` subprocess per
+    node adds up. Falls back to the real subprocess on any miss (a layout
+    it doesn't recognise, a missing ref), so a wrong answer is never
+    possible, only a forgone speedup."""
     if not workspace:
         return ""
+    try:
+        from pathlib import Path
+        from prism_service.services.control_plane import _fast_head_sha
+        fast = _fast_head_sha(Path(workspace))
+        if fast:
+            return fast
+    except Exception:
+        pass
     try:
         r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(workspace),
                            capture_output=True, text=True, timeout=10)
