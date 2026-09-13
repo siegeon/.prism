@@ -721,6 +721,33 @@ export class GraphState {
     this.height = height;
   }
 
+  /** True while something on this board is genuinely animating on its own
+   * clock right now -- a packet mid-flight, a toast sliding in/out, a
+   * worker chip's breathing pulse, an active drag, the camera mid
+   * auto-fit move, or a card mid slide-in/pulse/settle/ghost-flash.
+   * LivePage's rAF loop (task fix/canvasidle) drops to a slow idle tick
+   * once this goes false for the whole board -- a static scene measured
+   * live burned ~36% renderer CPU forever with no way to ever ask this
+   * question. Text that merely creeps forward with time (the mission
+   * clock, "waiting Xm", the quiet line's own age) is NOT a reason to keep
+   * 60fps -- the idle tick still repaints it once a second. */
+  hasActiveAnimation(now: number): boolean {
+    if (!this.booted) return true;
+    if (this.packets.length > 0) return true;
+    if (this.toasts.length > 0) return true;
+    if (this.workers.length > 0) return true;
+    if (this.draggingNodeId || this.draggingPortId) return true;
+    if (this.fitMoveStartAt && now - this.fitMoveStartAt < AUTO_FIT_MOVE_MS) return true;
+    for (const n of this.nodes) {
+      if (now - n.spawnAt < SPAWN_MS) return true;
+      if (n.pulseUntil > now) return true;
+      if (n.settleUntil > now) return true;
+      if (n.tokensGhostUntil > now) return true;
+      if (n.stepGhostUntil > now) return true;
+    }
+    return false;
+  }
+
   /** AC-5: the ONE router entry point -- draw.ts's wire loop and packet
    * spawning (maybeSpawnPacket below) both resolve a wire's polyline
    * through this method, so the drawn wire and the in-transit marker can

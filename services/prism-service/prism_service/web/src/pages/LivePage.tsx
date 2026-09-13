@@ -227,17 +227,58 @@ export default function LivePage() {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     let raf = 0;
+    let idleTimer = 0;
     let last = performance.now();
+    // task fix/canvasidle: measured live, a static /live board (nothing
+    // moving — no packets, no in-flight spawn/pulse/settle, no worker
+    // chip, nobody dragging) burned ~36% renderer CPU forever because this
+    // loop re-armed requestAnimationFrame unconditionally every frame,
+    // 61/s, regardless of GraphState.hasActiveAnimation. `lastActivityAt`
+    // tracks real pointer interaction (the listeners below, never the draw
+    // itself) so a hover/drag/wheel keeps the board at full 60fps for its
+    // duration and a short settle window after.
+    let lastActivityAt = performance.now();
+    const bump = () => {
+      lastActivityAt = performance.now();
+      if (!raf && !idleTimer && !document.hidden) raf = requestAnimationFrame(frame);
+    };
     const versionLabel = version?.version || "";
     const frame = (now: number) => {
       const dt = now - last;
       last = now;
       stateRef.current.step(dt, now);
       draw(ctx, stateRef.current, now, versionLabel);
-      raf = requestAnimationFrame(frame);
+      // Dirty-gated reschedule (see comment above): full 60fps while
+      // GraphState says something is really animating or the viewer
+      // touched the canvas in the last 500ms; otherwise a 1fps tick --
+      // enough to keep the mission clock/gate-wait text/quiet line
+      // creeping forward without ever looking frozen -- and a hidden tab
+      // stops scheduling entirely until it's visible again.
+      if (document.hidden) { raf = 0; return; }
+      const active = stateRef.current.hasActiveAnimation(now) || now - lastActivityAt < 500;
+      if (active) {
+        raf = requestAnimationFrame(frame);
+      } else {
+        raf = 0;
+        idleTimer = window.setTimeout(() => { idleTimer = 0; raf = requestAnimationFrame(frame); }, 1000);
+      }
     };
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    const onVisibilityChange = () => {
+      if (!document.hidden && !raf && !idleTimer) raf = requestAnimationFrame(frame);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    canvas.addEventListener("pointermove", bump);
+    canvas.addEventListener("pointerdown", bump);
+    canvas.addEventListener("wheel", bump, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(idleTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      canvas.removeEventListener("pointermove", bump);
+      canvas.removeEventListener("pointerdown", bump);
+      canvas.removeEventListener("wheel", bump);
+    };
   }, [version?.version]);
 
   useEffect(() => () => stateRef.current.destroy(), []);
