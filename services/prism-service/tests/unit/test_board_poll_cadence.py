@@ -42,7 +42,10 @@ class _Svc:
         self.tasks = list(tasks)
 
     def list(self, status=None, assigned_agent=None, tag=None,
-             story_file=None, parent_id=None, id=None):
+             story_file=None, parent_id=None, id=None, columns=None):
+        # `columns` (task fdb6a1a1) is accepted and ignored — this fake
+        # holds plain in-memory Task objects with nothing to narrow a
+        # SELECT over.
         return list(self.tasks)
 
 

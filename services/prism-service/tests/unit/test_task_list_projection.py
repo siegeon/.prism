@@ -65,7 +65,12 @@ def _client(tasks, monkeypatch):
 
     class _Svc:
         def list(self, status=None, assigned_agent=None, tag=None,
-                  story_file=None, parent_id=None, id=None):
+                  story_file=None, parent_id=None, id=None, columns=None):
+            # `columns` (task fdb6a1a1, column-narrowed SELECT) is accepted
+            # and ignored here — this fake already only ever holds fully
+            # in-memory Task objects, so there is no SELECT to narrow. The
+            # real narrowing is pinned against a live TaskService below in
+            # test_columns_narrows_the_actual_sql_select.
             rows = tasks
             if parent_id is not None:
                 rows = [t for t in rows if t.parent_id == parent_id]
@@ -120,6 +125,42 @@ def test_parent_id_and_fields_combine(monkeypatch):
     assert rows == [{"id": "child-1", "title": "Child 1"}]
 
 
+def test_columns_narrows_the_actual_sql_select(tmp_path):
+    """Real TaskService, real sqlite: list(columns=[...]) must issue a
+    SELECT that names only the requested (+ id/status) columns -- never
+    `SELECT *` followed by a Python-side trim. Narrowing the SELECT is the
+    actual fix; a wire-level fields= projection alone still paid the full
+    SELECT * cost (task fdb6a1a1)."""
+    from prism_service.services.task_service import TaskService
+
+    svc = TaskService(str(tmp_path / "tasks.db"))
+    svc.create(title="One", description="x" * 5000)
+
+    # sqlite3.Connection is an immutable C type -- neither the class NOR an
+    # instance accepts a patched `.execute`. sqlite3's own built-in trace
+    # hook is the sanctioned way to observe the literal SQL text sent to
+    # the engine.
+    seen_sql: list[str] = []
+    svc._db.set_trace_callback(seen_sql.append)
+    try:
+        rows = svc.list(columns=["id", "title"])
+    finally:
+        svc._db.set_trace_callback(None)
+
+    assert rows[0].title == "One"
+    select_stmts = [s for s in seen_sql if s.strip().upper().startswith("SELECT")
+                     and " FROM TASKS" in s.upper()
+                     and "TASK_HISTORY" not in s.upper()]
+    assert select_stmts, f"expected a SELECT ... FROM tasks; got {seen_sql}"
+    stmt = select_stmts[-1].upper()
+    assert "SELECT * FROM TASKS" not in stmt, (
+        f"columns=[...] must not fall back to SELECT *; got: {select_stmts[-1]!r}")
+    assert "DESCRIPTION" not in stmt, (
+        f"an unrequested heavy column leaked into the SELECT: {select_stmts[-1]!r}")
+    for must_have in ("ID", "TITLE"):
+        assert must_have in stmt, f"requested column {must_have!r} missing from {stmt!r}"
+
+
 def test_mirror_url_derived_from_description_without_leaking_raw_description(monkeypatch):
     mirrored = _mk_task(
         id="t-mirror", title="Imported issue", tags=["github", "external"],
@@ -134,17 +175,58 @@ def test_mirror_url_derived_from_description_without_leaking_raw_description(mon
     assert "description" not in row
 
 
-def test_default_unfiltered_call_is_unchanged_full_rows(monkeypatch):
-    # Backward compat: no fields/parent_id -> the full board, exactly like
-    # today (other pages may still rely on this shape).
-    tasks = [_mk_task(id="t-1", description="the full body")]
+# SUPERSEDED by task fdb6a1a1 (2026-09-12): 946 live tasks at the old full,
+# unprojected shape measured 9.8 MB / 7.6s for a route the board polls every
+# 1-2s. A bare, unscoped GET /api/tasks now returns the SAME lean slim
+# projection as an explicit `fields=` call, never the full board -- the old
+# "unprojected call is unchanged full rows" compat guarantee moved behind an
+# explicit `full=1` opt-in (test_full_opt_in_restores_the_complete_row
+# below), which is what a caller that genuinely needs every column must now
+# pass. This test is rewritten, not deleted, to keep pinning that a bare
+# call still returns SOMETHING sane (the new slim shape) rather than an
+# error.
+def test_default_unfiltered_call_returns_the_slim_projection_not_full_rows(monkeypatch):
+    tasks = [_mk_task(id="t-1", description="the full body" * 50,
+                       gate_reason="g" * 500, blocked_reason="b" * 500)]
     client = _client(tasks, monkeypatch)
     r = client.get("/api/tasks")
     assert r.status_code == 200, r.text
     row = r.json()["tasks"][0]
     assert row["id"] == "t-1"
+    assert "description" not in row, (
+        "a bare, unprojected GET /api/tasks must no longer ship the heavy "
+        "description column by default")
+    for heavy in ("plan_doc", "completion_proof", "premise_notes", "oracle"):
+        assert heavy not in row, f"default slim row must not carry {heavy!r}"
+    for slim_key in ("id", "title", "status", "workflow_step", "gate_state",
+                      "proof_type", "parent_id", "tags", "priority",
+                      "created_at", "updated_at"):
+        assert slim_key in row, f"default slim row missing {slim_key!r}"
+    assert len(row["gate_reason"]) <= 200, "gate_reason must be capped by default"
+    assert len(row["blocked_reason"]) <= 200, "blocked_reason must be capped by default"
+
+
+def test_full_opt_in_restores_the_complete_row(monkeypatch):
+    tasks = [_mk_task(id="t-1", description="the full body")]
+    client = _client(tasks, monkeypatch)
+    r = client.get("/api/tasks", params={"full": "1"})
+    assert r.status_code == 200, r.text
+    row = r.json()["tasks"][0]
+    assert row["id"] == "t-1"
     assert row["description"] == "the full body", (
-        "an unscoped, unprojected call must still return full task rows")
+        "full=1 must restore today's complete, unprojected row shape")
+
+
+def test_full_opt_in_ignores_a_fields_projection(monkeypatch):
+    # full=1 is the escape hatch back to the old complete shape -- it must
+    # win over an accidentally-combined fields= rather than silently
+    # projecting anyway.
+    tasks = [_mk_task(id="t-1", description="the full body")]
+    client = _client(tasks, monkeypatch)
+    r = client.get("/api/tasks", params={"full": "1", "fields": "id,title"})
+    assert r.status_code == 200, r.text
+    row = r.json()["tasks"][0]
+    assert row["description"] == "the full body"
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +331,28 @@ def test_detail_children_fetch_is_scoped_not_the_whole_board():
     # The OLD misfire: fetching the whole unscoped board and filtering client-side.
     assert not re.search(r"/api/tasks\?project=\$\{project\}`\)", window), (
         "children fetch must not be the old bare unscoped /api/tasks call")
+
+
+def test_completed_tasks_fetch_requests_a_lean_field_projection():
+    src = _read("pages/CompletedTasksPage.tsx")
+    m = re.search(r'/api/tasks\?project=\$\{project\}[^"`]*', src)
+    assert m, "expected CompletedTasksPage's /api/tasks fetch URL"
+    url = m.group(0)
+    assert "fields=" in url, f"completed-tasks fetch must request fields=; got {url!r}"
+    for must_not_have in ("description", "plan_doc", "completion_proof", "oracle"):
+        assert must_not_have not in url, (
+            f"completed-tasks fetch must NOT request heavy field {must_not_have!r}; got {url!r}")
+
+
+def test_workflows_page_fetch_requests_a_lean_field_projection():
+    src = _read("pages/WorkflowsPage.tsx")
+    m = re.search(r'/api/tasks\?project=\$\{encodeURIComponent\(project\)\}[^"`]*', src)
+    assert m, "expected WorkflowsPage's /api/tasks fetch URL"
+    url = m.group(0)
+    assert "fields=" in url, f"WorkflowsPage fetch must request fields=; got {url!r}"
+    for must_not_have in ("description", "plan_doc", "completion_proof", "oracle"):
+        assert must_not_have not in url, (
+            f"WorkflowsPage fetch must NOT request heavy field {must_not_have!r}; got {url!r}")
 
 
 def test_sidebar_tooltip_uses_the_explicit_notes_opt_in():

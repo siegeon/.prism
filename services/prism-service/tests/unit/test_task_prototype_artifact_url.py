@@ -65,7 +65,7 @@ class _Svc:
         return []
 
     def list(self, status=None, assigned_agent=None, tag=None,
-              story_file=None, parent_id=None, id=None):
+              story_file=None, parent_id=None, id=None, columns=None):
         rows = list(self._tasks.values())
         if id is not None:
             rows = [t for t in rows if t.id == id]

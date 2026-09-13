@@ -197,6 +197,51 @@ def _artifact_url(task_id: str) -> Optional[str]:
         return None
 
 
+# Default board projection (task fdb6a1a1) — measured live: 946 tasks at the
+# old unprojected shape shipped 9.8 MB / 7.6s on a route the board polls
+# every 1-2s (plan_doc 3.7MB, completion_proof 1.4MB, premise_notes 1.3MB,
+# description 1.2MB, oracle 0.4MB, plan_diagram 0.3MB of that). Every real
+# SPA caller of this route already asks for its own explicit `fields=`
+# projection; this is the safety net for a bare `GET /api/tasks` (curl, a
+# future caller, a test) so IT never pays the full cost either. Pass
+# `full=1` for today's complete, unprojected row.
+_DEFAULT_LIST_FIELDS = [
+    "id", "title", "status", "workflow_step", "gate_state", "gate_reason",
+    "proof_type", "parent_id", "tags", "priority", "created_at",
+    "updated_at", "blocked_reason",
+]
+
+# A derived field (computed in the row loop below, never a raw Task
+# attribute) declares the REAL columns it needs so the DB-level column
+# narrowing in TaskService.list(columns=...) still fetches enough to
+# compute it — e.g. mirror_url is regexed out of `description`.
+_DERIVED_FIELD_DEPS: dict = {
+    "mirror_url": ("description", "channel_ref"),
+    "artifact_url": ("id",),
+    "mirrors": ("id",),
+}
+
+
+def _real_columns_for(field_list: list) -> list:
+    """Map a `fields=` projection (raw Task attrs + derived pseudo-fields)
+    down to the real DB columns TaskService.list(columns=...) must select.
+    `status` rides along unconditionally — the soft-delete filter below
+    reads it regardless of whether the caller asked to render it."""
+    cols = {"id", "status"}
+    for f in field_list:
+        cols.update(_DERIVED_FIELD_DEPS.get(f, (f,)))
+    return sorted(cols)
+
+
+def _capped(value: str, limit: int = 200) -> str:
+    """Truncate a free-text field for the default slim projection (task
+    fdb6a1a1) — gate_reason/blocked_reason can carry a long adjudicator
+    narrative that the board never renders in full. An explicit
+    `fields=gate_reason` request bypasses this and gets the real value."""
+    value = value or ""
+    return value if len(value) <= limit else value[:limit]
+
+
 @router.get("")
 def list_tasks(project: str = Query("default"),
               include_deleted: bool = Query(False),
@@ -215,7 +260,16 @@ def list_tasks(project: str = Query("default"),
                                      "task_list tool) - lean board rows "
                                      "instead of the full record. "
                                      "'mirror_url'/'mirrors' are derived "
-                                     "fields, not raw Task attributes."),
+                                     "fields, not raw Task attributes. "
+                                     "Ignored when full=1."),
+              full: bool = Query(
+                  False, description="Return today's complete, "
+                                     "unprojected task rows (task "
+                                     "fdb6a1a1). The default response is "
+                                     "now the lean slim projection "
+                                     "(_DEFAULT_LIST_FIELDS) regardless of "
+                                     "`fields` — pass full=1 for the old, "
+                                     "every-column shape."),
               principal: Principal = Depends(current_principal),
               request: Request = None, response: Response = None):
     # Soft-deleted tasks stay in the store for audit but must NOT surface on
@@ -230,32 +284,53 @@ def list_tasks(project: str = Query("default"),
     # sqlite can't bind it.
     if isinstance(status, str) and status:
         _list_kw["status"] = status
-    tasks = _svc(project).list(**_list_kw)
+    # Same isinstance guard as status above: a caller that invokes this
+    # handler directly (bypassing FastAPI's DI) and never passes `full=`
+    # gets the unresolved fastapi.params.Query sentinel object back, which
+    # is truthy — treat only a REAL bool True as "full=1" so the default
+    # slim path (mirrors join included) still runs for every direct caller
+    # that doesn't know this param exists yet.
+    full = isinstance(full, bool) and full
+
+    if full:
+        # Compat escape hatch back to the pre-fdb6a1a1 complete row — no
+        # column narrowing, `fields=` ignored on purpose (AC: full=1 wins).
+        tasks = _svc(project).list(**_list_kw)
+        if not include_deleted:
+            tasks = [t for t in tasks
+                     if str(getattr(t, "status", "") or "") != "deleted"]
+        return _tasks_reply({"tasks": tasks}, request, response)
+
+    field_list = ([f.strip() for f in fields.split(",") if f.strip()]
+                  if fields else list(_DEFAULT_LIST_FIELDS))
+    is_default_projection = not fields
+
+    tasks = _svc(project).list(columns=_real_columns_for(field_list),
+                                **_list_kw)
     if not include_deleted:
         tasks = [t for t in tasks
                  if str(getattr(t, "status", "") or "") != "deleted"]
-    if fields:
-        field_list = [f.strip() for f in fields.split(",") if f.strip()]
-        # Batched once for the whole board request (AC-8), never per row —
-        # see _all_mirrors_index's docstring for why.
-        mirrors_index = (_all_mirrors_index(principal)
-                          if "mirrors" in field_list else {})
-        rows = []
-        for t in tasks:
-            row = {}
-            for f in field_list:
-                if f == "mirror_url":
-                    row[f] = _mirror_url(getattr(t, "description", "") or "",
-                                          getattr(t, "channel_ref", "") or "")
-                elif f == "artifact_url":
-                    row[f] = _artifact_url(getattr(t, "id", ""))
-                elif f == "mirrors":
-                    row[f] = mirrors_index.get(getattr(t, "id", ""), [])
-                else:
-                    row[f] = getattr(t, f, None)
-            rows.append(row)
-        return _tasks_reply({"tasks": rows}, request, response)
-    return _tasks_reply({"tasks": tasks}, request, response)
+    # Batched once for the whole board request (AC-8), never per row —
+    # see _all_mirrors_index's docstring for why.
+    mirrors_index = (_all_mirrors_index(principal)
+                      if "mirrors" in field_list else {})
+    rows = []
+    for t in tasks:
+        row = {}
+        for f in field_list:
+            if f == "mirror_url":
+                row[f] = _mirror_url(getattr(t, "description", "") or "",
+                                      getattr(t, "channel_ref", "") or "")
+            elif f == "artifact_url":
+                row[f] = _artifact_url(getattr(t, "id", ""))
+            elif f == "mirrors":
+                row[f] = mirrors_index.get(getattr(t, "id", ""), [])
+            elif is_default_projection and f in ("gate_reason", "blocked_reason"):
+                row[f] = _capped(getattr(t, f, "") or "")
+            else:
+                row[f] = getattr(t, f, None)
+        rows.append(row)
+    return _tasks_reply({"tasks": rows}, request, response)
 
 
 def _tasks_reply(body: dict, request, response):

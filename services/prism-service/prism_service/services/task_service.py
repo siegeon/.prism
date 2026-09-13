@@ -28,6 +28,15 @@ from prism_service.services import lexicon, ste
 EmbedFn = Callable[[str], Optional[bytes]]
 
 
+# Real Task dataclass field names, doubling as the tasks-table column
+# allowlist for list(columns=...) below (task fdb6a1a1) — every field maps
+# 1:1 onto a real `tasks` column (see _CREATE_TASKS_SQL), so validating a
+# caller-supplied projection against this set is enough to keep a
+# column-narrowed SELECT injection-safe without a second, separately
+# maintained column list.
+_TASK_COLUMN_NAMES: frozenset = frozenset(Task.__dataclass_fields__.keys())
+
+
 # Conductor session gate (task ef81fc15): the ONE message every public
 # surface (REST create/patch/advance + MCP task_update) raises when a
 # sessionless task would be handed to the conductor. A conductor tile
@@ -464,25 +473,35 @@ class TaskService:
     # ------------------------------------------------------------------
 
     def _row_to_task(self, row: sqlite3.Row) -> Task:
-        """Convert a database row to a Task dataclass."""
-        # Conductor v2 columns are optional on the cursor for tests that
-        # query against pre-migration handles; .keys() lookup keeps the
-        # cast safe and falls back to dataclass defaults.
+        """Convert a database row to a Task dataclass.
+
+        Every field is read defensively via `name in keys`, not just the
+        conductor-v2 columns below — a column-narrowed SELECT
+        (list(columns=...), task fdb6a1a1) hydrates a PARTIAL row on
+        purpose, and a column left out of the SELECT must fall back to the
+        dataclass default exactly like a pre-migration row already did for
+        workflow_step/gate_state/etc., never KeyError.
+        """
         keys = set(row.keys())
+
+        def _get(name, default=""):
+            return row[name] if name in keys and row[name] is not None else default
+
         return Task(
-            id=row["id"],
-            title=row["title"],
-            description=row["description"],
-            status=row["status"],
-            priority=row["priority"],
-            story_file=row["story_file"],
-            assigned_agent=row["assigned_agent"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            completed_at=row["completed_at"],
-            blocked_reason=row["blocked_reason"],
-            dependencies=json.loads(row["dependencies"]),
-            tags=json.loads(row["tags"]),
+            id=_get("id", ""),
+            title=_get("title", ""),
+            description=_get("description", ""),
+            status=_get("status", "pending"),
+            priority=_get("priority", 0),
+            story_file=_get("story_file", ""),
+            assigned_agent=_get("assigned_agent", ""),
+            created_at=_get("created_at", ""),
+            updated_at=_get("updated_at", ""),
+            completed_at=_get("completed_at", ""),
+            blocked_reason=_get("blocked_reason", ""),
+            dependencies=(json.loads(row["dependencies"])
+                          if "dependencies" in keys and row["dependencies"] else []),
+            tags=(json.loads(row["tags"]) if "tags" in keys and row["tags"] else []),
             workflow_step=(row["workflow_step"] if "workflow_step" in keys
                            and row["workflow_step"] is not None else ""),
             gate_state=(row["gate_state"] if "gate_state" in keys
@@ -1061,6 +1080,7 @@ class TaskService:
         story_file: Optional[str] = None,
         parent_id: Optional[str] = None,
         id: Optional[str] = None,
+        columns: Optional[list[str]] = None,
     ) -> list[Task]:
         """List tasks with optional filters.
 
@@ -1071,6 +1091,25 @@ class TaskService:
         ``id`` scopes to a SINGLE task — a by-id read so a caller (e.g. the
         implement drive) reads just the one task it is working instead of the
         whole board (the dominant token sink: a full board is ~100x larger).
+
+        ``columns`` (task fdb6a1a1) narrows the SELECT to just the named
+        Task fields instead of `SELECT *` — the board's own `fields=`
+        projection (api/tasks.py) used to still pull every column
+        (plan_doc/completion_proof/premise_notes/description — ~10.8 MB
+        combined across 946 live tasks) off disk and through
+        json.loads/dataclass construction only to discard it one line
+        later in Python. Every name not in `_TASK_COLUMN_NAMES` is dropped
+        silently (same leniency the fields= projection's getattr(..., None)
+        already had); `id` and `status` are always force-included (id so a
+        caller can key by it, status so the soft-delete filter below keeps
+        working even when the caller never asked to render status); `tags`
+        is force-included whenever `tag` filtering is requested. Returned
+        rows are still full ``Task`` objects — fields outside `columns`
+        just carry the dataclass default instead of the real value, which
+        is exactly the contract a leaner caller wants. `columns=None`
+        (default) keeps today's full `SELECT *` shape unchanged for the
+        ~40 other call sites across the codebase that read full Task
+        attributes.
         """
         # Hot-path cache: `parent_id` is the only real filter conductor's
         # board-render path ever passes (`list(parent_id=X)` — one epic's
@@ -1116,8 +1155,19 @@ class TaskService:
             params.append(parent_id)
 
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        select_cols = "*"
+        if columns is not None:
+            wanted = {c for c in columns if c in _TASK_COLUMN_NAMES}
+            wanted.add("id")
+            wanted.add("status")
+            if tag is not None:
+                wanted.add("tags")
+            select_cols = ", ".join(sorted(wanted)) if wanted else "id"
+
         rows = self._db.execute(
-            f"SELECT * FROM tasks{where} ORDER BY priority DESC, created_at ASC",
+            f"SELECT {select_cols} FROM tasks{where} "
+            "ORDER BY priority DESC, created_at ASC",
             params,
         ).fetchall()
 
