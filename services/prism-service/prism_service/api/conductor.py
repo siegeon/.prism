@@ -939,34 +939,36 @@ def park_release(project: str = Query("default"),
                   body: dict = Body(...)) -> dict:
     """Release a task PARKED by a governance seat, back to the drive.
 
-    Two independent seats can park a task `blocked` with a prefixed
-    `blocked_reason`: `resume_actuator` (`resume-actuator:`, a spent retry
-    budget) and `dispatch_guard` (`dispatch-guard:`, the per-task dispatch
-    ceiling — "parked for a person"). Each seat keeps its OWN dispatch
+    THREE independent seats can park a task `blocked`: `resume_actuator`
+    (`resume-actuator:`, a spent retry budget), `dispatch_guard`
+    (`dispatch-guard:`, the per-task dispatch ceiling — "parked for a
+    person"), and `task_runner` (`step-retry:`, or the pre-existing
+    unprefixed "step <name> did not advance after N attempts" wording —
+    see `task_runner.is_step_retry_park`). Each seat keeps its OWN
     counter, reset ONLY by that seat's own `release()` writing its own
     RELEASED_ACTION history row (`dispatch_guard_released` /
-    `resume_actuator_released`) — and each `release()` writes that row
-    unconditionally, regardless of whether the park it finds was its own
-    (it only flips `status`/`blocked_reason` when the park was its own).
-    Releasing only the seat named by the CURRENT `blocked_reason` prefix
-    therefore leaves the SIBLING seat's counter unreset: a person clicks
-    Release, the task unparks and dispatches once, and the sibling seat —
-    already at/over its own ceiling from earlier — re-parks it on the very
-    next sweep (task b490fabc-5067-4d08-a8cc-0d46dbfe1332, 2026-09-11: the
-    owner had to click Release twice). A person's release is "try again"
-    for the TASK, not for one seat, so this route calls BOTH seats'
-    `release()` — the one matching the current `blocked_reason` prefix
-    FIRST (so it performs the actual unpark), then the other (which resets
-    its own counter but finds the task no longer `blocked` and leaves
-    status alone). A `blocked_reason` that carries neither prefix
-    (`dispatch_guard.is_governance_park`'s shared predicate) is left
+    `resume_actuator_released` / `task_runner_released`) — and each
+    `release()` writes that row unconditionally, regardless of whether
+    the park it finds was its own (it only flips `status`/`blocked_reason`
+    when the park was its own). Releasing only the seat named by the
+    CURRENT `blocked_reason` therefore leaves the SIBLING seats' counters
+    unreset: a person clicks Release, the task unparks and dispatches
+    once, and a sibling seat — already at/over its own ceiling from
+    earlier — re-parks it on the very next sweep (task
+    b490fabc-5067-4d08-a8cc-0d46dbfe1332, 2026-09-11: the owner had to
+    click Release twice). A person's release is "try again" for the
+    TASK, not for one seat, so this route calls ALL THREE seats'
+    `release()` — the one matching the current `blocked_reason` FIRST (so
+    it performs the actual unpark), then the others (which reset their
+    own counters but find the task no longer `blocked` and leave status
+    alone). A `blocked_reason` that matches none of the three is left
     untouched — this route never flips a task some other mechanism
     blocked.
     """
     task_id = (body or {}).get("task_id") or ""
     if not task_id:
         raise HTTPException(422, "task_id required")
-    from prism_service.services import dispatch_guard, resume_actuator
+    from prism_service.services import dispatch_guard, resume_actuator, task_runner
 
     ctx = get_project(project)
     task = ctx.task_svc.get(task_id)
@@ -979,11 +981,14 @@ def park_release(project: str = Query("default"),
         primary = "dispatch_guard"
     elif reason.startswith("resume-actuator:"):
         primary = "resume_actuator"
+    elif task_runner.is_step_retry_park(reason):
+        primary = "task_runner"
     else:
         raise HTTPException(
             409, f"not a governance park: {reason or '(no blocked_reason)'}")
 
-    seats = {"dispatch_guard": dispatch_guard, "resume_actuator": resume_actuator}
+    seats = {"dispatch_guard": dispatch_guard, "resume_actuator": resume_actuator,
+             "task_runner": task_runner}
     order = [primary] + [name for name in seats if name != primary]
     results: dict[str, dict] = {}
     for name in order:
@@ -993,7 +998,7 @@ def park_release(project: str = Query("default"),
     return {
         "ok": all(bool(results[name].get("ok", True)) for name in order),
         "unparked": unparked,
-        "released": ["dispatch_guard", "resume_actuator"],
+        "released": list(seats.keys()),
         "primary": primary,
         "module": primary,
         "results": results,
