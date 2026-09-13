@@ -261,12 +261,14 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
             # Owner 2026-09-13: a reactive suite has no clock of its own --
             # a task edit (task_changed) is what makes text worth
             # realigning, so this worker wakes on that signal instead of
-            # ticking `interval_s` whether or not anything changed. The
-            # interval survives only as the fallback ceiling. `since=
-            # sweep_started` (this iteration's own pre-sweep timestamp,
-            # not a value left over from a previous iteration) is what
-            # keeps one signal to exactly one extra pass.
-            wakeups.wait(["task_changed"], timeout=interval_s, since=sweep_started)
+            # ticking `interval_s` whether or not anything changed.
+            # timeout=worker_fallback_s() is None by default -- no
+            # periodic wake at all unless an operator explicitly opts in.
+            # `since=sweep_started` (this iteration's own pre-sweep
+            # timestamp, not a value left over from a previous iteration)
+            # is what keeps one signal to exactly one extra pass.
+            wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s(),
+                         since=sweep_started)
 
 
 def start_language_alignment_worker() -> Optional[threading.Thread]:

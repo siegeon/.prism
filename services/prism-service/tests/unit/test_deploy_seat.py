@@ -190,6 +190,42 @@ def test_dirty_policy_file_parks_and_touches_nothing_else(tmp_path):
     assert rows[-1].details.startswith("stage=parked")
 
 
+def test_untracked_files_never_block_a_deploy(tmp_path):
+    """Owner 2026-09-13: the live checkout had ZERO modified tracked files
+    (`git status --short | grep -v '^??'` empty) but stray untracked pngs
+    in the repo root, and the deploy still refused with "uncommitted
+    changes in the checkout". An untracked file proves nothing about
+    whether the daemon executes the code it claims to -- only a tracked
+    file's own uncommitted change should ever park a deploy."""
+    _origin, work = _make_repo(tmp_path)
+    _write(work, "a-stray-screenshot.png", "not a real png, just a stray file\n")
+    _write(work, "notes.md", "scratch notes nobody committed\n")
+
+    run = FakeRunner()
+
+    assert deploy_worker.dirty_checkout_reason(run, work) == ""
+
+    result = deploy_worker.deploy_once(
+        repo_root=work, runner=run, request_restart=lambda: None)
+
+    assert result.get("stage") != "dirty_checkout"
+
+
+def test_a_tracked_files_uncommitted_edit_still_blocks_a_deploy(tmp_path):
+    """The other half of the untracked-files fix: a REAL uncommitted edit
+    to a tracked (non-policy) file must still park the deploy -- this is
+    not a blanket removal of the dirty-checkout guard, only untracked
+    files are exempted."""
+    _origin, work = _make_repo(tmp_path)
+    _write(work, "README.md", "# an uncommitted edit to a tracked file\n")
+
+    run = FakeRunner()
+
+    reason = deploy_worker.dirty_checkout_reason(run, work)
+
+    assert "uncommitted changes" in reason
+
+
 def test_happy_path_rebuilds_web_and_requests_restart_once(tmp_path):
     """AC(b): a landed commit that touches a web file gets pulled AND
     rebuilt, then the restart primitive is called exactly once (never an

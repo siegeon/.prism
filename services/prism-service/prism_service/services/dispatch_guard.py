@@ -561,16 +561,12 @@ def is_enabled() -> bool:
     return _interval_s() > 0
 
 
-_IDLE_FALLBACK_S = 900.0  # owner 2026-09-13: an idle worker should stop polling
-
-
 def _loop(interval_s: int,
           stop_event: Optional[threading.Event] = None) -> None:
     from prism_service.services import wakeups
 
-    fallback = max(interval_s, _IDLE_FALLBACK_S)
-    _log(f"started; interval={interval_s}s (event-driven; falls back to "
-         f"{fallback:.0f}s when nothing changed)")
+    _log(f"started; interval={interval_s}s (signal only unless "
+         "PRISM_WORKER_FALLBACK_S is set)")
     wakeups.lower_thread_priority()
     if stop_event is None:  # never delay a test-driven loop
         wakeups.wait_out_startup_warmup()
@@ -602,7 +598,8 @@ def _loop(interval_s: int,
             if stop_event.wait(interval_s):
                 break
         else:
-            wakeups.wait(["task_changed"], timeout=fallback, since=sweep_started)
+            wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s(),
+                         since=sweep_started)
 
 
 def start_dispatch_reaper() -> Optional[threading.Thread]:

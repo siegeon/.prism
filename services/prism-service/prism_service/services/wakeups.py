@@ -169,36 +169,69 @@ def _has_new(kinds: set, project: Optional[str], baseline: float) -> bool:
     return False
 
 
+def worker_fallback_s() -> Optional[float]:
+    """Explicit opt-in ONLY: PRISM_WORKER_FALLBACK_S, unset by default.
+
+    Owner 2026-09-13 ("it's all reactive and real time"): None (the
+    default) means a worker's wait() below blocks until a REAL signal,
+    with no periodic fallback wake at all -- not even a large one. Every
+    standing worker in this reactive family shares this one env var and
+    this one function rather than each inventing its own hardcoded
+    interval/TTL/safety-net constant. Set it only for an environment
+    whose writes genuinely bypass every signal path this family already
+    covers (a direct DB poke, a push this process's hooks never see)."""
+    raw = os.environ.get("PRISM_WORKER_FALLBACK_S", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
+
+
 def wait(kinds: Iterable[str], project: Optional[str] = None,
-         timeout: float = 900.0, since: Optional[float] = None) -> bool:
+         timeout: Optional[float] = 900.0, since: Optional[float] = None) -> bool:
     """Block until one of `kinds` has signalled (for `project`, or any
     project when `project` is None/omitted -- a project-scoped worker
     should pass its own project so it still wakes on wildcard signals)
     more recently than `since`, or `timeout` seconds elapse.
 
+    `timeout=None` blocks FOREVER until a real signal arrives -- no
+    fallback wake at all. A worker loop should pass
+    `timeout=worker_fallback_s()` (None unless an operator explicitly
+    opted in) rather than a hardcoded interval, so "no signal" genuinely
+    means "no work" instead of "check again in N seconds anyway."
+
     `since` defaults to "now" (the instant `wait()` was called) -- a
     worker that already swept as of some earlier timestamp should pass
     that timestamp so a signal raised WHILE it was still working is not
-    missed. Returns True on a real wakeup, False on a plain timeout.
+    missed. Returns True on a real wakeup, False on a plain timeout
+    (never, when timeout is None).
     """
     kinds_set = set(kinds)
     baseline = time.time() if since is None else since
-    deadline = time.time() + max(0.0, timeout)
+    deadline = None if timeout is None else time.time() + max(0.0, timeout)
     with _COND:
         while True:
             if _has_new(kinds_set, project, baseline):
                 return True
             if _cross_has_new(kinds_set, project, baseline):
                 return True
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                return False
+            if deadline is not None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                poll = min(remaining, _CROSS_POLL_S)
+            else:
+                poll = _CROSS_POLL_S
             # Wake at least every _CROSS_POLL_S (250ms) even with no local
             # notify_all(), so a signal() raised in ANOTHER process is
             # picked up within ~500ms round-trip (task: worker-host process
             # split) -- the in-process path is still notify_all()-driven
-            # and typically wakes far sooner than this poll floor.
-            _COND.wait(timeout=min(remaining, _CROSS_POLL_S))
+            # and typically wakes far sooner than this poll floor. This
+            # poll checks the cross-process bridge only; it is not a
+            # fallback wake of the CALLER's own sweep body.
+            _COND.wait(timeout=poll)
 
 
 def changes_snapshot(project: Optional[str] = None) -> float:

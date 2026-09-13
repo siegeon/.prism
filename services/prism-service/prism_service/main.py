@@ -361,17 +361,21 @@ def start_drift_timer():
     access to the GIL for 20-30 minutes on every restart.
 
     sweep_once() itself is idle-gated, active-project-gated, and wall-clock
-    budgeted, so this loop can simply poll it every STALE_CHECK_S with no
-    cadence bookkeeping of its own; PRISM_DRIFT_INTERVAL keeps its old
-    meaning as a hard on/off switch."""
+    budgeted; this loop wakes it on a real signal (task_changed/shipped/
+    workspace_written) instead of polling on a clock -- owner 2026-09-13
+    ("it's all reactive and real time"): there is no default poll interval
+    here any more. PRISM_DRIFT_INTERVAL keeps its old meaning as a hard
+    on/off switch; PRISM_WORKER_FALLBACK_S (unset by default) is the one
+    explicit opt-in for a periodic wake, shared with every other standing
+    worker."""
     if DRIFT_INTERVAL_SECONDS <= 0:
         print("Drift timer disabled (PRISM_DRIFT_INTERVAL=0)", file=_sys.stderr)
         return
-    from prism_service.services import drift_worker
-    STALE_CHECK_S = 5
+    from prism_service.services import drift_worker, wakeups
     print(
-        f"Drift timer running every {STALE_CHECK_S}s "
-        f"(active-project gated, budget={drift_worker.BUDGET_S}s)",
+        "Drift timer running on signal (task_changed/shipped/"
+        "workspace_written; signal only unless PRISM_WORKER_FALLBACK_S is "
+        f"set) (active-project gated, budget={drift_worker.BUDGET_S}s)",
         file=_sys.stderr,
     )
     # Best-effort: this worker competes with every request-serving thread
@@ -388,14 +392,19 @@ def start_drift_timer():
     # 2026-09-13: 6+ standing workers all firing within the same ~20s
     # startup window pegged CPU at 150% and made ordinary HTTP routes
     # take 10-25s. Nothing has had time to drift yet this early anyway.
-    from prism_service.services import wakeups
     wakeups.wait_out_startup_warmup()
     while True:
+        # Captured fresh, right before this iteration's own sweep -- see
+        # gate_adjudicator._loop's comment: a since= left over from a
+        # prior iteration double-fires on the very signal that just woke
+        # this loop.
+        swept_at = time.time()
         try:
             drift_worker.sweep_once()
         except Exception as e:
             print(f"Drift timer error: {e}", file=_sys.stderr)
-        time.sleep(STALE_CHECK_S)
+        wakeups.wait(["task_changed", "shipped", "workspace_written"],
+                     timeout=wakeups.worker_fallback_s(), since=swept_at)
 
 
 def start_quality_timer():

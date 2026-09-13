@@ -237,24 +237,14 @@ _LAST_PROJECT_ELIGIBLE: dict[str, int] = {}
 _SWEEP_BUDGET_S = 2.0
 
 
-def _scan_fallback_s() -> Optional[float]:
-    """Explicit opt-in ONLY: PRISM_WORKER_FALLBACK_S, unset by default --
-    see deploy_worker._fetch_fallback_s, same contract, same env var,
-    shared across every worker in this reactive family."""
-    raw = os.environ.get("PRISM_WORKER_FALLBACK_S", "").strip()
-    if not raw:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return None
-
-
 def _project_needs_scan(pid: str, wakeups_mod) -> bool:
     last = _LAST_PROJECT_SCAN.get(pid)
     if last is None:
         return True
-    fallback = _scan_fallback_s()
+    # PRISM_WORKER_FALLBACK_S, unset by default -- see
+    # wakeups.worker_fallback_s, same contract, same env var, shared
+    # across every worker in this reactive family (no per-file duplicate).
+    fallback = wakeups_mod.worker_fallback_s()
     if fallback is not None and time.time() - last >= fallback:
         return True
     # wait(..., timeout=0) rather than last_signal_at(): the worker-host
@@ -528,19 +518,11 @@ def sweep_once() -> list[dict]:
     return approved
 
 
-#: floor for the idle fallback wait -- this seat's configured interval
-#: (e.g. 60s on the AOS dev instance) stays the cadence ONLY while a gate
-#: is genuinely parked pending; once nothing is waiting, the wait grows
-#: to this ceiling instead of still polling every 60s forever (owner
-#: 2026-09-13: workers ticked "whether or not anything changed").
-_IDLE_FALLBACK_S = 900.0
-
-
 def _loop(interval_s: int) -> None:
     from prism_service.services import wakeups
 
-    _log(f"started; interval={interval_s}s (fast cadence only while a gate "
-         f"is pending; otherwise falls back to {_IDLE_FALLBACK_S:.0f}s)")
+    _log(f"started; interval={interval_s}s (gate signal only unless "
+         "PRISM_WORKER_FALLBACK_S is set)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     while True:
@@ -570,17 +552,18 @@ def _loop(interval_s: int) -> None:
                                   f"{len(approved)} decided")
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        fallback = interval_s if _last_eligible_count > 0 else \
-            max(interval_s, _IDLE_FALLBACK_S)
         # Wake on "shipped" too -- a push landing (ship_worker) can free a
         # green_gate or resolve a workspace-freshness refusal exactly like
         # a task_changed row does; waiting on task_changed alone left the
         # fallback timeout as the only way such a change was ever noticed.
         # since=sweep_started (this iteration's own pre-sweep timestamp,
         # not a value left over from a previous iteration) is what keeps
-        # one signal to exactly one extra pass.
-        wakeups.wait(["task_changed", "shipped"], timeout=fallback,
-                     since=sweep_started)
+        # one signal to exactly one extra pass. timeout=worker_fallback_s()
+        # is None by default -- no periodic wake at all unless an operator
+        # explicitly opts in (owner 2026-09-13: "it's all reactive and
+        # real time").
+        wakeups.wait(["task_changed", "shipped"],
+                     timeout=wakeups.worker_fallback_s(), since=sweep_started)
 
 
 def start_gate_adjudicator() -> threading.Thread | None:

@@ -89,6 +89,11 @@ def search(
 @router.post("/reindex")
 def reindex(project: str = Query("default")) -> dict:
     count = _svc(project).incremental_reindex()
+    try:
+        from prism_service.services import wakeups
+        wakeups.signal("workspace_written", project)
+    except Exception:
+        pass
     return {"reindexed": count}
 
 
