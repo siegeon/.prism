@@ -98,7 +98,7 @@ def _cross_conn() -> Optional[sqlite3.Connection]:
         return conn
 
 
-def _cross_signal(kind: str, project: str) -> None:
+def _cross_signal(kind: str, project: str, ts: float) -> None:
     conn = _cross_conn()
     if conn is None:
         return
@@ -107,7 +107,7 @@ def _cross_signal(kind: str, project: str) -> None:
             conn.execute(
                 "INSERT INTO signals(kind, project, ts) VALUES (?, ?, ?) "
                 "ON CONFLICT(kind, project) DO UPDATE SET ts=excluded.ts",
-                (kind, project, time.time()),
+                (kind, project, ts),
             )
     except Exception:
         pass
@@ -139,14 +139,23 @@ def signal(kind: str, project: str = "*", task_id: Optional[str] = None) -> None
     THIS process and (best-effort) any other process running a
     PRISM_WORKERS_PROCESS=1 worker host against the same data dir. Never
     raises, never blocks -- safe to call from any mutation path, including
-    ones with no worker currently listening."""
+    ones with no worker currently listening.
+
+    ONE `time.time()` read is shared by both the in-memory record and the
+    cross-process row (never two separate calls) -- a waiter that captures
+    its own baseline between two different reads of "now" would otherwise
+    see the earlier-timestamped channel as already-consumed while the
+    later-timestamped one still reads as "new", double-firing the very
+    next wait() on a signal that already woke this one (owner 2026-09-13:
+    "one signal makes exactly one pass")."""
+    now = time.time()
     try:
         with _COND:
-            _LAST[(kind, project or "*")] = time.time()
+            _LAST[(kind, project or "*")] = now
             _COND.notify_all()
     except Exception:
         pass
-    _cross_signal(kind, project or "*")
+    _cross_signal(kind, project or "*", now)
 
 
 def _has_new(kinds: set, project: Optional[str], baseline: float) -> bool:
