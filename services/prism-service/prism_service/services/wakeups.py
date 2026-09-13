@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sqlite3
 import threading
 import time
 from typing import Iterable, Iterator, Optional
@@ -42,17 +43,110 @@ _COND = threading.Condition(_LOCK)
 # project (or the signal is genuinely project-agnostic).
 _LAST: dict[tuple[str, str], float] = {}
 
+# ---------------------------------------------------------------------------
+# Cross-process signalling (task: worker-host process split, 2026-09-13).
+#
+# The in-memory _LAST dict + threading.Condition above only ever reaches
+# waiters in THIS process. Once PRISM_WORKERS_PROCESS=1 moves the standing
+# workers into a separate OS process from the API, a mutation raised by an
+# HTTP request (API process) must still wake a worker loop's wait() call
+# running in the OTHER process. This is the belt: a tiny WAL-mode sqlite
+# table under the data dir, written on every signal() and polled by wait()
+# every _CROSS_POLL_S. It is deliberately dumb (last-write-wins per
+# (kind, project), no queue, no fan-out bookkeeping) because wait() only
+# ever asks "has anything newer than my baseline happened", exactly what
+# the in-process path already answers.
+# ---------------------------------------------------------------------------
+
+_CROSS_POLL_S = 0.25
+_CROSS_LOCK = threading.Lock()
+_CROSS_CACHE: dict = {"conn": None, "path": None}
+
+
+def _cross_db_path() -> Optional[str]:
+    try:
+        from prism_service.data_dir import resolve_data_dir
+        return str(resolve_data_dir() / "wakeups.db")
+    except Exception:
+        return None
+
+
+def _cross_conn() -> Optional[sqlite3.Connection]:
+    """A cached, process-wide connection to the cross-process signal table.
+    None (feature silently off) if the data dir cannot be resolved -- every
+    caller treats that as "no cross-process peer to reach", never an error."""
+    path = _cross_db_path()
+    if not path:
+        return None
+    with _CROSS_LOCK:
+        conn = _CROSS_CACHE.get("conn")
+        if conn is not None and _CROSS_CACHE.get("path") == path:
+            return conn
+        try:
+            conn = sqlite3.connect(path, timeout=1.0, isolation_level=None,
+                                    check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS signals ("
+                "kind TEXT NOT NULL, project TEXT NOT NULL, ts REAL NOT NULL, "
+                "PRIMARY KEY (kind, project))"
+            )
+        except Exception:
+            return None
+        _CROSS_CACHE["conn"] = conn
+        _CROSS_CACHE["path"] = path
+        return conn
+
+
+def _cross_signal(kind: str, project: str) -> None:
+    conn = _cross_conn()
+    if conn is None:
+        return
+    try:
+        with _CROSS_LOCK:
+            conn.execute(
+                "INSERT INTO signals(kind, project, ts) VALUES (?, ?, ?) "
+                "ON CONFLICT(kind, project) DO UPDATE SET ts=excluded.ts",
+                (kind, project, time.time()),
+            )
+    except Exception:
+        pass
+
+
+def _cross_has_new(kinds: set, project: Optional[str], baseline: float) -> bool:
+    conn = _cross_conn()
+    if conn is None:
+        return False
+    placeholders = ",".join("?" for _ in kinds)
+    try:
+        with _CROSS_LOCK:
+            rows = conn.execute(
+                f"SELECT project, ts FROM signals WHERE kind IN ({placeholders})",
+                tuple(kinds),
+            ).fetchall()
+    except Exception:
+        return False
+    for ep, ts in rows:
+        if project and ep != "*" and ep != project:
+            continue
+        if ts > baseline:
+            return True
+    return False
+
 
 def signal(kind: str, project: str = "*", task_id: Optional[str] = None) -> None:
-    """Record that `kind` happened for `project` and wake every waiter.
-    Never raises, never blocks -- safe to call from any mutation path,
-    including ones with no worker currently listening."""
+    """Record that `kind` happened for `project` and wake every waiter, in
+    THIS process and (best-effort) any other process running a
+    PRISM_WORKERS_PROCESS=1 worker host against the same data dir. Never
+    raises, never blocks -- safe to call from any mutation path, including
+    ones with no worker currently listening."""
     try:
         with _COND:
             _LAST[(kind, project or "*")] = time.time()
             _COND.notify_all()
     except Exception:
         pass
+    _cross_signal(kind, project or "*")
 
 
 def _has_new(kinds: set, project: Optional[str], baseline: float) -> bool:
@@ -85,14 +179,17 @@ def wait(kinds: Iterable[str], project: Optional[str] = None,
         while True:
             if _has_new(kinds_set, project, baseline):
                 return True
+            if _cross_has_new(kinds_set, project, baseline):
+                return True
             remaining = deadline - time.time()
             if remaining <= 0:
                 return False
-            # Wake at least every 5s even with no signal, so a very long
-            # fallback timeout still re-checks promptly if `_LAST` was
-            # mutated by a signal() that raced notify_all() (belt+braces;
-            # notify_all() already covers the common case).
-            _COND.wait(timeout=min(remaining, 5.0))
+            # Wake at least every _CROSS_POLL_S (250ms) even with no local
+            # notify_all(), so a signal() raised in ANOTHER process is
+            # picked up within ~500ms round-trip (task: worker-host process
+            # split) -- the in-process path is still notify_all()-driven
+            # and typically wakes far sooner than this poll floor.
+            _COND.wait(timeout=min(remaining, _CROSS_POLL_S))
 
 
 def last_signal_at(kind: str, project: Optional[str] = None) -> float:
@@ -113,9 +210,18 @@ def last_signal_at(kind: str, project: Optional[str] = None) -> float:
 
 def _reset_for_tests() -> None:
     """Test-only: clear all recorded signals between tests that share
-    this module-level state."""
+    this module-level state -- including the cross-process sqlite table,
+    which otherwise outlives any one test (the suite pins PRISM_DATA_DIR
+    to one throwaway dir for the whole session, not per-test)."""
     with _LOCK:
         _LAST.clear()
+    conn = _cross_conn()
+    if conn is not None:
+        try:
+            with _CROSS_LOCK:
+                conn.execute("DELETE FROM signals")
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

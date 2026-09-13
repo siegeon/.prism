@@ -425,6 +425,95 @@ def start_quality_timer():
         time.sleep(QUALITY_INTERVAL_SECONDS)
 
 
+# ---------------------------------------------------------------------------
+# Worker-host process split (task: worker-host process split, owner
+# 2026-09-13). The nine standing workers below ran as threads INSIDE this
+# process; any tick that held the GIL or blocked on git delayed every HTTP
+# request being served at the same moment (measured live: 10-20s routes
+# whenever a worker pass ran, 0.2s otherwise). See
+# prism_service/services/worker_host.py for the full story and the
+# worker list. PRISM_WORKERS_PROCESS=1 spawns them there instead of
+# starting them as threads in THIS process; =0 keeps today's behavior
+# unchanged. Unset defaults to "1 when PRISM_DEV_MODE is on" (dev's `prism
+# start` opts in), "0" otherwise (a release/docker boot keeps the
+# single-process shape unless an operator opts in explicitly).
+# ---------------------------------------------------------------------------
+
+_WORKER_HOST_PROC = None  # multiprocessing.Process, once spawned
+_WORKER_HOST_SUPERVISOR_STOP = threading.Event()
+
+
+def _truthy_env(name: str) -> "bool | None":
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def _workers_process_enabled() -> bool:
+    explicit = _truthy_env("PRISM_WORKERS_PROCESS")
+    if explicit is not None:
+        return explicit
+    return bool(_truthy_env("PRISM_DEV_MODE"))
+
+
+def _spawn_worker_host():
+    """Start the worker-host child process against this process's data
+    dir. Import deferred to call time so a PRISM_WORKERS_PROCESS=0 boot
+    never even imports `multiprocessing`'s spawn machinery or
+    `worker_host` (and, transitively, every standing worker's module)."""
+    import multiprocessing
+    from prism_service.services import worker_host as _wh
+    ctx = multiprocessing.get_context("spawn")
+    proc = ctx.Process(
+        target=_wh.main,
+        args=(str(DATA_DIR), dict(os.environ)),
+        daemon=True,
+        name="prism-worker-host",
+    )
+    proc.start()
+    _log.info("worker host process started (pid=%s)", proc.pid)
+    try:
+        from prism_service.services import system_activity
+        system_activity.record(
+            "worker_host", "*", f"started pid={proc.pid}",
+            started_at=time.time(), elapsed_ms=0.0, ok=True,
+        )
+    except Exception:
+        pass
+    return proc
+
+
+def _worker_host_supervisor() -> None:
+    """Own thread: restart the worker-host process (with backoff) if it
+    dies, until the API's own shutdown sets
+    `_WORKER_HOST_SUPERVISOR_STOP`. A dead worker host is silent failure
+    otherwise -- every standing worker (task_runner, gate_adjudicator,
+    ship_worker, ...) just stops ticking with nothing to say why."""
+    global _WORKER_HOST_PROC
+    backoff = 1.0
+    while not _WORKER_HOST_SUPERVISOR_STOP.is_set():
+        proc = _WORKER_HOST_PROC
+        if proc is None or not proc.is_alive():
+            if proc is not None:
+                _log.warning(
+                    "worker host process exited (pid=%s, exitcode=%s); "
+                    "restarting", proc.pid, proc.exitcode,
+                )
+            try:
+                _WORKER_HOST_PROC = _spawn_worker_host()
+                backoff = 1.0
+            except Exception:
+                _log.critical("failed to spawn worker host process",
+                               exc_info=True)
+                _WORKER_HOST_SUPERVISOR_STOP.wait(timeout=min(backoff, 30.0))
+                backoff = min(backoff * 2, 30.0)
+                continue
+        _WORKER_HOST_SUPERVISOR_STOP.wait(timeout=2.0)
+
+
 def _install_stackdump_handler() -> None:
     """Dump every thread's stack to stderr on SIGUSR1 (preserved from #38)."""
     import signal
@@ -460,6 +549,7 @@ async def lifespan(_app: FastAPI):
     quality, and the v5.1.6 understand_drainer). v5.1.7 reclaims a
     stale lock instead of bailing.
     """
+    global _WORKER_HOST_PROC
     # Idempotent — also covers the PyInstaller/Tauri service_entry path
     # that boots uvicorn directly and never hits the __main__ block (#66).
     _configure_logging()
@@ -500,7 +590,15 @@ async def lifespan(_app: FastAPI):
         except Exception:
             pass
         threading.Thread(target=start_mcp_server, daemon=True).start()
-        threading.Thread(target=start_drift_timer, daemon=True).start()
+        _run_workers_in_process = not _workers_process_enabled()
+        if _run_workers_in_process:
+            threading.Thread(target=start_drift_timer, daemon=True).start()
+        else:
+            _WORKER_HOST_PROC = _spawn_worker_host()
+            threading.Thread(
+                target=_worker_host_supervisor, daemon=True,
+                name="prism-worker-host-supervisor",
+            ).start()
         from prism_service.services.understand_drainer import start_understand_drainer
         threading.Thread(target=start_understand_drainer, daemon=True).start()
         # v5.3.0 — sweep .trash/ (renamed-on-delete project dirs) until
@@ -558,8 +656,9 @@ async def lifespan(_app: FastAPI):
         # MERGE_RETIRED_TO_BUS (Phase 3) still holds — the Memory Ops Merge op
         # remains retired onto the memory.written bus handler and is NOT one of
         # the five wall-clock passes the maintenance clock folds.
-        from prism_service.services.maintenance_clock import start_maintenance_clock
-        start_maintenance_clock()
+        if _run_workers_in_process:
+            from prism_service.services.maintenance_clock import start_maintenance_clock
+            start_maintenance_clock()
 
         # GH #155 — deadlock watchdog. Arms faulthandler.dump_traceback_later
         # each cycle then runs a real HTTP self-probe; a wedge lets the
@@ -595,10 +694,11 @@ async def lifespan(_app: FastAPI):
         # when machine-runnable and unevidenced. Humans keep manual-evidence
         # oracles, failed gates and overrides. Own thread (mints take
         # minutes); PRISM_GATE_ADJUDICATOR_INTERVAL=0 disables.
-        from prism_service.services.gate_adjudicator import (
-            start_gate_adjudicator,
-        )
-        start_gate_adjudicator()
+        if _run_workers_in_process:
+            from prism_service.services.gate_adjudicator import (
+                start_gate_adjudicator,
+            )
+            start_gate_adjudicator()
 
         # Task b490fabc (2026-09-11) — drop stale leases from a prior
         # process BEFORE either seat below can take a new one. A restart
@@ -608,28 +708,31 @@ async def lifespan(_app: FastAPI):
         # started below would otherwise read their OWN dead lease as "held
         # by another driver" and defer to it for up to MAX_LEASE_S. Once,
         # at startup, never per-sweep; never touches an external holder.
-        from prism_service.services.task_runner import (
-            release_stale_seat_leases,
-        )
-        release_stale_seat_leases()
+        if _run_workers_in_process:
+            from prism_service.services.task_runner import (
+                release_stale_seat_leases,
+            )
+            release_stale_seat_leases()
 
         # Epic 0784729f, AC-4 — the terminal-less task-drive seat: a task
         # advances even when no human's Claude Code session is looping on
         # conductor_work. NEVER decides a gate (gate_adjudicator's seat).
         # Own thread (same footprint as gate_adjudicator); default OFF —
         # PRISM_TASK_RUNNER_INTERVAL=<seconds> opts an environment in.
-        from prism_service.services.task_runner import start_task_runner
-        start_task_runner()
+        if _run_workers_in_process:
+            from prism_service.services.task_runner import start_task_runner
+            start_task_runner()
 
         # Task f07c9cea (owner rule mx-f49a5c) — the align-language seat:
         # a top-level, system-controlled workflow that brings loose task
         # text into plain Simplified Technical English. Own thread (same
         # footprint as task_runner); default OFF —
         # PRISM_LANGUAGE_ALIGNMENT_WORKER=on opts an environment in.
-        from prism_service.services.language_alignment_worker import (
-            start_language_alignment_worker,
-        )
-        start_language_alignment_worker()
+        if _run_workers_in_process:
+            from prism_service.services.language_alignment_worker import (
+                start_language_alignment_worker,
+            )
+            start_language_alignment_worker()
 
         # Task 5b6aefc1 (owner 2026-08-18) — the ship seat: an owner's
         # green_gate approve LANDS the branch (push -> PR -> CI -> merge)
@@ -637,8 +740,9 @@ async def lifespan(_app: FastAPI):
         # code, no model calls. Own thread (a CI wait takes minutes and must
         # never block a request); default OFF — PRISM_SHIP_ON_APPROVE=1 opts
         # an environment in.
-        from prism_service.services.ship_worker import start_ship_worker
-        start_ship_worker()
+        if _run_workers_in_process:
+            from prism_service.services.ship_worker import start_ship_worker
+            start_ship_worker()
 
         # Task 13cfe8ee (owner 2026-08-27) — the deploy seat: a shipped
         # build reaches the dev instance without a hand. ship_worker's own
@@ -647,8 +751,9 @@ async def lifespan(_app: FastAPI):
         # PENDING deploy on later ticks, including after the restart this
         # same seat requested. Deterministic code, no model calls. Default
         # OFF — PRISM_DEPLOY_ON_LAND=1 opts an environment in.
-        from prism_service.services.deploy_worker import start_deploy_worker
-        start_deploy_worker()
+        if _run_workers_in_process:
+            from prism_service.services.deploy_worker import start_deploy_worker
+            start_deploy_worker()
 
         # Task 7a72ebcb — the stalled-drive actuator seat: activity_for
         # already DETECTS a stalled task (task_motion_s stale, session_quiet_s
@@ -658,8 +763,9 @@ async def lifespan(_app: FastAPI):
         # itself excludes any task parked at a gate step). Own thread (same
         # footprint as gate_adjudicator/task_runner); default OFF —
         # PRISM_RESUME_ACTUATOR_INTERVAL=<seconds> opts an environment in.
-        from prism_service.services.resume_actuator import start_resume_actuator
-        start_resume_actuator()
+        if _run_workers_in_process:
+            from prism_service.services.resume_actuator import start_resume_actuator
+            start_resume_actuator()
 
         # Task ab9166d5 incident (2026-09-10) — the reaper seat: a task
         # parked mid-flight (blocked/done/cancelled while its own step
@@ -670,8 +776,9 @@ async def lifespan(_app: FastAPI):
         # genuinely in_progress. Own thread (same footprint as
         # gate_adjudicator/task_runner); default OFF —
         # PRISM_DISPATCH_REAPER_INTERVAL=<seconds> opts an environment in.
-        from prism_service.services.dispatch_guard import start_dispatch_reaper
-        start_dispatch_reaper()
+        if _run_workers_in_process:
+            from prism_service.services.dispatch_guard import start_dispatch_reaper
+            start_dispatch_reaper()
 
         # Ops incident 2026-09-12 — the worktree sweep: 173 registered git
         # worktrees, disk at 98%, 93 of them already landed on origin/main
@@ -728,6 +835,13 @@ async def lifespan(_app: FastAPI):
         # current limp-along behavior; visibility is the fix here.
         _log.critical("lifespan startup failed", exc_info=True)
     yield
+    _WORKER_HOST_SUPERVISOR_STOP.set()
+    if _WORKER_HOST_PROC is not None:
+        try:
+            _WORKER_HOST_PROC.terminate()
+            _WORKER_HOST_PROC.join(timeout=5.0)
+        except Exception:
+            _log.warning("worker host process shutdown failed", exc_info=True)
     try:
         from prism_service.services.watchdog import stop_watchdog
         stop_watchdog()
