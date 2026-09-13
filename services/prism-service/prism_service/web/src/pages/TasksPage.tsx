@@ -216,20 +216,6 @@ export default function TasksPage() {
     api.get<{ tasks: Task[] }>(`/api/tasks?project=${project}&fields=id,title,status,assigned_agent,priority,updated_at,workflow_step,gate_state,parent_id,tags,mirrors,channel`)
       .then((d) => setTasks(d.tasks))
       .catch(() => setTasks([]));
-    // The viewer identity powers My Tasks; failure just leaves it empty (Team
-    // still works). Authorization is the server's — we never infer it here.
-    api.get<{ user?: { id?: string; display_name?: string; email?: string } }>("/api/auth/me")
-      .then((d) => setMe(d.user?.display_name || d.user?.id || d.user?.email || ""))
-      .catch(() => setMe(""));
-    // Merge external GitHub/Jira work from the first workspace the viewer can
-    // see. Best-effort: no workspace / no integrations -> native-only board.
-    listWorkspaces()
-      .then(async (workspaces) => {
-        if (!workspaces.length) { setExternal([]); return; }
-        const rows = await listIntegrationEntities(workspaces[0].id);
-        setExternal(rows);
-      })
-      .catch(() => setExternal([]));
   }, [project]);
 
   // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
@@ -237,6 +223,34 @@ export default function TasksPage() {
   // reconnect safety net -- never a bare 5s interval regardless of
   // whether the board actually changed.
   usePolledEffect(load, project, TASK_CHANGED_KINDS);
+
+  // Perf (2026-09-13 UI-latency measurement): identity + external-workspace
+  // integrations were riding the SAME task_changed-gated load() as the task
+  // board, so on a busy instance (task_changed firing ~once/3s) this page
+  // re-fetched /api/auth/me and re-listed workspaces/integrations that many
+  // times a MINUTE even though neither ever changes when a task changes.
+  // Measured: 60s idle on this page fired 20x each of /api/tasks (333KB),
+  // /api/auth/me, and /api/workspaces. Split them out: identity and the
+  // external-work merge only need to happen once per mount/project change.
+  useEffect(() => {
+    let cancelled = false;
+    // The viewer identity powers My Tasks; failure just leaves it empty (Team
+    // still works). Authorization is the server's — we never infer it here.
+    api.get<{ user?: { id?: string; display_name?: string; email?: string } }>("/api/auth/me")
+      .then((d) => { if (!cancelled) setMe(d.user?.display_name || d.user?.id || d.user?.email || ""); })
+      .catch(() => { if (!cancelled) setMe(""); });
+    // Merge external GitHub/Jira work from the first workspace the viewer can
+    // see. Best-effort: no workspace / no integrations -> native-only board.
+    listWorkspaces()
+      .then(async (workspaces) => {
+        if (cancelled) return;
+        if (!workspaces.length) { setExternal([]); return; }
+        const rows = await listIntegrationEntities(workspaces[0].id);
+        if (!cancelled) setExternal(rows);
+      })
+      .catch(() => { if (!cancelled) setExternal([]); });
+    return () => { cancelled = true; };
+  }, [project]);
 
   // The unified, filtered, viewer-scoped work list — ONE queue, not two.
   const items = useMemo(() => {
