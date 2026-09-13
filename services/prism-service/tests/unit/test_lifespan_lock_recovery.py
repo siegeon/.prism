@@ -22,6 +22,11 @@ import pytest
 def isolated_lock(tmp_path, monkeypatch):
     import prism_service.main as main_mod
     monkeypatch.setattr(main_mod, "_LOCK_FILE", tmp_path / ".mcp_started")
+    # Task: worker-host process split (2026-09-13) made PRISM_WORKERS_PROCESS
+    # default ON in production; this test pins the pre-existing, still-
+    # supported single-process thread wiring explicitly, so it stays a test
+    # of THAT code path regardless of the live default.
+    monkeypatch.setenv("PRISM_WORKERS_PROCESS", "0")
     # The drive-activity observer (task dd1e8871) keeps a module-level
     # singleton so a live process never double-starts its thread. Mocked
     # Threads read as alive forever, so without a reset the SECOND lifespan
