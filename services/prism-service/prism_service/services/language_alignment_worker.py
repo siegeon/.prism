@@ -222,11 +222,20 @@ def run_once_for(project: str, force: bool = False) -> dict:
 def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None:
     from prism_service.services import wakeups
 
-    _log(f"started; interval={interval_s}s")
+    _log(f"started; interval={interval_s}s (event-driven; falls back to "
+         f"{interval_s}s when nothing changed)")
     wakeups.lower_thread_priority()
     if stop_event is None:  # never delay a test-driven loop
         wakeups.wait_out_startup_warmup()
     while stop_event is None or not stop_event.is_set():
+        # Captured fresh, right before this iteration's own sweep -- NOT
+        # carried over from the timestamp the PREVIOUS iteration's wait()
+        # already consumed. Using a stale prior baseline here double-fires:
+        # the signal that woke the previous wait() is still the newest
+        # entry in wakeups._LAST, so a since= older than it (e.g. the
+        # previous sweep's own start time) sees it as "new" all over again
+        # and triggers an extra, unwanted pass immediately after this one.
+        sweep_started = time.time()
         for project in _projects_in_scope():
             try:
                 # Serialized with the other pure-maintenance sweeps (see
@@ -242,10 +251,22 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
             except Exception as exc:
                 _log(f"{project}: run_once_for raised: {exc}")
         if stop_event is not None:
+            # Test-only plumbing (never passed by
+            # start_language_alignment_worker): keep the plain interval
+            # wait here so a stop_event-driven test still ends the loop
+            # the way it always has.
             if stop_event.wait(timeout=interval_s):
                 break
         else:
-            time.sleep(interval_s)
+            # Owner 2026-09-13: a reactive suite has no clock of its own --
+            # a task edit (task_changed) is what makes text worth
+            # realigning, so this worker wakes on that signal instead of
+            # ticking `interval_s` whether or not anything changed. The
+            # interval survives only as the fallback ceiling. `since=
+            # sweep_started` (this iteration's own pre-sweep timestamp,
+            # not a value left over from a previous iteration) is what
+            # keeps one signal to exactly one extra pass.
+            wakeups.wait(["task_changed"], timeout=interval_s, since=sweep_started)
 
 
 def start_language_alignment_worker() -> Optional[threading.Thread]:

@@ -803,18 +803,21 @@ def _loop(interval_s: int) -> None:
          f"{max(interval_s, _IDLE_FALLBACK_S):.0f}s when nothing changed)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
-    last_checked = time.time()
     while True:
+        # Captured fresh, right before this iteration's own sweep -- see
+        # gate_adjudicator._loop's comment: a since= left over from a
+        # prior iteration's post-sweep timestamp double-fires on the very
+        # signal that just woke this loop (owner 2026-09-13: "one signal
+        # makes exactly one pass").
+        sweep_started = time.time()
         try:
             with system_activity.pass_("resume_actuator", "*", "sweep_once") as info:
                 res = sweep_once()
                 info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        checked_at = time.time()
         wakeups.wait(["task_changed"], timeout=max(interval_s, _IDLE_FALLBACK_S),
-                     since=last_checked)
-        last_checked = checked_at
+                     since=sweep_started)
 
 
 def start_resume_actuator() -> threading.Thread | None:
