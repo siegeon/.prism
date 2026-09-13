@@ -273,3 +273,76 @@ def test_a_stuck_drain_eventually_gives_up_and_goes_reactive(monkeypatch):
     assert len(calls) == ga._MAX_BOOT_DRAIN_PASSES, (
         f"a never-converging drain must stop at the ceiling and go "
         f"reactive, not hang forever -- got {len(calls)} passes")
+
+
+# ---------------------------------------------------------------------------
+# Fourth round, task a65c66e5 (2026-09-13): _SWEEP_BUDGET_S (2s) only ever
+# gates STARTING the next task -- it never bounds one already running, and a
+# real pass was observed taking ~20s live (one slow adjudication). The
+# worker host is its own process since 7.13.341, so this no longer risks
+# delaying a live API request, but a chain of several such passes can still
+# burn real minutes -- so the drain also gets a WALL-CLOCK ceiling, and the
+# slowest task(s) get surfaced instead of just the pass elapsed time.
+# ---------------------------------------------------------------------------
+
+
+def test_boot_drain_stops_at_the_wall_clock_ceiling(monkeypatch):
+    from prism_service.services import gate_adjudicator as ga
+    from prism_service.services import wakeups as wk
+
+    wk._reset_for_tests()
+    calls: list[tuple] = []
+
+    def fake_sweep_once(force=False, force_backoff=None):
+        calls.append((force, force_backoff))
+        ga._last_eligible_count = 5
+        ga._last_changed_count = 4  # never converges on its own
+        return []
+
+    def fake_wait(kinds, timeout=None):
+        raise _StopLoop()
+
+    clock = {"t": 0.0}
+
+    def fake_monotonic():
+        clock["t"] += 25.0  # 3rd read crosses the 60s ceiling
+        return clock["t"]
+
+    monkeypatch.setattr(ga, "sweep_once", fake_sweep_once)
+    monkeypatch.setattr(ga.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(wk, "wait_out_startup_warmup", lambda: None)
+    monkeypatch.setattr(wk, "lower_thread_priority", lambda: None)
+    monkeypatch.setattr(wk, "wait", fake_wait)
+    monkeypatch.setattr(wk, "worker_fallback_s", lambda: None)
+
+    with pytest.raises(_StopLoop):
+        ga._loop(60)
+
+    assert 0 < len(calls) < ga._MAX_BOOT_DRAIN_PASSES, (
+        f"the wall-clock ceiling must stop a never-converging drain well "
+        f"before the pass-count ceiling would -- got {len(calls)} passes")
+
+
+def test_top_3_slowest_tasks_are_surfaced(monkeypatch):
+    """Live, task a65c66e5 fourth round: a pass taking far longer than
+    _SWEEP_BUDGET_S implies is almost always one or two tasks' own
+    adjudication running long -- surface WHICH ones instead of leaving a
+    human to guess from the pass's total elapsed time alone."""
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = _make_tasks(5)
+    ctx, svc = _fake_ctx(tasks)
+    _wire(monkeypatch, ctx)
+    delays = {"t0": 0.08, "t1": 0.0, "t2": 0.05, "t3": 0.0, "t4": 0.02}
+
+    def fake_adjudicate(tid):
+        time.sleep(delays.get(tid, 0.0))
+        return {"ok": False}
+
+    svc.adjudicate_green_gate = MagicMock(side_effect=fake_adjudicate)
+
+    ga.sweep_once(force=True)
+
+    slow_ids = [t for t, _ in ga._last_top_slow]
+    assert slow_ids == ["t0", "t2", "t4"], ga._last_top_slow
+    assert len(ga._last_top_slow) == 3

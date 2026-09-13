@@ -212,6 +212,14 @@ _last_eligible_count = 0
 _last_changed_count = 0
 _last_decided_count = 0
 
+#: The top 3 (task_id, elapsed_ms) pairs from the most recent pass, slowest
+#: first -- task a65c66e5, third round, 2026-09-13: a pass observed taking
+#: ~20s (against a 2s _SWEEP_BUDGET_S, which only ever gates STARTING the
+#: next task, never bounds one already running) turned out to be one or two
+#: individual adjudications running long, and there was no way to tell
+#: which from the activity feed alone.
+_last_top_slow: list[tuple[str, float]] = []
+
 
 # PROJECT-LEVEL SKIP (2026-09-13, task adjmemo). The per-task backoff above
 # only ever saved the cost of ONE task's adjudication -- every sweep still
@@ -243,6 +251,18 @@ _SWEEP_BUDGET_S = 2.0
 # does, the loop falls through to normal reactive waiting rather than
 # holding up startup forever.
 _MAX_BOOT_DRAIN_PASSES = 25
+
+# WALL-CLOCK ceiling on the WHOLE boot-drain sequence (task a65c66e5,
+# fourth round, 2026-09-13): live, individual passes were observed taking
+# ~20s each (one slow adjudication -- a git op or evidence re-mint -- not a
+# bug in this loop; _SWEEP_BUDGET_S only gates STARTING the next task,
+# never bounds one already running), so a pass-count ceiling alone could
+# still burn real minutes. Since the worker host runs as its own process
+# separate from the API (task workerproc, 7.13.341+), this no longer risks
+# delaying a live request the way it would have before that split -- but
+# CPU and correctness still matter, so the drain still gives up and goes
+# reactive well before it could look "stuck" to an operator.
+_MAX_BOOT_DRAIN_SECONDS = 60.0
 
 
 def _project_needs_scan(pid: str, wakeups_mod) -> bool:
@@ -294,12 +314,14 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
     if force_backoff is None:
         force_backoff = force
     global _last_eligible_count, _last_changed_count, _last_decided_count
+    global _last_top_slow
     from prism_service.project_context import get_all_projects, get_project
     from prism_service.services import wakeups
     approved: list[dict] = []
     eligible_count = 0
     changed_count = 0
     decided_count = 0
+    task_timings: list[tuple[str, float]] = []
     started = time.monotonic()
     deadline = started + _SWEEP_BUDGET_S
     for pid in get_all_projects():
@@ -388,6 +410,7 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
                 # NEXT tick retries it -- deferred, never dropped.
                 continue
             changed_count += 1
+            _task_started = time.monotonic()
             try:
                 if step == "decide":
                     # The triage workflow's ONLY gate. It carries no rubric
@@ -445,7 +468,11 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
                         res = svc.adjudicate_rubric_gate(tid)
             except Exception as exc:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
+                task_timings.append(
+                    (tid, (time.monotonic() - _task_started) * 1000.0))
                 continue
+            task_timings.append(
+                (tid, (time.monotonic() - _task_started) * 1000.0))
             if res and res.get("ok"):
                 decided_count += 1
                 _backoff_clear(tid)
@@ -543,9 +570,21 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
     _last_eligible_count = eligible_count
     _last_changed_count = changed_count
     _last_decided_count = decided_count
+    # TOP-3 SLOWEST TASK, THIS PASS (owner ask, 2026-09-13: name the slow
+    # ones instead of just measuring the pass as a whole) -- a pass that
+    # takes far longer than _SWEEP_BUDGET_S implies is almost always ONE
+    # task's own adjudication (a git op, an evidence re-mint) running long,
+    # since the budget check only ever gates STARTING the next task, never
+    # bounds one already in flight. Surfaced on the activity feed so a
+    # human (or the next round of this exact investigation) can read WHICH
+    # task without guessing.
+    task_timings.sort(key=lambda p: p[1], reverse=True)
+    _last_top_slow = task_timings[:3]
     elapsed_ms = (time.monotonic() - started) * 1000.0
+    _slow_str = ", ".join(f"{t[:8]}={ms:.0f}ms" for t, ms in _last_top_slow)
     _log(f"{eligible_count} at gates · {changed_count} changed · "
-         f"{decided_count} decided · {elapsed_ms:.0f} ms")
+         f"{decided_count} decided · {elapsed_ms:.0f} ms"
+         + (f" · slowest: {_slow_str}" if _slow_str else ""))
     return approved
 
 
@@ -559,6 +598,8 @@ def _loop(interval_s: int) -> None:
     baseline = time.time()
     first_pass = True
     boot_drain_passes = 0
+    boot_drain_started: Optional[float] = None
+    boot_drain_decided = 0
     while True:
         # THE FIRST PASS(ES) AFTER WARMUP ARE UNCONDITIONAL (task a65c66e5,
         # 2026-09-13, second and third rounds): relying on a `deployed`
@@ -599,9 +640,12 @@ def _loop(interval_s: int) -> None:
                 # backoff's own cost win legible on the activity feed --
                 # a human should be able to tell "26 at gates, 0 changed,
                 # 0 decided" (near-zero cost) apart from an actual sweep.
+                _slow = (", slow: " + ", ".join(
+                    f"{t[:8]}={ms:.0f}ms" for t, ms in _last_top_slow)
+                        if _last_top_slow else "")
                 info["detail"] = (f"{_last_eligible_count} at gates, "
                                   f"{_last_changed_count} changed, "
-                                  f"{len(approved)} decided")
+                                  f"{len(approved)} decided{_slow}")
         except Exception as exc:
             _log(f"sweep error: {exc}")
             first_pass = False
@@ -609,10 +653,11 @@ def _loop(interval_s: int) -> None:
         if first_pass:
             # DRAIN THE FULL BOOT BACKLOG BEFORE GOING REACTIVE. Live
             # 2026-09-13: sweep_once's own per-pass time budget
-            # (_SWEEP_BUDGET_S, 2s -- no background pass may hold the GIL
-            # that long) left MOST of a real 31-gate backlog merely
-            # DEFERRED after just one forced pass (10 changed, then the
-            # loop would have gone reactive) -- and once reactive, a
+            # (_SWEEP_BUDGET_S, 2s) only ever gates STARTING the next
+            # task -- it never bounds one already running, and a real
+            # pass was observed taking ~20s (one slow adjudication, not a
+            # bug in this loop) -- so a real 31-gate backlog was merely
+            # DEFERRED after just one forced pass, and once reactive, a
             # deferred task's own eventual write happens BEFORE the
             # post-sweep wait() baseline below, so it can never
             # self-trigger the very re-look it still needs; it sits stuck
@@ -620,17 +665,40 @@ def _loop(interval_s: int) -> None:
             # `eligible_count > changed_count` on a FORCED pass (backoff
             # is bypassed, so the only reason something is not "changed"
             # is the time budget) means real work is still waiting -- so
-            # force another pass immediately, no wait() in between, each
-            # still capped at _SWEEP_BUDGET_S so the GIL is never held
-            # longer in any single call. A single-gate boot (the shape
-            # this seat's own tests pin) drains in exactly one pass, since
-            # nothing there ever hits the budget.
+            # force another pass immediately, no wait() in between.
+            #
+            # BOUNDED TWO WAYS (owner 2026-09-13, third round: the worker
+            # host is a separate process from the API since 7.13.341, so
+            # this no longer risks delaying a live request -- but CPU and
+            # correctness still matter): a pass-count ceiling
+            # (_MAX_BOOT_DRAIN_PASSES) AND a wall-clock ceiling
+            # (_MAX_BOOT_DRAIN_SECONDS) on the WHOLE drain sequence, since
+            # a handful of ~20s passes can burn real minutes otherwise. A
+            # single-gate boot (the shape this seat's own tests pin)
+            # drains in exactly one pass, since nothing there ever hits
+            # the per-pass budget.
+            if boot_drain_started is None:
+                boot_drain_started = time.monotonic()
             boot_drain_passes += 1
+            boot_drain_decided += len(approved)
+            drain_elapsed_s = time.monotonic() - boot_drain_started
             still_draining = (_last_eligible_count > _last_changed_count
-                              and boot_drain_passes < _MAX_BOOT_DRAIN_PASSES)
+                              and boot_drain_passes < _MAX_BOOT_DRAIN_PASSES
+                              and drain_elapsed_s < _MAX_BOOT_DRAIN_SECONDS)
             if still_draining:
                 continue
             first_pass = False
+            _summary = (f"drain: {boot_drain_passes} passes, "
+                       f"{_last_eligible_count} gates, "
+                       f"{boot_drain_decided} decided, "
+                       f"{drain_elapsed_s:.1f}s")
+            _log(_summary)
+            try:
+                with system_activity.pass_(
+                        "gate_adjudicator", "*", "boot_drain") as info:
+                    info["detail"] = _summary
+            except Exception:
+                pass
         # Wake on "shipped" too -- a push landing (ship_worker) can free a
         # green_gate or resolve a workspace-freshness refusal exactly like
         # a task_changed row does; waiting on task_changed alone left the
