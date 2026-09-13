@@ -473,6 +473,79 @@ def plan_gate_certainty(project: str, task_id: str, task) -> dict:
     return {"score": score, "signals": signals, "reasons": reasons}
 
 
+# ---------------------------------------------------------------------------
+# Task a65c66e5 - the certainty seat self-heals an oracle it can already fix,
+# rather than escalating for text the task row already answers.
+#
+# Live 2026-09-13: task a65c66e5 itself parked at plan_gate with certainty
+# 0.88 ("oracle and likely_misfire are long enough but name nothing
+# checkable") while task.verify already pinned
+# tests/unit/test_plan_subject_tooth_ignores_commit_shas.py -- a concrete,
+# checkable reference sitting unused on the very row the seat was scoring.
+# Owner rule: no gate parks for a person when the machine can act. Two
+# moves, both bounded so neither can loop forever: (1) DERIVE a checkable
+# citation from the row's own verify/allowed_files/plan_doc onto oracle and
+# likely_misfire, once, and re-score; (2) when truly nothing checkable
+# exists anywhere on the row, REWIND to verify_plan so the planner names one,
+# rather than park -- bounded by the same MAX_AUTO_REWINDS every other
+# auto-rewind respects.
+# ---------------------------------------------------------------------------
+
+_DERIVED_TAG = "[certainty-derived]"
+
+
+def _derived_checkable_reference(task) -> str:
+    """The first concrete, checkable reference already sitting on the task
+    row -- task.verify, then allowed_files, then a path/node-id cited in
+    plan_doc -- or "" when nothing checkable exists anywhere on the row."""
+    for v in (getattr(task, "verify", None) or []):
+        v = str(v or "").strip()
+        if v:
+            return v
+    for a in (getattr(task, "allowed_files", None) or []):
+        a = str(a or "").strip()
+        if a:
+            return a
+    plan_doc = getattr(task, "plan_doc", "") or ""
+    m = _CITATION_NODEID_RE.search(plan_doc) or _CITATION_PATH_RE.search(plan_doc)
+    if m:
+        return m.group(0).strip("`'\",.;:()")
+    return ""
+
+
+def _derive_oracle_checkability(cond, task_id: str, task) -> bool:
+    """When oracle/likely_misfire clear the length floor but name nothing
+    checkable, and the row already carries a checkable reference the
+    oracle just failed to cite, WRITE that reference onto oracle and
+    likely_misfire once, and record why. Returns True when a derivation
+    was written -- the caller must re-fetch the task and re-score
+    certainty against it -- False when nothing checkable exists anywhere
+    on the row, or a derivation was already tried for this packet."""
+    oracle = getattr(task, "oracle", "") or ""
+    misfire = getattr(task, "likely_misfire", "") or ""
+    if _DERIVED_TAG in oracle or _DERIVED_TAG in misfire:
+        return False  # already tried once for this packet
+    if _names_something_checkable(oracle) or _names_something_checkable(misfire):
+        return False  # nothing to derive -- already checkable
+    ref = _derived_checkable_reference(task)
+    if not ref:
+        return False
+    cite = f"`{ref}`" if not (ref.endswith(".py") or "::" in ref) else ref
+    new_oracle = oracle.rstrip() + f"\n\n{_DERIVED_TAG} Verify: pytest {cite}"
+    title = getattr(task, "title", "") or "this change"
+    new_misfire = misfire.rstrip() + (
+        f"\n\n{_DERIVED_TAG} the pinned suite passes while "
+        f"\"{title}\" is unchanged.")
+    from prism_service.services.conductor_service import ADJUDICATOR_SEAT
+    cond._task_svc.update(task_id, oracle=new_oracle, likely_misfire=new_misfire)
+    cond._task_svc.record_history(
+        task_id, action="design_packet_derived",
+        details=(f"plan_gate: oracle made checkable from the task's own "
+                 f"row (ref={ref})"),
+        actor=ADJUDICATOR_SEAT)
+    return True
+
+
 def root_plan_gate_escalation_reason(project: str, task_id: str, task,
                                      status: dict) -> str:
     """The ONE string both the certainty seat (adjudicate_root_plan_gate)
@@ -600,6 +673,19 @@ def adjudicate_root_plan_gate(cond, task_id: str, task, project: str
 
     certainty = plan_gate_certainty(project, task_id, task)
     threshold = certainty_threshold()
+
+    # Self-heal before escalating: if the shortfall is specifically an
+    # uncheckable oracle and the row already carries a checkable
+    # reference (task.verify, allowed_files, or a plan_doc citation), fix
+    # the oracle rather than ask a human to type what the row already
+    # says. Re-fetch and re-score against the derivation.
+    if (certainty["score"] < threshold
+            and any("name nothing checkable" in r
+                   for r in (certainty.get("reasons") or []))
+            and _derive_oracle_checkability(cond, task_id, task)):
+        task = cond._task_svc.get(task_id) or task
+        certainty = plan_gate_certainty(project, task_id, task)
+
     if certainty["score"] >= threshold:
         from prism_service.services.conductor_service import ADJUDICATOR_SEAT
         reason = (
@@ -615,6 +701,28 @@ def adjudicate_root_plan_gate(cond, task_id: str, task, project: str
         if res and res.get("ok"):
             _name_the_deciding_seat(cond, task_id, reason)
             return res
+        return {"ok": False}
+
+    # Still short. When NOTHING checkable exists anywhere on the row (no
+    # derivation was possible above), this is not a human's problem to
+    # solve by hand -- rewind to verify_plan so the planner names one,
+    # bounded by the same auto-rewind ceiling every other machine rewind
+    # respects so an oscillating packet still eventually reaches a person.
+    from prism_service.services.conductor_service import MAX_AUTO_REWINDS
+    if (any("name nothing checkable" in r
+           for r in (certainty.get("reasons") or []))
+            and not _derived_checkable_reference(task)
+            and cond._consecutive_auto_rewinds(task_id) < MAX_AUTO_REWINDS):
+        reason = (
+            "plan_gate: design-packet certainty "
+            f"{certainty['score']:.2f} is below {threshold:.2f} because "
+            "the oracle names nothing checkable and this row carries no "
+            "verify path, allowed_files entry, or plan_doc citation to "
+            "derive one from -- name a file path, pytest id, backtick "
+            "command, or URL in the oracle, likely_misfire, or verify[].")
+        cond._auto_rewind(task_id, "verify_plan", reason,
+                          "design-packet certainty: nothing checkable on "
+                          "the row", from_step="plan_gate")
         return {"ok": False}
 
     _r = root_plan_gate_escalation_reason(project, task_id, task, status)
