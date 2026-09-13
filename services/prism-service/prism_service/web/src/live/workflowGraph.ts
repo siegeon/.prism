@@ -612,6 +612,19 @@ export class WorkflowGraph {
     return new Set(this.wires.map((w) => w.key));
   }
 
+  /** True while this board has something genuinely animating on its own
+   * clock right now — a packet mid-flight, or any node actually occupied
+   * (count > 0, the same signal that lights its RUNNING pulse). The
+   * page's rAF loop (task fix/canvasidle) drops to a slow idle tick once
+   * this goes false and nothing else (a replay, a progress fill, a real
+   * pointer interaction) is keeping it awake either — a static conductor
+   * canvas measured live burned ~36% renderer CPU forever with no way to
+   * ever ask this question. */
+  hasActiveAnimation(): boolean {
+    if (this.packets.length > 0) return true;
+    return this.nodes.some((n) => (n.count ?? 0) > 0);
+  }
+
   /** Frames the whole board once, then leaves the camera to the owner —
    * a view that re-fits under you while you are reading it is unusable. */
   fit(w: number, h: number, force = false): void {

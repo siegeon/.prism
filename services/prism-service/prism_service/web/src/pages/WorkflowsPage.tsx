@@ -2090,7 +2090,21 @@ export default function WorkflowsPage() {
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
     let raf = 0;
+    let idleTimer = 0;
     let last = performance.now();
+    // task fix/canvasidle: measured live, a static conductor canvas (no
+    // packets, no lit/occupied node, nobody dragging or replaying) burned
+    // ~36% renderer CPU forever because this loop re-armed
+    // requestAnimationFrame unconditionally every frame, 61/s, whether or
+    // not the board had a single pixel left to change. `lastActivityAt`
+    // tracks real pointer interaction (updated by the listeners below,
+    // never by the draw itself) so a hover/drag/wheel keeps the board at
+    // full 60fps for its duration and for a short settle window after.
+    let lastActivityAt = performance.now();
+    const bump = () => {
+      lastActivityAt = performance.now();
+      if (!raf && !idleTimer && !document.hidden) raf = requestAnimationFrame(frame);
+    };
     const frame = (now: number) => {
       const dt = now - last;
       last = now;
@@ -2271,10 +2285,41 @@ export default function WorkflowsPage() {
         };
       }
       drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, effectiveNodeVerdicts, runView);
-      raf = requestAnimationFrame(frame);
+      // Dirty-gated reschedule: keep 60fps while the board itself has a
+      // real pulse/packet/replay in flight (graphRef.current.hasActiveAnimation)
+      // or a node's own progress fill is animating (activeProgress, computed
+      // above), OR the viewer touched the canvas within the last 500ms
+      // (lastActivityAt, via the pointer/wheel listeners below). Otherwise
+      // drop to a 1fps tick -- still enough for the RUN clock/gate-wait
+      // labels to creep forward -- instead of stopping dead, since a
+      // page-open board must never look frozen. A hidden tab stops
+      // scheduling entirely and resumes on visibilitychange.
+      if (document.hidden) { raf = 0; return; }
+      const active = graphRef.current.hasActiveAnimation() || activeProgress !== null
+        || now - lastActivityAt < 500;
+      if (active) {
+        raf = requestAnimationFrame(frame);
+      } else {
+        raf = 0;
+        idleTimer = window.setTimeout(() => { idleTimer = 0; raf = requestAnimationFrame(frame); }, 1000);
+      }
     };
     raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
+    const onVisibilityChange = () => {
+      if (!document.hidden && !raf && !idleTimer) raf = requestAnimationFrame(frame);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    canvas.addEventListener("pointermove", bump);
+    canvas.addEventListener("pointerdown", bump);
+    canvas.addEventListener("wheel", bump, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(idleTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      canvas.removeEventListener("pointermove", bump);
+      canvas.removeEventListener("pointerdown", bump);
+      canvas.removeEventListener("wheel", bump);
+    };
   }, [selectedNodeId, selectedWorkflow, workflowRun, testStep, replayStoppedAt, workflowRunHistory, workflows, effectiveNodeVerdicts, runView, runTrace, runMotionSeconds, tier, lastOutcome, liveEndedAt, isStateMachineWorkflow, conductorManaged, conductorStepIds]);
 
   // Rehydrate the directory's own saved child order whenever the project
