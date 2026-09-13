@@ -296,3 +296,25 @@ def test_the_wheel_zoom_out_floor_matches_the_canvas_minimum():
         "the wheel handler must not keep its own separate hardcoded 0.35 "
         "floor"
     )
+
+
+# ---------------------------------------------------------------------------
+# Live counts prefix (task fix/canvasplay, widened scope, owner 2026-09-13:
+# "N tasks · M at gates · running: <kind> on <node>"). Every "Driving ..."/
+# "Waiting at ..."/quiet-copy literal this file pins above lives INSIDE
+# statusLineText's own useMemo and is untouched -- the counts are a
+# separate derived value (bannerText) that prefixes the whole thing at the
+# render site, never a rewrite of the pinned running/waiting copy.
+# ---------------------------------------------------------------------------
+
+def test_running_banner_is_prefixed_with_live_task_and_gate_counts():
+    src = _read(_PAGE)
+    assert "const bannerText = dataLoaded" in src
+    # bannerText must reference statusLineText (the running/waiting/quiet
+    # copy this file's own tests pin) rather than duplicating its logic.
+    banner_idx = src.index("const bannerText = dataLoaded")
+    banner_expr = src[banner_idx:banner_idx + 400]
+    assert "${statusLineText}" in banner_expr
+    assert "<span>{bannerText}</span>" in src, (
+        "the status-line row must render the counts-prefixed bannerText, "
+        "not the bare statusLineText")

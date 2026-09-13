@@ -124,3 +124,30 @@ def test_a_session_cache_lets_navigation_repaint_instantly():
         "the workflows state's initial value must read the cache, not "
         "hardcode an empty array"
     )
+
+
+# ---------------------------------------------------------------------------
+# Live counts prefix (task fix/canvasplay, widened scope, owner 2026-09-13):
+# the banner grew "N tasks · M at gates · " ahead of the existing
+# statusLineText copy this file's other tests pin byte-for-byte. Added as a
+# SEPARATE derived value (bannerText) applied only at the JSX render site --
+# statusLineText's own useMemo (and every literal branch inside it this
+# file's other tests assert) is untouched, so this is a pure addition, not
+# a rewrite of the pinned copy.
+# ---------------------------------------------------------------------------
+
+def test_banner_prefixes_live_task_and_gate_counts_ahead_of_the_status_line():
+    src = _read()
+    assert "const bannerText = dataLoaded" in src, (
+        "a bannerText derived value must exist, held back until dataLoaded "
+        "so the counts never read '0 tasks · 0 at gates' before the first "
+        "poll answers")
+    banner_idx = src.index("const bannerText = dataLoaded")
+    banner_expr = src[banner_idx:banner_idx + 400]
+    assert "conductorManaged.length" in banner_expr
+    assert "conductorTaskWaitingAtGate" in banner_expr
+    assert "${statusLineText}" in banner_expr, (
+        "the counts must PREFIX the existing statusLineText copy, never "
+        "replace it")
+    # The render site shows bannerText, not the bare statusLineText.
+    assert "<span>{bannerText}</span>" in src
