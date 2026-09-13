@@ -28,13 +28,23 @@ import { api } from "@/lib/api";
 export type ChangesSnapshot = { counter: number; at: number };
 
 const POLL_MS = 1000;
+// Self-healing backoff (measured live, 2026-09-13): an older backend that
+// predates GET /api/changes answers 404 forever, and polling a 404 at 1Hz
+// costs real requests for zero benefit -- measured adding ~60 req/min on an
+// idle tab with nothing to show for it. After FAILURES_BEFORE_BACKOFF
+// consecutive failures the shared poll backs off to BACKOFF_MS; the very
+// next SUCCESS (the backend catches up, or comes back after a restart)
+// resets it to the full 1Hz cadence immediately.
+const FAILURES_BEFORE_BACKOFF = 5;
+const BACKOFF_MS = 30_000;
 
 type Listener = (snap: ChangesSnapshot) => void;
 
 const listenersByProject = new Map<string, Set<Listener>>();
 const latestByProject = new Map<string, ChangesSnapshot>();
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
 let started = false;
+let consecutiveFailures = 0;
 
 function projectsWithSubscribers(): string[] {
   const out: string[] = [];
@@ -42,25 +52,51 @@ function projectsWithSubscribers(): string[] {
   return out;
 }
 
-function pollOnce(): void {
+async function pollOnce(): Promise<void> {
   if (typeof document !== "undefined" && document.hidden) return;
-  for (const project of projectsWithSubscribers()) {
-    const qs = project ? `?project=${encodeURIComponent(project)}` : "";
-    api
-      .get<ChangesSnapshot>(`/api/changes${qs}`)
-      .then((snap) => {
+  const projects = projectsWithSubscribers();
+  if (projects.length === 0) return;
+  const results = await Promise.allSettled(
+    projects.map((project) => {
+      const qs = project ? `?project=${encodeURIComponent(project)}` : "";
+      return api.get<ChangesSnapshot>(`/api/changes${qs}`).then((snap) => {
         latestByProject.set(project, snap);
         for (const l of listenersByProject.get(project) ?? []) l(snap);
-      })
-      .catch(() => { /* leave last-known snapshot; next tick retries */ });
+      });
+    }),
+  );
+  if (results.some((r) => r.status === "rejected")) {
+    consecutiveFailures += 1;
+  } else {
+    consecutiveFailures = 0;
   }
+}
+
+/** The ONE live schedule this module ever runs: a single pending timer,
+ * re-armed after each poll settles (never a second one stacked on top).
+ * Same shared-timer discipline as sharedStream.ts, just self-rescheduling
+ * instead of a fixed setInterval so the backoff above can stretch the gap
+ * without a second concurrent timer ever existing. */
+function scheduleNext(): void {
+  const delay = consecutiveFailures >= FAILURES_BEFORE_BACKOFF ? BACKOFF_MS : POLL_MS;
+  timer = setTimeout(runAndReschedule, delay);
+}
+
+function runAndReschedule(): void {
+  void pollOnce().finally(scheduleNext);
 }
 
 function ensureStarted(): void {
   if (started || typeof window === "undefined") return;
   started = true;
-  timer = setInterval(pollOnce, POLL_MS);
-  const onVisible = () => { if (!document.hidden) pollOnce(); };
+  scheduleNext();
+  const onVisible = () => {
+    if (document.hidden) return;
+    // Refocusing/returning to a backed-off tab shouldn't wait out the full
+    // backoff window -- try immediately, which also resets it on success.
+    if (timer) clearTimeout(timer);
+    void pollOnce().finally(scheduleNext);
+  };
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onVisible);
 }
@@ -95,9 +131,10 @@ export function useChanges(project = ""): ChangesSnapshot {
 
 /** Test/diagnostic escape hatch -- never call from product code. */
 export function _resetForTests(): void {
-  if (timer) clearInterval(timer);
+  if (timer) clearTimeout(timer);
   timer = null;
   started = false;
+  consecutiveFailures = 0;
   listenersByProject.clear();
   latestByProject.clear();
 }
