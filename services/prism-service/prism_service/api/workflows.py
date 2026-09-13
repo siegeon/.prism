@@ -4214,17 +4214,34 @@ def workflow_step_commit_tests_only(
                 out["reason"] = why
                 return out
             try:
-                changed = _git("status", "--porcelain")
+                # --untracked-files=all: without it, git collapses a
+                # wholly-new directory (e.g. tests/unit/) into a single
+                # "?? tests/" entry instead of listing the files inside
+                # it -- which is exactly the shape a brand-new red-step
+                # test file almost always has.
+                changed = _git("status", "--porcelain",
+                               "--untracked-files=all")
             except (OSError, subprocess.TimeoutExpired) as exc:
                 out["reason"] = f"git status failed: {exc}"
                 return out
-            files = [ln[3:].strip() for ln in
-                     (changed.stdout or "").splitlines() if ln[3:].strip()]
+            files = []
+            for ln in (changed.stdout or "").splitlines():
+                path = ln[3:].strip()
+                if not path:
+                    continue
+                if " -> " in path:  # staged rename: "old -> new"
+                    path = path.split(" -> ", 1)[1].strip()
+                if path:
+                    files.append(path)
             if not files:
                 out["reason"] = "nothing to commit: the worktree is clean"
                 return out
-            stray = [f for f in files
-                     if not f.rsplit("/", 1)[-1].startswith("test_")]
+
+            def _is_test_path(f: str) -> bool:
+                base = f.rstrip("/").rsplit("/", 1)[-1]
+                return base.startswith("test_")
+
+            stray = [f for f in files if not _is_test_path(f)]
             if stray:
                 out["files"] = files
                 out["reason"] = (
