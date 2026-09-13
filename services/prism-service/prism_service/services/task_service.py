@@ -1245,6 +1245,28 @@ class TaskService:
         ).fetchone()
         return (int(row["n"] or 0), str(row["latest"] or ""))
 
+    def pending_deploy_task_ids(self, action: str = "deploy",
+                                stage_prefix: str = "stage=requested") -> list[str]:
+        """Ids of DONE tasks whose MOST RECENT `action` history row still
+        reads `stage_prefix` -- one SQL query (a per-task-id latest-row
+        subquery) instead of deploy_worker.sweep_pending's old N+1: list
+        every done task, then call TaskService.history(tid) on each one
+        just to look at its last row. Cost pass (owner brief, 2026-09-13,
+        200ms bar): sweep_pending used to pay a full row_to_task
+        conversion PLUS a history() table scan for every done task in the
+        project on every tick, most of which have no pending deploy at
+        all."""
+        rows = self._db.execute(
+            "SELECT th.task_id AS task_id FROM task_history th "
+            "JOIN tasks t ON t.id = th.task_id "
+            "WHERE t.status = 'done' AND th.action = ? "
+            "AND th.id = (SELECT MAX(id) FROM task_history th2 "
+            "             WHERE th2.task_id = th.task_id AND th2.action = ?) "
+            "AND th.details LIKE ? || '%'",
+            (action, action, stage_prefix),
+        ).fetchall()
+        return [r["task_id"] for r in rows]
+
     def attach_conductor_service(self, conductor_svc: Any) -> None:
         """Late-bind the project's ConductorService so update()'s task.changed
         publish (below) can compute a fresh `activity` block at the moment of

@@ -490,6 +490,43 @@ def test_sweep_new_land_notices_a_signalled_land_inside_a_warm_cache(tmp_path):
     assert restarted == [1]
 
 
+def test_sweep_pending_confirms_only_ids_with_a_real_pending_request(
+        tmp_path, monkeypatch):
+    """200ms-bar cost tooth (owner brief, 2026-09-13): sweep_pending used to
+    list EVERY done task and call history() on each just to find the rare
+    one with a pending deploy request. It must now confirm exactly the ids
+    TaskService.pending_deploy_task_ids names -- zero confirm attempts for
+    an ordinary done task with no deploy history at all."""
+    from prism_service.services.task_service import TaskService
+
+    task_svc = TaskService(str(tmp_path / "tasks.db"))
+    plain_done = task_svc.create(title="ordinary done task")
+    task_svc.update(plain_done.id, status="done")
+    pending = task_svc.create(title="task with a pending deploy")
+    task_svc.update(pending.id, status="done")
+    task_svc.record_history(
+        pending.id, action="deploy", details="stage=requested; target_version=1.2.3")
+
+    class _Ctx:
+        pass
+    ctx = _Ctx()
+    ctx.task_svc = task_svc
+    monkeypatch.setattr(
+        "prism_service.project_context.get_all_projects", lambda: ["proj"])
+    monkeypatch.setattr(
+        "prism_service.project_context.get_project", lambda pid: ctx)
+
+    confirmed = []
+    monkeypatch.setattr(deploy_worker, "confirm_pending_deploy",
+                        lambda *, task_svc, task_id: confirmed.append(task_id))
+
+    deploy_worker.sweep_pending()
+
+    assert confirmed == [pending.id], (
+        "only the task with a real pending deploy row may be confirmed -- "
+        "the ordinary done task must cost zero confirm attempts")
+
+
 def test_deployer_seat_is_a_registered_machine_seat():
     """AC(e): an unregistered actor writing history resolves to
     ActorKind.UNKNOWN -- the audited defect ship_worker's own suite already

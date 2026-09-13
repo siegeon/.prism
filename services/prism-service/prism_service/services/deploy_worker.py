@@ -555,17 +555,23 @@ def sweep_pending() -> None:
         task_svc = getattr(ctx, "task_svc", None)
         if task_svc is None:
             continue
+        # COST (owner brief, 2026-09-13, 200ms bar): the old candidates =
+        # list(status="done") + _pending_deploy_target(tid) per task paid a
+        # full row_to_task conversion for EVERY done task plus a history()
+        # table scan on each one, almost all with no pending deploy at all.
+        # One SQL query (TaskService.pending_deploy_task_ids) narrows this
+        # to just the ids that actually need confirming.
         try:
-            candidates = list(task_svc.list(status="done"))
+            ids = task_svc.pending_deploy_task_ids(
+                action=_DEPLOY_ACTION,
+                stage_prefix=f"stage={_STAGE_REQUESTED}")
         except Exception:
-            candidates = []
-        for task in candidates:
-            tid = str(getattr(task, "id", "") or "")
-            if tid and _pending_deploy_target(task_svc, tid):
-                try:
-                    confirm_pending_deploy(task_svc=task_svc, task_id=tid)
-                except Exception:
-                    pass
+            ids = []
+        for tid in ids:
+            try:
+                confirm_pending_deploy(task_svc=task_svc, task_id=tid)
+            except Exception:
+                pass
 
 
 def _tick() -> None:
