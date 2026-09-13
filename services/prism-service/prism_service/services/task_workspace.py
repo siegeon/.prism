@@ -354,6 +354,16 @@ def _detach_link(path: Path) -> None:
         os.unlink(str(path))
 
 
+def _ref_exists(cwd: Path, ref: str) -> bool:
+    """True if `ref` resolves in `cwd`'s repo -- a plain rev-parse --verify,
+    never raising (a missing ref is an ordinary "no" here, not an error)."""
+    try:
+        _git_out(cwd, "rev-parse", "--verify", ref)
+        return True
+    except RuntimeError:
+        return False
+
+
 def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
                      base_ref: Optional[str] = None) -> dict:
     """Create (idempotently) a real git worktree of the PRISM repo for this
@@ -364,8 +374,25 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
     commit, so the worker's later commits are the scoped work tier0 diffs
     against.
 
-    FAIL CLOSED: any git failure (no repo, worktree add error) raises —
-    callers must NOT fall back to a shared branch.
+    RECOVERY (task a65c66e5, ops incident 2026-09-13): the recorded (or
+    conventional) path may be missing while the task's OWN `prism/ws/
+    <task_id>` branch still exists -- a worktree-sweep pass, or an
+    operator, removed the directory (and pruned git's own worktree
+    registration) without deleting the branch, or without this index ever
+    being told. Before this fix, the branch below always ran `worktree add
+    -b <branch>`, which git refuses outright when that branch already
+    exists ("fatal: A branch named '...' already exists"), so the task
+    could never start again. Now: if the branch exists (locally, or on
+    `origin`), the SAME branch is checked out into a fresh worktree at
+    that path -- recovering whatever commits it carries, merged or not --
+    instead of trying to create it anew. Only when the branch exists
+    nowhere at all does this fall back to a brand-new branch off
+    `base_ref`/HEAD, exactly as before.
+
+    FAIL CLOSED: any git failure (no repo, worktree add error, a branch
+    that exists but cannot be checked out -- e.g. already attached to
+    another live worktree) raises — callers must NOT fall back to a
+    shared branch, and must NOT silently drop a branch's commits.
     """
     idx = _load_index()
     rec = idx.get(task_id)
@@ -391,19 +418,47 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
     if not (root / ".git").exists():
         raise RuntimeError(f"{root} is not a git checkout; refusing to create "
                            "a fake workspace (fail closed)")
-    base = base_ref or _git_out(root, "rev-parse", "HEAD")
 
-    ws = _root() / task_id
     branch = f"prism/ws/{task_id}"
+    # Recover at the PREVIOUSLY RECORDED path when one is on file (even
+    # though it no longer exists on disk) so a later sync/report reads the
+    # same location a driver may already know about; otherwise the usual
+    # conventional path.
+    ws = Path(rec["path"]) if rec and rec.get("path") else (_root() / task_id)
+
     # Reap any orphaned registration from a prior partial run so a fresh id
     # is not blocked; harmless when there is nothing to prune.
     try:
         _git_out(root, "worktree", "prune")
     except RuntimeError:
         pass
-    # git creates `ws`; adding -b makes the task's branch off `base`. A
-    # failure here raises straight out of _git_out (fail closed).
-    _git_out(root, "worktree", "add", "-b", branch, str(ws), base)
+
+    recovered_from = ""
+    remote_ref = f"origin/{branch}"
+    if _ref_exists(root, f"refs/heads/{branch}"):
+        try:
+            _git_out(root, "worktree", "add", str(ws), branch)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"branch {branch} exists but could not be recovered into a "
+                f"worktree (fail closed, its commits are not discarded): "
+                f"{exc}") from exc
+        recovered_from = branch
+    elif _ref_exists(root, remote_ref):
+        try:
+            _git_out(root, "worktree", "add", "-b", branch, str(ws),
+                     remote_ref)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"branch {branch} exists on {remote_ref} but could not be "
+                f"recovered into a worktree (fail closed): {exc}") from exc
+        recovered_from = remote_ref
+    else:
+        base = base_ref or _git_out(root, "rev-parse", "HEAD")
+        # git creates `ws`; adding -b makes the task's branch off `base`. A
+        # failure here raises straight out of _git_out (fail closed).
+        _git_out(root, "worktree", "add", "-b", branch, str(ws), base)
+
     _git_out(ws, "config", "user.email", "worker@prism")
     _git_out(ws, "config", "user.name", "prism-worker")
     # JS deps are gitignored, so the fresh checkout has none; link them in
@@ -415,6 +470,11 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
 
     rec = {"task_id": task_id, "path": str(ws), "baseline": _git_out(
         ws, "rev-parse", "HEAD"), "branch": branch, "repo_root": str(root)}
+    if recovered_from:
+        # Transient audit breadcrumb for the caller (conductor_flow.flow_start
+        # turns this into a task history row); harmless to also persist in
+        # the index, read by nothing that requires its absence.
+        rec["recreated_from"] = recovered_from
     idx[task_id] = rec
     _save_index(idx)
     return rec

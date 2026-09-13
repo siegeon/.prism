@@ -454,6 +454,69 @@ def _proc_cwd_is_under(path: Path) -> bool:
     return False
 
 
+_TASK_BRANCH_PREFIX = "prism/ws/"
+
+# A task in any of these states is finished; every other status (in_progress,
+# blocked, pending, or anything future) means the task is still active and
+# its worktree must survive the sweep regardless of age or cleanliness.
+_ACTIVE_STATUSES_ARE_EVERYTHING_ELSE = FINISHED_STATUSES
+
+
+def _task_id_from_branch(branch: str) -> Optional[str]:
+    """The task id a `prism/ws/<task_id>` branch names, or None for any
+    other branch shape (an agent/QA/fixer worktree, which never has a task
+    row to protect it here)."""
+    b = str(branch or "")
+    if not b.startswith(_TASK_BRANCH_PREFIX):
+        return None
+    tid = b[len(_TASK_BRANCH_PREFIX):].strip()
+    return tid or None
+
+
+def _live_task_guard_reason(branch: str) -> Optional[str]:
+    """None when this worktree is free to be judged on age/cleanliness/
+    ancestry as before; a reason string when a REAL task row says it is
+    still active and must survive regardless of any of that.
+
+    Ops incident 2026-09-13, task a65c66e5: that task was `in_progress` at
+    `verify_plan`, its worktree was clean, and its branch was a pure
+    ancestor of origin/main (zero unique commits -- the ordinary shape of a
+    task that has not committed past its baseline yet). The sweep reaped it
+    on age alone. This guard is checked BEFORE dirty/age/ancestor so none of
+    those can ever override it.
+
+    No task row for the id (an orphaned branch, or a task_id belonging to
+    no project this process knows about) returns None -- the OLD
+    task-agnostic behavior, unchanged (see
+    test_the_sweep_reaps_a_task_worktree_too_when_orphaned).
+    """
+    task_id = _task_id_from_branch(branch)
+    if not task_id:
+        return None
+    try:
+        from prism_service.project_context import get_all_projects, get_project
+    except Exception:  # noqa: BLE001 - the guard degrades to "no opinion"
+        return None
+    try:
+        project_ids = get_all_projects()
+    except Exception:  # noqa: BLE001
+        return None
+    for pid in project_ids:
+        try:
+            task = get_project(pid).task_svc.get(task_id)
+        except Exception:  # noqa: BLE001 - one bad project never blocks the rest
+            continue
+        if task is None:
+            continue
+        status = str(getattr(task, "status", "") or "").strip().lower()
+        if status not in _ACTIVE_STATUSES_ARE_EVERYTHING_ELSE:
+            return (f"task {task_id[:8]} is still {status or 'active'} in "
+                    f"project {pid!r}; the sweep never reaps a live task's "
+                    "own worktree")
+        return None  # found the task row and it is finished; no restriction
+    return None
+
+
 def _forget_paths(gone: set[str]) -> None:
     """Drop any workspace index row pointing at a path the sweep just
     removed -- the same bookkeeping `_forget` does for `reap_task`, just
@@ -553,6 +616,12 @@ def sweep_worktrees(
             continue
         if not path.exists():
             item["reason"] = "directory already gone (pruned)"
+            items.append(item)
+            continue
+
+        live_task_reason = _live_task_guard_reason(item["branch"])
+        if live_task_reason is not None:
+            item["reason"] = live_task_reason
             items.append(item)
             continue
 

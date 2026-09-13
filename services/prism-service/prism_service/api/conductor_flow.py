@@ -684,6 +684,19 @@ def flow_start(body: Ident, project: str = Query("default")) -> dict:
                 "error": f"workspace unavailable, refusing to start "
                          f"(fail closed): {exc}",
                 "workspace": None}
+    # A missing directory was just recovered from its own surviving branch
+    # (task a65c66e5) -- record it on the task's own history so the recovery
+    # is visible, not just a silent side effect of this call.
+    recovered_from = (ws or {}).get("recreated_from")
+    if recovered_from:
+        try:
+            svc._task_svc.record_history(
+                body.task_id, "workspace_recreated",
+                details=f"workspace recreated at {ws.get('path')} from "
+                        f"{recovered_from}",
+                actor="task_workspace")
+        except Exception:
+            pass
     # The board must show the drive from the FIRST call, not from the first
     # successful report -- an intake window that reads pending is the same
     # blind spot one step earlier.
