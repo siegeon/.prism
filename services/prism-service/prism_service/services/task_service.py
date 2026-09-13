@@ -1195,6 +1195,56 @@ class TaskService:
         ).fetchall()
         return [r["id"] for r in rows]
 
+    #: the only workflow_step values gate_adjudicator.sweep_once ever acts
+    #: on (a gate step it can decide, or 'done' for terminal closure) --
+    #: shared so the SQL predicate below and any caller checking "is this
+    #: step gate-relevant" never drift apart.
+    GATE_SWEEP_STEPS = (
+        "green_gate", "red_gate", "story_gate", "plan_gate",
+        "decide", "review", "done",
+    )
+
+    def gate_sweep_rows(self) -> list[dict[str, str]]:
+        """Lean id/workflow_step/gate_state/updated_at snapshot of every task
+        on a step `gate_adjudicator.sweep_once` cares about -- narrows BOTH
+        the predicate and the columns at the SQL layer, so the project's
+        OTHER tasks (the overwhelming majority once a project has run for a
+        while) never pay for a full `_row_to_task` conversion -- JSON-
+        decoding dependencies/tags, reading every text column including
+        plan_doc/description/oracle -- just to be filtered back out by the
+        sweep's own loop a moment later. Tick-cost pass (owner brief,
+        2026-09-13): sweep_once used to call the general-purpose `list()`
+        (SELECT * across the WHOLE table) once per sweep regardless of how
+        few tasks were actually gate-relevant. Returns plain dicts (the
+        sweep already branches on `isinstance(t, dict)` for every field it
+        reads), never a Task dataclass -- there is deliberately no
+        conversion path back to one here."""
+        placeholders = ",".join("?" for _ in self.GATE_SWEEP_STEPS)
+        rows = self._db.execute(
+            f"SELECT id, workflow_step, gate_state, updated_at FROM tasks "
+            f"WHERE workflow_step IN ({placeholders})",
+            list(self.GATE_SWEEP_STEPS),
+        ).fetchall()
+        return [
+            {"id": r["id"], "workflow_step": r["workflow_step"] or "",
+             "gate_state": r["gate_state"] or "none",
+             "updated_at": r["updated_at"] or ""}
+            for r in rows
+        ]
+
+    def text_fingerprint(self) -> tuple[int, str]:
+        """Cheap (COUNT(*), MAX(updated_at)) signature for "could this
+        project's task text possibly have changed since I last looked" --
+        one indexed aggregate query, zero row_to_task conversions. Tick-
+        cost pass (owner brief, 2026-09-13): language_alignment_worker's
+        own dry-run scans every task's free text on EVERY tick just to
+        answer that; a caller can check this first and skip the scan
+        entirely when the signature has not moved."""
+        row = self._db.execute(
+            "SELECT COUNT(*) AS n, MAX(updated_at) AS latest FROM tasks"
+        ).fetchone()
+        return (int(row["n"] or 0), str(row["latest"] or ""))
+
     def attach_conductor_service(self, conductor_svc: Any) -> None:
         """Late-bind the project's ConductorService so update()'s task.changed
         publish (below) can compute a fresh `activity` block at the moment of
