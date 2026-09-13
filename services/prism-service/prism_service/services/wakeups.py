@@ -234,6 +234,46 @@ def wait(kinds: Iterable[str], project: Optional[str] = None,
             _COND.wait(timeout=poll)
 
 
+def changed_since(kinds: Iterable[str], project: Optional[str],
+                   baseline: float) -> list[tuple[str, str, float]]:
+    """Which of `kinds` have a signal newer than `baseline` (for `project`,
+    or every project when None) -- across BOTH the in-memory record and
+    the cross-process table, deduped to the single newest (project, ts)
+    per kind. Backs GET /sse/changes (routes/sse.py): after `wait()`
+    returns True, this answers WHICH kind(s) actually moved, so the
+    stream can emit one real event per change instead of a bare "something
+    happened" ping the client would have to re-poll to interpret."""
+    kinds_set = set(kinds)
+    best: dict[str, tuple[str, float]] = {}
+    with _LOCK:
+        for (ek, ep), ts in _LAST.items():
+            if ek not in kinds_set or ts <= baseline:
+                continue
+            if project and ep != "*" and ep != project:
+                continue
+            if ek not in best or ts > best[ek][1]:
+                best[ek] = (ep, ts)
+    conn = _cross_conn()
+    if conn is not None:
+        placeholders = ",".join("?" for _ in kinds_set) or "NULL"
+        try:
+            with _CROSS_LOCK:
+                rows = conn.execute(
+                    f"SELECT kind, project, ts FROM signals WHERE kind IN ({placeholders})",
+                    tuple(kinds_set),
+                ).fetchall()
+        except Exception:
+            rows = []
+        for ek, ep, ts in rows:
+            if ts <= baseline:
+                continue
+            if project and ep != "*" and ep != project:
+                continue
+            if ek not in best or ts > best[ek][1]:
+                best[ek] = (ep, ts)
+    return [(k, p, t) for k, (p, t) in best.items()]
+
+
 def changes_snapshot(project: Optional[str] = None) -> float:
     """The newest signal timestamp visible to `project` (any kind, plus
     wildcard signals) -- or across every project when `project` is None.

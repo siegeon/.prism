@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from fastapi import APIRouter, Request
 from starlette.responses import StreamingResponse
@@ -151,6 +152,78 @@ async def sse_work(request: Request, project: str = "default"):
 
     return StreamingResponse(
         gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# Task fix/polling ("why are you hammering the server with polling rather
+# than updating with streaming", owner 2026-09-13): GET /sse/changes
+# replaces the SPA's shared GET /api/changes 1Hz poll (lib/useChanges.ts)
+# with a real push. Driven by services/wakeups.py's wait()/changed_since()
+# instead of the in-process `bus` every other route on this page uses,
+# because wakeups already bridges CROSS-PROCESS signals (a 2026-09-13
+# worker-host process split moved the nine standing workers into a
+# separate OS process; wait() polls a small sqlite table under the data
+# dir every 250ms so a signal() raised in that other process still wakes a
+# waiter here) -- exactly the channel this stream needs to reach a signal
+# raised by a background worker, not just one raised by an HTTP request in
+# THIS process. `wait()` is a blocking call (threading.Condition), so it
+# runs in a thread via asyncio.to_thread rather than blocking the event
+# loop; its own 15s timeout doubles as the heartbeat interval.
+_CHANGE_KINDS = frozenset({"task_changed", "shipped", "activity"})
+_CHANGE_HEARTBEAT_S = 15.0
+
+
+async def _gen_changes(request: Request, project: str):
+    """The stream body, factored out of sse_changes() as a plain
+    module-level async generator so a test can drive it directly (pull
+    frames via `__anext__()` against a fake `request`) instead of going
+    through TestClient's HTTP/ASGI streaming layer, which buffers a
+    StreamingResponse's chunks unpredictably under a synchronous test
+    client and made a first version of this test hang."""
+    from prism_service.services import wakeups
+
+    # Baseline captured BEFORE the first yield, not after: a generator
+    # pauses AT a yield until the next pull, so anything computed after it
+    # would race a caller that reacts to "connected" by signalling right
+    # away (as a real client effectively does, and as the cross-process
+    # test below does) -- that signal must land AFTER this baseline, never
+    # racing to land before it and being missed as "already old".
+    baseline = time.time()
+    yield b": connected\n\n"
+    while True:
+        if await request.is_disconnected():
+            break
+        woke = await asyncio.to_thread(
+            wakeups.wait, _CHANGE_KINDS, project=project,
+            timeout=_CHANGE_HEARTBEAT_S, since=baseline,
+        )
+        if not woke:
+            yield b": keepalive\n\n"
+            continue
+        changes = wakeups.changed_since(_CHANGE_KINDS, project, baseline)
+        baseline = time.time()
+        for kind, proj, ts in changes:
+            payload = json.dumps(
+                {"kind": kind, "project": proj, "counter": ts},
+                separators=(",", ":"),
+            )
+            yield f"data: {payload}\n\n".encode("utf-8")
+
+
+@router.get("/changes")
+async def sse_changes(request: Request, project: str = "default"):
+    """Stream one event per wakeups signal -- {kind, project, counter} --
+    for `project` (plus wildcard signals). A heartbeat comment every
+    15s keeps the connection alive through idle-timeout proxies and gives
+    the client a liveness signal distinct from "no changes happened"."""
+    return StreamingResponse(
+        _gen_changes(request, project),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",

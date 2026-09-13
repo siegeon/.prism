@@ -1,33 +1,37 @@
 /**
  * usePolledResource — the generic refetch gate every page-level data query
- * should sit behind, instead of its own private `setInterval` fetch loop.
+ * should sit behind, instead of its own private `setInterval` fetch loop
+ * OR (the earlier version of this file) a shared change-counter poll.
  *
- * Policy (owner 2026-09-13, "fan out sub agents, fix this" -- the idle
- * Workflows tab measured 665+ requests in 7 minutes across ~10 endpoints,
- * each an independent fixed-interval poll with no notion of whether
- * anything had changed):
+ * Policy (owner 2026-09-13, two rounds: first "fan out sub agents, fix
+ * this" on the idle-tab request storm, then "why are you hammering the
+ * server with polling rather than updating with streaming" once the
+ * counter-poll fix was itself measured still polling):
  *
- *   - refetch when the shared change counter (useChanges) moves,
- *   - refetch on window focus (a backgrounded tab someone returns to must
- *     not show minutes-old data),
- *   - otherwise refetch at a 30s FLOOR so a query self-heals even from a
- *     signal this project's wakeups bus never learned about,
+ *   - refetch when a matching-kind event arrives over GET /sse/changes
+ *     (lib/useChanges.ts's useChangeEvents — a real push, not a poll),
+ *   - refetch on window focus or document visibilitychange,
+ *   - a 60s floor fires ONLY as a reconnect safety net -- while the SSE
+ *     stream itself looks unhealthy (no frames flowing) -- never as a
+ *     routine refetch trigger while the stream is fine,
  *   - never fetch at all while the tab is hidden,
  *   - cache the last good payload per URL at MODULE scope, so navigating
  *     back to an already-fetched resource paints instantly from cache
- *     (stale-while-revalidate) instead of a fresh blank-loading flash, and
- *     revalidates in the background exactly like any other trigger above.
+ *     (stale-while-revalidate) instead of a fresh blank-loading flash.
+ *
+ * `kinds` narrows which /sse/changes event kinds trigger a refetch (e.g.
+ * ["task_changed"] for a task list, ["activity"] for the System Activity
+ * panel). Omit it to refetch on ANY event kind (the safe default for a
+ * caller that has not been mapped to a specific kind yet).
  *
  * This does not replace lib/useConductorState.ts or lib/sharedStream.ts --
- * those already implement the same policy bespoke for their one endpoint
- * (SSE push + coalescing + staleness sweep). Use THIS for any other GET
- * that would otherwise reach for a bare `setInterval`.
+ * those already implement the same policy bespoke for their one endpoint.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { useChanges } from "@/lib/useChanges";
+import { useChangeEvents } from "@/lib/useChanges";
 
-const FLOOR_MS = 30_000;
+const FLOOR_MS = 60_000;
 
 type CacheEntry<T> = { data: T; at: number };
 const cache = new Map<string, CacheEntry<unknown>>();
@@ -38,22 +42,24 @@ export type PolledResource<T> = {
    * lets a consumer tell "no fetch yet" apart from "fetched and empty". */
   polled: boolean;
   error: boolean;
-  /** Force an immediate refetch regardless of the counter/floor. */
+  /** Force an immediate refetch regardless of the event/floor gate. */
   refresh: () => void;
 };
 
 /**
- * Poll `url` under the policy above. `project` selects which change-counter
- * scope gates this query (pass "" to watch every project's counter, the
- * same default useChanges uses).
+ * Poll `url` under the policy above. `project` selects which
+ * GET /sse/changes stream gates this query; `kinds` narrows which event
+ * kinds on that stream trigger a refetch (omit for "any kind").
  */
-export function usePolledResource<T>(url: string | null, project = ""): PolledResource<T> {
+export function usePolledResource<T>(
+  url: string | null, project = "", kinds?: string[],
+): PolledResource<T> {
   const cached = url ? (cache.get(url) as CacheEntry<T> | undefined) : undefined;
   const [data, setData] = useState<T | null>(cached?.data ?? null);
   const [polled, setPolled] = useState(cached !== undefined);
   const [error, setError] = useState(false);
-  const { counter } = useChanges(project);
-  const lastCounterRef = useRef<number | null>(null);
+  const { event, healthy } = useChangeEvents(project);
+  const lastSeqRef = useRef<number | null>(null);
   const lastFetchAtRef = useRef(0);
 
   const load = useCallback(() => {
@@ -83,25 +89,20 @@ export function usePolledResource<T>(url: string | null, project = ""): PolledRe
     load();
   }, [url, load]);
 
-  // Counter-driven refetch.
+  // Event-driven refetch: a NEW /sse/changes frame (by seq, so the same
+  // event never double-fires this) of a kind this query cares about.
   useEffect(() => {
-    if (!url) return;
-    if (lastCounterRef.current === null) {
-      lastCounterRef.current = counter;
-      return;
-    }
-    if (counter !== lastCounterRef.current) {
-      lastCounterRef.current = counter;
-      load();
-    }
-  }, [counter, url, load]);
+    if (!url || !event) return;
+    if (lastSeqRef.current === event.seq) return;
+    lastSeqRef.current = event.seq;
+    if (kinds && kinds.length > 0 && !kinds.includes(event.kind)) return;
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, url, load]);
 
-  // Focus/visibility + 30s floor, both gated on visibility -- never fetch
-  // while hidden. Both listeners, not just one: switching OS apps fires
-  // window focus/blur, but switching BETWEEN TABS in the same browser
-  // window only fires document visibilitychange -- a page that only
-  // listened for focus would miss exactly the "tab someone just switched
-  // back to" case this whole layer exists to catch promptly.
+  // Focus/visibility (unconditional refetch trigger) + a 60s floor that
+  // fires ONLY while the stream looks unhealthy (reconnect safety net,
+  // never a routine poll substitute) -- and never while hidden.
   useEffect(() => {
     if (!url) return;
     const onVisible = () => { if (!document.hidden) load(); };
@@ -109,6 +110,7 @@ export function usePolledResource<T>(url: string | null, project = ""): PolledRe
     document.addEventListener("visibilitychange", onVisible);
     const floor = setInterval(() => {
       if (document.hidden) return;
+      if (healthy) return;
       if (performance.now() - lastFetchAtRef.current >= FLOOR_MS) load();
     }, 5000);
     return () => {
@@ -116,22 +118,19 @@ export function usePolledResource<T>(url: string | null, project = ""): PolledRe
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(floor);
     };
-  }, [url, load]);
+  }, [url, load, healthy]);
 
   return { data, polled, error, refresh: load };
 }
 
 /**
- * Same policy as usePolledResource (counter move / focus / 30s floor,
- * never while hidden), for a page's own composite `load()` that fetches
- * more than one URL at once (Promise.all(...)) and so cannot be expressed
- * as a single `usePolledResource<T>(url)` call. Runs `load` once on mount
- * and again on every trigger; `load` itself owns its state updates and
- * caching exactly as before -- this hook only owns WHEN it fires.
+ * Same policy as usePolledResource, for a page's own composite `load()`
+ * that fetches more than one URL at once (Promise.all(...)) and so
+ * cannot be expressed as a single `usePolledResource<T>(url)` call.
  */
-export function usePolledEffect(load: () => void, project = ""): void {
-  const { counter } = useChanges(project);
-  const lastCounterRef = useRef<number | null>(null);
+export function usePolledEffect(load: () => void, project = "", kinds?: string[]): void {
+  const { event, healthy } = useChangeEvents(project);
+  const lastSeqRef = useRef<number | null>(null);
   const lastRunAtRef = useRef(0);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -144,15 +143,13 @@ export function usePolledEffect(load: () => void, project = ""): void {
   useEffect(() => { run(); }, [run]);
 
   useEffect(() => {
-    if (lastCounterRef.current === null) {
-      lastCounterRef.current = counter;
-      return;
-    }
-    if (counter !== lastCounterRef.current) {
-      lastCounterRef.current = counter;
-      run();
-    }
-  }, [counter, run]);
+    if (!event) return;
+    if (lastSeqRef.current === event.seq) return;
+    lastSeqRef.current = event.seq;
+    if (kinds && kinds.length > 0 && !kinds.includes(event.kind)) return;
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [event, run]);
 
   useEffect(() => {
     const onVisible = () => { if (!document.hidden) run(); };
@@ -160,6 +157,7 @@ export function usePolledEffect(load: () => void, project = ""): void {
     document.addEventListener("visibilitychange", onVisible);
     const floor = setInterval(() => {
       if (document.hidden) return;
+      if (healthy) return;
       if (performance.now() - lastRunAtRef.current >= FLOOR_MS) run();
     }, 5000);
     return () => {
@@ -167,5 +165,5 @@ export function usePolledEffect(load: () => void, project = ""): void {
       document.removeEventListener("visibilitychange", onVisible);
       clearInterval(floor);
     };
-  }, [run]);
+  }, [run, healthy]);
 }

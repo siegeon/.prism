@@ -41,9 +41,24 @@ def _get(client: TestClient, project: str | None = None) -> dict:
     return resp.json()
 
 
+def _isolated_changes_client() -> TestClient:
+    """A bare app with ONLY the /api/changes route, no lifespan -- so the
+    real app's standing background workers (task_runner, and since the
+    SSE follow-up, services/system_activity.py's own record()/pass_()
+    signalling "activity" on every real pass) can never contaminate a
+    baseline that expects EXACTLY zero. `with TestClient(app)` mounts the
+    full app including its lifespan; the two tests below need a process
+    with no other signaller in it at all, same shape as
+    test_work_bus_publishers.py's _heartbeat_client()."""
+    from fastapi import FastAPI
+    from prism_service.api.changes import router as changes_router
+    bare = FastAPI()
+    bare.include_router(changes_router, prefix="/api/changes")
+    return TestClient(bare)
+
+
 def test_changes_returns_zero_counter_when_nothing_has_ever_signalled():
-    with TestClient(app) as client:
-        body = _get(client, project="prism")
+    body = _get(_isolated_changes_client(), project="prism")
     assert body["counter"] == 0.0
     assert "at" in body
 
@@ -65,9 +80,9 @@ def test_changes_counter_bumps_on_a_wildcard_signal_for_any_project():
 
 
 def test_changes_counter_ignores_a_signal_for_a_different_project():
-    with TestClient(app) as client:
-        wakeups.signal("task_changed", "some-other-project")
-        body = _get(client, project="prism")
+    client = _isolated_changes_client()
+    wakeups.signal("task_changed", "some-other-project")
+    body = _get(client, project="prism")
     assert body["counter"] == 0.0
 
 
