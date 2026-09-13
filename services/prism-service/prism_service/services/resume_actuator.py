@@ -391,6 +391,42 @@ def _rearm_once(project: str) -> Optional[dict]:
     return None
 
 
+def _clear_stale_park_text(project: str) -> list[str]:
+    """Clear THIS seat's own park text off `blocked_reason` on any task
+    whose status has ALREADY moved on to "in_progress" -- task a65c66e5,
+    2026-09-13, ops incident: the row's real history shows a bare status
+    PATCH ('blocked' -> 'in_progress', no blocked_reason kwarg, no
+    RELEASED_ACTION row -- not this seat's own release()) that left the old
+    park text reading "still parked" on the card long after the task was
+    genuinely driving again.
+
+    `_rearm_once` only ever looks at status="blocked" rows (the task is
+    still actually parked there); this is the complementary case -- the
+    task already got unstuck by some OTHER path, and only the cosmetic
+    field never caught up. Only ever touches a reason THIS seat wrote
+    (`_PARK_PREFIX`), never a human's or another seat's text. Called on a
+    `deployed` wakeup, the same trigger that makes the certainty/gate seats
+    re-look at rows nothing else would re-notice (a landing fixed the CODE,
+    not the row). Returns the ids cleared."""
+    from prism_service.project_context import get_project
+
+    ctx = get_project(project)
+    cleared: list[str] = []
+    for t in ctx.task_svc.list(status="in_progress"):
+        reason = getattr(t, "blocked_reason", "") or ""
+        if not reason.startswith(_PARK_PREFIX):
+            continue
+        ctx.task_svc.update(t.id, blocked_reason="")
+        ctx.task_svc.record_history(
+            t.id, action=RELEASED_ACTION,
+            details=("cleared a stale park text on a deployed signal -- "
+                     "status had already left blocked without going "
+                     "through release()"),
+            actor=SEAT)
+        cleared.append(t.id)
+    return cleared
+
+
 def _total_dispatches(project: str, task_id: str) -> int:
     """Dispatches this seat has made SINCE THE LAST HUMAN RELEASE, from
     durable history. Survives a daemon restart, and no automatic budget
@@ -714,13 +750,23 @@ def dispatch_once(project: str, task_id: str) -> dict:
             "report": report}
 
 
-def sweep_once_for(project: str) -> Optional[dict]:
+def sweep_once_for(project: str, force: bool = False) -> Optional[dict]:
     """One pass over `project`: continue an open retry (bypassing the
     'stalled' recheck -- see `_open_retry_task_id`), park it if its budget
     is spent, or else dispatch one newly-stalled task. Returns None when
-    nothing was eligible."""
+    nothing was eligible.
+
+    `force=True` (passed by `_loop` on a `deployed` wakeup) also clears any
+    stale park text this seat left on an already-in_progress task -- see
+    `_clear_stale_park_text` -- before anything else this pass, whether or
+    not a dispatch/rearm/park follows."""
     from prism_service.services import resume_attempts_data as rad
     from prism_service.services import task_runner as _runner
+
+    if force:
+        cleared = _clear_stale_park_text(project)
+        if cleared:
+            _log(f"{project}: cleared stale park text on {cleared}")
 
     # A DEAD ENGINE IS NOT A STALL (task b490fabc, 2026-09-11). This seat
     # dispatches on its own path, so the runner's breaker does not cover it,
@@ -775,15 +821,16 @@ def sweep_once_for(project: str) -> Optional[dict]:
     return dispatch_once(project, task_id)
 
 
-def sweep_once() -> Optional[dict]:
+def sweep_once(force: bool = False) -> Optional[dict]:
     """One pass over every project: dispatch/park the first eligible task
     found and stop -- AT MOST one task advances per tick (mirrors
-    task_runner.sweep_once)."""
+    task_runner.sweep_once). `force` is passed through to every project's
+    `sweep_once_for` (see its docstring)."""
     from prism_service.project_context import get_all_projects
 
     for pid in get_all_projects():
         try:
-            res = sweep_once_for(pid)
+            res = sweep_once_for(pid, force=force)
         except Exception as exc:
             _log(f"{pid}: sweep failed: {exc}")
             continue
@@ -800,10 +847,17 @@ def _loop(interval_s: int) -> None:
          "PRISM_WORKER_FALLBACK_S is set)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
+    baseline = time.time()
     while True:
+        # A `deployed` signal since the last wait() means the CODE that
+        # reads a parked/stale row may have just changed, not the row
+        # itself (task a65c66e5, 2026-09-13) -- force one full pass so a
+        # stale park text left by an earlier bug gets swept even though
+        # nothing about the row's own fields moved.
+        force = bool(wakeups.changed_since(["deployed"], None, baseline))
         try:
             with system_activity.pass_("resume_actuator", "*", "sweep_once") as info:
-                res = sweep_once()
+                res = sweep_once(force=force)
                 info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
@@ -813,7 +867,9 @@ def _loop(interval_s: int) -> None:
         # instant wait() is entered, self-retriggering forever with zero
         # external cause -- see gate_adjudicator._loop's comment for the
         # measured numbers.
-        wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s())
+        baseline = time.time()
+        wakeups.wait(["task_changed", "deployed"],
+                     timeout=wakeups.worker_fallback_s())
 
 
 def start_resume_actuator() -> threading.Thread | None:
