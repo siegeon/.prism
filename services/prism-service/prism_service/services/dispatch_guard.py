@@ -86,6 +86,111 @@ REAP_STATUSES = {"blocked", "done", "cancelled"}
 DEFAULT_CEILING = 12
 HEARTBEAT_INTERVAL_S = 60
 
+# THE ENGINE SLOT (task 8ddbba7f, 2026-09-13). Live incident: the owner's
+# own screenshot showed ~6 tasks "in progress" with running step agents at
+# once, on a box whose local inference engine serves exactly ONE request at
+# a time (services/local-inference/launch.sh `--parallel 1`). task_runner's
+# sweep (up to PRISM_TASK_RUNNER_CONCURRENCY, default 4, via a
+# ThreadPoolExecutor) and dispatch.py's instant `_drive_now` handoff (fired
+# on every step advance, with NO concurrency check at all) both call into
+# this exact chokepoint, so this is the one place that can cap how many
+# real `claude_cli.invoke()` calls may be open across every seat at once --
+# never a per-task ceiling (DEFAULT_CEILING above), a DIFFERENT axis
+# (lifetime dispatches for ONE task, not concurrent dispatches across many).
+#
+# Counted from LIVE DRIVE HEARTBEATS (drive_heartbeat.py) PLUS live
+# step-agent processes THIS process has itself spawned (_OPEN_TICKETS,
+# populated the instant try_begin actually opens a ticket and cleared the
+# instant end_dispatch closes it) -- never from a task's `status` column,
+# which says nothing about whether a real subprocess is behind it right
+# now. The two seat names below mirror task_runner.RUNNER_DRIVER and
+# resume_actuator.SEAT literally rather than importing them: both of those
+# modules already import this one, so importing back would cycle.
+PRISM_DRIVE_CONCURRENCY_ENV = "PRISM_DRIVE_CONCURRENCY"
+_TASK_RUNNER_SEAT = "prism-task-runner"
+_RESUME_ACTUATOR_SEAT = "prism-resume-actuator"
+
+_DRIVE_CONCURRENCY_CACHE: Optional[int] = None
+
+
+def _drive_concurrency() -> int:
+    """PRISM_DRIVE_CONCURRENCY, read ONCE per process and cached (never
+    re-read mid-run, so a mid-drive env change cannot move the ceiling out
+    from under an already-open ticket) -- default 1, matching the single
+    parallel slot the local engine declares."""
+    global _DRIVE_CONCURRENCY_CACHE
+    if _DRIVE_CONCURRENCY_CACHE is None:
+        raw = os.environ.get(PRISM_DRIVE_CONCURRENCY_ENV, "")
+        try:
+            _DRIVE_CONCURRENCY_CACHE = max(1, int(raw)) if raw.strip() else 1
+        except ValueError:
+            _DRIVE_CONCURRENCY_CACHE = 1
+    return _DRIVE_CONCURRENCY_CACHE
+
+
+def reset_drive_concurrency_cache() -> None:
+    """Test-only: clears the read-once cache so a test can exercise a
+    different PRISM_DRIVE_CONCURRENCY without a fresh process."""
+    global _DRIVE_CONCURRENCY_CACHE
+    _DRIVE_CONCURRENCY_CACHE = None
+
+
+# task_id -> the DispatchTicket THIS process opened for it. The size of
+# this dict, unioned with any live heartbeat from one of our two seats
+# (see `_occupants_unlocked`), is the real occupancy count -- populated
+# only inside `try_begin` (a real dispatch about to invoke) and cleared
+# only inside `end_dispatch`, both under `_OPEN_LOCK` so two threads racing
+# the same tick cannot both read "free" and both reserve.
+_OPEN_LOCK = threading.Lock()
+_OPEN_TICKETS: dict = {}
+
+
+def _project_live_beats(project: str) -> list:
+    """`drive_heartbeat.live_beats` for `project`'s own scores db, or []
+    on any error -- a heartbeat read that cannot answer must never be
+    treated as "somebody is dispatching", the same fail-open posture
+    `_foreign_driver_on` already uses elsewhere in this codebase."""
+    try:
+        return drive_heartbeat.live_beats(_scores_db_for(project))
+    except Exception:
+        return []
+
+
+def _occupants_unlocked(project: str, exclude_task_id: str = "") -> dict:
+    """task_id -> step for every dispatch presently holding an engine
+    slot. Caller must hold `_OPEN_LOCK`."""
+    occupants = {tid: t.step for tid, t in _OPEN_TICKETS.items()
+                 if tid != exclude_task_id}
+    for beat in _project_live_beats(project):
+        tid = beat.get("task_id")
+        if not tid or tid == exclude_task_id or tid in occupants:
+            continue
+        if beat.get("driver") in (_TASK_RUNNER_SEAT, _RESUME_ACTUATOR_SEAT):
+            occupants[tid] = beat.get("step") or ""
+    return occupants
+
+
+def _slot_busy_reason(occupants: dict) -> str:
+    tid, step = next(iter(occupants.items()))
+    label = tid[:8] if isinstance(tid, str) else str(tid)
+    return f"engine slot busy: {label}" + (f" at {step}" if step else "")
+
+
+def engine_slot_reason(project: str, exclude_task_id: str = "") -> Optional[str]:
+    """None when a NEW real dispatch may begin now in `project`;
+    otherwise the reason naming who holds the one declared slot.
+    READ-ONLY -- never reserves, so a caller using this for an
+    advisory/pre-flight check (task_runner.eligible_tasks,
+    dispatch._drive_now, resume_actuator.dispatch_once) can still race a
+    concurrent `try_begin` and lose; that is fine, because `try_begin`
+    never trusts this answer either -- it is the one place that actually
+    reserves, atomically."""
+    with _OPEN_LOCK:
+        occupants = _occupants_unlocked(project, exclude_task_id)
+    if len(occupants) < _drive_concurrency():
+        return None
+    return _slot_busy_reason(occupants)
+
 # A task parked with a blocked_reason carrying one of these prefixes was
 # stopped BY A GOVERNANCE SEAT, not by a person clicking block or by an
 # ordinary dependency wait. `flow_start`'s own `_mark_in_progress` (both
@@ -258,24 +363,41 @@ def try_begin(project: str, task_id: str, step_id: str,
             pass
         return None, reason
 
-    try:
-        task_svc.record_history(
-            task_id, action=DISPATCH_ACTION,
-            details=f"seat={seat}; step={step_id}; dispatch {total + 1}/{ceiling}",
-            actor=seat)
-    except Exception:
-        pass
+    with _OPEN_LOCK:
+        occupants = _occupants_unlocked(project, task_id)
+        if len(occupants) >= _drive_concurrency():
+            reason = f"dispatch-guard: {_slot_busy_reason(occupants)}"
+            try:
+                task_svc.record_history(task_id, action=REFUSED_ACTION,
+                                        details=reason, actor=seat)
+            except Exception:
+                pass
+            return None, reason
 
-    scores_db = _scores_db_for(project)
-    ticket = DispatchTicket(project, task_id, step_id, seat, scores_db)
+        try:
+            task_svc.record_history(
+                task_id, action=DISPATCH_ACTION,
+                details=f"seat={seat}; step={step_id}; dispatch {total + 1}/{ceiling}",
+                actor=seat)
+        except Exception:
+            pass
+
+        scores_db = _scores_db_for(project)
+        ticket = DispatchTicket(project, task_id, step_id, seat, scores_db)
+        _OPEN_TICKETS[task_id] = ticket
     ticket.start()
     return ticket, None
 
 
 def end_dispatch(ticket: Optional[DispatchTicket]) -> None:
     """Close a ticket opened by `try_begin`. Always safe to call, even
-    with None (a refused dispatch never opened one)."""
+    with None (a refused dispatch never opened one). Frees the engine
+    slot `try_begin` reserved for this ticket's task_id -- without this,
+    `_OPEN_TICKETS` only ever grows and every dispatch after the first
+    `PRISM_DRIVE_CONCURRENCY` ones would refuse forever."""
     if ticket is not None:
+        with _OPEN_LOCK:
+            _OPEN_TICKETS.pop(ticket.task_id, None)
         ticket.stop()
 
 

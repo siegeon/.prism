@@ -1,6 +1,9 @@
 {
   "id": "conductor",
   "name": "Conductor",
+  "driveConcurrency": 1,
+  "driveConcurrencyEnv": "PRISM_DRIVE_CONCURRENCY",
+  "driveConcurrencyNote": "How many real claude_cli.invoke dispatches (task_runner's sweep, dispatch.py's instant handoff, and resume_actuator alike) may be open at the same time, enforced atomically at services/dispatch_guard.py's try_begin chokepoint. Default 1 matches the local inference engine's own --parallel 1 (services/local-inference/launch.sh) -- it serves one request at a time, so more concurrent dispatches only pile claude -p processes onto the host without any of them making faster progress (task 8ddbba7f, 2026-09-13).",
   "fsms": [
     {
       "fsmId": "pipeline",

@@ -40,8 +40,34 @@ the same change would leave no backstop.
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Optional
 
+# De-dupe window for the ONE history row a queued-behind-the-engine-slot
+# refusal writes (task 8ddbba7f, 2026-09-13). after_step fires on every
+# step advance and on_started on every task first going in_progress, so
+# without this a task sitting behind a busy engine would get a fresh
+# "engine slot busy" row every time either fires -- the same reasoning
+# that already keeps a hot-loop non-advance from re-driving instantly.
+_QUEUED_LOG_LOCK = threading.Lock()
+_QUEUED_LOG: dict = {}
+_QUEUED_LOG_DEDUPE_S = 60.0
+
+
+def _record_queued_once(task_id: str, project: str, reason: str) -> None:
+    now = time.time()
+    with _QUEUED_LOG_LOCK:
+        last = _QUEUED_LOG.get(task_id)
+        if last is not None and now - last < _QUEUED_LOG_DEDUPE_S:
+            return
+        _QUEUED_LOG[task_id] = now
+    try:
+        _task_svc_for(project).record_history(
+            task_id, action="engine_slot_queued", details=reason,
+            actor="dispatch")
+    except Exception:
+        pass
 
 
 def _task_svc_for(project: str):
@@ -99,8 +125,10 @@ def _foreign_driver_on(task_id: str, project: str) -> str:
         return ""
 
 
-def _drive_now(task_id: str, project: str) -> None:
+def _drive_now(task_id: str, project: str) -> Optional[str]:
     """Drive `task_id`'s current step immediately, off the request thread.
+    Returns None when a driver thread was actually started, or the engine-
+    slot refusal reason when it was not.
 
     This is the latency the handoff exists to remove: the next owner is
     known the instant the step advances, and without this the task sits
@@ -109,8 +137,22 @@ def _drive_now(task_id: str, project: str) -> None:
     The driver takes the per-task lease, so firing this while another seat
     is mid-step loses the race and returns -- it cannot reproduce the
     two-drivers-one-worktree incident of 2026-08-30.
+
+    THE ENGINE SLOT (task 8ddbba7f, 2026-09-13): unlike task_runner's own
+    sweep (bounded by PRISM_TASK_RUNNER_CONCURRENCY, and now the same
+    engine-slot gate), this instant handoff fires on EVERY step advance
+    with no concurrency check of its own at all -- observed live piling
+    threads (each spawning a real `claude -p`) on top of whatever the
+    periodic sweep was already driving. Checked here BEFORE spawning the
+    thread at all, so a busy slot costs nothing (no thread, no flow_start,
+    no claim) -- `task_runner._run_one_step`'s own pre-check is the
+    authoritative backstop for the race this advisory check cannot close.
     """
-    import threading
+    from prism_service.services import dispatch_guard
+
+    busy = dispatch_guard.engine_slot_reason(project, exclude_task_id=task_id)
+    if busy:
+        return busy
 
     def _run() -> None:
         try:
@@ -122,6 +164,7 @@ def _drive_now(task_id: str, project: str) -> None:
 
     threading.Thread(target=_run, daemon=True,
                      name=f"handoff-{task_id[:8]}").start()
+    return None
 
 
 def unblocked_by(task_id: str, task_svc) -> list[str]:
@@ -259,7 +302,12 @@ def after_step(task_id: str, project: str, advanced: bool = True) -> dict:
             return {"kind": "conductor.handoff", "from": task_id,
                     "started": [], "step": step, "drove": False,
                     "reason": f"driver {foreign!r} is live on this task"}
-        _drive_now(task_id, project)
+        busy = _drive_now(task_id, project)
+        if busy:
+            _record_queued_once(task_id, project, busy)
+            return {"kind": "conductor.handoff", "from": task_id,
+                    "started": [], "step": step, "drove": False,
+                    "reason": busy}
         return {"kind": "conductor.handoff", "from": task_id,
                 "started": [task_id], "step": step, "drove": True}
     return {"kind": "conductor.handoff", "from": task_id, "started": [],
@@ -288,6 +336,10 @@ def on_started(task_id: str, project: str) -> dict:
         return {"kind": "conductor.handoff", "from": task_id, "started": [],
                 "drove": False,
                 "reason": f"driver {foreign!r} is live on this task"}
-    _drive_now(task_id, project)
+    busy = _drive_now(task_id, project)
+    if busy:
+        _record_queued_once(task_id, project, busy)
+        return {"kind": "conductor.handoff", "from": task_id, "started": [],
+                "drove": False, "reason": busy}
     return {"kind": "conductor.handoff", "from": task_id,
             "started": [task_id], "drove": True}

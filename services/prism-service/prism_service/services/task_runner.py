@@ -1312,6 +1312,7 @@ def eligible_tasks(project: str, limit: int = 1) -> list[str]:
 
     out: list[str] = []
     ctx = get_project(project)
+    from prism_service.services import dispatch_guard
     for t in ctx.task_svc.list(status="in_progress"):
         if t.id in _IN_FLIGHT:
             continue
@@ -1322,6 +1323,19 @@ def eligible_tasks(project: str, limit: int = 1) -> list[str]:
         foreign = _foreign_driver_on(project, t.id)
         if foreign:
             _log(f"skipping {t.id[:8]}: driver {foreign!r} is live on it")
+            continue
+        # THE ENGINE SLOT (task 8ddbba7f, 2026-09-13): the local engine
+        # serves PRISM_DRIVE_CONCURRENCY (default 1) real dispatch(es) at a
+        # time -- advisory here (dispatch_guard.try_begin is the atomic
+        # reservation), but cheap and correct for the common case: a prior
+        # tick's drive, or dispatch._drive_now's instant handoff, is still
+        # live. `exclude_task_id=t.id` matters: THIS candidate's OWN fresh
+        # beat (the runner re-driving its own in-flight step) must never
+        # read as "the slot is busy" and refuse itself -- only a DIFFERENT
+        # task's occupancy should.
+        busy = dispatch_guard.engine_slot_reason(project, exclude_task_id=t.id)
+        if busy:
+            _log(f"skipping {t.id[:8]}: {busy}")
             continue
         if not t.workflow_step:
             out.append(t.id)
@@ -1950,6 +1964,24 @@ def _run_one_step(project: str, task_id: str) -> dict:
             # work. Skip without touching the task's step or status.
             return {"ok": False, "task_id": task_id, "step": job["step"],
                     "reason": f"already driving: held by {holder}"}
+
+    # THE ENGINE SLOT, CHECKED BEFORE ANY BEAT (task 8ddbba7f, 2026-09-13).
+    # Mirrors the claim check just above for the identical reason (task
+    # b490fabc): a heartbeat written for a dispatch that is about to be
+    # refused anyway is a ghost that a LATER, unrelated attempt could read
+    # as a live driver and defer to needlessly. dispatch_guard.try_begin
+    # below is still the authoritative, atomic reservation right before
+    # the real invoke -- this is the same no-side-effect pre-check
+    # eligible_tasks/dispatch._drive_now use, so a task this seat cannot
+    # possibly dispatch right now never gets a claim-then-instantly-
+    # released heartbeat at all.
+    from prism_service.services import dispatch_guard as _dg
+    busy = _dg.engine_slot_reason(project, exclude_task_id=task_id)
+    if busy:
+        if claim is not None:
+            claim.release(claim_id)
+        return {"ok": False, "task_id": task_id, "step": job["step"],
+                "reason": busy, "queued": True}
 
     scores_db = _scores_db_for(project)
     drive_heartbeat.record_heartbeat(scores_db, {

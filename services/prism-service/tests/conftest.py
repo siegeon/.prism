@@ -189,6 +189,43 @@ def _task_observer_registry_isolation():
         task_service._STATUS_OBSERVERS[:] = status
 
 
+@pytest.fixture(autouse=True)
+def _dispatch_guard_open_tickets_isolation():
+    """Snapshot/restore dispatch_guard._OPEN_TICKETS (and its
+    PRISM_DRIVE_CONCURRENCY read-once cache) around every test (task
+    8ddbba7f), mirroring _integration_adapter_registry_isolation above for
+    the identical class of bug on a different registry.
+
+    _OPEN_TICKETS is process-global and counts toward the one-engine-slot
+    concurrency gate for EVERY project, not just the one a test happens to
+    use. A test that goes through flow_report/flow_start's own
+    after_step/on_started handoff (dispatch._drive_now) reaches the REAL
+    task_runner._run_one_step and the REAL dispatch_guard.try_begin, exactly
+    as production does -- so it can open a real ticket whose background
+    thread has not yet failed/returned by the time the test function
+    itself returns. Left open, that ticket occupies the one declared slot
+    for every LATER test in the same process, however unrelated its own
+    project -- observed live: test_rest_drive_is_visible_on_the_board.py's
+    AC-5/AC-6 failed only when run after an earlier test in the same file
+    triggered a real (if doomed) background dispatch. Stopped and
+    discarded here so no test can strand the slot for a neighbour."""
+    from prism_service.services import dispatch_guard
+
+    before = dict(dispatch_guard._OPEN_TICKETS)
+    cache_before = dispatch_guard._DRIVE_CONCURRENCY_CACHE
+    try:
+        yield
+    finally:
+        with dispatch_guard._OPEN_LOCK:
+            leaked = {tid: t for tid, t in dispatch_guard._OPEN_TICKETS.items()
+                      if tid not in before}
+            for tid in leaked:
+                dispatch_guard._OPEN_TICKETS.pop(tid, None)
+        for ticket in leaked.values():
+            ticket.stop()
+        dispatch_guard._DRIVE_CONCURRENCY_CACHE = cache_before
+
+
 @pytest.fixture
 def quiet_boot(monkeypatch):
     """Boot the REAL lifespan (prism_service.main.app) without its periodic

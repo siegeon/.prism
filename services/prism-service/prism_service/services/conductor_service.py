@@ -6300,6 +6300,22 @@ class ConductorService:
         return (self._subtree_motion_active(task, _depth)
                 or self._subtree_beat(task, _depth) is not None)
 
+    def _engine_slot_busy_elsewhere(self, task) -> bool:
+        """True when some OTHER task currently holds the one declared
+        engine slot (dispatch_guard.engine_slot_reason), so THIS task's
+        own lack of motion/heartbeat/quiet-session evidence means
+        'queued', not 'stalled' (task 8ddbba7f). Fails closed (False) on
+        any error -- a check that cannot answer must never manufacture
+        the calmer word."""
+        try:
+            from prism_service.services import dispatch_guard
+
+            return bool(dispatch_guard.engine_slot_reason(
+                self._project_name or "default",
+                exclude_task_id=getattr(task, "id", "")))
+        except Exception:
+            return False
+
     def activity_for(self, task, phase_progress: dict) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
         means a REAL recent conductor transition on THIS task (<=120s); when
@@ -6399,6 +6415,17 @@ class ConductorService:
                 state = "driving"            # heartbeat-attributed liveness
             elif quiet is not None and quiet <= 90:
                 state = "adrift"             # session alive but busy elsewhere
+            elif self._engine_slot_busy_elsewhere(task):
+                # QUEUED, NOT STALLED (task 8ddbba7f, 2026-09-13). The
+                # local engine serves PRISM_DRIVE_CONCURRENCY (default 1)
+                # real dispatch(es) at a time -- a task with none of the
+                # liveness evidence above is not necessarily broken, it
+                # may simply be waiting its turn behind another task that
+                # DOES hold the slot. "stalled" is an alarm word the owner
+                # reads as "I must intervene" (2026-07-21); a task queued
+                # behind a busy engine needs no intervention at all, it
+                # needs the engine to finish the task ahead of it.
+                state = "queued"
             else:
                 state = "stalled"            # nothing is driving it
         else:

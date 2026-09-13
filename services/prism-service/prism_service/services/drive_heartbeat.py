@@ -260,6 +260,38 @@ def latest_many(scores_db: str, task_ids) -> dict:
     return out
 
 
+def live_beats(scores_db: str, window_s: float = HEARTBEAT_WINDOW_S) -> list:
+    """Every heartbeat row still within `window_s` of its last_progress_at,
+    across EVERY task_id recorded in this project's scores db (task
+    8ddbba7f) -- the GLOBAL occupancy signal a slot-limited engine needs.
+    Unlike `latest`/`latest_many` (answer for one task_id, or a known set
+    of them), this is "which drives are live RIGHT NOW", the question
+    dispatch_guard's engine-slot gate asks before every real dispatch.
+    Each row carries task_id/step/driver/last_tool/age_s."""
+    conn = _connect(scores_db)
+    try:
+        rows = conn.execute(
+            "SELECT task_id, step, driver, last_tool, last_progress_at "
+            "FROM drive_heartbeats"
+        ).fetchall()
+    finally:
+        conn.close()
+    now = datetime.now(timezone.utc)
+    out: list = []
+    for r in rows:
+        if not r["last_progress_at"]:
+            continue
+        ts = datetime.fromisoformat(r["last_progress_at"])
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age = (now - ts).total_seconds()
+        if age <= window_s:
+            out.append({"task_id": r["task_id"], "step": r["step"],
+                        "driver": r["driver"], "last_tool": r["last_tool"],
+                        "age_s": age})
+    return out
+
+
 def heartbeat_age_s(scores_db: str, task_id: str):
     """Seconds since the recorded heartbeat's last_progress_at for THIS
     task_id, or None when no (accepted) heartbeat has been recorded for it

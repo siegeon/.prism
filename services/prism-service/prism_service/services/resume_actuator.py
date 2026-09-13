@@ -408,6 +408,25 @@ def dispatch_once(project: str, task_id: str) -> dict:
                     "deferred": True,
                     "reason": f"already driving: held by {holder}"}
 
+    # THE ENGINE SLOT, CHECKED BEFORE ANY BEAT (task 8ddbba7f, 2026-09-13).
+    # Mirrors the claim check just above for the identical reason: a beat
+    # written for a dispatch about to be refused anyway is a ghost a LATER,
+    # unrelated attempt could read as a live driver and defer to
+    # needlessly (the exact b490fabc shape, for a different gate).
+    # dispatch_guard.try_begin below is still the authoritative, atomic
+    # reservation right before the real invoke; this is the same
+    # no-side-effect pre-check task_runner/dispatch use. NO heartbeat, NO
+    # DISPATCH_ACTION row, and no attempt spent -- this seat did not fail,
+    # it deferred to a slot it cannot have right now.
+    from prism_service.services import dispatch_guard as _dgu
+
+    busy = _dgu.engine_slot_reason(project, exclude_task_id=task_id)
+    if busy:
+        if claim is not None:
+            claim.release(claim_id)
+        return {"ok": False, "task_id": task_id, "step": job["step"],
+                "deferred": True, "reason": busy}
+
     # THE LEASE IS HELD -- this is a real dispatch. Beat and record it now,
     # not before (task b490fabc).
     task_svc.record_history(task_id, action=DISPATCH_ACTION,
@@ -464,6 +483,14 @@ def dispatch_once(project: str, task_id: str) -> dict:
     if ticket is None:
         if claim is not None:
             claim.release(claim_id)
+        # THE RACE THE PRE-CHECK ABOVE CANNOT CLOSE: a slot that looked
+        # free a moment ago may already be taken by the time try_begin's
+        # atomic check runs. Same rule as the pre-check -- a busy engine
+        # is not this task's fault, so it must not spend the retry budget
+        # (task 8ddbba7f).
+        if refusal and "engine slot busy" in refusal:
+            return {"ok": False, "task_id": task_id, "step": job["step"],
+                    "deferred": True, "reason": refusal}
         return _no_advance(refusal or "dispatch refused", step=job["step"])
 
     try:

@@ -154,17 +154,28 @@ def test_concurrency_two_allows_two_open_tickets(make_task, monkeypatch):
     dg.end_dispatch(ticket_b)
 
 
-def test_eligible_tasks_returns_nothing_while_the_slot_is_busy(monkeypatch):
+def test_eligible_tasks_skips_a_candidate_while_a_different_task_holds_the_slot(
+        monkeypatch):
+    """A candidate task must be excluded from its OWN engine-slot check
+    (exclude_task_id=t.id) -- otherwise a task's own fresh beat would read
+    as 'the slot is busy' and disqualify itself, the exact regression this
+    caught against test_rest_drive_is_visible_on_the_board.py's AC-5."""
     from prism_service.services import task_runner as tr
 
     monkeypatch.setattr(tr, "_spend_ceiling_crossed", lambda: False)
     monkeypatch.setattr(tr, "_system_overloaded", lambda: False)
     monkeypatch.setattr(tr, "_engine_unreachable", lambda: False)
+    monkeypatch.setattr(tr, "_foreign_driver_on", lambda p, tid: "")
 
     from prism_service.services import dispatch_guard as dg
-    monkeypatch.setattr(dg, "engine_slot_reason",
-                        lambda project, exclude_task_id="": (
-                            "engine slot busy: abcd1234 at implement_tasks"))
+
+    # "occupant" holds the slot; a check excluding "occupant" itself sees
+    # it free, a check excluding anything else sees it busy.
+    monkeypatch.setattr(
+        dg, "engine_slot_reason",
+        lambda project, exclude_task_id="": (
+            None if exclude_task_id == "occupant"
+            else "engine slot busy: occupant at implement_tasks"))
 
     class _T:
         def __init__(self, tid, step):
@@ -172,16 +183,17 @@ def test_eligible_tasks_returns_nothing_while_the_slot_is_busy(monkeypatch):
 
     class _Svc:
         def list(self, **_kw):
-            raise AssertionError(
-                "eligible_tasks must refuse before ever listing tasks "
-                "when the engine slot is busy")
+            return [_T("occupant", "implement_tasks"),
+                    _T("someone-else", "implement_tasks")]
 
     import types
     monkeypatch.setattr(
         "prism_service.project_context.get_project",
         lambda p: types.SimpleNamespace(task_svc=_Svc()))
 
-    assert tr.eligible_tasks("p", 5) == []
+    assert tr.eligible_tasks("p", 5) == ["occupant"], (
+        "the occupant's own re-check must not disqualify itself, and the "
+        "other task must be excluded while the slot is busy")
 
 
 def test_drive_now_refuses_without_spawning_a_thread(monkeypatch):
