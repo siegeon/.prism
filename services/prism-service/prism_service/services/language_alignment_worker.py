@@ -98,22 +98,52 @@ def _rule_counts(project: str) -> dict:
     return out
 
 
+#: project -> the (count, max_updated_at) TaskService.text_fingerprint()
+#: returned the last time run_once_for actually looked. Tick-cost pass
+#: (owner brief, 2026-09-13): in-memory and per-process, like the other
+#: standing workers' own backoff/fetch caches -- a restart re-scans once,
+#: which is the correct bias.
+_LAST_FINGERPRINT: dict[str, tuple[int, str]] = {}
+
+
+def reset_fingerprint_cache() -> None:
+    """Test-only: forces the next run_once_for call for every project to
+    treat its fingerprint as unseen."""
+    _LAST_FINGERPRINT.clear()
+
+
 def run_once_for(project: str, force: bool = False) -> dict:
     """One align-language pass for ``project``.
 
     Returns ``{"skipped": <reason>}`` when there is nothing to do (the
-    behaviour is disabled and ``force`` is False, or a dry run finds
-    zero candidates), ``{"ok": False, ...}`` if the drive itself could
-    not start, or ``{"run_task_id", "report"}`` once a run task has
-    been created and driven all the way to ``done``. Never raises --
-    every failure path returns a result dict so a tick loop stays
-    alive.
+    behaviour is disabled and ``force`` is False, a project's task text
+    has not moved since the last look, or a dry run finds zero
+    candidates), ``{"ok": False, ...}`` if the drive itself could not
+    start, or ``{"run_task_id", "report"}`` once a run task has been
+    created and driven all the way to ``done``. Never raises -- every
+    failure path returns a result dict so a tick loop stays alive.
     """
     from prism_service.services import language_alignment
 
     behavior = _load_behavior(project)
     if not behavior.get("enabled", True) and not force:
         return {"skipped": "disabled"}
+
+    if not force:
+        # COST (owner brief, 2026-09-13): the dry run below scans every
+        # task's free text just to answer "would_change" -- a project
+        # nothing has touched since the last pass cannot have a different
+        # answer, so check a cheap (count, max updated_at) signature
+        # FIRST and skip the scan entirely when it has not moved.
+        try:
+            from prism_service.project_context import get_project
+            fp = get_project(project).task_svc.text_fingerprint()
+        except Exception:
+            fp = None
+        if fp is not None:
+            if _LAST_FINGERPRINT.get(project) == fp:
+                return {"skipped": "unchanged since last pass"}
+            _LAST_FINGERPRINT[project] = fp
 
     fields = behavior.get("fields") or language_alignment.DEFAULT_FIELDS
     batch_size = behavior.get("batch_size") or language_alignment.DEFAULT_BATCH_SIZE

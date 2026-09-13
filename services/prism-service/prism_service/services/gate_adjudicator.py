@@ -184,19 +184,34 @@ def _backoff_clear(tid: str) -> None:
 #: for its `approved` list needs to change.
 _last_eligible_count = 0
 
+#: set alongside `_last_eligible_count` -- how many of THOSE eligible tasks
+#: actually got re-attempted this pass (backoff did not skip them). The
+#: gap between the two is the cost win: an unchanged pending gate costs
+#: one dict-membership check and nothing else. `_loop` reports both plus
+#: `len(approved)` as "N at gates, M changed, K decided" (tick-cost pass,
+#: owner brief 2026-09-13) so a human reading the activity feed can see
+#: the backoff is actually holding, not just infer it from a fast pass.
+_last_changed_count = 0
+
 
 def sweep_once() -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
     Returns the list of approvals made (empty when nothing was decidable)."""
-    global _last_eligible_count
+    global _last_eligible_count, _last_changed_count
     from prism_service.project_context import get_all_projects, get_project
     approved: list[dict] = []
     eligible_count = 0
+    changed_count = 0
     for pid in get_all_projects():
         try:
             ctx = get_project(pid)
             svc = ctx.conductor_svc
-            tasks = ctx.task_svc.list()
+            # LEAN SNAPSHOT (tick-cost pass, owner brief 2026-09-13): a
+            # project's tasks outside the gate steps below (the vast
+            # majority once it has run a while) never pay for a full
+            # `list()` row conversion just to be filtered back out a line
+            # later -- see TaskService.gate_sweep_rows's own docstring.
+            tasks = ctx.task_svc.gate_sweep_rows()
         except Exception as exc:
             _log(f"{pid}: project unavailable ({exc})")
             continue
@@ -261,6 +276,7 @@ def sweep_once() -> list[dict]:
             eligible_count += 1
             if _backoff_should_skip(tid, t):
                 continue
+            changed_count += 1
             try:
                 if step == "decide":
                     # The triage workflow's ONLY gate. It carries no rubric
@@ -411,6 +427,7 @@ def sweep_once() -> list[dict]:
                 except Exception as exc:
                     _log(f"{pid}/{tid[:8]}: reason-surface skipped ({exc})")
     _last_eligible_count = eligible_count
+    _last_changed_count = changed_count
     return approved
 
 
@@ -435,6 +452,13 @@ def _loop(interval_s: int) -> None:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
                 approved = sweep_once()
                 info["active"] = bool(approved) or _last_eligible_count > 0
+                # Tick-cost pass (owner brief, 2026-09-13): make the
+                # backoff's own cost win legible on the activity feed --
+                # a human should be able to tell "26 at gates, 0 changed,
+                # 0 decided" (near-zero cost) apart from an actual sweep.
+                info["detail"] = (f"{_last_eligible_count} at gates, "
+                                  f"{_last_changed_count} changed, "
+                                  f"{len(approved)} decided")
         except Exception as exc:
             _log(f"sweep error: {exc}")
         checked_at = time.time()

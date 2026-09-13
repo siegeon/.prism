@@ -421,6 +421,7 @@ def deploy_after_land(task_svc, task_id: str, project: str = "default") -> None:
     ship_worker._reap_after_land's docstring). Best-effort: never re-runs
     or blocks a ship that already succeeded, and does nothing at all unless
     this environment opted in (`is_enabled`)."""
+    signal_land()  # the sweep's own fetch cache must not go stale on this
     if not is_enabled():
         return
     try:
@@ -429,11 +430,59 @@ def deploy_after_land(task_svc, task_id: str, project: str = "default") -> None:
         pass
 
 
+# FETCH COST (owner tick-cost brief, 2026-09-13). Measured live: every
+# _tick ran a real `git fetch origin` + `git rev-list` even when nothing
+# had landed anywhere -- a network round trip and a process spawn, paid on
+# a clock, for a "no" the last check already gave. Cached PER REPO ROOT
+# (never global -- tests exercise many throwaway repos in one process) for
+# `_FETCH_CACHE_TTL_S`; `signal_land` (called from `deploy_after_land`, the
+# one place this process learns of a REAL land via the normal ship path)
+# invalidates it early so a genuine event is never made to wait out the
+# TTL. A direct push (this repo's own self-dev carve-out) has no such
+# hook, so it is still caught within the TTL by the ordinary poll -- the
+# same bound `sweep_new_land`'s own docstring already accepts for that
+# path. In-memory, like task_runner's/gate_adjudicator's own backoff
+# caches: a restart re-fetches once, which is the correct bias.
+_FETCH_CACHE_TTL_S = 900.0  # 15 minutes
+_FETCH_CACHE: dict[str, tuple[float, int]] = {}   # repo key -> (fetched_at, ahead)
+_LAND_SIGNALLED: dict[str, bool] = {}             # repo key -> force next fetch
+
+
+def signal_land(repo_root: Optional[Path] = None) -> None:
+    """Mark that a land just happened for `repo_root` (default: this
+    seat's own resolved checkout) so the NEXT `sweep_new_land` tick fetches
+    for real even inside a warm cache's TTL. Cheap, best-effort, never
+    raises -- an unresolvable repo_root is simply a no-op."""
+    root = repo_root if repo_root is not None else _repo_root()
+    if root is None:
+        return
+    _LAND_SIGNALLED[str(root)] = True
+
+
+def reset_fetch_cache() -> None:
+    """Test-only: clears the fetch cache and any pending land signal so
+    each test starts from a cold cache regardless of repo_root reuse."""
+    _FETCH_CACHE.clear()
+    _LAND_SIGNALLED.clear()
+
+
 def _upstream_ahead_count(run: Runner, repo_root: Path) -> int:
-    """Commits the checkout's upstream (`@{u}`) is ahead of HEAD, after
-    fetching origin for real. -1 on any git failure -- no upstream
+    """Commits the checkout's upstream (`@{u}`) is ahead of HEAD.
+
+    Fetches origin FOR REAL only when a land was signalled for this repo
+    or the last real fetch is older than `_FETCH_CACHE_TTL_S` -- otherwise
+    answers from the cached ahead-count, which cannot have changed without
+    one of those two triggers. -1 on any git failure -- no upstream
     configured, a detached HEAD, an unreachable remote -- so an ambiguous
-    comparison never triggers a deploy attempt."""
+    comparison never triggers a deploy attempt (and is never cached, so
+    the next call retries for real)."""
+    key = str(repo_root)
+    now = time.monotonic()
+    forced = _LAND_SIGNALLED.pop(key, False)
+    if not forced:
+        cached = _FETCH_CACHE.get(key)
+        if cached is not None and (now - cached[0]) < _FETCH_CACHE_TTL_S:
+            return cached[1]
     rc, _out, _err = run(["git", "fetch", "origin"], repo_root)
     if rc != 0:
         return -1
@@ -441,9 +490,11 @@ def _upstream_ahead_count(run: Runner, repo_root: Path) -> int:
     if rc != 0:
         return -1
     try:
-        return int((out or "").strip())
+        ahead = int((out or "").strip())
     except ValueError:
         return -1
+    _FETCH_CACHE[key] = (now, ahead)
+    return ahead
 
 
 def sweep_new_land(*, repo_root: Optional[Path] = None,
