@@ -5,7 +5,7 @@
  * once per frame; nothing else drives motion (all state changes are
  * WorkEvent-sourced, so a still wire really means no flow). */
 
-import type { GraphState, LiveNode } from "./graphState";
+import type { GraphState, LiveNode, WorkerActivity } from "./graphState";
 import { HEARTBEAT_DECAY_MS, deriveCardState } from "./graphState";
 import { drawCard, drawActionStrip, type CardMetrics } from "./cards";
 import { wireKey, type WireKind } from "./wires";
@@ -21,6 +21,76 @@ import { logMeterFrac } from "./scale";
 
 function edgeKind(k: "parent_of" | "driven_in"): WireKind {
   return k === "driven_in" ? "token" : "structure";
+}
+
+/** How long one full breath of a running worker chip's glow takes -- same
+ * "alive, not alarming" pacing as the /workflows canvas's own behaviour-
+ * node pulse (workflowGraph.ts's RUNNING_PULSE_PERIOD_MS), reused here so
+ * the two boards read as one visual grammar rather than drifting apart. */
+const WORKER_PULSE_PERIOD_MS = 2200;
+/** PALETTE.teal (#2dd4bf) as r,g,b -- the pulse modulates ALPHA. */
+const WORKER_TEAL_RGB = "45, 212, 191";
+const WORKER_CHIP_W = 158;
+const WORKER_CHIP_H = 30;
+const WORKER_CHIP_GAP = 8;
+const WORKER_ROW_MARGIN = 14;
+
+function clipText(ctx: CanvasRenderingContext2D, text: string, maxW: number): string {
+  if (ctx.measureText(text).width <= maxW) return text;
+  let out = text;
+  while (out.length > 1 && ctx.measureText(`${out}…`).width > maxW) out = out.slice(0, -1);
+  return `${out}…`;
+}
+
+/** Task fix/canvasplay (owner 2026-09-13: "the playing is supposed to be
+ * IN the graph like in a normal game"). Draws each currently-running
+ * daemon background pass (task_runner, gate_adjudicator, deploy_sweep,
+ * ...) as its own small pulsing chip, top-right, screen space -- fixed
+ * to the canvas like the HUD/legend/gate panel, never a floating DOM
+ * overlay competing with the board it describes. Elapsed is recomputed
+ * from `now` every frame off the chip's own stored startedAtMs, the same
+ * "one stored instant, recomputed every frame" pattern draw.ts already
+ * uses for the mission clock. An idle daemon draws nothing here -- no
+ * chip exists until GraphState.workers actually holds a running pass. */
+function drawWorkerRow(ctx: CanvasRenderingContext2D, workers: WorkerActivity[], now: number, screenW: number): void {
+  if (!workers.length) return;
+  ctx.save();
+  ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+  workers.forEach((worker, i) => {
+    const x = screenW - WORKER_ROW_MARGIN - (i + 1) * WORKER_CHIP_W - i * WORKER_CHIP_GAP;
+    const y = WORKER_ROW_MARGIN;
+    const elapsedS = Math.max(0, (Date.now() - worker.startedAtMs) / 1000);
+    const pulse = 0.55 + 0.35 * Math.sin((now * 2 * Math.PI) / WORKER_PULSE_PERIOD_MS);
+
+    ctx.fillStyle = "rgba(18,22,32,0.85)";
+    ctx.beginPath();
+    ctx.roundRect(x, y, WORKER_CHIP_W, WORKER_CHIP_H, 6);
+    ctx.fill();
+
+    ctx.shadowColor = `rgba(${WORKER_TEAL_RGB}, ${pulse.toFixed(2)})`;
+    ctx.shadowBlur = 8 + 5 * pulse;
+    ctx.strokeStyle = PALETTE.teal;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    ctx.font = "600 10px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = PALETTE.textPrimary;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(clipText(ctx, worker.kind.replace(/_/g, " "), WORKER_CHIP_W - 46), x + 8, y + 11);
+
+    ctx.font = "10px ui-monospace, SFMono-Regular, monospace";
+    ctx.fillStyle = PALETTE.teal;
+    ctx.textAlign = "right";
+    ctx.fillText(`${Math.floor(elapsedS)}s`, x + WORKER_CHIP_W - 8, y + 11);
+    ctx.textAlign = "left";
+
+    ctx.font = "9px ui-sans-serif, system-ui, sans-serif";
+    ctx.fillStyle = PALETTE.textDim;
+    ctx.fillText(clipText(ctx, worker.detail || worker.project, WORKER_CHIP_W - 16), x + 8, y + 22);
+  });
+  ctx.restore();
 }
 
 /** `import.meta.env` isn't declared anywhere in this project (no
@@ -278,6 +348,10 @@ export function draw(ctx: CanvasRenderingContext2D, state: GraphState, now: numb
 
   // HUD — fixed, screen space, independent of pan/zoom.
   drawHud(ctx, state, now);
+  // Daemon background-pass chips -- fixed, screen space, top-right (the
+  // spot the old floating System Activity panel used to occupy, now drawn
+  // INTO the graph instead of over it).
+  drawWorkerRow(ctx, state.workers, now, width);
   // Round 8 (owner report + task 04783650): the calm-case caption is
   // retired -- hud.ts's hero row sub-label already shows the identical
   // quiet-age info -- so this now only ever docks when there is a real

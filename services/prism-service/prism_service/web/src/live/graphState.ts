@@ -263,6 +263,34 @@ export type LiveNode = GraphNode & {
 
 export type LiveEdge = { source: string; target: string; kind: GraphEdge["kind"] };
 
+/** ONE currently-running daemon background pass (task_runner,
+ * gate_adjudicator, resume_actuator, deploy_sweep, ship_worker,
+ * reap_sweep, brain_jobs, drift_reindex, language_alignment, governance
+ * -- see services/system_activity.py's real pass_() call sites) drawn as
+ * its own small pulsing chip on the /live canvas.
+ *
+ * Task fix/canvasplay (owner 2026-09-13, with a screenshot: "i dont want
+ * the panel on the top, the playing is supposed to be IN the graph like
+ * in a normal game"). Deliberately a SEPARATE small array from `nodes`
+ * rather than a third LiveNode kind -- these are not sessions/tasks
+ * (queue_depth, gate_state, driveStartedAt etc. have no meaning for a
+ * daemon pass), and folding them into the generic node model would force
+ * every existing node-kind branch in this file and draw.ts to grow a
+ * third case for fields that never apply to it. */
+export type WorkerActivity = {
+  id: string;
+  kind: string;
+  project: string;
+  detail: string;
+  /** Date.now()-space epoch ms this pass started -- computed ONCE when
+   * the snapshot lands (from the server's own started_at when present,
+   * else Date.now() - elapsed_ms), so the render loop can recompute
+   * elapsed every frame from a single stored instant rather than
+   * re-deriving it from a stale elapsed_ms that would otherwise freeze
+   * between polls. */
+  startedAtMs: number;
+};
+
 /** A hit on a wire's port dot — which wire (wireKey-shaped `key`), which
  * end ("from"|"to"), and the card id that end is anchored to. A type
  * alias (not an inline object literal) so portAtWorld's OWN opening `{`
@@ -329,6 +357,11 @@ export class GraphState {
   nodes: LiveNode[] = [];
   edges: LiveEdge[] = [];
   packets: Packet[] = [];
+  /** Currently-running daemon background passes -- see WorkerActivity's
+   * own doc comment. Set by setWorkerActivity(), called by LivePage only
+   * when a real `activity` GET /sse/changes event arrives (never on a
+   * timer of its own); drawn by draw.ts's drawWorkerRow. */
+  workers: WorkerActivity[] = [];
   layout = new LayoutEngine();
   width = 800;
   height = 600;
@@ -1350,6 +1383,24 @@ export class GraphState {
 
   setReconcileFetcher(fn: () => Promise<GraphSnapshot>): void {
     this.reconcileFetcher = fn;
+  }
+
+  /** Replaces the running-worker list from a fresh GET /api/system/activity
+   * `running` array. Called only on a real `activity` change event (see
+   * LivePage.tsx) -- never polled -- so an idle daemon draws nothing here
+   * and a real pass appears/disappears exactly when it starts/ends. */
+  setWorkerActivity(running: Array<{
+    id: string; kind: string; project?: string; detail?: string;
+    started_at?: number; elapsed_ms?: number;
+  }>): void {
+    const now = Date.now();
+    this.workers = running.map((e) => ({
+      id: e.id,
+      kind: e.kind,
+      project: e.project ?? "",
+      detail: e.detail ?? "",
+      startedAtMs: e.started_at ? e.started_at * 1000 : now - (e.elapsed_ms ?? 0),
+    }));
   }
 
   /** Round 2, piece 4 self-heal (build item 4): debounces a burst of

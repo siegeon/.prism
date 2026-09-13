@@ -6,15 +6,23 @@ The PRISM SPA has NO JS test runner, so this pins the ACTUAL rendered TSX
 source (the same convention as test_conductor_page_animated_cleanup_ui.py):
 LivePage.tsx must actually mount SystemActivityPanel (not merely define an
 unused component), and SystemActivityPanel.tsx must poll the real
-/api/system/activity route, render a live-elapsed "running" section and a
-"recent" completed-passes section, and be positioned so it never collides
-with the existing gate-decision overlay or reset-layout button.
+/api/system/activity route, render a "recent" completed-passes section,
+and be positioned so it never collides with the existing gate-decision
+overlay or reset-layout button.
 
 Docking position SUPERSEDED 2026-09-13 (owner, verbatim, with a screenshot
 of the conductor canvas): "i dont want the panel on the top, the playing is
 supposed to be IN the graph like in a normal game." The panel moved from a
 top-right float to a bottom-right, collapsed-by-default drawer -- see the
 docking/collapsed tests below for what replaced the old top-right pin.
+
+The "running now" section SUPERSEDED again, same day: it is GONE from this
+panel entirely, replaced by live/draw.ts's drawWorkerRow drawing pulsing
+worker chips straight onto the /live canvas (fed by
+live/graphState.ts's GraphState.workers + LivePage.tsx's own `activity`
+GET /sse/changes subscription) -- see
+test_live_graph_draws_worker_activity_chips.py for that pin, and the
+retired-running-section test below for what this replaced.
 """
 
 from __future__ import annotations
@@ -51,13 +59,22 @@ def test_panel_polls_the_real_system_activity_route() -> None:
     assert "POLL_MS = 1000" not in src
 
 
-def test_panel_renders_a_running_section_with_live_elapsed() -> None:
+def test_panel_no_longer_renders_a_running_section() -> None:
+    # SUPERSEDED 2026-09-13 (owner, verbatim, with a screenshot of the
+    # conductor canvas): "the playing is supposed to be IN the graph like
+    # in a normal game." The "running now" list this test used to pin
+    # (test_panel_renders_a_running_section_with_live_elapsed) is gone from
+    # this DOM panel entirely -- it is now drawn as pulsing chips straight
+    # onto the /live canvas by live/draw.ts's drawWorkerRow (see
+    # test_live_graph_draws_worker_activity_chips.py). This component keeps
+    # only the "recent" completed-passes list, so its own per-250ms ticker
+    # (forceTick) -- which existed only to keep a running pass's elapsed
+    # counter moving -- is gone too; there is no live-elapsed number left
+    # in this DOM panel for it to serve.
     src = _read(_PANEL)
-    assert "snap.running" in src
-    # Elapsed for a running pass is recomputed from started_at every tick,
-    # never frozen at the value from the last fetch.
-    assert "now - e.started_at" in src
-    assert "forceTick" in src
+    assert "snap.running" not in src
+    assert "forceTick" not in src
+    assert "Recent activity" in src
 
 
 def test_panel_renders_a_recent_completed_section() -> None:

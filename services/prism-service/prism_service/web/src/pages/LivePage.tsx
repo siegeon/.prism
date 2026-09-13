@@ -12,6 +12,14 @@ import { actionStripHitTest, exploreHrefFor } from "@/live/cards";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
 import LiveGatePanel from "@/components/live/LiveGatePanel";
 import SystemActivityPanel from "@/components/live/SystemActivityPanel";
+import { subscribeToChangeKind } from "@/lib/useChanges";
+
+type SystemActivitySnapshot = {
+  running: Array<{
+    id: string; kind: string; project: string; detail: string;
+    started_at: number; elapsed_ms: number;
+  }>;
+};
 
 /** localStorage key for a project's manual card-position overrides (owner
  * ask: "the individual panels should be able to be moved") — read once
@@ -174,6 +182,26 @@ export default function LivePage() {
       }
     },
   ), [project]);
+
+  // Daemon background-pass chips (task fix/canvasplay, owner 2026-09-13:
+  // "the playing is supposed to be IN the graph like in a normal game").
+  // No polling: fetch GET /api/system/activity once at mount so the graph
+  // isn't blank until the first event, then refetch ONLY on a real
+  // `activity` GET /sse/changes signal (services/system_activity.py's
+  // record()/pass_() call wakeups.signal("activity", project) at the
+  // instant a pass starts or ends) -- the same signal the old floating
+  // panel polled every 1s for, now driving the graph's own chips instead.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      api.get<SystemActivitySnapshot>(`/api/system/activity?project=${encodeURIComponent(project)}`)
+        .then((snap) => { if (!cancelled) stateRef.current.setWorkerActivity(snap.running); })
+        .catch(() => { /* next real signal retries; a stale chip list just holds */ });
+    };
+    load();
+    const unsubscribe = subscribeToChangeKind("activity", load, project);
+    return () => { cancelled = true; unsubscribe(); };
+  }, [project]);
 
   // Canvas sizing — crisp at devicePixelRatio, backing store scaled, CSS
   // size unscaled, so lines/text stay sharp on hi-DPI displays.

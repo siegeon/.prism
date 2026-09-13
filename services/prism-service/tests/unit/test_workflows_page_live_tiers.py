@@ -879,3 +879,28 @@ def test_attempt_and_token_trend_lines_never_share_a_canvas_position():
     # y-offset, not a bare y + 58 shared with the ATTEMPT label.
     m = re.search(r"fitTokenTrend\(ctx, n\.tokenTrend, w - 20\), x \+ 10, y \+ \(attemptsLine \? \d+ : 58\)\)", body)
     assert m, "the token-trend line must offset its y-position when attemptsLine is true"
+
+
+# ---------------------------------------------------------------------------
+# Live counts prefix (task fix/canvasplay, widened scope, owner 2026-09-13:
+# "N tasks · M at gates · running: <kind> on <node>"). Confirms the counts
+# prefix (bannerText) never leaks into the QUIET-copy region this file's
+# own test_quiet_status_line_copy_has_no_forbidden_words scopes so tightly
+# -- bannerText is a separate wrapper computed OUTSIDE statusLineText's
+# useMemo, so that test's `_binding_expr`/`_innermost_enclosing_braces`
+# search (anchored on "No run in progress", found only inside the memo)
+# is unaffected by this addition; this test pins that fact directly rather
+# than relying on it staying true by accident.
+# ---------------------------------------------------------------------------
+
+def test_live_counts_prefix_wraps_status_line_text_without_touching_its_memo():
+    src = _read_page()
+    memo_start = src.index("const statusLineText = useMemo(() => {")
+    memo_end = src.index("}, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks, dataLoaded, loadingElapsedS, selectedWorkflow]);") + 1
+    memo_body = src[memo_start:memo_end]
+    assert "bannerText" not in memo_body, (
+        "the live-counts prefix must be computed OUTSIDE statusLineText's "
+        "own useMemo, never inline inside its pinned branches")
+    banner_idx = src.index("const bannerText = dataLoaded", memo_end)
+    assert banner_idx > memo_end, (
+        "bannerText must be declared AFTER statusLineText's memo closes")

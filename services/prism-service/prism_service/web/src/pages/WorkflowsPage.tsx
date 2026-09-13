@@ -1501,6 +1501,22 @@ export default function WorkflowsPage() {
     return `No run in progress · last run ${relativeTime(lastOutcome.endedAtIso)} · ${lastOutcome.passed ? "passed" : "failed"}`;
   }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks, dataLoaded, loadingElapsedS, selectedWorkflow]);
 
+  // Live counts prefix (task fix/canvasplay, widened scope): "N tasks · M
+  // at gates · <existing statusLineText>" -- both numbers come straight off
+  // conductorManaged, the SAME SSE-pushed board useConductorState already
+  // maintains for this page (no new fetch, no polling of any kind).
+  // Deliberately computed OUTSIDE statusLineText's own useMemo and applied
+  // only at the render site below -- every existing branch/literal inside
+  // that memo (the exact "Driving ..."/"Waiting at ..."/"No run in
+  // progress" strings the pinned tests in test_workflows_live_run_banner_
+  // ui.py, test_workflows_page_live_tiers.py and test_workflows_canvas_
+  // loading_state_ui.py all assert byte-for-byte) is untouched. Held back
+  // until dataLoaded so the banner never reads "0 tasks · 0 at gates" while
+  // the first poll is still in flight.
+  const bannerText = dataLoaded
+    ? `${conductorManaged.length} tasks · ${conductorManaged.filter(conductorTaskWaitingAtGate).length} at gates · ${statusLineText}`
+    : statusLineText;
+
   const refreshRunHistory = useCallback(() => {
     if (!selectedWorkflow || selectedWorkflow.id !== "validation") {
       setWorkflowRunHistory([]);
@@ -2991,7 +3007,7 @@ export default function WorkflowsPage() {
             the canvas. */}
         <div className="border-b border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-4 py-2 text-xs text-[color:var(--text-secondary)]">
           <div className="flex items-center gap-2">
-            <span>{statusLineText}</span>
+            <span>{bannerText}</span>
             {/* A REFRESH poll (not the first) running long or failing must
                 say so in place, never silently blank the board it's still
                 showing the last good data for. Only shows once dataLoaded
