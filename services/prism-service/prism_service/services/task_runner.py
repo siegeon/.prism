@@ -1010,6 +1010,36 @@ def _failure_reason(result, budget_s: float, proof: str = "") -> str:
             "(crash/auth/truncated mid-turn)")
 
 
+_TEST_DEF_RE = re.compile(r"\bdef\s+test_\w+")
+_TEST_NODE_ID_RE = re.compile(r"test_[\w./-]*\.py::test_\w+")
+
+
+def _write_failing_tests_has_artifact(proof: str) -> bool:
+    """True when `proof` shows an actual test was written, not just prose.
+
+    write_failing_tests's whole job is a tests-only commit that anchors
+    red_gate (see `_DRAFT_ONLY_WITHOUT_CHAIN` above) -- a report naming
+    neither a `def test_...` function nor a pytest node id (a real run
+    against a real file, e.g. "FAILED tests/unit/test_x.py::test_y") is a
+    chat transcript, never a step completion. Live on task bb3d1f6a
+    (2026-09-13): the declared chain never ran, the narrow-prompt guard
+    only covers that path, and the FULL BRIEF fallback (BUILD_TOOLS, no
+    chain) returned an empty `<think></think>` wrapper plus "I have
+    examined the test files and found..." five times running -- exit 0,
+    non-empty proof, so the old check (`proof and exit_code == 0`) called
+    it a pass, advanced to red_gate, and stamped a `red_step_sha` anchor at
+    a commit with no tests, which red_gate then refuses forever (the
+    pinned suite passes there, so red can never be demonstrated from that
+    history). This is a floor, not a rubric: it only rules out prose with
+    neither signal (test_task_runner_red_ids_on_live_path.py's realistic
+    "FAILED tests/unit/test_alpha.py::test_one" pytest-tail proof carries
+    no `def test_` at all and must still pass), and never runs on any
+    other step.
+    """
+    text = proof or ""
+    return bool(_TEST_DEF_RE.search(text) or _TEST_NODE_ID_RE.search(text))
+
+
 def _repair_premises(proof: str, task, facts) -> str:
     """Complete an ungrounded premise report with the RENDERED section.
 
@@ -2315,7 +2345,20 @@ def _run_one_step(project: str, task_id: str) -> dict:
         except Exception:
             pass
 
-    if proof and (result.exit_code == 0 or result.graceful_budget_stop()):
+    # A NO-ARTIFACT "SUCCESS" IS STILL A FAILED ATTEMPT (task bb3d1f6a). The
+    # narrow-prompt guard (`_DRAFT_ONLY_WITHOUT_CHAIN`) only stops a
+    # draft-only prompt from running ALONE; it does nothing once that guard
+    # falls through to the full-brief fallback below, which still has tools
+    # and can just talk about the tests instead of writing one. Checked here
+    # rather than folded into the condition below so the reason this attempt
+    # failed is honest, not the generic exit/proof `_failure_reason` text.
+    no_test_artifact = (
+        step_id == "write_failing_tests"
+        and bool(proof)
+        and not _write_failing_tests_has_artifact(proof))
+
+    if proof and not no_test_artifact and (
+            result.exit_code == 0 or result.graceful_budget_stop()):
         _route_proof(task_svc, task_id, step_id, proof)
         # CODIFIED RED TEST IDS ON LIVE PATH. When write_failing_tests
         # succeeds, consult the deterministic red-test-ids node to make those
@@ -2336,6 +2379,14 @@ def _run_one_step(project: str, task_id: str) -> dict:
                     + "\n".join(f"  {i}" for i in codified_ids))
                 task_svc.update(task_id, completion_proof=enhanced_proof)
         outcome: object = "pass"
+    elif no_test_artifact:
+        outcome = {"ok": False,
+                   "reason": ("write_failing_tests reported success with no "
+                              "test artifact in the proof (no `def test_...` "
+                              "naming a test file) -- treating this as a "
+                              "failed attempt so the step retries instead of "
+                              "advancing and stamping a red anchor on "
+                              "nothing")}
     else:
         # ONE reason builder for every failure shape. It used to be two
         # branches keyed on whether `proof` was empty, which is why a timeout
