@@ -192,6 +192,27 @@ def wait(kinds: Iterable[str], project: Optional[str] = None,
             _COND.wait(timeout=min(remaining, _CROSS_POLL_S))
 
 
+def changes_snapshot(project: Optional[str] = None) -> float:
+    """The newest signal timestamp visible to `project` (any kind, plus
+    wildcard signals) -- or across every project when `project` is None.
+
+    Backs GET /api/changes (api/changes.py): the SPA's shared poll layer
+    runs ONE 1s poll of that tiny endpoint per tab, and every other data
+    query gates its own refetch on "did this number move" instead of a
+    private fixed-interval timer. Monotonic non-decreasing for a fixed
+    `project` across the process lifetime -- a fresh maximum over the same
+    `_LAST` dict `_has_new`/`last_signal_at` already read, so this mints no
+    new state of its own."""
+    with _LOCK:
+        best = 0.0
+        for (_ek, ep), ts in _LAST.items():
+            if project and ep != "*" and ep != project:
+                continue
+            if ts > best:
+                best = ts
+        return best
+
+
 def last_signal_at(kind: str, project: Optional[str] = None) -> float:
     """Most recent signal time for `kind` (matching `project`, or the
     newest across all projects when None). 0.0 if never signalled.
