@@ -2290,7 +2290,22 @@ def _render_conventions(conventions: list | None) -> str:
     return result
 
 
-def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
+def _pinned_ids_for(project: str, task_id: str) -> list[str]:
+    """The task's pinned pytest ids (task.verify), or [] when they cannot be
+    resolved. NEVER raises: an unreachable task_svc, an unknown id, or an
+    empty task_id all mean "no coverage requirement" (task bb3d1f6a), and a
+    checker that refuses a good draft is worse than no checker."""
+    if not task_id:
+        return []
+    try:
+        task = get_project(project).task_svc.get(task_id)
+        return [str(p) for p in (getattr(task, "verify", None) or [])]
+    except Exception:
+        return []
+
+
+def _score_rubric(rubric_name: str, fields: dict, project: str,
+                  task_id: str = "") -> dict:
     """Dispatch to the right existing PURE scorer by rubric name, mapping
     the Reason stage's structured_output fields onto each scorer's own
     evidence shape. One place that knows "which scorer, which fields" so
@@ -2321,8 +2336,13 @@ def _score_rubric(rubric_name: str, fields: dict, project: str) -> dict:
         }
         return gov.score_plan_coverage(evidence, rubric, principles)
     if rubric_name == "test_drafted":
-        return gov.score_test_drafted({"test_code": fields.get("test_code", ""),
-                                        "test_file_path": fields.get("test_file_path", "")}, rubric)
+        # PINNED IDS COME FROM THE TASK ROW, not from the model's own output
+        # (task bb3d1f6a): the draft must define every function the red gate
+        # is going to run, and only task.verify knows which those are.
+        return gov.score_test_drafted(
+            {"test_code": fields.get("test_code", ""),
+             "test_file_path": fields.get("test_file_path", ""),
+             "pinned_ids": _pinned_ids_for(project, task_id)}, rubric)
     return {"ok": False, "reason": f"unknown rubric: {rubric_name!r}"}
 
 
@@ -2459,7 +2479,8 @@ def workflow_step_reason_loop(
         # --- Validate: reuse the SAME pure rubric scorers story/plan-gate-check wrap ---
         stop_chain = False
         if body.rubric:
-            verdict = _score_rubric(body.rubric, fields, project)
+            verdict = _score_rubric(body.rubric, fields, project,
+                                    task_id=body.task_id)
             validation = {"ok": verdict.get("ok", False), "reason": verdict.get("reason", "")}
             # A declared rubric that REFUSES must stop the rest of this
             # node's chain (write-test-file/run-pinned-suite/commit-tests-
@@ -3747,11 +3768,19 @@ class WriteTestFileRequest(BaseModel):
 
 
 class RunPinnedSuiteRequest(BaseModel):
-    """Run the task's pinned suite. `paths` empty means read task.verify."""
+    """Run the task's pinned suite. `paths` empty means read task.verify.
+
+    `expected_rc` is THE NODE'S OWN DECLARATION of the exit code this step
+    must measure -- write-failing-tests-loop.json declares 1, because only
+    rc==1 (tests ran, an assertion genuinely failed) is red demonstrated.
+    None means report-only: the rc comes back and nothing is compared, so
+    every caller that declares no expectation behaves exactly as before.
+    """
 
     task_id: str = Field(min_length=1)
     paths: list[str] = Field(default_factory=list)
     timeout_s: float = Field(default=600.0, gt=0)
+    expected_rc: Optional[int] = None
 
 
 class CommitTestsOnlyRequest(BaseModel):
@@ -4143,15 +4172,44 @@ def workflow_step_write_test_file(
             out["reason"] or f"wrote {out['bytes']} byte(s) to {out['path']}")
 
 
+# WHAT AN EXIT CODE MEANS, in the words a refusal must say out loud. A
+# bare "rc 4 != 1" tells a reader nothing they can act on; naming the
+# cause is what lets the next attempt fix the draft instead of retrying it.
+_PYTEST_RC_MEANING = {
+    0: "the tests passed, where a red step needs a genuine assertion "
+       "failure",
+    1: "the tests ran and an assertion genuinely failed",
+    2: "the run was interrupted before it finished",
+    3: "an internal pytest error",
+    4: "pytest could not collect the suite (a usage or collection error -- "
+       "a pinned test id is missing, or its file does not exist)",
+    5: "no tests were collected",
+}
+
+
 @router.post("/steps/run-pinned-suite")
 def workflow_step_run_pinned_suite(
     body: RunPinnedSuiteRequest, project: str = Query(...),
 ) -> dict:
-    """Run the task's pinned suite in its worktree and REPORT the rc.
+    """Run the task's pinned suite in its worktree, REPORT the rc, and
+    compare it against the expectation THE NODE DECLARES.
 
-    The rc IS the product. oracle_spec's red check wants rc==1 and refuses
-    rc 0, 2 and 4 by name, so this node never interprets -- it reports the
-    integer and the tail, and the gate decides.
+    The rc IS the product, and it is always reported -- the integer, the
+    paths and the real pytest tail come back on every path, refusal
+    included, because a person or an agent reading the run log must see
+    what was actually measured.
+
+    What changed (task bb3d1f6a): this step no longer reports every rc as
+    ok. It compares the measured rc against `expected_rc`, which
+    write-failing-tests-loop.json declares as 1. A mismatch is a REFUSAL
+    that carries `stop_chain`, so commit-tests-only does not run. Before
+    this, an rc=4 (pytest could not collect, because the drafted file never
+    defined the pinned test id) was reported ok and the next step committed
+    it as the task's red anchor -- a red anchor holding a test that can
+    never collect, while red_gate needs rc==1.
+
+    `expected_rc=None` keeps the old contract exactly: report the integer
+    and let the gate decide.
     """
     import subprocess
 
@@ -4189,8 +4247,21 @@ def workflow_step_run_pinned_suite(
                 out["reason"] = f"could not run pytest: {exc}"
                 return out
             combined = (proc.stdout or "") + (proc.stderr or "")
-            out.update(outcome="ok", rc=proc.returncode,
+            out.update(rc=proc.returncode,
                        tail="\n".join(combined.splitlines()[-30:]))
+            if (body.expected_rc is not None
+                    and proc.returncode != body.expected_rc):
+                # THE MEASUREMENT IS NEVER DISCARDED: rc, tail and paths
+                # stay on the payload, and stop_chain keeps the rest of the
+                # node's chain from anchoring on a bad run.
+                out["stop_chain"] = True
+                means = _PYTEST_RC_MEANING.get(
+                    proc.returncode, "an exit code pytest does not document")
+                out["reason"] = (
+                    f"pytest exit code {proc.returncode}, expected "
+                    f"{body.expected_rc}: {means}")
+                return out
+            out["outcome"] = "ok"
             return out
     finally:
         _record_node_run(

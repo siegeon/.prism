@@ -692,12 +692,16 @@ def score_green_outcome(evidence: dict, rubric: dict) -> dict:
 # ----------------------------------------------------------------------
 
 def _module_resolvable(module_name: str) -> bool:
-    """Check if a module can be resolved without importing it.
+    """Check if a TOP-LEVEL module name can be resolved without importing it.
 
     Returns True if the module can be found via importlib.util.find_spec.
     Conservative: any exception (ImportError, ModuleNotFoundError, ValueError,
     AttributeError) means the module is treated as unresolvable. A real
-    test must import only resolvable modules."""
+    test must import only resolvable modules.
+
+    Pass only a top-level name here. A dotted path goes to
+    `_submodule_path_resolvable`, which holds the safety precondition that
+    keeps this check from executing code."""
     import importlib.util
     try:
         spec = importlib.util.find_spec(module_name)
@@ -711,6 +715,93 @@ def _module_resolvable(module_name: str) -> bool:
         return True
 
 
+def _submodule_path_resolvable(module_name: str):
+    """Resolve a FULL dotted module path. Returns True, False, or None.
+
+    None means indeterminate — the caller must PASS, never refuse.
+
+    THE SAFETY PRECONDITION: `importlib.util.find_spec("pkg.sub")` imports
+    `pkg` to find `sub`, which EXECUTES that package's __init__. This checker
+    never executes code it was given. So the full path is resolved only when
+    every ancestor package (`pkg`, `pkg.sub` for `pkg.sub.leaf`, ...) is
+    ALREADY in sys.modules: the process has loaded them, so resolving the
+    leaf executes nothing new. Any other case returns None:
+      - an ancestor is absent from sys.modules (resolving would import it);
+      - the name has no dot (nothing beyond the top-level to check);
+      - find_spec raises (indeterminate).
+    """
+    import importlib.util
+    import sys as _sys
+
+    parts = module_name.split(".")
+    if len(parts) < 2:
+        return None
+    for i in range(1, len(parts)):
+        if ".".join(parts[:i]) not in _sys.modules:
+            return None
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return None
+
+
+# ----------------------------------------------------------------------
+# Pinned-id coverage for a drafted test (task bb3d1f6a) — pure helpers
+# ----------------------------------------------------------------------
+
+def _norm_test_path(path: str) -> str:
+    """POSIX-normalise a test path for comparison: one separator style, no
+    leading './' or '/'. Comparison only — never used to open a file."""
+    text = str(path or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text.lstrip("/")
+
+
+def _pinned_test_names_for_file(
+    pinned_ids, draft_path: str,
+) -> tuple[bool, list[str]]:
+    """Split pinned pytest ids into (this file was named, function names).
+
+    A pinned id is `<path>` or `<path>::<name>` or
+    `<path>::<Class>::<name>`, and the name may carry a parametrisation
+    suffix `[...]`. The FUNCTION name is the last '::' segment with any
+    trailing '[...]' removed. An entry with no '::' pins a file only and
+    contributes no function name.
+
+    task.verify is workspace-root-relative while a draft's own path can be
+    shorter or repo-relative, so paths match on a suffix in EITHER
+    direction, with a basename fallback. Returns (False, []) when no pinned
+    id names this draft's file — that is a path concern, not a coverage
+    failure, and the caller must require nothing.
+    """
+    draft = _norm_test_path(draft_path)
+    draft_base = draft.split("/")[-1]
+    matched = False
+    names: list[str] = []
+    for raw in pinned_ids or []:
+        entry = str(raw or "").strip()
+        if not entry:
+            continue
+        parts = entry.split("::")
+        path = _norm_test_path(parts[0])
+        if not path:
+            continue
+        base = path.split("/")[-1]
+        if not (path == draft
+                or draft.endswith("/" + path)
+                or path.endswith("/" + draft)
+                or base == draft_base):
+            continue
+        matched = True
+        if len(parts) < 2:
+            continue
+        name = parts[-1].split("[", 1)[0].strip()
+        if name and name not in names:
+            names.append(name)
+    return matched, names
+
+
 # ----------------------------------------------------------------------
 # Intended-vs-observed conformance (d1) — pure function
 # ----------------------------------------------------------------------
@@ -718,7 +809,8 @@ def _module_resolvable(module_name: str) -> bool:
 def score_test_drafted(evidence: dict, rubric: dict) -> dict:
     """PURE rubric verdict for the write_failing_tests Validate stage.
 
-    evidence: {"test_code": <python source>, "test_file_path": <file path>};
+    evidence: {"test_code": <python source>, "test_file_path": <file path>,
+    "pinned_ids": <optional list of pytest ids from task.verify>};
     rubric: the test_drafted entry from governance_rubrics.yaml.
     Returns {"ok": bool, "reason": str}. A compliant drafted test has:
 
@@ -729,8 +821,23 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
         'test_';
     (5) REFUSES a test that would raise an exception before any assert runs
         (e.g. a bare .index( call or subscript lookup as a bare statement);
-    (6) REFUSES a test that imports an unresolvable module (e.g. a bare
-        import 'prism' that does not exist).
+    (6) REFUSES a test that imports an unresolvable module — both a
+        top-level name that does not exist (a bare import 'prism') and a
+        full dotted path whose leaf does not exist under a real package
+        ('prism_service.lexicon', where the real module is
+        'prism_service.services.lexicon'). The reason names the module that
+        failed to resolve, at the depth it failed, so the drafting agent can
+        redraft without guessing. The full dotted path is checked ONLY when
+        every ancestor package is already in sys.modules, because find_spec
+        on a child imports its parents and this rubric never executes the
+        code it is given; every other case passes (see
+        _submodule_path_resolvable). Relative imports (from . import x) stay
+        exempt, and nothing here checks that an imported SYMBOL exists
+        inside a module — that needs real execution;
+    (7) REFUSES a draft that does not define EVERY test function name the
+        task pins for that same file (task bb3d1f6a: the draft defined 1 of
+        2 pinned ids, pytest exited 4 at collection, red_gate wants rc==1).
+        No pinned ids, or none that name this file, requires nothing.
     """
     import ast as ast_module
     import importlib.util
@@ -772,6 +879,28 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
     if not test_funcs:
         return {"ok": False,
                 "reason": "test_drafted: no function starting with test_ found"}
+
+    # PINNED-ID COVERAGE (task bb3d1f6a). The task pins the pytest ids the
+    # red gate will run. A draft that omits one of them collects as rc=4
+    # ("no tests ran" for that id) where the gate wants rc==1, so refuse it
+    # HERE and NAME the missing function — a computed reason thrown away is
+    # the very defect this closes. Conservative: a non-list value, an empty
+    # list, or a pinned path that does not name this file requires nothing.
+    pinned_note = ""
+    raw_pinned = evidence.get("pinned_ids")
+    if isinstance(raw_pinned, (list, tuple, set)):
+        path_named, required = _pinned_test_names_for_file(raw_pinned,
+                                                           test_file_path)
+        if not path_named:
+            pinned_note = "; no pinned id names this file"
+        else:
+            defined = set(test_funcs)
+            missing = [n for n in required if n not in defined]
+            if missing:
+                return {"ok": False,
+                        "reason": ("test_drafted: draft does not define "
+                                   "pinned test id(s): " + ", ".join(missing))}
+            pinned_note = f"; {len(required)} pinned id(s) covered"
 
     # Check for at least one assert statement.
     has_assert = any(isinstance(node, ast_module.Assert)
@@ -823,27 +952,34 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
                            + "; ".join(problems))}
 
     # Check for unresolvable imports (avoid collecting errors like rc==2/4).
-    # Walk Import and ImportFrom nodes; extract top-level module name.
+    # Walk Import and ImportFrom nodes. Check the top-level name first, then
+    # the FULL dotted path — `prism_service.lexicon` does not exist while its
+    # top-level `prism_service` does, and the top-level check alone let that
+    # draft through into a collection error. The full-path check is skipped
+    # whenever it would import something new; see _submodule_path_resolvable.
     # Skip relative imports (ImportFrom with level > 0) — they cannot be
     # resolved without the package context.
     unresolvable: list[str] = []
+
+    def _check_module(dotted: str) -> None:
+        top_level = dotted.split(".")[0]
+        if not _module_resolvable(top_level):
+            if top_level not in unresolvable:
+                unresolvable.append(top_level)
+        elif _submodule_path_resolvable(dotted) is False:
+            if dotted not in unresolvable:
+                unresolvable.append(dotted)
+
     for node in ast_module.walk(tree):
         if isinstance(node, ast_module.Import):
             for alias in node.names:
-                # Extract top-level module name (before first dot).
-                top_level = alias.name.split(".")[0]
-                if not _module_resolvable(top_level):
-                    if top_level not in unresolvable:
-                        unresolvable.append(top_level)
+                _check_module(alias.name)
         elif isinstance(node, ast_module.ImportFrom):
             # Skip relative imports (level > 0 means from . or from .. etc).
             if node.level > 0:
                 continue
             if node.module:
-                top_level = node.module.split(".")[0]
-                if not _module_resolvable(top_level):
-                    if top_level not in unresolvable:
-                        unresolvable.append(top_level)
+                _check_module(node.module)
     if unresolvable:
         shown = ", ".join(unresolvable)
         return {"ok": False,
@@ -852,7 +988,8 @@ def score_test_drafted(evidence: dict, rubric: dict) -> dict:
 
     return {"ok": True,
             "reason": (f"test_drafted: {len(test_funcs)} test function(s) "
-                       "defined; test code parses; assert statement present")}
+                       "defined; test code parses; assert statement present"
+                       + pinned_note)}
 
 
 def compute_violations(principles: list[dict], layers: dict) -> dict:

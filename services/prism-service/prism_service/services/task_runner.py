@@ -509,6 +509,20 @@ def _exported_variables(result) -> dict:
     return out
 
 
+def _step_field(result, name: str, default=None):
+    """One field of a declared step's output, whatever shape it came in.
+
+    A handler returns either a pydantic response (reason-loop,
+    oracle-route-check) or a plain dict (the three build routes). Reading a
+    dict with getattr() silently returns the default forever, which is
+    exactly how a dict-returning step's `stop_chain` was ignored. Keyed on
+    the FIELD, never on which route produced it.
+    """
+    if isinstance(result, dict):
+        return result.get(name, default)
+    return getattr(result, name, default)
+
+
 def _dispatch_declared_steps(project: str, plan: Optional[dict],
                              *, handlers: Optional[dict] = None,
                              variables: Optional[dict] = None,
@@ -571,22 +585,30 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
             out.append({"ok": False, "route": route,
                         "reason": f"{route} raised {type(exc).__name__}: {exc}"})
             continue
-        stopped = getattr(result, "stop_chain", False)
-        # A STOPPED STEP IS A FAILED ATTEMPT, NOT A QUIET SKIP (task
-        # bb3d1f6a). reason-loop reports stop_chain when its own declared
-        # rubric refused the draft (e.g. test_drafted's unresolvable-import
-        # check) -- record that row not-ok with the refusal text so
-        # _record_codified_run's history and the retry/stall path have
-        # something actionable instead of the generic "ran as a declared
-        # step". Read from validation.reason (the rubric's own message)
-        # before falling back to a plain result.reason string.
+        # A DICT RESULT MUST BE ABLE TO STOP THE CHAIN TOO (task bb3d1f6a,
+        # second pass). This read was `getattr(result, "stop_chain", False)`
+        # alone, and getattr on a dict reads an ATTRIBUTE, never a KEY --
+        # so every dict-returning handler (the three build routes included)
+        # was structurally unable to stop the chain no matter what it
+        # reported. run-pinned-suite refuses an rc that does not match the
+        # rc its node declares, and that refusal has to reach here or
+        # commit-tests-only anchors red on the bad run anyway.
+        stopped = bool(_step_field(result, "stop_chain", False))
+        # A STOPPED STEP IS A FAILED ATTEMPT, NOT A QUIET SKIP. reason-loop
+        # reports stop_chain when its own declared rubric refused the draft
+        # (e.g. test_drafted's unresolvable-import check) -- record that row
+        # not-ok with the refusal text so _record_codified_run's history and
+        # the retry/stall path have something actionable instead of the
+        # generic "ran as a declared step". Read from validation.reason (the
+        # rubric's own message) before falling back to the step's own
+        # `reason`, in either shape.
         row_reason = ""
         if stopped:
-            validation = getattr(result, "validation", None)
+            validation = _step_field(result, "validation", None)
             if isinstance(validation, dict):
                 row_reason = str(validation.get("reason") or "")
             if not row_reason:
-                row_reason = str(getattr(result, "reason", "") or "")
+                row_reason = str(_step_field(result, "reason", "") or "")
         out.append({"ok": not stopped, "route": route,
                     "reason": row_reason, "result": result})
         live.update(_exported_variables(result))
