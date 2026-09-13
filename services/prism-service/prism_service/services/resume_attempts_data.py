@@ -31,20 +31,31 @@ CREATE TABLE IF NOT EXISTS resume_attempts (
 def _connect(scores_db: str) -> sqlite3.Connection:
     conn = sqlite_db.connect(scores_db, timeout=5.0)
     conn.execute(_SCHEMA)
+    # `last_reason` landed after the original schema (task: infra refusals
+    # must not spend the retry budget) -- migrate an existing db in place
+    # rather than requiring a fresh scores.db.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(resume_attempts)")}
+    if "last_reason" not in cols:
+        conn.execute("ALTER TABLE resume_attempts ADD COLUMN last_reason TEXT")
+        conn.commit()
     return conn
 
 
-def record_attempt(scores_db: str, task_id: str) -> int:
-    """Increment and return the attempt count for `task_id`."""
+def record_attempt(scores_db: str, task_id: str, reason: str = "") -> int:
+    """Increment and return the attempt count for `task_id`, remembering
+    `reason` (the exact failure string) so a later park can name it instead
+    of a bare 'parked for a human'."""
     now = datetime.now(timezone.utc).isoformat()
     conn = _connect(scores_db)
     try:
         conn.execute(
-            "INSERT INTO resume_attempts (task_id, attempts, last_attempt_at) "
-            "VALUES (?, 1, ?) "
+            "INSERT INTO resume_attempts "
+            "(task_id, attempts, last_attempt_at, last_reason) "
+            "VALUES (?, 1, ?, ?) "
             "ON CONFLICT(task_id) DO UPDATE SET "
-            "attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at",
-            (task_id, now),
+            "attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at, "
+            "last_reason = excluded.last_reason",
+            (task_id, now, reason),
         )
         conn.commit()
         row = conn.execute(
@@ -54,6 +65,21 @@ def record_attempt(scores_db: str, task_id: str) -> int:
     finally:
         conn.close()
     return int(row["attempts"]) if row is not None else 0
+
+
+def last_reason(scores_db: str, task_id: str) -> str:
+    """The reason string recorded on the most recent CHARGED attempt for
+    `task_id`, or "" when none recorded -- read by `_park` so the park
+    reason names the actual failure instead of just a count."""
+    conn = _connect(scores_db)
+    try:
+        row = conn.execute(
+            "SELECT last_reason FROM resume_attempts WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row["last_reason"] or "") if row is not None else ""
 
 
 def attempt_count(scores_db: str, task_id: str) -> int:

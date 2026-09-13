@@ -21,6 +21,7 @@ that stays a distinct seat's job.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 import time
@@ -53,6 +54,60 @@ DEFAULT_MAX_RETRIES = 3
 # dispatch this seat has EVER made for the task, from durable history, so
 # an oscillating task stops even while it keeps producing transitions.
 DEFAULT_MAX_TOTAL_DISPATCHES = 12
+
+# A dispatch refusal in this list never spent by the WORK -- the drive
+# never got a turn, so it must never cost a retry attempt (ops incident
+# task a65c66e5, 2026-09-13): a reaped worktree made every tick fail
+# "workspace unavailable, refusing to start (fail closed): ..." and the
+# old code charged the budget on every refusal alike, spending all 3
+# attempts on an outage that 7.13.330 later fixed for good -- the task
+# then sat parked "for a human" with nothing for a human to actually do.
+# Only a refusal that matches one of these markers is infrastructure; any
+# other refusal (a dispatch that ran and failed, or a genuine step
+# failure) still charges as before.
+_INFRA_REFUSAL_MARKERS = (
+    "workspace unavailable",
+    "fail closed",
+    "engine unreachable",
+    "engine slot busy",
+    "daemon restart",
+    "git transport",
+    "already driving",
+)
+
+# The prefix `_park` and `release()` both recognise as THIS seat's own
+# park, distinct from a human's manual block or another seat's park.
+_PARK_PREFIX = "resume-actuator:"
+# `_park`'s message wraps these tags in backtick inline-code spans so
+# ste.normalize's own semicolon-to-sentence-break rewrite (task/memory
+# writes all pass through it -- CLAUDE.md's ASD-STE100 doctrine) never
+# capitalises or otherwise mutates them: a protected span is copied
+# through byte-for-byte. The regexes below tolerate the backticks and
+# any trailing punctuation either way, so a legacy (pre-backtick,
+# pre-STE) park still parses.
+_CLASS_RE = re.compile(r"class=(\w+)", re.IGNORECASE)
+_VERSION_RE = re.compile(r"parked_version=(\S+)", re.IGNORECASE)
+
+
+def _refusal_class(reason: str) -> str:
+    """'infra' for a dispatch refusal caused by infrastructure (workspace,
+    engine, daemon, git transport) rather than the work itself; 'work'
+    otherwise. Only a 'work' refusal ever costs a retry attempt."""
+    r = (reason or "").lower()
+    return "infra" if any(m in r for m in _INFRA_REFUSAL_MARKERS) else "work"
+
+
+def _park_meta(reason: str) -> tuple[str, str]:
+    """(class, parked_version) tags on a park reason THIS seat wrote, or
+    ('unknown', '') for one written before this classification existed --
+    exactly task a65c66e5's real blocked_reason, which names no cause and
+    no PRISM_VERSION at all."""
+    reason = reason or ""
+    m_cls = _CLASS_RE.search(reason)
+    m_ver = _VERSION_RE.search(reason)
+    cls = m_cls.group(1).lower() if m_cls else "unknown"
+    version = m_ver.group(1).rstrip("`.,;:)") if m_ver else ""
+    return cls, version
 
 
 def _max_total_dispatches() -> int:
@@ -150,11 +205,28 @@ def _open_retry_task_id(project: str) -> Optional[str]:
 
 
 def _park(project: str, task_id: str, attempts: int, max_retries: int) -> dict:
+    from prism_service.__version__ import PRISM_VERSION
     from prism_service.project_context import get_project
+    from prism_service.services import resume_attempts_data as rad
 
     ctx = get_project(project)
-    reason = (f"resume-actuator: retry budget spent "
-              f"({attempts}/{max_retries}) — parked for a human")
+    scores_db = _scores_db_for(project)
+    last = rad.last_reason(scores_db, task_id) or "no reason recorded"
+    # By construction this only ever fires on charged (class=work) attempts
+    # -- an infra refusal never reaches here (see _refusal_class /
+    # _no_advance) -- so the class is always named explicitly, and a later
+    # sweep's re-arm check (`_rearm_once`) can tell this genuine step
+    # failure apart from an infrastructure one and leave it for a person.
+    # Backtick-wrapped: an inline-code span is a PROTECTED span for
+    # ste.normalize (every task write passes through it), so these tags
+    # survive byte-for-byte instead of having their own semicolon rewrite
+    # capitalise "class=work" into an unmatchable "Class=work".
+    reason = (f"{_PARK_PREFIX} retry budget spent ({attempts}/{max_retries}). "
+              f"`class=work`. Last reason: {last}. "
+              f"`parked_version={PRISM_VERSION}`. This was a real step "
+              "failure, not an infrastructure refusal. It needs a "
+              "person's review. Call resume_actuator.release() once the "
+              "cause is fixed.")
     ctx.task_svc.update(task_id, status="blocked", blocked_reason=reason)
     ctx.task_svc.record_history(task_id, action=PARKED_ACTION,
                                 details=reason, actor=SEAT)
@@ -207,7 +279,8 @@ def _advanced_since(project: str, task_id: str, since_iso: str) -> bool:
     return False
 
 
-def release(project: str, task_id: str, actor: str = "human") -> dict:
+def release(project: str, task_id: str, actor: str = "human",
+           note: str = "") -> dict:
     """Release a task this seat PARKED, back to the drive (task 5227a646).
 
     `_park` spends the retry budget and writes `status=blocked`, and until
@@ -222,7 +295,13 @@ def release(project: str, task_id: str, actor: str = "human") -> dict:
     a park-shaped `blocked` back to `in_progress`, and record WHO released
     it. A task blocked for any other reason keeps its own blocked_reason
     and is left alone — this releases the actuator's park, never a real
-    dependency block."""
+    dependency block.
+
+    `note`, when given, replaces the default "released by ..." wording in
+    the history row's details -- used by `_rearm_once` so an AUTOMATIC
+    re-arm reads distinctly from a human's manual release (task a65c66e5:
+    "the cause class was infrastructure and it is now demonstrably gone",
+    never a bare "released by resume-actuator")."""
     from prism_service.project_context import get_project
     from prism_service.services import resume_attempts_data as rad
 
@@ -243,13 +322,73 @@ def release(project: str, task_id: str, actor: str = "human") -> dict:
 
     ctx.task_svc.record_history(
         task_id, action=RELEASED_ACTION,
-        details=(f"released by {actor}; retry budget reset "
-                 f"(was {attempts}); "
-                 + ("unparked to in_progress" if parked_by_seat
-                    else f"status left as {status or 'unknown'}")),
+        details=(note or
+                 (f"released by {actor}; retry budget reset "
+                  f"(was {attempts}); "
+                  + ("unparked to in_progress" if parked_by_seat
+                     else f"status left as {status or 'unknown'}"))),
         actor=actor)
     return {"ok": True, "task_id": task_id, "attempts_cleared": attempts,
             "unparked": parked_by_seat}
+
+
+def _workspace_now_resolves(task_id: str) -> bool:
+    """True when `ensure_workspace` succeeds for `task_id` right now --
+    the live, un-mocked check for "the infrastructure cause is gone"
+    (task a65c66e5: a reaped worktree recovers via its own surviving
+    branch since 7.13.330). Fails closed: any error means the cause is
+    still live."""
+    from prism_service.services import task_workspace
+
+    try:
+        task_workspace.ensure_workspace(task_id)
+        return True
+    except Exception:
+        return False
+
+
+def _rearm_once(project: str) -> Optional[dict]:
+    """Auto-lift the FIRST park this seat wrote for an infrastructure (or
+    legacy, unclassified) cause that is now demonstrably gone -- never a
+    park this seat tagged `class=work` (a genuine step failure, which
+    stays for a person), and never a park another seat or a human wrote.
+
+    A "human release" was the only way to undo `_park` before this (see
+    `release`'s own docstring) -- for a park whose ENTIRE cause was
+    infrastructure, that is exactly the "no gate or park is the human's"
+    shape the owner has repeatedly flagged as a defect (task a65c66e5,
+    ops incident 2026-09-13: 3/3 retries spent on "workspace unavailable,
+    refusing to start (fail closed)" while the underlying bug was already
+    fixed in 7.13.330, and nothing could lift the resulting park short of
+    a human noticing and calling `release()` by hand).
+
+    Matches only `_park`'s own "retry budget spent" wording -- deliberately
+    NOT `_park_looping`'s ceiling message (task 338f7810's oscillation
+    backstop), which must never auto-lift regardless of class."""
+    from prism_service.__version__ import PRISM_VERSION
+    from prism_service.project_context import get_project
+
+    ctx = get_project(project)
+    for t in ctx.task_svc.list(status="blocked"):
+        reason = getattr(t, "blocked_reason", "") or ""
+        if not reason.startswith(_PARK_PREFIX) or "retry budget spent" not in reason:
+            continue
+        cls, parked_version = _park_meta(reason)
+        if cls == "work":
+            continue
+        version_changed = bool(parked_version) and parked_version != PRISM_VERSION
+        workspace_ok = _workspace_now_resolves(t.id)
+        if not (version_changed or workspace_ok):
+            continue
+        cause = (f"{cls} cause cleared (parked_version="
+                 f"{parked_version or 'unknown'}, now={PRISM_VERSION}, "
+                 f"workspace_ok={workspace_ok})")
+        result = release(project, t.id, actor=SEAT,
+                         note=f"re-armed after {cause}")
+        if result.get("ok"):
+            return {"ok": True, "task_id": t.id, "rearmed": True,
+                    "reason": cause}
+    return None
 
 
 def _total_dispatches(project: str, task_id: str) -> int:
@@ -354,8 +493,17 @@ def dispatch_once(project: str, task_id: str) -> dict:
     scores_db = _scores_db_for(project)
 
     def _no_advance(reason: str, **extra) -> dict:
-        rad.record_attempt(scores_db, task_id)
-        return {"ok": False, "task_id": task_id, "reason": reason, **extra}
+        # A refusal classified as infrastructure never charges the retry
+        # budget -- the drive never got a turn, so it is never evidence
+        # the WORK failed (task a65c66e5: "workspace unavailable, refusing
+        # to start (fail closed)" spent all 3 attempts on an outage that
+        # 7.13.330 fixed for good, and parked the task for a human with
+        # nothing for a human to actually do).
+        cls = _refusal_class(reason)
+        if cls != "infra":
+            rad.record_attempt(scores_db, task_id, reason=reason)
+        return {"ok": False, "task_id": task_id, "reason": reason,
+                "refusal_class": cls, **extra}
 
     started = flow.flow_start(
         flow.Ident(task_id=task_id, session_id=SEAT), project=project)
@@ -550,7 +698,16 @@ def dispatch_once(project: str, task_id: str) -> dict:
     if report.get("ok"):
         rad.reset_attempts(scores_db, task_id)
     else:
-        rad.record_attempt(scores_db, task_id)
+        # A dispatch that actually ran (claude_cli.invoke was called) and
+        # still failed is always work-class -- the drive got its turn, so
+        # this always charges, unlike the infra-classified refusals in
+        # `_no_advance` above that never reached an invoke at all. Record
+        # the real failure text so `_park` can name it instead of a bare
+        # "parked for a human" (task a65c66e5).
+        fail_reason = ((outcome.get("reason") if isinstance(outcome, dict)
+                       else None) or report.get("error")
+                      or "flow_report refused")
+        rad.record_attempt(scores_db, task_id, reason=fail_reason)
 
     return {"ok": bool(report.get("ok")), "task_id": task_id,
             "step": step_id, "run_id": getattr(result, "run_id", None),
@@ -570,6 +727,16 @@ def sweep_once_for(project: str) -> Optional[dict]:
     # and a retry here would spend budget and park the task on an outage.
     if _runner._engine_unreachable():
         return None
+
+    # RE-ARM BEFORE ANYTHING ELSE (task a65c66e5, 2026-09-13): a task this
+    # seat parked purely on an infrastructure refusal must not sit blocked
+    # forever once that cause is gone -- checked first, and if it fires
+    # this tick's one action is the re-arm itself (mirrors sweep_once's own
+    # "at most one task advances per tick" discipline), never also a
+    # dispatch in the same pass.
+    rearmed = _rearm_once(project)
+    if rearmed is not None:
+        return rearmed
 
     scores_db = _scores_db_for(project)
     max_retries = _max_retries()
