@@ -470,3 +470,75 @@ def test_both_seats_reach_the_same_verdict_on_the_same_packet(
         cond, thin_resweep.id, thin_resweep, dp_env)
     assert thin_resweep_res is not None and not thin_resweep_res.get("ok")
     assert task_svc.get(thin_entry.id).gate_reason.strip()
+
+
+# ---------------------------------------------------------------------------
+# Task a65c66e5 - the seat self-heals an uncheckable oracle rather than
+# escalating for text the row already answers, and rewinds instead of
+# parking when truly nothing checkable exists.
+# ---------------------------------------------------------------------------
+
+# Same shape as test_all_four_signals_discriminate...'s thin_oracle case:
+# long enough to clear the length floor, but names nothing checkable.
+_VAGUE_ORACLE = (
+    "This change will work correctly in every case and produce the right "
+    "result for the user every single time without any problems at all, "
+    "because it has been tested thoroughly end to end.")
+_VAGUE_MISFIRE = (
+    "Something could in theory go wrong somewhere but it has been "
+    "carefully checked and reviewed already and should be fine in every "
+    "situation that comes up during normal operation.")
+
+
+def test_certainty_derives_a_checkable_oracle_from_task_verify(
+        dp_env, tmp_path, monkeypatch):
+    """A row with an uncheckable-but-long oracle and a real verify path
+    gets the oracle FIXED and the gate cleared -- never escalated for text
+    the row already answers (the exact a65c66e5 shape)."""
+    from prism_service.services import design_packet as dp
+    task_svc, cond = _services(tmp_path, dp_env)
+    task = _task(task_svc, _RICH_PLAN, _RICH_DIAGRAM, _VAGUE_ORACLE,
+                _VAGUE_MISFIRE)
+    verify_path = ("services/prism-service/tests/unit/"
+                  "test_plan_subject_tooth_ignores_commit_shas.py")
+    task_svc.update(task.id, verify=[verify_path])
+    task = task_svc.get(task.id)
+    pre = dp.plan_gate_certainty(dp_env, task.id, task)
+    assert pre["score"] < dp.certainty_threshold(), pre
+    _stub_rubric_pass(monkeypatch, cond)
+
+    res = dp.adjudicate_root_plan_gate(cond, task.id, task, dp_env)
+
+    assert res is not None and res.get("ok") is True, res
+    after = task_svc.get(task.id)
+    assert after.workflow_step != "plan_gate", after.workflow_step
+    assert verify_path in after.oracle, after.oracle
+    derived_rows = [h for h in task_svc.history(task.id)
+                    if h.action == "design_packet_derived"]
+    assert derived_rows, "the derivation must leave an audit row"
+    assert dp.read_approvals(dp_env, task.id) == [], (
+        "a derivation must never write to the owner approval ledger")
+
+
+def test_certainty_rewinds_to_verify_plan_when_nothing_checkable_exists(
+        dp_env, tmp_path, monkeypatch):
+    """No verify path, no allowed_files, no citation anywhere in plan_doc --
+    there is nothing to derive, so the seat rewinds the planner to name
+    one rather than park pending for a human (owner rule: no gate parks
+    for a person when the machine can act)."""
+    from prism_service.services import design_packet as dp
+    task_svc, cond = _services(tmp_path, dp_env)
+    task = _task(task_svc, _RICH_PLAN, _RICH_DIAGRAM, _VAGUE_ORACLE,
+                _VAGUE_MISFIRE)
+    _stub_rubric_pass(monkeypatch, cond)
+
+    res = dp.adjudicate_root_plan_gate(cond, task.id, task, dp_env)
+
+    assert res is not None and not res.get("ok"), res
+    after = task_svc.get(task.id)
+    assert after.workflow_step == "verify_plan", after.workflow_step
+    assert after.gate_state == "none", after.gate_state
+    assert after.blocked_reason == "", after.blocked_reason
+    rewind_rows = [h for h in task_svc.history(task.id)
+                  if h.action == "auto_rewind"]
+    assert rewind_rows, "nothing-checkable must rewind, never silently park"
