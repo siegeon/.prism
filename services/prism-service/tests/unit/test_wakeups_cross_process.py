@@ -54,7 +54,7 @@ def test_wait_wakes_on_a_cross_process_row_with_no_local_notify(monkeypatch) -> 
     # sqlite table, not just the local condition variable.
     since = time.time()
     monkeypatch.setattr(wakeups, "_CROSS_POLL_S", 0.05)
-    wakeups._cross_signal("cross_test", "prism")
+    wakeups._cross_signal("cross_test", "prism", time.time())
     started = time.time()
     ok = wakeups.wait(["cross_test"], project="prism", timeout=2.0, since=since)
     elapsed = time.time() - started
