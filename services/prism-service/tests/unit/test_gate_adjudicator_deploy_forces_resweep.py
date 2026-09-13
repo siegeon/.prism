@@ -469,3 +469,86 @@ def test_a_slow_prefix_no_longer_starves_the_rest_of_the_backlog(
     seen = set(ga._BACKOFF.keys())
 
     assert seen == {f"t{i}" for i in range(6)}, seen
+
+
+# ---------------------------------------------------------------------------
+# Fifth round, task a65c66e5, owner 2026-09-13: on an IDLE system there is
+# no task_changed/shipped traffic, so a lap that stops at a burst's
+# wall-clock cap mid-backlog would leave the rest waiting for a signal that
+# never comes. The cap must bound a BURST, never the LAP -- a capped,
+# unconverged burst yields briefly (its own one-off wait() timeout, never
+# the global fallback) and starts a fresh burst, until one full lap
+# completes with nothing left deferred.
+# ---------------------------------------------------------------------------
+
+
+def test_a_lap_self_continues_across_capped_bursts_with_no_signal(
+        monkeypatch):
+    """Owner's own pin: 30 fake gates each costing 3s, with the per-burst
+    wall-clock cap set to 10s -- the lap must complete across SEVERAL
+    bursts, each separated only by this worker's own short yield, with NO
+    external wakeups.signal(...) of any kind firing at any point."""
+    from prism_service.services import gate_adjudicator as ga
+    from prism_service.services import wakeups as wk
+
+    wk._reset_for_tests()
+    monkeypatch.setattr(ga, "_MAX_BOOT_DRAIN_SECONDS", 10.0)
+    monkeypatch.setattr(ga, "_MAX_BOOT_DRAIN_PASSES", 1000)  # isolate to the
+                                                             # wall-clock cap
+
+    clock = {"t": 0.0}
+
+    def fake_monotonic():
+        return clock["t"]
+
+    monkeypatch.setattr(ga.time, "monotonic", fake_monotonic)
+
+    remaining = {"n": 30}
+    per_task_cost_s = 3.0
+    calls: list[tuple] = []
+
+    def fake_sweep_once(force=False, force_backoff=None):
+        calls.append((force, force_backoff))
+        eligible = remaining["n"]
+        done = min(3, remaining["n"])  # ~3 fit in one 10s burst at 3s each
+        ga._last_eligible_count = eligible
+        ga._last_changed_count = done
+        remaining["n"] -= done
+        clock["t"] += done * per_task_cost_s
+        return []
+
+    wait_timeouts: list[object] = []
+
+    def fake_wait(kinds, timeout=None):
+        wait_timeouts.append(timeout)
+        if timeout is None:
+            # The FINAL, post-lap reactive wait -- the lap is over.
+            raise _StopLoop()
+        return True  # the short inter-burst yield "succeeds" (no real sleep)
+
+    monkeypatch.setattr(ga, "sweep_once", fake_sweep_once)
+    monkeypatch.setattr(wk, "wait_out_startup_warmup", lambda: None)
+    monkeypatch.setattr(wk, "lower_thread_priority", lambda: None)
+    monkeypatch.setattr(wk, "wait", fake_wait)
+    monkeypatch.setattr(wk, "worker_fallback_s", lambda: None)
+    monkeypatch.setattr(wk, "changed_since", lambda *a, **k: False)
+
+    with pytest.raises(_StopLoop):
+        ga._loop(60)
+
+    assert remaining["n"] == 0, (
+        f"the lap must fully drain the backlog across bursts -- "
+        f"{remaining['n']} gates never reached")
+    yields = [t for t in wait_timeouts if t is not None]
+    assert len(yields) >= 2, (
+        f"a 30-gate backlog at ~3 fitting per 10s burst needs several "
+        f"inter-burst yields -- got {yields}")
+    assert all(t == ga._BOOT_DRAIN_YIELD_S for t in yields), (
+        f"every inter-burst yield must use the worker's own short "
+        f"timeout, never some other value -- got {yields}")
+    assert wait_timeouts[-1] is None, (
+        "the lap must end with exactly one FINAL indefinite reactive "
+        f"wait, not another yield -- got {wait_timeouts}")
+    assert len(calls) > 5, (
+        "the backlog must actually take several sweep_once calls across "
+        f"bursts to drain, not resolve trivially -- got {len(calls)} calls")
