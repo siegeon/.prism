@@ -152,13 +152,30 @@ def _task_updated_at(t: object) -> str:
     return str(getattr(t, "updated_at", "") or "")
 
 
+def _task_field(t: object, name: str) -> str:
+    val = t.get(name) if isinstance(t, dict) else getattr(t, name, "")
+    return str(val or "")
+
+
+def _backoff_key(tid: str, t: object) -> tuple:
+    """Everything one gate decision for `t` depends on this sweep --
+    task 2026-09-13 (adjmemo): updated_at alone missed a workspace whose
+    tree moved without a matching row write, so a stale receipt kept
+    re-refusing on a decision that had actually gone stale in the other
+    direction. See gate_adjudicator_memo for the workspace-HEAD half."""
+    from prism_service.services import gate_adjudicator_memo as _memo
+    return _memo.adjudication_key(
+        tid, _task_updated_at(t), _task_field(t, "gate_state"),
+        _task_field(t, "workflow_step"))
+
+
 def _backoff_should_skip(tid: str, t: object) -> bool:
     """True when this task refused recently and nothing about it changed."""
     st = _BACKOFF.get(tid)
     if st is None:
         return False
-    prev_updated, next_at, _delay = st
-    if _task_updated_at(t) != prev_updated:
+    prev_key, next_at, _delay = st
+    if _backoff_key(tid, t) != prev_key:
         _BACKOFF.pop(tid, None)      # something moved -- re-attempt now
         return False
     return time.monotonic() < next_at
@@ -167,7 +184,7 @@ def _backoff_should_skip(tid: str, t: object) -> bool:
 def _backoff_note_refused(tid: str, t: object) -> None:
     prev = _BACKOFF.get(tid)
     delay = min((prev[2] * 2.0) if prev else 60.0, _BACKOFF_CAP_S)
-    _BACKOFF[tid] = (_task_updated_at(t), time.monotonic() + delay, delay)
+    _BACKOFF[tid] = (_backoff_key(tid, t), time.monotonic() + delay, delay)
 
 
 def _backoff_clear(tid: str) -> None:
@@ -184,25 +201,73 @@ def _backoff_clear(tid: str) -> None:
 #: for its `approved` list needs to change.
 _last_eligible_count = 0
 
-#: set alongside `_last_eligible_count` -- how many of THOSE eligible tasks
-#: actually got re-attempted this pass (backoff did not skip them). The
-#: gap between the two is the cost win: an unchanged pending gate costs
-#: one dict-membership check and nothing else. `_loop` reports both plus
-#: `len(approved)` as "N at gates, M changed, K decided" (tick-cost pass,
-#: owner brief 2026-09-13) so a human reading the activity feed can see
-#: the backoff is actually holding, not just infer it from a fast pass.
+#: set alongside `_last_eligible_count` -- how many of this pass's eligible
+#: tasks actually had a changed adjudication key (a real rubric/oracle/git
+#: attempt), and how many of THOSE were decided. `_loop` reads these to
+#: mark a pass "active" only when real work happened, not merely because a
+#: backlog of unchanged pending gates still exists (task adjmemo), and to
+#: report "N at gates, M changed, K decided" on the activity feed
+#: (tick-cost pass, owner brief 2026-09-13).
 _last_changed_count = 0
+_last_decided_count = 0
+
+
+# PROJECT-LEVEL SKIP (2026-09-13, task adjmemo). The per-task backoff above
+# only ever saved the cost of ONE task's adjudication -- every sweep still
+# fetched and reconstructed EVERY task row in EVERY project (946 rows) just
+# to re-discover the same ~26 gate candidates. If nothing has moved for a
+# project since this seat last looked at it -- no `task_changed`/`shipped`
+# wakeup, and the safety net has not elapsed -- skip the fetch entirely and
+# reuse last pass's eligible count for the idle-vs-fast cadence decision in
+# `_loop`. A signal is the fast path; `_PROJECT_SCAN_SAFETY_NET_S` is the
+# belt-and-braces bound for writes that bypass task_service.update()/
+# ship_worker's own signal calls (a direct DB poke, a crash mid-write).
+_PROJECT_SCAN_SAFETY_NET_S = 300.0
+_LAST_PROJECT_SCAN: dict[str, float] = {}
+_LAST_PROJECT_ELIGIBLE: dict[str, int] = {}
+
+# Wall-clock ceiling on the EXPENSIVE half of one sweep_once() pass (actual
+# rubric/oracle/git adjudication of a task whose key changed) -- owner
+# 2026-09-13: no background pass may hold the GIL long enough to delay a
+# live request. A task that does not fit the budget is simply left for the
+# next tick; its memo is never written, so it is retried, never dropped.
+_SWEEP_BUDGET_S = 2.0
+
+
+def _project_needs_scan(pid: str, wakeups_mod) -> bool:
+    last = _LAST_PROJECT_SCAN.get(pid)
+    if last is None:
+        return True
+    if time.time() - last >= _PROJECT_SCAN_SAFETY_NET_S:
+        return True
+    # wait(..., timeout=0) rather than last_signal_at(): the worker-host
+    # process split (task workerproc) moved this seat into a SEPARATE OS
+    # process from the API, and last_signal_at() only ever reads THIS
+    # process's in-memory _LAST dict -- it would never see a task_changed
+    # signal task_service.update() raised in the API process. wait()'s
+    # own _cross_has_new() check does consult the cross-process wakeups.db
+    # bridge, and timeout=0 makes it a non-blocking single check rather
+    # than an actual wait.
+    return wakeups_mod.wait(("task_changed", "shipped"), project=pid,
+                            timeout=0, since=last)
 
 
 def sweep_once() -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
     Returns the list of approvals made (empty when nothing was decidable)."""
-    global _last_eligible_count, _last_changed_count
+    global _last_eligible_count, _last_changed_count, _last_decided_count
     from prism_service.project_context import get_all_projects, get_project
+    from prism_service.services import wakeups
     approved: list[dict] = []
     eligible_count = 0
     changed_count = 0
+    decided_count = 0
+    started = time.monotonic()
+    deadline = started + _SWEEP_BUDGET_S
     for pid in get_all_projects():
+        if not _project_needs_scan(pid, wakeups):
+            eligible_count += _LAST_PROJECT_ELIGIBLE.get(pid, 0)
+            continue
         try:
             ctx = get_project(pid)
             svc = ctx.conductor_svc
@@ -215,6 +280,7 @@ def sweep_once() -> list[dict]:
         except Exception as exc:
             _log(f"{pid}: project unavailable ({exc})")
             continue
+        project_eligible = 0
         for t in tasks:
             step = t.get("workflow_step") if isinstance(t, dict) \
                 else getattr(t, "workflow_step", "")
@@ -274,7 +340,14 @@ def sweep_once() -> list[dict]:
             # this is what "a gate is genuinely parked" means for the
             # loop's fast-vs-idle cadence decision below.
             eligible_count += 1
+            project_eligible += 1
             if _backoff_should_skip(tid, t):
+                continue
+            if time.monotonic() > deadline:
+                # Over the per-sweep time budget (owner 2026-09-13: no
+                # background pass may hold the GIL long enough to delay a
+                # live request). Leave this task's memo untouched so the
+                # NEXT tick retries it -- deferred, never dropped.
                 continue
             changed_count += 1
             try:
@@ -336,6 +409,7 @@ def sweep_once() -> list[dict]:
                 _log(f"{pid}/{tid[:8]}: adjudication raised ({exc})")
                 continue
             if res and res.get("ok"):
+                decided_count += 1
                 _backoff_clear(tid)
                 # RECORD THE CONCLUDED GATE (task 8fbd5cf0). This seat never
                 # passes through conductor_flow.flow_report, so without this
@@ -426,8 +500,14 @@ def sweep_once() -> list[dict]:
                     _backoff_note_refused(tid, ctx.task_svc.get(tid) or task)
                 except Exception as exc:
                     _log(f"{pid}/{tid[:8]}: reason-surface skipped ({exc})")
+        _LAST_PROJECT_SCAN[pid] = time.time()
+        _LAST_PROJECT_ELIGIBLE[pid] = project_eligible
     _last_eligible_count = eligible_count
     _last_changed_count = changed_count
+    _last_decided_count = decided_count
+    elapsed_ms = (time.monotonic() - started) * 1000.0
+    _log(f"{eligible_count} at gates · {changed_count} changed · "
+         f"{decided_count} decided · {elapsed_ms:.0f} ms")
     return approved
 
 
@@ -451,7 +531,12 @@ def _loop(interval_s: int) -> None:
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
                 approved = sweep_once()
-                info["active"] = bool(approved) or _last_eligible_count > 0
+                # "active" means real work happened -- a changed key was
+                # actually adjudicated, or something was decided. A
+                # backlog of unchanged pending gates (the common case once
+                # the per-project/per-task memo is warm) must read QUIET,
+                # never churn, on the Live page (task adjmemo).
+                info["active"] = bool(approved) or _last_changed_count > 0
                 # Tick-cost pass (owner brief, 2026-09-13): make the
                 # backoff's own cost win legible on the activity feed --
                 # a human should be able to tell "26 at gates, 0 changed,
@@ -464,7 +549,12 @@ def _loop(interval_s: int) -> None:
         checked_at = time.time()
         fallback = interval_s if _last_eligible_count > 0 else \
             max(interval_s, _IDLE_FALLBACK_S)
-        wakeups.wait(["task_changed"], timeout=fallback, since=last_checked)
+        # Wake on "shipped" too -- a push landing (ship_worker) can free a
+        # green_gate or resolve a workspace-freshness refusal exactly like
+        # a task_changed row does; waiting on task_changed alone left the
+        # fallback timeout as the only way such a change was ever noticed.
+        wakeups.wait(["task_changed", "shipped"], timeout=fallback,
+                     since=last_checked)
         last_checked = checked_at
 
 
