@@ -91,3 +91,78 @@ def test_both_pages_resume_on_visibility_change():
         src = _read(path)
         assert "visibilitychange" in src, \
             f"{path.name} must listen for visibilitychange to resume a stopped loop when the tab becomes visible again"
+
+
+def _method_body(src: str, signature: str) -> str:
+    i = src.index(signature)
+    start = src.index("{", i) + 1
+    depth = 1
+    j = start
+    while depth > 0:
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+        j += 1
+    return src[start:j]
+
+
+def test_workflow_graph_idle_check_ignores_static_occupancy():
+    # task fix/canvasidle2: measured live, /workflows?workflow=conductor held
+    # the renderer at 33% CPU for a full idle minute because this method
+    # read ANY occupied node (count > 0) as "active" -- and the conductor
+    # board, with 58 real tasks, is basically ALWAYS occupied, so the idle
+    # gate never actually engaged. Occupancy alone must never make this
+    # method return true; only a packet in flight (genuine, bounded motion)
+    # may.
+    body = _method_body(_read(_WORKFLOW_GRAPH), "hasActiveAnimation(): boolean")
+    assert "count" not in body, \
+        "WorkflowGraph.hasActiveAnimation must not treat node occupancy (count > 0) as active animation"
+    assert re.search(r"this\.packets\.(length\s*>\s*0|some\()", body), \
+        "WorkflowGraph.hasActiveAnimation must be driven only by packets actually in flight"
+
+
+def test_workflows_page_idle_gate_ignores_gate_waiting_progress():
+    # task fix/canvasidle2: measured live, a SECOND root cause survived the
+    # occupancy fix above -- the ambient "ombient board" activeProgress
+    # branch draws a progress fill for a task merely parked at a pending
+    # gate (conductorTaskWaitingAtGate), and the frame loop's own reschedule
+    # decision used to treat ANY activeProgress as a reason to keep 60fps.
+    # With ~26 pending gates typically open, that alone kept the loop at
+    # full rate forever. The reschedule must gate on real motion
+    # (activeProgressIsLive / conductorTaskDrivingNow), never on
+    # `activeProgress !== null` by itself.
+    body = _frame_loop_body(_read(_WORKFLOWS_PAGE))
+    assert "activeProgressIsLive" in body, \
+        "WorkflowsPage's frame() must track whether activeProgress reflects real motion, not just its presence"
+    assert not re.search(r"const active = graphRef\.current\.hasActiveAnimation\(\)\s*\|\|\s*activeProgress\s*!==\s*null", body), \
+        "WorkflowsPage's reschedule must not treat bare activeProgress !== null as a reason to keep 60fps"
+    src = _read(_WORKFLOWS_PAGE)
+    assert "function conductorTaskDrivingNow(" in src, \
+        "WorkflowsPage must distinguish a genuinely-driving task from one merely parked at a gate"
+
+
+def test_workflow_graph_idle_check_ignores_ambient_occupancy_packets():
+    # task fix/canvasidle2: the occupancy-count fix above was not enough on
+    # its own -- measured live, CPU stayed pegged (34%/26%) because step()'s
+    # own ambient bot->step marker (spawned for ANY occupied "structure"
+    # wire, cycle-respawned every ~900ms forever) kept `packets.length > 0`
+    # true almost continuously on a board that is basically always occupied
+    # somewhere. hasActiveAnimation must only count a REAL (non-ambient)
+    # packet.
+    src = _read(_WORKFLOW_GRAPH)
+    body = _method_body(src, "hasActiveAnimation(): boolean")
+    assert re.search(r"this\.packets\.some\(\s*\(?p\)?\s*=>\s*!\s*p\.ambient\s*\)", body), \
+        "WorkflowGraph.hasActiveAnimation must exclude ambient (occupancy-decoration) packets"
+    step_body = _method_body(src, "step(dtMs: number, now: number): void")
+    assert re.search(r"spawnPacket\([^)]*,\s*true\)", step_body), \
+        "step()'s ambient bot->step marker must be spawned with ambient=true"
+
+
+def test_graph_state_idle_check_ignores_static_worker_presence():
+    # Same bug, /live's analog: a daemon background pass (task_runner,
+    # gate_adjudicator, ...) is routinely running continuously, so
+    # `workers.length > 0` alone kept this method "active" forever too.
+    body = _method_body(_read(_GRAPH_STATE), "hasActiveAnimation(now: number): boolean")
+    assert "this.workers.length" not in body, \
+        "GraphState.hasActiveAnimation must not treat a merely-present worker row as active animation"

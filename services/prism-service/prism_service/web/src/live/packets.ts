@@ -43,6 +43,19 @@ export type Packet = {
    * still riding a live wire. Once set, t/pts are frozen and drawPackets
    * ramps alpha to 0 over FADE_MS. */
   fadingSince: number;
+  /** task fix/canvasidle2: true for a packet spawned purely to decorate a
+   * STATIC occupancy fact (workflowGraph.ts's ambient bot->step "someone
+   * is standing here" marker) rather than a real transition/token event.
+   * On a board that is basically always occupied, ambient packets are
+   * ALSO basically always in flight -- so a caller's hasActiveAnimation()
+   * must not count them as "real motion happening right now" (the same
+   * defeated-idle-gate bug as bare occupancy itself), or the canvas can
+   * never actually go idle. An ambient packet still rides its wire and
+   * still draws -- just on whatever cadence the idle-gated loop happens
+   * to run, not a reason to force that loop to 60fps. Defaults false so
+   * every other spawnPacket call site (a real tokens.turn event, a real
+   * FSM transition) is unaffected. */
+  ambient: boolean;
 };
 
 /** How long a marker takes to fade out in place once its wire disappears
@@ -72,12 +85,14 @@ const TRAVERSE_MS_MAX = 1800;
 const MIN_PX_PER_S = 60;
 const MAX_PX_PER_S = 900;
 
-export function spawnPacket(source: string, target: string, reversed: boolean, pts: Point[]): Packet {
+export function spawnPacket(
+  source: string, target: string, reversed: boolean, pts: Point[], ambient = false,
+): Packet {
   const len = Math.max(1, polylineLength(pts));
   const durationMs = TRAVERSE_MS_MIN + Math.random() * (TRAVERSE_MS_MAX - TRAVERSE_MS_MIN);
   const impliedPxPerMs = len / durationMs;
   const clampedPxPerMs = Math.max(MIN_PX_PER_S / 1000, Math.min(MAX_PX_PER_S / 1000, impliedPxPerMs));
-  return { source, target, reversed, pts, t: 0, fracPerMs: clampedPxPerMs / len, fadingSince: 0 };
+  return { source, target, reversed, pts, t: 0, fracPerMs: clampedPxPerMs / len, fadingSince: 0, ambient };
 }
 
 /** Advances travel time for every packet that isn't fading (a fading
