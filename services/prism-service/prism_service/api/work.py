@@ -267,7 +267,11 @@ def _drive_started_at_bulk(scores_db: str, task_ids: list[str]) -> dict[str, flo
 def _queue_depth(task_svc, task_id: str) -> int:
     """Count of `task_id`'s children that are pending AND have never
     entered the conductor (no workflow_step) -- the work queued up behind
-    this node, as distinct from work already in flight."""
+    this node, as distinct from work already in flight.
+
+    Kept as a single-id fallback (mirrors `_drive_started_at` next to its
+    own bulk form); GET /api/work/graph uses `_queue_depth_bulk` below
+    instead (route-timing pass, external fixer, owner brief 2026-09-13)."""
     try:
         kids = task_svc.list(parent_id=task_id)
     except Exception:
@@ -277,6 +281,47 @@ def _queue_depth(task_svc, task_id: str) -> int:
         if (getattr(c, "status", "") or "") == "pending"
         and not (getattr(c, "workflow_step", "") or "")
     )
+
+
+def _queue_depth_bulk(task_svc, task_ids: list[str]) -> dict[str, int]:
+    """Batched form of `_queue_depth` for GET /api/work/graph: one
+    `WHERE parent_id IN (...)` query across every node in the graph,
+    instead of `TaskService.list(parent_id=X)` called once PER NODE.
+
+    Live timing (owner brief 2026-09-13, "like 200ms"): the graph
+    route's node-building loop (`edges` phase in the route's own
+    `timing` block) cost 195-410ms warm on the real 946-task/122-node
+    instance even with spend_usd fully cache-warm -- task_service.py's
+    own per-parent_id cache (7.13.339) dedupes a REPEATED call for the
+    same parent_id within a render, but every node here has a DISTINCT
+    task_id, so each one was still its own fresh SQLite round trip.
+    Same batching pattern as `_drive_started_at_bulk` (task 356ffdd2
+    AC-3) and `drive_heartbeat.latest_many` above -- one connection,
+    one query, keyed by parent_id, instead of N."""
+    result: dict[str, int] = {tid: 0 for tid in task_ids}
+    if not task_ids:
+        return result
+    from prism_service.services import sqlite_db
+    try:
+        conn = sqlite_db.connect(task_svc._db_path, timeout=5.0)
+        try:
+            placeholders = ",".join("?" for _ in task_ids)
+            rows = conn.execute(
+                "SELECT parent_id FROM tasks "
+                f"WHERE parent_id IN ({placeholders}) "
+                "AND status = 'pending' "
+                "AND (workflow_step IS NULL OR workflow_step = '')",
+                tuple(task_ids),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return result
+    for r in rows:
+        pid = r["parent_id"]
+        if pid in result:
+            result[pid] += 1
+    return result
 
 
 def _gate_actionability(project: str, task_id: str, workflow_step: str,
@@ -390,7 +435,8 @@ def _task_spend_usd(project: str, task_id: str, task_svc,
 
 
 @router.get("/graph")
-def work_graph(response: Response, project: str = Query("default")) -> dict:
+def work_graph(project: str = Query("default"),
+               response: Response = None) -> dict:
     """One snapshot: {nodes, edges, generated_at}. See module docstring
     for the shape contract the /live SPA page relies on.
 
@@ -481,6 +527,13 @@ def work_graph(response: Response, project: str = Query("default")) -> dict:
     _drive_started_map = _drive_started_at_bulk(scores_db, _dedup_task_ids)
     if scores_db and _dedup_task_ids:
         _counts["sqlite_connections_opened"] += 1
+    # Same batching for queue_depth (route-timing pass, owner brief
+    # 2026-09-13): one `WHERE parent_id IN (...)` query for every node's
+    # queue depth instead of `_queue_depth` reissuing `list(parent_id=X)`
+    # once per node -- see `_queue_depth_bulk`'s own docstring.
+    _queue_depth_map = _queue_depth_bulk(task_svc, _dedup_task_ids)
+    if _dedup_task_ids:
+        _counts["sqlite_connections_opened"] += 1
     _timing_ms["tasks_query"] = (time.monotonic() - _p0) * 1000
     # Same batching for the child-node activity_for() call below (tick-cost
     # pass, external fixer, owner brief 2026-09-13, no PRISM ticket):
@@ -543,7 +596,7 @@ def work_graph(response: Response, project: str = Query("default")) -> dict:
                 gate_waiting_s=(
                     conductor.gate_waiting_s(task_obj)
                     if task_obj is not None else None),
-                queue_depth=_queue_depth(task_svc, r["id"]),
+                queue_depth=_queue_depth_map.get(r["id"], 0),
                 drive_started_at=_drive_started_map.get(r["id"]),
                 owner_actionable=_oa, waiting_on=_wo,
             )
@@ -583,7 +636,7 @@ def work_graph(response: Response, project: str = Query("default")) -> dict:
                 c_activity,
                 spend_usd=_child_spend,
                 gate_waiting_s=conductor.gate_waiting_s(child),
-                queue_depth=_queue_depth(task_svc, child.id),
+                queue_depth=_queue_depth_map.get(child.id, 0),
                 drive_started_at=_drive_started_map.get(child.id),
                 owner_actionable=_c_oa, waiting_on=_c_wo,
             )
@@ -685,7 +738,8 @@ def work_graph(response: Response, project: str = Query("default")) -> dict:
     timing["sessions_seen"] = len(seen_sessions)
     timing.update(_counts)
     result["timing"] = timing
-    response.headers["X-Prism-Timing"] = f"total_ms={timing['total_ms']}"
+    if response is not None:
+        response.headers["X-Prism-Timing"] = f"total_ms={timing['total_ms']}"
     return result
 
 
