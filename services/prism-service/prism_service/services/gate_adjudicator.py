@@ -255,13 +255,22 @@ def _project_needs_scan(pid: str, wakeups_mod) -> bool:
     # own _cross_has_new() check does consult the cross-process wakeups.db
     # bridge, and timeout=0 makes it a non-blocking single check rather
     # than an actual wait.
-    return wakeups_mod.wait(("task_changed", "shipped"), project=pid,
-                            timeout=0, since=last)
+    return wakeups_mod.wait(("task_changed", "shipped", "deployed"),
+                            project=pid, timeout=0, since=last)
 
 
-def sweep_once() -> list[dict]:
+def sweep_once(force: bool = False) -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
-    Returns the list of approvals made (empty when nothing was decidable)."""
+    Returns the list of approvals made (empty when nothing was decidable).
+
+    `force=True` bypasses BOTH the project-level scan skip
+    (`_project_needs_scan`) and the per-task backoff (`_backoff_should_skip`)
+    for this one pass -- task a65c66e5, 2026-09-13: a `deployed` signal means
+    the CODE that reads a parked row may have just changed (the certainty
+    seat's own self-heal), not the row itself, so neither memo -- both keyed
+    on the row being unchanged -- would ever notice on its own. Used by
+    `_loop` for exactly one pass after a `deployed` wakeup; every other pass
+    keeps the normal reactive skip."""
     global _last_eligible_count, _last_changed_count, _last_decided_count
     from prism_service.project_context import get_all_projects, get_project
     from prism_service.services import wakeups
@@ -272,7 +281,7 @@ def sweep_once() -> list[dict]:
     started = time.monotonic()
     deadline = started + _SWEEP_BUDGET_S
     for pid in get_all_projects():
-        if not _project_needs_scan(pid, wakeups):
+        if not force and not _project_needs_scan(pid, wakeups):
             eligible_count += _LAST_PROJECT_ELIGIBLE.get(pid, 0)
             continue
         try:
@@ -348,7 +357,7 @@ def sweep_once() -> list[dict]:
             # loop's fast-vs-idle cadence decision below.
             eligible_count += 1
             project_eligible += 1
-            if _backoff_should_skip(tid, t):
+            if not force and _backoff_should_skip(tid, t):
                 continue
             if time.monotonic() > deadline:
                 # Over the per-sweep time budget (owner 2026-09-13: no
@@ -525,10 +534,18 @@ def _loop(interval_s: int) -> None:
          "PRISM_WORKER_FALLBACK_S is set)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
+    baseline = time.time()
     while True:
+        # A `deployed` signal since the last wait() means the CODE that
+        # reads a parked gate may have just changed, not the row itself
+        # (task a65c66e5, 2026-09-13) -- force one full pass, bypassing
+        # both the project-level scan skip and the per-task backoff, so a
+        # park whose cause a landing just fixed is re-evaluated instead of
+        # sitting on a memo keyed on an unchanged row.
+        force = bool(wakeups.changed_since(["deployed"], None, baseline))
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
-                approved = sweep_once()
+                approved = sweep_once(force=force)
                 # "active" means real work happened -- a changed key was
                 # actually adjudicated, or something was decided. A
                 # backlog of unchanged pending gates (the common case once
@@ -562,7 +579,8 @@ def _loop(interval_s: int) -> None:
         # timeout=worker_fallback_s() is None by default -- no periodic
         # wake at all unless an operator explicitly opts in (owner
         # 2026-09-13: "it's all reactive and real time").
-        wakeups.wait(["task_changed", "shipped"],
+        baseline = time.time()
+        wakeups.wait(["task_changed", "shipped", "deployed"],
                      timeout=wakeups.worker_fallback_s())
 
 
