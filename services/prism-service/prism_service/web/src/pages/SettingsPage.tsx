@@ -177,15 +177,21 @@ export default function SettingsPage() {
     }
   }, []);
 
-  useEffect(() => { loadProjects(); }, [loadProjects]);
-  useEffect(() => {
-    if (projects.length > 0) loadAllInfos(projects);
-  }, [projects, loadAllInfos]);
-
-
   const { section: sectionParam } = useParams<{ section?: string }>();
   const section: SectionId = resolveSection(sectionParam);
   const meta = SECTION_META[section];
+
+  useEffect(() => { loadProjects(); }, [loadProjects]);
+  // Only the "projects" section reads `infos` (the per-project cards). Loading
+  // it on EVERY Settings mount fanned out one /api/understand request per
+  // project through Promise.all -- 154 of them on the dev instance -- so
+  // merely opening Settings > Access key to turn on Remote assist stalled the
+  // daemon and the page read as unresponsive. Fetch only when that section is
+  // actually on screen.
+  useEffect(() => {
+    if (section !== "projects") return;
+    if (projects.length > 0) loadAllInfos(projects);
+  }, [section, projects, loadAllInfos]);
 
   return (
     <Page>
