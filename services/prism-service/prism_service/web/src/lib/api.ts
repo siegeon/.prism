@@ -22,11 +22,20 @@ export class ApiError extends Error {
 // opening devtools' Network tab and eyeballing timestamps -- exactly the
 // question this whole polling-discipline pass exists to answer. Never
 // runs in a production build: import.meta.env.DEV is false there.
+//
+// `import.meta.env` isn't declared anywhere in this project (no
+// vite-env.d.ts, no `types: ["vite/client"]` in tsconfig.app.json) --
+// same narrow local cast live/draw.ts already uses for its own
+// import.meta.env.DEV check, so the dead branch is eliminated from the
+// prod bundle exactly like any other DEV-gated block, with no need to
+// widen this project's global type surface.
+const isDevBuild = (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV === true;
+
 const requestCounts = new Map<string, number>();
 let requestLogStarted = false;
 
 function trackRequest(path: string): void {
-  if (!import.meta.env.DEV) return;
+  if (!isDevBuild) return;
   const endpoint = path.split("?")[0] ?? path;
   requestCounts.set(endpoint, (requestCounts.get(endpoint) ?? 0) + 1);
   if (requestLogStarted || typeof window === "undefined") return;
