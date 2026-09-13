@@ -526,8 +526,15 @@ def _loop(interval_s: int) -> None:
          f"is pending; otherwise falls back to {_IDLE_FALLBACK_S:.0f}s)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
-    last_checked = time.time()
     while True:
+        # Captured fresh, right before this iteration's own sweep -- a
+        # since= carried over from a PRIOR iteration's post-sweep
+        # timestamp double-fires: the signal that just woke this loop is
+        # still the newest entry in wakeups._LAST, so the very next wait()
+        # would see it as "new" all over again and trigger an extra,
+        # unwanted sweep immediately after this one (owner 2026-09-13:
+        # "one signal makes exactly one pass").
+        sweep_started = time.time()
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
                 approved = sweep_once()
@@ -546,16 +553,17 @@ def _loop(interval_s: int) -> None:
                                   f"{len(approved)} decided")
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        checked_at = time.time()
         fallback = interval_s if _last_eligible_count > 0 else \
             max(interval_s, _IDLE_FALLBACK_S)
         # Wake on "shipped" too -- a push landing (ship_worker) can free a
         # green_gate or resolve a workspace-freshness refusal exactly like
         # a task_changed row does; waiting on task_changed alone left the
         # fallback timeout as the only way such a change was ever noticed.
+        # since=sweep_started (this iteration's own pre-sweep timestamp,
+        # not a value left over from a previous iteration) is what keeps
+        # one signal to exactly one extra pass.
         wakeups.wait(["task_changed", "shipped"], timeout=fallback,
-                     since=last_checked)
-        last_checked = checked_at
+                     since=sweep_started)
 
 
 def start_gate_adjudicator() -> threading.Thread | None:

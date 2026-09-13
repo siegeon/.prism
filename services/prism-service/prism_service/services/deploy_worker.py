@@ -618,18 +618,21 @@ def _loop(interval_s: int) -> None:
          f"{fallback:.0f}s when nothing changed)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
-    last_checked = time.time()
     while True:
+        # Captured fresh, right before this iteration's own tick -- see
+        # gate_adjudicator._loop's comment: a since= left over from a
+        # prior iteration's post-tick timestamp double-fires on the very
+        # signal that just woke this loop (owner 2026-09-13: "one signal
+        # makes exactly one pass").
+        tick_started = time.time()
         _tick()
-        checked_at = time.time()
         # "shipped" wakes this immediately on a same-process land;
         # "task_changed" covers a fresh deploy request queued on a task.
         # A land from OUTSIDE this process (a fixer's own `git push`) is
         # still only caught by the fallback poll -- unavoidable without a
         # cross-process channel.
         wakeups.wait(["shipped", "task_changed"], timeout=fallback,
-                     since=last_checked)
-        last_checked = checked_at
+                     since=tick_started)
 
 
 def start_deploy_worker() -> Optional[threading.Thread]:

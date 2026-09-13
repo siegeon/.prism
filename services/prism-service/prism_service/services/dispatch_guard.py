@@ -574,8 +574,13 @@ def _loop(interval_s: int,
     wakeups.lower_thread_priority()
     if stop_event is None:  # never delay a test-driven loop
         wakeups.wait_out_startup_warmup()
-    last_checked = time.time()
     while stop_event is None or not stop_event.is_set():
+        # Captured fresh, right before this iteration's own sweep -- see
+        # gate_adjudicator._loop's comment: a since= left over from a
+        # prior iteration's post-sweep timestamp double-fires on the very
+        # signal that just woke this loop (owner 2026-09-13: "one signal
+        # makes exactly one pass").
+        sweep_started = time.time()
         try:
             # Serialized with the other pure-maintenance sweeps (never
             # task_runner/resume_actuator/ship_worker/gate_adjudicator,
@@ -590,7 +595,6 @@ def _loop(interval_s: int,
                     info["active"] = bool(res)
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        checked_at = time.time()
         if stop_event is not None:
             # Test-only plumbing (never passed by start_dispatch_reaper):
             # keep the plain interval wait here so a stop_event-driven
@@ -598,8 +602,7 @@ def _loop(interval_s: int,
             if stop_event.wait(interval_s):
                 break
         else:
-            wakeups.wait(["task_changed"], timeout=fallback, since=last_checked)
-        last_checked = checked_at
+            wakeups.wait(["task_changed"], timeout=fallback, since=sweep_started)
 
 
 def start_dispatch_reaper() -> Optional[threading.Thread]:
