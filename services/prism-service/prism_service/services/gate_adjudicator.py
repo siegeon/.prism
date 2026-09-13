@@ -535,14 +535,29 @@ def _loop(interval_s: int) -> None:
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     baseline = time.time()
+    first_pass = True
     while True:
-        # A `deployed` signal since the last wait() means the CODE that
-        # reads a parked gate may have just changed, not the row itself
-        # (task a65c66e5, 2026-09-13) -- force one full pass, bypassing
-        # both the project-level scan skip and the per-task backoff, so a
-        # park whose cause a landing just fixed is re-evaluated instead of
-        # sitting on a memo keyed on an unchanged row.
-        force = bool(wakeups.changed_since(["deployed"], None, baseline))
+        # THE FIRST PASS AFTER WARMUP IS UNCONDITIONAL (task a65c66e5,
+        # 2026-09-13, second round): relying on a `deployed` signal to
+        # force a re-sweep only works for an in-process restart that lands
+        # AFTER this loop is already waiting -- main.py's own boot signal
+        # fires at API startup, before the worker-host process (and this
+        # loop) even exists, so a fresh process never sees it and a fix
+        # that only landed in a new deploy would sit unswept until the
+        # NEXT deploy. A deploy is exactly the moment this seat's own code
+        # can least be trusted to have already looked at every pending
+        # gate with the new logic, so the very first pass ignores both
+        # memos regardless of any signal.
+        #
+        # A `deployed` signal since the last wait() (a LATER in-process
+        # restart is not possible for this thread, but a landing that
+        # confirmed via deploy_worker mid-run is) means the CODE that
+        # reads a parked gate may have just changed, not the row itself --
+        # force one more full pass, bypassing both the project-level scan
+        # skip and the per-task backoff, so that park is re-evaluated too.
+        force = first_pass or bool(
+            wakeups.changed_since(["deployed"], None, baseline))
+        first_pass = False
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
                 approved = sweep_once(force=force)

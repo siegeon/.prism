@@ -848,13 +848,23 @@ def _loop(interval_s: int) -> None:
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     baseline = time.time()
+    first_pass = True
     while True:
+        # THE FIRST PASS AFTER WARMUP IS UNCONDITIONAL (task a65c66e5,
+        # 2026-09-13, second round): a `deployed` signal fired at API
+        # startup, BEFORE the worker-host process (and this loop) exists,
+        # is invisible to a wait baseline taken after warmup -- a fresh
+        # process would otherwise never re-look at a stale park left by a
+        # bug that this very deploy just fixed. So the very first pass
+        # forces the stale-park clear regardless of any signal.
+        #
         # A `deployed` signal since the last wait() means the CODE that
         # reads a parked/stale row may have just changed, not the row
-        # itself (task a65c66e5, 2026-09-13) -- force one full pass so a
-        # stale park text left by an earlier bug gets swept even though
-        # nothing about the row's own fields moved.
-        force = bool(wakeups.changed_since(["deployed"], None, baseline))
+        # itself -- force one more full pass so a stale park text gets
+        # swept even though nothing about the row's own fields moved.
+        force = first_pass or bool(
+            wakeups.changed_since(["deployed"], None, baseline))
+        first_pass = False
         try:
             with system_activity.pass_("resume_actuator", "*", "sweep_once") as info:
                 res = sweep_once(force=force)
