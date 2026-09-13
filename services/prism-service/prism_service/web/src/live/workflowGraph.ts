@@ -523,7 +523,20 @@ export class WorkflowGraph {
   /** Ambient motion, driven by real occupancy only: a bot->step wire whose
    * step has someone standing on it carries exactly one marker at a time,
    * the next spawning a beat after the previous arrives. A step with no
-   * work is silent, so a still canvas honestly means an idle board. */
+   * work is silent, so a still canvas honestly means an idle board.
+   *
+   * task fix/canvasidle2: on a board that is basically ALWAYS occupied
+   * somewhere (58 real tasks spread over ~10 steps), this loop was the
+   * true root cause the earlier occupancy-in-hasActiveAnimation fix
+   * missed -- it kept spawning a fresh ambient packet on every occupied
+   * bot->step wire, forever, so `this.packets.length > 0` (what
+   * hasActiveAnimation actually checks) was true almost continuously even
+   * with the occupancy check itself removed. Spawned here as `ambient:
+   * true` so hasActiveAnimation can tell "decorating a static fact" apart
+   * from "a real transition/user action is in flight" -- the marker still
+   * rides its wire and still draws, just on whatever cadence the
+   * idle-gated frame loop happens to be running, not a reason to force
+   * that loop to 60fps forever. */
   step(dtMs: number, now: number): void {
     if (this.reducedMotion) return;
     for (const p of this.packets) {
@@ -540,7 +553,7 @@ export class WorkflowGraph {
       const last = this.lastArrival.get(w.key) ?? 0;
       if (last && now - last < SPAWN_GAP_MS) continue;
       const pts = this.route(w);
-      if (pts.length >= 2) this.packets.push(spawnPacket(w.from, w.to, false, pts));
+      if (pts.length >= 2) this.packets.push(spawnPacket(w.from, w.to, false, pts, true));
     }
   }
 
@@ -612,17 +625,28 @@ export class WorkflowGraph {
     return new Set(this.wires.map((w) => w.key));
   }
 
-  /** True while this board has something genuinely animating on its own
-   * clock right now — a packet mid-flight, or any node actually occupied
-   * (count > 0, the same signal that lights its RUNNING pulse). The
-   * page's rAF loop (task fix/canvasidle) drops to a slow idle tick once
-   * this goes false and nothing else (a replay, a progress fill, a real
-   * pointer interaction) is keeping it awake either — a static conductor
-   * canvas measured live burned ~36% renderer CPU forever with no way to
-   * ever ask this question. */
+  /** True while this board has something genuinely animating ON ITS OWN
+   * CLOCK right now — a packet mid-flight, nothing else. Occupancy (`count
+   * > 0`) alone does NOT count: task fix/canvasidle2's own live measurement
+   * found the conductor board (58 real tasks, always some step occupied)
+   * held the renderer at 33% CPU forever, because the PREVIOUS version of
+   * this method read `nodes.some(n => n.count > 0)` as "active" — on a
+   * board that is basically always occupied, that check alone defeated the
+   * whole idle gate every single frame, so the 60fps loop never actually
+   * stopped. Static occupancy (the badge, the running glow/pulse on an
+   * occupied node) is drawn once by whatever frame happens to be running
+   * and then costs nothing further — the page's own idle tick (a bounded
+   * ~1fps setTimeout, see WorkflowsPage.tsx's frame()) still repaints it
+   * periodically, which is the "ticked at a slow rate, never 60fps" this
+   * fix calls for, without this method itself ever reporting "active" for
+   * a scene where nothing is actually moving. Excludes AMBIENT packets
+   * (step()'s own doc comment) for the same reason: an ambient marker is
+   * just occupancy given motion, and with occupancy basically always
+   * present somewhere on this board, counting it here reintroduces the
+   * exact same defeated-idle-gate bug one level down. A REAL packet
+   * (sendTransition, a genuine FSM transition) still counts. */
   hasActiveAnimation(): boolean {
-    if (this.packets.length > 0) return true;
-    return this.nodes.some((n) => (n.count ?? 0) > 0);
+    return this.packets.some((p) => !p.ambient);
   }
 
   /** Frames the whole board once, then leaves the camera to the owner —

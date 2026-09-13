@@ -722,20 +722,29 @@ export class GraphState {
   }
 
   /** True while something on this board is genuinely animating on its own
-   * clock right now -- a packet mid-flight, a toast sliding in/out, a
-   * worker chip's breathing pulse, an active drag, the camera mid
-   * auto-fit move, or a card mid slide-in/pulse/settle/ghost-flash.
-   * LivePage's rAF loop (task fix/canvasidle) drops to a slow idle tick
-   * once this goes false for the whole board -- a static scene measured
-   * live burned ~36% renderer CPU forever with no way to ever ask this
-   * question. Text that merely creeps forward with time (the mission
-   * clock, "waiting Xm", the quiet line's own age) is NOT a reason to keep
-   * 60fps -- the idle tick still repaints it once a second. */
+   * clock right now -- a packet mid-flight, a toast sliding in/out, an
+   * active drag, the camera mid auto-fit move, or a card mid
+   * slide-in/pulse/settle/ghost-flash. LivePage's rAF loop (task
+   * fix/canvasidle) drops to a slow idle tick once this goes false for the
+   * whole board -- a static scene measured live burned ~36% renderer CPU
+   * forever with no way to ever ask this question. Text that merely creeps
+   * forward with time (the mission clock, "waiting Xm", the quiet line's
+   * own age) is NOT a reason to keep 60fps -- the idle tick still repaints
+   * it once a second. Nor is a MERELY-PRESENT worker row or occupied node
+   * (task fix/canvasidle2) -- see the `workers.length` comment below;
+   * static presence with no bound is never "animating right now". */
   hasActiveAnimation(now: number): boolean {
     if (!this.booted) return true;
     if (this.packets.length > 0) return true;
     if (this.toasts.length > 0) return true;
-    if (this.workers.length > 0) return true;
+    // NOT a check on `workers` -- task fix/canvasidle2: a daemon
+    // background pass (task_runner, gate_adjudicator, ...) is routinely
+    // running continuously, so that check alone kept this method "active"
+    // forever, the exact same defeated-idle-gate bug as workflowGraph.ts's
+    // occupancy check (see its own doc comment). The worker chip's
+    // breathing pulse (draw.ts's drawWorkerRow) still repaints on the
+    // page's own bounded idle tick (~1fps) instead of 60fps -- static
+    // presence of a worker row is not, by itself, motion.
     if (this.draggingNodeId || this.draggingPortId) return true;
     if (this.fitMoveStartAt && now - this.fitMoveStartAt < AUTO_FIT_MOVE_MS) return true;
     for (const n of this.nodes) {

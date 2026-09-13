@@ -368,6 +368,23 @@ function conductorTaskGenuinelyActive(task: ManagedTask): boolean {
   return conductorTaskDriving(task) || conductorTaskWaitingAtGate(task);
 }
 
+/** task fix/canvasidle2: the real-motion half of conductorRunGenuinelyActive
+ * -- that predicate deliberately counts a task PARKED at a pending/failed
+ * gate as "genuinely active" (a real occupancy fact worth drawing), but a
+ * parked gate is a STATIC state with no bound, not something happening
+ * right now. Measured live: with 26 pending gates typically open at once,
+ * treating that as a reason to keep the canvas's rAF loop at 60fps meant
+ * the loop's idle gate almost never actually engaged, the same defeated-gate
+ * bug as workflowGraph.ts's own occupancy check. Only a REAL fresh heartbeat
+ * (activity.state working/driving) means the frame loop needs to keep
+ * painting fast; a gate wait still draws (once per idle tick), it just
+ * doesn't have to be redrawn 60 times a second to do so. */
+function conductorTaskDrivingNow(conductorTask?: WorkflowRun["data"]["conductorTask"]): boolean {
+  if (!conductorTask) return true;
+  const state = (conductorTask.activity as { state?: string } | null | undefined)?.state;
+  return state === "working" || state === "driving";
+}
+
 type FailureEvidence = { location: string | null; lines: string[] };
 
 function failureEvidence(output?: string): FailureEvidence | null {
@@ -2110,6 +2127,11 @@ export default function WorkflowsPage() {
       last = now;
       graphRef.current.step(dt, now);
       let activeProgress: ActiveNodeProgress | null = null;
+      // task fix/canvasidle2: whether the CURRENT activeProgress (if any)
+      // reflects real motion happening right now, vs. a static gate-wait
+      // this loop must still draw but need not redraw at 60fps for. See
+      // conductorTaskDrivingNow's own doc comment.
+      let activeProgressIsLive = false;
       const runtime = workflowRun?.runtime;
       // See conductorRunGenuinelyActive's own docstring (task 0b5dd37c): a
       // conductor task's synthesized runtime.status === "running" means
@@ -2144,6 +2166,7 @@ export default function WorkflowsPage() {
           overrunRatio: ratio > 1 ? ratio : null,
           attempts: runTrace?.attempts ?? 1,
         };
+        activeProgressIsLive = conductorTaskDrivingNow(workflowRun?.data.conductorTask);
       } else if (runtime?.status === "running" && genuinelyActive && runtime.startedAt && selectedWorkflow) {
         // A linked CHILD node (e.g. verify_green_state's "Build and test",
         // whose own steps are "build"/"test" from the external AOS engine)
@@ -2192,6 +2215,7 @@ export default function WorkflowsPage() {
           overrunRatio: pacing && pacing > 0 && elapsedSeconds > pacing ? elapsedSeconds / pacing : null,
           attempts: runTrace?.attempts ?? 1,
         };
+        activeProgressIsLive = conductorTaskDrivingNow(workflowRun?.data.conductorTask);
       } else if (testModeRef.current === "replay" && testStep !== null && selectedWorkflow) {
         const nodeId = testStep < 0
           ? "__start__"
@@ -2230,6 +2254,10 @@ export default function WorkflowsPage() {
           label: replayLabel,
           tone,
         };
+        // A deliberately-started, finite replay -- genuinely animating on
+        // its own clock (bounded by replayStepDurationRef), same as a
+        // packet in flight.
+        activeProgressIsLive = true;
       } else if (isStateMachineWorkflow && !workflowRun && !viewingInstanceRef.current) {
         // No single instance is open, but the AMBIENT board may still have
         // a real task working a step on this canvas right now -- the same
@@ -2262,6 +2290,15 @@ export default function WorkflowsPage() {
             // heartbeat earns (2026-09-13, screenshot workflows-342.png).
             tone: conductorTaskWaitingAtGate(activeTask) ? "warning" : undefined,
           };
+          // task fix/canvasidle2: a task merely WAITING at a gate (no live
+          // heartbeat) is a static occupancy fact, not real motion -- with
+          // 26 pending gates typically open, treating that as "active"
+          // here defeated the idle gate below almost permanently (measured
+          // live: 33%/27% renderer/GPU CPU on an otherwise-idle board).
+          // Only a task the daemon is actually DRIVING right now needs the
+          // full-rate loop; a gate wait still gets drawn, just on the
+          // idle tick instead of 60 times a second.
+          activeProgressIsLive = conductorTaskDriving(activeTask);
         }
       } else if (tier === "settling" && lastOutcome) {
         // Task 0b5dd37c item 5: the last node sweeps ONCE in pass/fail
@@ -2283,19 +2320,27 @@ export default function WorkflowsPage() {
             ? (lastOutcome.passed ? "success" : "failure")
             : undefined,
         };
+        // A one-shot settle sweep, bounded by SETTLE_WINDOW_MS -- genuinely
+        // animating, same as a packet in flight.
+        activeProgressIsLive = true;
       }
       drawWorkflows(ctx, graphRef.current, canvas.clientWidth, canvas.clientHeight, now, selectedNodeId, activeProgress, effectiveNodeVerdicts, runView);
       // Dirty-gated reschedule: keep 60fps while the board itself has a
       // real pulse/packet/replay in flight (graphRef.current.hasActiveAnimation)
-      // or a node's own progress fill is animating (activeProgress, computed
-      // above), OR the viewer touched the canvas within the last 500ms
-      // (lastActivityAt, via the pointer/wheel listeners below). Otherwise
-      // drop to a 1fps tick -- still enough for the RUN clock/gate-wait
-      // labels to creep forward -- instead of stopping dead, since a
-      // page-open board must never look frozen. A hidden tab stops
-      // scheduling entirely and resumes on visibilitychange.
+      // or a node's own progress fill is animating ON REAL MOTION right now
+      // (activeProgressIsLive, computed above -- NOT merely activeProgress
+      // !== null: a task parked at a pending gate still computes and draws
+      // an activeProgress every tick, but that is a static fact, not
+      // motion, and must not by itself keep this loop at 60fps -- see
+      // conductorTaskDrivingNow), OR the viewer touched the canvas within
+      // the last 500ms (lastActivityAt, via the pointer/wheel listeners
+      // below). Otherwise drop to a 1fps tick -- still enough for the RUN
+      // clock/gate-wait labels to creep forward -- instead of stopping
+      // dead, since a page-open board must never look frozen. A hidden tab
+      // stops scheduling entirely and resumes on visibilitychange.
       if (document.hidden) { raf = 0; return; }
-      const active = graphRef.current.hasActiveAnimation() || activeProgress !== null
+      const active = graphRef.current.hasActiveAnimation()
+        || (activeProgress !== null && activeProgressIsLive)
         || now - lastActivityAt < 500;
       if (active) {
         raf = requestAnimationFrame(frame);
