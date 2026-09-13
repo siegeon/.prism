@@ -226,6 +226,50 @@ def _dispatch_guard_open_tickets_isolation():
         dispatch_guard._DRIVE_CONCURRENCY_CACHE = cache_before
 
 
+@pytest.fixture(autouse=True)
+def _drive_heartbeat_table_isolation():
+    """Wipe every project's drive_heartbeats table after each test (task
+    8ddbba7f).
+
+    A handful of pre-existing tests use the FIXED project name "prism"
+    (they need the real .prism/behaviors/conductor/*.json files on disk,
+    which only exist for this project), so a heartbeat row one test writes
+    for its own task stays LIVE (within HEARTBEAT_WINDOW_S) for whichever
+    unrelated task a LATER test in the same file or a neighbouring one
+    dispatches under that same project name --
+    dispatch_guard.engine_slot_reason's new gate then reads that leftover
+    row as "the slot is busy" and refuses a dispatch the test never
+    expected to be refused (observed live:
+    test_task_runner_honors_declared_node_plan.py and
+    test_resume_actuator_runs_the_declared_plan.py both dispatch under
+    project="prism" and started failing with an empty captured_kwargs --
+    claude_cli.invoke was never reached). A heartbeat row has no meaning
+    across two different tests, so this clears the table for every
+    project this session has touched rather than trying to track which
+    one a given test used."""
+    yield
+    from prism_service.config import PROJECTS_DIR
+    from prism_service.services import sqlite_db
+
+    if not PROJECTS_DIR.exists():
+        return
+    for entry in PROJECTS_DIR.iterdir():
+        db_path = entry / "scores.db"
+        if not db_path.exists():
+            continue
+        try:
+            conn = sqlite_db.connect(str(db_path))
+            try:
+                conn.execute("DELETE FROM drive_heartbeats")
+                conn.commit()
+            except Exception:
+                pass  # no such table yet -- nothing to clear
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def quiet_boot(monkeypatch):
     """Boot the REAL lifespan (prism_service.main.app) without its periodic
