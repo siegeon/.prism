@@ -28,6 +28,24 @@ finish. Every project whose configured source path does not resolve to a
 real directory is dropped from consideration (logged once) and never
 re-checked.
 
+ROUND 6: fixing WHICH projects got swept (this module) and per-file
+content hashing (brain_engine.py's incremental_reindex) still left one
+thing unbounded -- a project that stays "in use" continuously (the
+normal case: someone actively working a checkout with real, ongoing
+uncommitted edits) got swept every ~5s forever, and even with content
+hashing most of those passes correctly found NOTHING new to embed.
+Cheap per pass, but "cheap x every 5 seconds forever" is still real,
+sustained CPU (observed live: ~147% sustained). Per-project exponential
+backoff (`_backoff`) means a pass that embeds zero files pushes that
+project's NEXT eligible sweep out (60s, then 120s, ... capped at 15
+minutes); a pass that DOES embed something resets it to immediate
+eligibility again, so genuinely active editing still gets swept
+promptly while a quiet-but-still-open project stops being re-checked
+every few seconds for no reason. (A dedicated filesystem watcher would
+be the more precise "wakeup signal" -- out of scope here; a real content
+change is the wakeup signal this round implements, which is also the
+one signal that can never miss a genuine edit.)
+
 main.py's start_drift_timer is now a thin `while True: sweep_once();
 sleep(...)` wrapper -- this module is what tests exercise directly, same
 convention as sweep_once() in gate_adjudicator.py / task_runner.py."""
@@ -53,10 +71,31 @@ IDLE_GATE_S = float(os.environ.get("PRISM_DRIFT_IDLE_GATE_S", "3"))
 # is not itself preemptible), but no NEW project starts once it's spent;
 # leftover candidates resume on the next call.
 BUDGET_S = float(os.environ.get("PRISM_DRIFT_BUDGET_S", "5"))
+# Per-project backoff after a pass that embeds zero files (task: livehang
+# round 6) -- doubles each consecutive zero-change pass, capped at 15
+# minutes; a pass that DOES embed something resets it to zero (next
+# sweep eligible immediately).
+BACKOFF_MIN_S = float(os.environ.get("PRISM_DRIFT_BACKOFF_MIN_S", "60"))
+BACKOFF_MAX_S = float(os.environ.get("PRISM_DRIFT_BACKOFF_MAX_S", "900"))
 
 _drift_brains: dict = {}
 _dropped: set[str] = set()
 _pending: list[str] = []
+_backoff: dict[str, dict] = {}  # pid -> {"next_at": monotonic ts, "level_s": float}
+
+
+def _backoff_ready(pid: str) -> bool:
+    st = _backoff.get(pid)
+    return st is None or time.monotonic() >= st["next_at"]
+
+
+def _update_backoff(pid: str, embedded: int) -> None:
+    if embedded > 0:
+        _backoff.pop(pid, None)  # a real change just happened -- stay fast
+        return
+    prev_level = _backoff.get(pid, {}).get("level_s", 0.0)
+    level = min(BACKOFF_MAX_S, prev_level * 2 if prev_level else BACKOFF_MIN_S)
+    _backoff[pid] = {"next_at": time.monotonic() + level, "level_s": level}
 
 
 def _has_in_progress_task(pid: str) -> bool:
@@ -102,6 +141,7 @@ def sweep_once() -> list[dict]:
     candidates = [
         p for p in live
         if p not in _dropped
+        and _backoff_ready(p)
         and (project_activity.seen_within(p, ACTIVE_WINDOW_S)
              or _has_in_progress_task(p))
     ]
@@ -145,20 +185,28 @@ def sweep_once() -> list[dict]:
         from prism_service.services import wakeups
 
         t0 = time.monotonic()
+        stats: dict = {}
         # Serialized with the other pure-maintenance sweeps (see
         # dispatch_guard._loop's comment) -- never task_runner/
         # resume_actuator/ship_worker/gate_adjudicator.
         with wakeups.serial_slot():
             with system_activity.pass_(
                     "drift_reindex", pid, "incremental_reindex") as info:
-                n = brain.incremental_reindex(repo_path=repo_path)
+                n = brain.incremental_reindex(repo_path=repo_path, stats=stats)
+                elapsed_ms = (time.monotonic() - t0) * 1000.0
+                detail = (
+                    f"{stats.get('candidates', 0)} candidates, "
+                    f"{stats.get('changed', 0)} changed, "
+                    f"{stats.get('embedded', 0)} embedded, {elapsed_ms:.0f}ms"
+                )
+                info["detail"] = detail
                 # A clean project (n==0, the common case once its own
                 # baseline has settled) collapses into the throttled idle
                 # entry instead of one ring-buffer line per in-use project
                 # per tick.
                 info["active"] = bool(n)
-        elapsed_ms = (time.monotonic() - t0) * 1000.0
-        print(f"[drift] {pid}: {n} file(s) in {elapsed_ms:.0f}ms", file=sys.stderr)
+        _update_backoff(pid, stats.get("embedded", 0))
+        print(f"[drift] {pid}: {detail}", file=sys.stderr)
         results.append({"project": pid, "files": n, "elapsed_ms": elapsed_ms})
 
     return results
@@ -172,3 +220,4 @@ def reset_for_tests() -> None:
     _drift_brains.clear()
     _dropped.clear()
     _pending.clear()
+    _backoff.clear()
