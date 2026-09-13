@@ -24,10 +24,13 @@ WORKFLOW_STEPS that nothing kept in sync. The rail now fetches it here.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from typing import Literal, Optional
 from urllib.error import HTTPError, URLError
@@ -378,7 +381,90 @@ def _workflow_engine_json(
         raise HTTPException(503, f"workflow engine unavailable: {exc}") from exc
 
 
+# --- Catalog memoization (task: 200ms bar, owner 2026-09-13) ---------------
+# GET /api/workflows measured 14.2s (up to 21-52s under load, per
+# services/workflow_live.py's own docstring) while idle it answers in 0.3s
+# -- the difference is not algorithmic cost, it is this route making ~20+
+# synchronous HTTP round trips to the separate AosWorkflows engine (one for
+# the scripted "validation" definition, one for the conductor bot, and one
+# MORE per behavior id the bot names) every single request, each queued
+# behind whatever else is holding the GIL/CPU at that moment (a live
+# background pass). The engine's answers are near-static: they change only
+# when a `.prism/behaviors/**/*.json` file on disk changes (what the engine
+# itself reads) or the engine restarts with new definitions. So memoize the
+# ENGINE-DERIVED structure only -- never the per-request occupancy/live/
+# trend overlay computed below, which must stay fresh -- keyed on a cheap
+# file-mtime fingerprint plus a short TTL backstop for an engine-side change
+# with no corresponding file. `id(_workflow_engine_json)` rides along in the
+# key so a test that monkeypatches the engine call (many do, per-test, with
+# a fresh closure each time) gets its own cache slot instead of reading a
+# previous test's memoized answer -- in production this name resolves to
+# the same function object across requests, so real caching still applies.
+_CATALOG_CACHE_LOCK = threading.Lock()
+_CATALOG_STRUCTURE_CACHE: dict[tuple, tuple[float, object]] = {}
+CATALOG_STRUCTURE_CACHE_TTL_S = 30.0
+
+
+def _behaviors_dir_for(project: str) -> Path:
+    from prism_service.services.claude_transcripts import _project_source_path
+    configured = Path(_project_source_path(project))
+    fallback = Path.home() / "projects" / project
+    root = configured if configured.is_absolute() and configured.exists() else fallback
+    return root / ".prism" / "behaviors"
+
+
+def _behavior_files_signature(behaviors_dir: Path) -> tuple:
+    """A cheap fingerprint (a handful of stat() calls, not a parse) of
+    every behavior override file on disk for this project -- changes the
+    instant a file is added, removed, or edited, which is the real
+    invalidation signal for engine-served behavior structure."""
+    if not behaviors_dir.exists():
+        return ()
+    try:
+        return tuple(sorted(
+            (str(p), p.stat().st_mtime_ns) for p in behaviors_dir.rglob("*.json")
+        ))
+    except OSError:
+        return ()
+
+
+def _cached_engine_structure(cache_name: str, project: str, compute):
+    """Memoize `compute()` (a zero-arg callable doing the real engine
+    work) under `(cache_name, project, behaviors-dir signature,
+    id(_workflow_engine_json))`, refreshed at most every
+    CATALOG_STRUCTURE_CACHE_TTL_S seconds. Returns a deep copy on every
+    call (hit or miss) -- callers (get_workflows) mutate the returned
+    structure in place (stamping occupancy/live/task_count/tier per
+    request), and a shared cached object would leak one request's
+    mutations into the next cache hit."""
+    behaviors_dir = _behaviors_dir_for(project)
+    key = (cache_name, project, str(behaviors_dir),
+           _behavior_files_signature(behaviors_dir), id(_workflow_engine_json))
+    now = time.monotonic()
+    with _CATALOG_CACHE_LOCK:
+        hit = _CATALOG_STRUCTURE_CACHE.get(key)
+        if hit is not None and (now - hit[0]) < CATALOG_STRUCTURE_CACHE_TTL_S:
+            return copy.deepcopy(hit[1])
+    result = compute()
+    with _CATALOG_CACHE_LOCK:
+        _CATALOG_STRUCTURE_CACHE[key] = (now, result)
+    return copy.deepcopy(result)
+
+
+def _reset_catalog_structure_cache_for_tests() -> None:
+    """Test-only: clear the memoized engine structure between tests that
+    share this module-level cache."""
+    with _CATALOG_CACHE_LOCK:
+        _CATALOG_STRUCTURE_CACHE.clear()
+
+
 def _project_validation_workflow(project: str) -> dict:
+    return _cached_engine_structure(
+        "validation", project,
+        lambda: _project_validation_workflow_uncached(project))
+
+
+def _project_validation_workflow_uncached(project: str) -> dict:
     # THE ENGINE IS OPTIONAL INFRASTRUCTURE, NOT A DEPENDENCY OF THE PAGE.
     # This entry is sourced from the AosWorkflows engine, and every other
     # workflow on the page is built from local constants. Letting the
@@ -1127,6 +1213,12 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
 
 
 def _conductor_behavior_workflows(project: str) -> list[dict]:
+    return _cached_engine_structure(
+        "conductor_behaviors", project,
+        lambda: _conductor_behavior_workflows_uncached(project))
+
+
+def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
     """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
     just the behavior ids. Bot [1] uses FSM [1..*], FSM [1] has Behavior
