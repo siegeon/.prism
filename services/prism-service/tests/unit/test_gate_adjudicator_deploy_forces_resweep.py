@@ -162,8 +162,12 @@ def test_the_first_pass_after_warmup_is_unconditional_with_no_signals(
     wk._reset_for_tests()
     forces: list[bool] = []
 
-    def fake_sweep_once(force=False):
+    def fake_sweep_once(force=False, force_backoff=None):
         forces.append(force)
+        # Nothing deferred -- a single-gate (or otherwise budget-fitting)
+        # boot drains in exactly one pass.
+        ga._last_eligible_count = 1
+        ga._last_changed_count = 1
         return []
 
     wait_calls = {"n": 0}
@@ -186,3 +190,86 @@ def test_the_first_pass_after_warmup_is_unconditional_with_no_signals(
     assert forces == [True, False], (
         f"pass 1 (post-warmup, no signals at all) must force; pass 2 (no "
         f"new signal since) must not -- got {forces}")
+
+
+def test_a_backlog_bigger_than_one_budget_drains_across_several_passes(
+        monkeypatch):
+    """Live, task a65c66e5 third round: 31 real pending gates, only ~10
+    fit in one _SWEEP_BUDGET_S window. The first pass bypasses per-task
+    backoff too (nothing has an entry yet); every CONTINUATION drain pass
+    bypasses only the project scan, letting real backoff gate whatever
+    was already refused this boot so the remaining budget goes to
+    never-yet-touched tasks -- and the loop goes reactive the instant a
+    pass reports nothing left to force."""
+    from prism_service.services import gate_adjudicator as ga
+    from prism_service.services import wakeups as wk
+
+    wk._reset_for_tests()
+    calls: list[tuple] = []
+    remaining = {"n": 10}
+    per_pass = [3, 3, 4]  # drains fully on the third forced pass
+
+    def fake_sweep_once(force=False, force_backoff=None):
+        calls.append((force, force_backoff))
+        done = per_pass[len(calls) - 1] if len(calls) <= len(per_pass) else 0
+        ga._last_eligible_count = remaining["n"]
+        ga._last_changed_count = done
+        remaining["n"] -= done
+        return []
+
+    wait_calls = {"n": 0}
+
+    def fake_wait(kinds, timeout=None):
+        wait_calls["n"] += 1
+        if wait_calls["n"] >= 2:
+            raise _StopLoop()
+        return True
+
+    monkeypatch.setattr(ga, "sweep_once", fake_sweep_once)
+    monkeypatch.setattr(wk, "wait_out_startup_warmup", lambda: None)
+    monkeypatch.setattr(wk, "lower_thread_priority", lambda: None)
+    monkeypatch.setattr(wk, "wait", fake_wait)
+    monkeypatch.setattr(wk, "worker_fallback_s", lambda: None)
+
+    with pytest.raises(_StopLoop):
+        ga._loop(60)
+
+    assert calls == [
+        (True, True),    # pass 1: force scan + force backoff (nothing yet)
+        (True, False),   # pass 2: force scan only -- real backoff applies
+        (True, False),   # pass 3: force scan only -- fully drains here
+        (False, False),  # reactive pass: no new signal, no force at all
+    ], calls
+
+
+def test_a_stuck_drain_eventually_gives_up_and_goes_reactive(monkeypatch):
+    """A pathological backlog that never reports fully drained must not
+    hang startup forever -- the boot-drain ceiling caps it."""
+    from prism_service.services import gate_adjudicator as ga
+    from prism_service.services import wakeups as wk
+
+    wk._reset_for_tests()
+    calls: list[tuple] = []
+
+    def fake_sweep_once(force=False, force_backoff=None):
+        calls.append((force, force_backoff))
+        # Never converges: always one more than changed.
+        ga._last_eligible_count = 5
+        ga._last_changed_count = 4
+        return []
+
+    def fake_wait(kinds, timeout=None):
+        raise _StopLoop()
+
+    monkeypatch.setattr(ga, "sweep_once", fake_sweep_once)
+    monkeypatch.setattr(wk, "wait_out_startup_warmup", lambda: None)
+    monkeypatch.setattr(wk, "lower_thread_priority", lambda: None)
+    monkeypatch.setattr(wk, "wait", fake_wait)
+    monkeypatch.setattr(wk, "worker_fallback_s", lambda: None)
+
+    with pytest.raises(_StopLoop):
+        ga._loop(60)
+
+    assert len(calls) == ga._MAX_BOOT_DRAIN_PASSES, (
+        f"a never-converging drain must stop at the ceiling and go "
+        f"reactive, not hang forever -- got {len(calls)} passes")
