@@ -546,7 +546,24 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
             out.append({"ok": False, "route": route,
                         "reason": f"{route} raised {type(exc).__name__}: {exc}"})
             continue
-        out.append({"ok": True, "route": route, "result": result})
+        stopped = getattr(result, "stop_chain", False)
+        # A STOPPED STEP IS A FAILED ATTEMPT, NOT A QUIET SKIP (task
+        # bb3d1f6a). reason-loop reports stop_chain when its own declared
+        # rubric refused the draft (e.g. test_drafted's unresolvable-import
+        # check) -- record that row not-ok with the refusal text so
+        # _record_codified_run's history and the retry/stall path have
+        # something actionable instead of the generic "ran as a declared
+        # step". Read from validation.reason (the rubric's own message)
+        # before falling back to a plain result.reason string.
+        row_reason = ""
+        if stopped:
+            validation = getattr(result, "validation", None)
+            if isinstance(validation, dict):
+                row_reason = str(validation.get("reason") or "")
+            if not row_reason:
+                row_reason = str(getattr(result, "reason", "") or "")
+        out.append({"ok": not stopped, "route": route,
+                    "reason": row_reason, "result": result})
         live.update(_exported_variables(result))
         # GENERIC EARLY-EXIT (task d0b392b3): a declared step's own typed
         # result may say the rest of THIS node's chain does not apply --
@@ -554,7 +571,7 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
         # from the pytest write/run/commit steps. Keyed on the step's own
         # output, never on a route NAME, so a node can branch without a
         # bare Python `if` that no node file declares.
-        if getattr(result, "stop_chain", False):
+        if stopped:
             break
     if scores_db is not None:
         from prism_service.services import drive_heartbeat
@@ -2531,6 +2548,30 @@ def wake() -> None:
     _wake_event.set()
 
 
+def _fallback_timeout_s(interval_s: int,
+                        stop_event: Optional[threading.Event]) -> Optional[float]:
+    """The `_wake_event.wait()` timeout for one loop iteration.
+
+    Production (`stop_event is None`, the shape `start_task_runner` actually
+    launches) is fully reactive: `wake()` already fires immediately on every
+    real task_service.update(), so the only remaining periodic tick is
+    `wakeups.worker_fallback_s()` -- None by default, matching every sibling
+    worker's contract (gate_adjudicator, resume_actuator, ship_worker,
+    deploy_worker, dispatch_guard, maintenance_clock, language_alignment_
+    worker). Ticking on PRISM_TASK_RUNNER_INTERVAL regardless of activity
+    (the old behaviour) is exactly the passive constant-scanning the owner
+    ruled out 2026-09-13: "even when the application is driving a task, it
+    should be QUIESCENT ... this is a REACTIVE system".
+
+    A test-driven loop (`stop_event` given) keeps the plain `interval_s`
+    wait so it can end deterministically without needing to fake the shared
+    wakeups bus -- this path is never used by `start_task_runner` itself."""
+    if stop_event is None:
+        from prism_service.services import wakeups
+        return wakeups.worker_fallback_s()
+    return interval_s
+
+
 def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None:
     """`stop_event` is test-only plumbing (never passed by
     `start_task_runner`): without it, a test that spins up this loop in a
@@ -2540,7 +2581,8 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
     that leak in test_wake_cuts_the_wait_short_instead_of_sitting_out_the_
     interval, which used to cope by permanently stubbing `sweep_once` to
     a no-op instead, breaking every later test that calls it directly."""
-    _log(f"started; interval={interval_s}s (event-driven, interval is a fallback)")
+    _log(f"started; interval={interval_s}s (event-driven; production has no "
+         "periodic fallback unless PRISM_WORKER_FALLBACK_S is set)")
     from prism_service.services import wakeups
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
@@ -2555,7 +2597,7 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
                 info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        if _wake_event.wait(timeout=interval_s):
+        if _wake_event.wait(timeout=_fallback_timeout_s(interval_s, stop_event)):
             _wake_event.clear()
 
 
