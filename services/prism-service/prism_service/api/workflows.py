@@ -2335,6 +2335,13 @@ class ReasonLoopRequest(BaseModel):
     max_budget_usd: float = 0.5
     max_turns: int = 4
     task_id: str = ""
+    # THE NODE'S OWN WALL CLOCK (task bb3d1f6a): a declared step's
+    # timeoutSeconds now flows through task_runner._dispatch_declared_steps
+    # into this body -- bind it on the actual claude_cli.invoke call below
+    # so a hung reason-loop dies at its own declared budget instead of
+    # running unbounded. None (the default) preserves today's behaviour
+    # for every caller that declares no timeout.
+    timeout_s: Optional[float] = None
     # NARROW BY DEFAULT (task eda5a843). Every declared agentic middle on the
     # conductor bot is a no-tool text generation -- it is handed its material
     # and asked to write a document. Leaving tools on costs the ~20k-token
@@ -2430,7 +2437,7 @@ def workflow_step_reason_loop(
             full_prompt, work_dir=root, plugin_dir=root,
             model=body.model, max_budget_usd=body.max_budget_usd, max_turns=body.max_turns,
             project=project, purpose="reason-loop",
-            json_schema=body.json_schema, **invoke_kwargs,
+            json_schema=body.json_schema, timeout_s=body.timeout_s, **invoke_kwargs,
         )
         fields = result.structured_output or {}
         reason = {
