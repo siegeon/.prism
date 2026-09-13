@@ -368,6 +368,28 @@ class TaskService:
         # advance_task row to the same db file, so the stamp is what makes
         # the snapshot honest for a reader-only service (task dee931c6).
         self._advance_rows_cache: Optional[tuple[int, dict]] = None
+        # Tick-cost pass (external fixer, owner brief 2026-09-13):
+        # history(task_id) had NO cache of its own -- every one of
+        # _in_step_s / _own_transition_run_start / _task_window_start /
+        # api/conductor.py's _dispatch_count_for_step / _gate_seat calls it
+        # independently for the SAME task_id within one render, each a
+        # fresh SQL round trip (measured: 241 history() calls for a
+        # 58-task /api/conductor/state render). Same stamp-keyed strategy
+        # as _advance_rows_cache just above: the whole per-task snapshot is
+        # thrown away the instant ANY connection commits to tasks.db (a
+        # global PRAGMA data_version bump), so it can never serve a row a
+        # write has since superseded, foreign writers included.
+        self._history_cache: Optional[tuple[int, dict[str, list]]] = None
+        # Same tick-cost pass: list(parent_id=X) and bare list() (the only
+        # filter combos the conductor's board-render path uses --
+        # managed_tasks/step_buckets/_board_tasks each ran their OWN full
+        # "SELECT * FROM tasks" per request, and _children/_queue_depth/
+        # _task_motion_s each independently re-listed the SAME task_id's
+        # children) are cached the same way, stamp-keyed so a write
+        # anywhere in tasks.db (own or foreign) throws the whole snapshot
+        # away. Keyed by parent_id, None meaning "no parent_id filter at
+        # all" -- distinct from '' ("root tasks only").
+        self._parent_list_cache: Optional[tuple[int, dict[Optional[str], list]]] = None
         # STE style report (task 36283d72): the STYLE BLOCK from the most
         # recent create/update call. A plain attribute, not a model field —
         # a sibling slice reads it right after the call that set it. Empty
@@ -544,6 +566,7 @@ class TaskService:
             self._db.commit()
             if action == "advance_task":
                 self._advance_rows_cache = None
+            self._invalidate_history_cache(task_id)
             return
         window = self._db.execute(
             "SELECT id, actor, action, details FROM task_history "
@@ -574,6 +597,7 @@ class TaskService:
         if action == "advance_task":
             # New advance row → the cached advance_rows_all snapshot is stale.
             self._advance_rows_cache = None
+        self._invalidate_history_cache(task_id)
 
     def record_history(
         self, task_id: str, action: str, details: str = "", actor: str = "",
@@ -917,6 +941,7 @@ class TaskService:
             ),
         )
         self._db.commit()
+        self._parent_list_cache = None
         self._record_history(task.id, "created", f"title={title!r}")
         if ste_rules:
             changed_before = {
@@ -1001,6 +1026,7 @@ class TaskService:
              channel, channel_ref or ""),
         )
         self._db.commit()
+        self._parent_list_cache = None
         self._record_history(task_id, "external_intake", f"title={title!r}")
         return self.get(task_id)
 
@@ -1046,6 +1072,30 @@ class TaskService:
         implement drive) reads just the one task it is working instead of the
         whole board (the dominant token sink: a full board is ~100x larger).
         """
+        # Hot-path cache: `parent_id` is the only real filter conductor's
+        # board-render path ever passes (`list(parent_id=X)` — one epic's
+        # children — or bare `list()` for the whole board, keyed here as
+        # None same as the parameter default so the two never collide with
+        # a real '' parent_id meaning "root tasks only"). `tag` is a
+        # Python-side post-filter applied after the cache lookup below, so
+        # it never affects cacheability.
+        cacheable = (
+            status is None and assigned_agent is None
+            and story_file is None and id is None
+        )
+        if cacheable:
+            stamp = self._db_change_stamp()
+            cache = self._parent_list_cache
+            if cache is None or cache[0] != stamp:
+                cache = (stamp, {})
+                self._parent_list_cache = cache
+            hit = cache[1].get(parent_id)
+            if hit is not None:
+                tasks = hit
+                if tag is not None:
+                    tasks = [t for t in tasks if tag in t.tags]
+                return tasks
+
         clauses: list[str] = []
         params: list[str] = []
 
@@ -1072,6 +1122,9 @@ class TaskService:
         ).fetchall()
 
         tasks = [self._row_to_task(r) for r in rows]
+
+        if cacheable:
+            self._parent_list_cache[1][parent_id] = tasks
 
         # Tag filtering is done in Python because tags are JSON-encoded
         if tag is not None:
@@ -1329,6 +1382,7 @@ class TaskService:
             ),
         )
         self._db.commit()
+        self._parent_list_cache = None
         self._record_history(task.id, "updated", "; ".join(changes))
         if ste_rules:
             changed_before = {
@@ -1403,13 +1457,39 @@ class TaskService:
     # History
     # ------------------------------------------------------------------
 
+    def _invalidate_history_cache(self, task_id: str) -> None:
+        """Drop `task_id`'s entry from the `history()` snapshot (if any) —
+        called after every OWN write to task_history, since `PRAGMA
+        data_version` deliberately does not move for this connection's own
+        commits (see `_db_change_stamp` / `_advance_rows_cache` above)."""
+        cache = self._history_cache
+        if cache is not None:
+            cache[1].pop(task_id, None)
+
     def history(self, task_id: str) -> list[TaskHistory]:
-        """Return audit history for a given task."""
+        """Return audit history for a given task.
+
+        Cached per task_id behind the same `PRAGMA data_version` stamp
+        `advance_rows_all` uses (tick-cost pass, owner brief 2026-09-13):
+        a single conductor render calls this several times for the same
+        task_id (in-step dwell, run-start, motion, dispatch count, ...),
+        and the whole snapshot is thrown away the instant any connection
+        commits to tasks.db, so it can never serve a row a write has since
+        superseded."""
+        stamp = self._db_change_stamp()
+        cache = self._history_cache
+        if cache is None or cache[0] != stamp:
+            cache = (stamp, {})
+            self._history_cache = cache
+        by_task = cache[1]
+        hit = by_task.get(task_id)
+        if hit is not None:
+            return hit
         rows = self._db.execute(
             "SELECT * FROM task_history WHERE task_id = ? ORDER BY timestamp ASC",
             (task_id,),
         ).fetchall()
-        return [
+        result = [
             TaskHistory(
                 id=r["id"],
                 task_id=r["task_id"],
@@ -1420,6 +1500,8 @@ class TaskService:
             )
             for r in rows
         ]
+        by_task[task_id] = result
+        return result
 
     def advance_rows_all(self) -> dict[str, list[tuple[str, str]]]:
         """Every `advance_task` history row in the project, grouped by task id

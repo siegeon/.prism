@@ -812,6 +812,19 @@ class ConductorService:
         # conformance note (intended-vs-observed layer-edge diff).
         self._memory_svc: Optional[Any] = None
         self._project_name: str = ""
+        # Tick-cost pass (external fixer, owner brief 2026-09-13):
+        # _median_step_s/_per_step_typical both re-derive their medians
+        # (regex + datetime.fromisoformat over EVERY advance_task row in the
+        # project) from scratch on every call, and phase_progress calls them
+        # ONCE PER MANAGED TASK -- so a 58-task /api/conductor/state render
+        # redid the identical project-wide computation 58 times (measured:
+        # ~0.6s of a ~1.2s in-process render). advance_rows_all() already
+        # caches the RAW rows behind a data_version stamp and returns the
+        # SAME dict object on a hit (task 9974d407) -- these two caches key
+        # off that object's identity, so they invalidate in lockstep with
+        # the rows they're derived from with no separate staleness clock.
+        self._median_step_cache: Optional[tuple[Any, float]] = None
+        self._per_step_typical_cache: Optional[tuple[Any, tuple[dict, dict]]] = None
         self._ensure_meta_schema()
         if not enable_engine:
             return
@@ -5757,6 +5770,9 @@ class ConductorService:
             by_task = self._task_svc.advance_rows_all()
         except Exception:
             return self._TYPICAL_S_FALLBACK
+        cached = self._median_step_cache
+        if cached is not None and cached[0] is by_task:
+            return cached[1]
         gaps: list[float] = []
         for rows in by_task.values():
             advs = [self._parse_iso(ts) for ts, _details in rows]
@@ -5765,12 +5781,16 @@ class ConductorService:
                 if b > a:
                     gaps.append(b - a)
         if not gaps:
-            return self._TYPICAL_S_FALLBACK
-        gaps.sort()
-        n = len(gaps)
-        mid = n // 2
-        med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
-        return med if med > 0 else self._TYPICAL_S_FALLBACK
+            med = self._TYPICAL_S_FALLBACK
+        else:
+            gaps.sort()
+            n = len(gaps)
+            mid = n // 2
+            med = gaps[mid] if n % 2 else (gaps[mid - 1] + gaps[mid]) / 2.0
+            if med <= 0:
+                med = self._TYPICAL_S_FALLBACK
+        self._median_step_cache = (by_task, med)
+        return med
 
     def _per_step_typical(self) -> tuple[dict, dict]:
         """Per-step median dwell time, LEARNED from advance_task history (so it
@@ -5788,6 +5808,9 @@ class ConductorService:
             by_task = self._task_svc.advance_rows_all()
         except Exception:
             return out, counts
+        cached = self._per_step_typical_cache
+        if cached is not None and cached[0] is by_task:
+            return cached[1]
         buckets: dict = {}
         for rows in by_task.values():
             advs = []
@@ -5807,6 +5830,7 @@ class ConductorService:
             if med > 0:
                 out[step] = med
                 counts[step] = n
+        self._per_step_typical_cache = (by_task, (out, counts))
         return out, counts
 
     def _eta_s(self, current_step: str, in_step_s: float,
