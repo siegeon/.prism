@@ -46,13 +46,28 @@ def test_use_changes_polls_the_changes_endpoint():
     assert "/api/changes" in src
 
 
-def test_use_changes_runs_exactly_one_interval_module_scope():
+def test_use_changes_runs_exactly_one_self_rescheduling_timer_module_scope():
     src = _read(_USE_CHANGES)
-    # Module-scope singleton, not one setInterval per component instance --
-    # the exact bug class sharedStream.ts/useConductorState.ts already
-    # exist to prevent for SSE and /api/conductor/state.
-    assert src.count("setInterval(") == 1, \
-        "useChanges must run exactly one shared poll timer, not one per subscriber"
+    # Module-scope singleton, not one timer per component instance -- the
+    # exact bug class sharedStream.ts/useConductorState.ts already exist to
+    # prevent for SSE and /api/conductor/state. A self-rescheduling
+    # setTimeout (armed once per poll, never a bare fixed setInterval) is
+    # what lets the backoff below stretch the gap without ever having two
+    # timers ticking at once.
+    assert "let timer: ReturnType<typeof setTimeout>" in src
+    assert src.count("setTimeout(runAndReschedule") == 1
+
+
+def test_use_changes_backs_off_after_repeated_failures_against_an_old_backend():
+    src = _read(_USE_CHANGES)
+    # Live measurement (2026-09-13): polling a 404 (an older backend that
+    # predates GET /api/changes) at 1Hz forever costs ~60 req/min for zero
+    # benefit. After a few consecutive failures the poll must stretch out,
+    # and the very next success must snap it back to full cadence.
+    assert "FAILURES_BEFORE_BACKOFF" in src
+    assert "BACKOFF_MS" in src
+    assert "consecutiveFailures = 0" in src, \
+        "a success must reset the failure count back to full 1Hz cadence"
 
 
 def test_use_changes_stops_polling_while_the_tab_is_hidden():
