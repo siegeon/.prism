@@ -84,7 +84,10 @@ def test_dispatch_guard_park_releases_both_seats(project, monkeypatch):
     body = r.json()
     assert body["ok"] is True
     assert body["unparked"] is True
-    assert sorted(body["released"]) == ["dispatch_guard", "resume_actuator"]
+    # SUPERSEDED by task_runner joining the seat set (step-retry park
+    # release): the route now resets all THREE seats' counters, not two.
+    assert sorted(body["released"]) == [
+        "dispatch_guard", "resume_actuator", "task_runner"]
     assert body["primary"] == "dispatch_guard"
     # Both seats' release() ran, so both counters' resets landed —
     # never just the seat named by the current blocked_reason prefix.
@@ -130,7 +133,10 @@ def test_resume_actuator_park_releases_both_seats(project, monkeypatch):
     body = r.json()
     assert body["ok"] is True
     assert body["unparked"] is True
-    assert sorted(body["released"]) == ["dispatch_guard", "resume_actuator"]
+    # SUPERSEDED by task_runner joining the seat set (step-retry park
+    # release): the route now resets all THREE seats' counters, not two.
+    assert sorted(body["released"]) == [
+        "dispatch_guard", "resume_actuator", "task_runner"]
     assert body["primary"] == "resume_actuator"
     assert dg_calls == [(project, tid, "human")]
     assert ra_calls == [(project, tid, "human")]

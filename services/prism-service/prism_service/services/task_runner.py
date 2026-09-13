@@ -79,6 +79,17 @@ ATTEMPT_ACTION = "runner_attempt"
 # lands on, so the stall budget is counted from it — see _stall_count.
 # Written by ConductorService's rewind path as this exact action name.
 REWIND_ACTION = "auto_rewind"
+# Prefix `_handle_stall`'s blocked_reason carries going forward, so
+# POST /api/conductor/park/release (previously only dispatch-guard: and
+# resume-actuator:) can recognise this as a governance park too — before
+# this, a step-retry park had NO release path at all (7 of 19 blocked
+# tasks live, task <step-retry-release>). `release()` below also accepts
+# the pre-existing unprefixed wording ("step <name> did not advance after
+# N attempts") already sitting on tasks parked before this fix.
+PARK_PREFIX = "step-retry:"
+_LEGACY_PARK_RE = re.compile(
+    r"step \S+ did not advance after \d+ attempts")
+RELEASED_ACTION = "task_runner_released"
 _TEST_ID_RE = re.compile(r"(?m)(?:^|\s)((?:[\w./-]+)\.py::[\w\[\]./:-]+)")
 
 
@@ -1633,6 +1644,48 @@ def _demo_rubric_already_satisfied(task) -> bool:
         return False
 
 
+def is_step_retry_park(blocked_reason) -> bool:
+    """True for a blocked_reason `_handle_stall` wrote — the new
+    `step-retry:`-prefixed form, or the pre-existing unprefixed
+    "step <name> did not advance after N attempts" wording already on
+    tasks parked before this fix existed."""
+    reason = str(blocked_reason or "")
+    return reason.startswith(PARK_PREFIX) or bool(_LEGACY_PARK_RE.search(reason))
+
+
+def release(project: str, task_id: str, actor: str = "human") -> dict:
+    """The human 'the cause is fixed, try again' signal for a task
+    `_handle_stall` parked on step-retry exhaustion (mirrors
+    dispatch_guard.release / resume_actuator.release).
+
+    Only lifts a park THIS module made (blocked_reason matches
+    `is_step_retry_park`); any other blocked_reason is left untouched.
+    Resetting the stall budget needs no separate counter store: flipping
+    status blocked->in_progress here writes an "updated" history row
+    that `_stall_count`'s own `_OPERATOR_RESET_RE` already recognises as
+    a fresh-mandate boundary, so the next tick's count starts at 0.
+    """
+    from prism_service.project_context import get_project
+
+    ctx = get_project(project)
+    task = ctx.task_svc.get(task_id)
+    if task is None:
+        return {"ok": False, "task_id": task_id, "reason": "no such task"}
+    status = str(getattr(task, "status", "") or "")
+    reason = str(getattr(task, "blocked_reason", "") or "")
+    parked_by_runner = status == "blocked" and is_step_retry_park(reason)
+    if parked_by_runner:
+        ctx.task_svc.update(task_id, status="in_progress", blocked_reason="")
+    ctx.task_svc.record_history(
+        task_id, action=RELEASED_ACTION,
+        details=(f"released by {actor}; "
+                 + ("unparked to in_progress, stall budget reset"
+                    if parked_by_runner
+                    else f"status left as {status or 'unknown'}")),
+        actor=actor)
+    return {"ok": True, "task_id": task_id, "unparked": parked_by_runner}
+
+
 def _handle_stall(task_svc, task_id: str, step_id: str,
                   project: str = "") -> dict:
     """Fourth tick on a stalled step: close if shipped, else decompose or
@@ -1839,6 +1892,7 @@ def _handle_stall(task_svc, task_id: str, step_id: str,
         # write documents, not tests, so no red test id could exist here.
         reason += ("the step did not produce a usable report. This step writes "
                    "a document rather than tests, so no red test id could exist yet")
+    reason = f"{PARK_PREFIX} {reason}"
     task_svc.update(task_id, status="blocked", blocked_reason=reason)
     task_svc.record_history(task_id, action="runner_stall",
                             details=reason, actor=SEAT_ID)
