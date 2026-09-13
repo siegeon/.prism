@@ -5928,18 +5928,42 @@ class ConductorService:
     def _phase_progress_cache_key(self, task_id: str,
                                    heartbeat_cache: Optional[dict]) -> tuple:
         """Cache key for `phase_progress(task_id)`: (this task's own
-        updated_at, the tasks.db-wide PRAGMA data_version, this task's own
+        updated_at, a stamp over THIS task's own children, this task's own
         latest heartbeat recorded_at). updated_at changes on ANY column
         write to this row (task_service.py's update() stamps it); the
-        data_version component is the superset that also covers a CHILD
-        row changing (phase_progress's children_done/children_total ratio
-        depends on them) since PRAGMA data_version bumps on any write to
-        the file, not just this row. The heartbeat component catches the
-        case neither of those two see: this task's own live transcript
-        growing (tokens_since_step/token_turns/session_quiet_s) between
-        two task-row-unchanged polls -- a heartbeat is recorded by the
-        SAME step agent that is writing that transcript, so a fresh beat
-        is the signal that those numbers actually moved.
+        children stamp is the superset that also covers a CHILD row
+        changing (phase_progress's children_done/children_total ratio
+        depends on them). The heartbeat component catches the case neither
+        of those two see: this task's own live transcript growing
+        (tokens_since_step/token_turns/session_quiet_s) between two
+        task-row-unchanged polls -- a heartbeat is recorded by the SAME
+        step agent that is writing that transcript, so a fresh beat is the
+        signal that those numbers actually moved.
+
+        TASK-SCOPED, not file-wide (measured 2026-09-13). This used to key
+        on `_db_change_stamp()` (`PRAGMA data_version`, a WHOLE-FILE write
+        counter) purely to notice a child moving, and that was wrong in
+        BOTH directions. LIVE it over-fired: data_version moves whenever
+        ANY other connection commits, and the worker host is a separate
+        process writing heartbeats/history rows continuously, so one busy
+        task evicted every managed task's cached progress on nearly every
+        request -- each miss re-reading and re-parsing live transcript
+        JSONL, which is the 400-505ms measured on /api/conductor/state.
+        IN-PROCESS it under-fired: data_version stays put for our OWN
+        connection's commits, so a child written through this same service
+        never invalidated its parent at all (pinned by
+        test_phase_progress_cache_is_task_scoped.py).
+
+        The children stamp below is `self._task_svc.list(parent_id=task_id)`
+        -- the SAME parent_id-scoped read `_phase_progress_uncached` and
+        `_children()` already issue for this task_id -- so it costs ZERO
+        additional SQL: TaskService.list() memoizes per parent_id per
+        db-write-generation (`_parent_list_cache`), so whichever of the
+        three call sites runs first for a given task_id pays the query and
+        the other two are dict hits. Do not replace this with a fresh
+        COUNT/MAX statement -- that would double the parent_id-scoped
+        fanout per task (see
+        test_conductor_state_parent_scoped_reads_are_not_reissued_per_task).
 
         Known, accepted gap (owner brief 2026-09-13 asked for this exact
         trade): an EPIC's aggregated child-session tokens (via
@@ -5955,16 +5979,22 @@ class ConductorService:
             except Exception:
                 updated_at = ""
         try:
-            data_version = (
-                self._task_svc._db_change_stamp()
-                if self._task_svc is not None else 0)
+            if self._task_svc is not None:
+                kids = self._task_svc.list(parent_id=task_id)
+                children_stamp = (
+                    len(kids),
+                    max((getattr(c, "updated_at", "") or "" for c in kids),
+                        default=""),
+                )
+            else:
+                children_stamp = (0, "")
         except Exception:
-            data_version = 0
+            children_stamp = (0, "")
         beat_marker = None
         if heartbeat_cache is not None:
             beat = heartbeat_cache.get(task_id)
             beat_marker = beat.get("recorded_at") if beat else None
-        return (updated_at, data_version, beat_marker)
+        return (updated_at, children_stamp, beat_marker)
 
     def phase_progress(self, task_id: str,
                         heartbeat_cache: Optional[dict] = None) -> dict:
