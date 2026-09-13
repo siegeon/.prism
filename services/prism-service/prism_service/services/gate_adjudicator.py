@@ -277,25 +277,45 @@ def _rotate_from_cursor(tasks: list, cursor_tid: str) -> list:
 # next tick; its memo is never written, so it is retried, never dropped.
 _SWEEP_BUDGET_S = 2.0
 
-# Ceiling on back-to-back FORCED passes `_loop` runs right after warmup to
-# drain a real boot-time backlog (task a65c66e5, third round) -- a backstop
-# against a pathological signal loop, never expected to bind in practice
-# (31 real pending gates drained in a handful of passes live); if it ever
-# does, the loop falls through to normal reactive waiting rather than
-# holding up startup forever.
+# Ceiling on back-to-back FORCED passes within ONE BURST (task a65c66e5,
+# third round) -- a backstop against a pathological signal loop, never
+# expected to bind in practice; if it ever does, the burst ends (see
+# _MAX_BOOT_DRAIN_SECONDS below for what happens next).
 _MAX_BOOT_DRAIN_PASSES = 25
 
-# WALL-CLOCK ceiling on the WHOLE boot-drain sequence (task a65c66e5,
-# fourth round, 2026-09-13): live, individual passes were observed taking
-# ~20s each (one slow adjudication -- a git op or evidence re-mint -- not a
-# bug in this loop; _SWEEP_BUDGET_S only gates STARTING the next task,
-# never bounds one already running), so a pass-count ceiling alone could
-# still burn real minutes. Since the worker host runs as its own process
-# separate from the API (task workerproc, 7.13.341+), this no longer risks
-# delaying a live request the way it would have before that split -- but
-# CPU and correctness still matter, so the drain still gives up and goes
-# reactive well before it could look "stuck" to an operator.
+# WALL-CLOCK ceiling on ONE BURST (task a65c66e5, fourth round,
+# 2026-09-13): live, individual passes were observed taking ~20s each (one
+# slow adjudication -- a git op or evidence re-mint -- not a bug in this
+# loop; _SWEEP_BUDGET_S only gates STARTING the next task, never bounds one
+# already running), so a pass-count ceiling alone could still burn real
+# minutes in one uninterrupted stretch. Since the worker host runs as its
+# own process separate from the API (task workerproc, 7.13.341+), a long
+# burst no longer risks delaying a live request the way it would have
+# before that split -- but CPU and correctness still matter, so a burst
+# still yields well before it could look "stuck" to an operator.
+#
+# THIS BOUNDS A BURST, NEVER THE LAP (task a65c66e5, fifth round, owner
+# 2026-09-13: on an idle system there is no task_changed traffic to wake a
+# stalled drive, so a lap that simply stopped here mid-backlog would leave
+# the rest -- a65c66e5 included -- waiting for a signal that never comes).
+# When a burst caps out with the lap not yet converged (still eligible >
+# changed), `_loop` yields for `_BOOT_DRAIN_YIELD_S` -- via THIS worker's
+# own one-off wait() timeout, never the global PRISM_WORKER_FALLBACK_S --
+# then starts a fresh burst with its own budget, repeating until one full
+# lap completes (nothing left deferred) or `_MAX_LAP_BURSTS` is hit.
 _MAX_BOOT_DRAIN_SECONDS = 60.0
+
+# Short yield between bursts of the SAME lap (task a65c66e5, fifth round).
+# Long enough that a genuinely busy box gets real breathing room between
+# bursts; short enough that a lap self-continues promptly on an idle one
+# rather than looking stalled.
+_BOOT_DRAIN_YIELD_S = 5.0
+
+# Backstop on the WHOLE lap (all bursts combined) -- never expected to
+# bind for a real backlog (a lap making any progress at all converges long
+# before this), but a lap that is somehow never converging must still give
+# up and go reactive rather than yield-and-retry forever.
+_MAX_LAP_BURSTS = 50
 
 
 def _project_needs_scan(pid: str, wakeups_mod) -> bool:
@@ -661,7 +681,10 @@ def _loop(interval_s: int) -> None:
     first_pass = True
     boot_drain_passes = 0
     boot_drain_started: Optional[float] = None
-    boot_drain_decided = 0
+    lap_started: Optional[float] = None
+    lap_total_passes = 0
+    lap_total_decided = 0
+    lap_bursts = 0
     while True:
         # THE FIRST PASS(ES) AFTER WARMUP ARE UNCONDITIONAL (task a65c66e5,
         # 2026-09-13, second and third rounds): relying on a `deployed`
@@ -719,41 +742,65 @@ def _loop(interval_s: int) -> None:
             # task -- it never bounds one already running, and a real
             # pass was observed taking ~20s (one slow adjudication, not a
             # bug in this loop) -- so a real 31-gate backlog was merely
-            # DEFERRED after just one forced pass, and once reactive, a
-            # deferred task's own eventual write happens BEFORE the
-            # post-sweep wait() baseline below, so it can never
-            # self-trigger the very re-look it still needs; it sits stuck
-            # until some UNRELATED external signal happens to arrive.
-            # `eligible_count > changed_count` on a FORCED pass (backoff
-            # is bypassed, so the only reason something is not "changed"
-            # is the time budget) means real work is still waiting -- so
-            # force another pass immediately, no wait() in between.
-            #
-            # BOUNDED TWO WAYS (owner 2026-09-13, third round: the worker
-            # host is a separate process from the API since 7.13.341, so
-            # this no longer risks delaying a live request -- but CPU and
-            # correctness still matter): a pass-count ceiling
-            # (_MAX_BOOT_DRAIN_PASSES) AND a wall-clock ceiling
-            # (_MAX_BOOT_DRAIN_SECONDS) on the WHOLE drain sequence, since
-            # a handful of ~20s passes can burn real minutes otherwise. A
-            # single-gate boot (the shape this seat's own tests pin)
-            # drains in exactly one pass, since nothing there ever hits
-            # the per-pass budget.
+            # DEFERRED after just one forced pass. `eligible_count >
+            # changed_count` on a FORCED pass (backoff is bypassed, so
+            # the only reason something is not "changed" is the time
+            # budget) means real work is still waiting -- so force
+            # another pass immediately, no wait() in between: one BURST.
+            if lap_started is None:
+                lap_started = time.monotonic()
             if boot_drain_started is None:
                 boot_drain_started = time.monotonic()
             boot_drain_passes += 1
-            boot_drain_decided += len(approved)
+            lap_total_passes += 1
+            lap_total_decided += len(approved)
             drain_elapsed_s = time.monotonic() - boot_drain_started
-            still_draining = (_last_eligible_count > _last_changed_count
-                              and boot_drain_passes < _MAX_BOOT_DRAIN_PASSES
-                              and drain_elapsed_s < _MAX_BOOT_DRAIN_SECONDS)
-            if still_draining:
-                continue
-            first_pass = False
-            _summary = (f"drain: {boot_drain_passes} passes, "
+            lap_converged = _last_eligible_count <= _last_changed_count
+            burst_capped = (boot_drain_passes >= _MAX_BOOT_DRAIN_PASSES
+                           or drain_elapsed_s >= _MAX_BOOT_DRAIN_SECONDS)
+            if not lap_converged and not burst_capped:
+                continue  # same burst, no wait() at all
+            if not lap_converged and burst_capped:
+                # THE CAP BOUNDS A BURST, NEVER THE LAP (owner 2026-09-13,
+                # fifth round): on an idle system there is no
+                # task_changed/shipped traffic to ever wake a lap that
+                # simply stopped here -- the rest of the backlog (a task
+                # positioned late enough, like a65c66e5 live) would wait
+                # for a signal that never comes. So a capped-but-
+                # unconverged burst SELF-CONTINUES: yield for
+                # `_BOOT_DRAIN_YIELD_S` via THIS worker's own one-off
+                # wait() timeout (never the global PRISM_WORKER_FALLBACK_S
+                # fallback -- other worker cadences are untouched), then
+                # start a fresh burst with its own budget. Bounded overall
+                # by `_MAX_LAP_BURSTS` so a genuinely non-converging lap
+                # still gives up eventually rather than yield-and-retry
+                # forever.
+                lap_bursts += 1
+                if lap_bursts >= _MAX_LAP_BURSTS:
+                    _log(f"lap gave up after {_MAX_LAP_BURSTS} bursts "
+                         f"({lap_total_passes} passes total) without "
+                         "converging -- going reactive anyway")
+                    first_pass = False
+                else:
+                    _log(f"burst capped mid-lap: {boot_drain_passes} "
+                         f"passes this burst, {_last_eligible_count} "
+                         f"gates, {_last_changed_count} changed -- "
+                         f"yielding {_BOOT_DRAIN_YIELD_S:.0f}s then "
+                         "continuing the same lap")
+                    boot_drain_passes = 0
+                    boot_drain_started = None
+                    wakeups.wait(["task_changed", "shipped", "deployed"],
+                                 timeout=_BOOT_DRAIN_YIELD_S)
+                    continue
+            else:
+                first_pass = False
+            lap_elapsed_s = time.monotonic() - lap_started
+            _summary = (f"drain: {lap_total_passes} passes "
+                       f"({lap_bursts + 1} burst"
+                       f"{'s' if lap_bursts else ''}), "
                        f"{_last_eligible_count} gates, "
-                       f"{boot_drain_decided} decided, "
-                       f"{drain_elapsed_s:.1f}s")
+                       f"{lap_total_decided} decided, "
+                       f"{lap_elapsed_s:.1f}s")
             _log(_summary)
             try:
                 with system_activity.pass_(
