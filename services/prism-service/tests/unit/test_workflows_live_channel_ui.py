@@ -31,34 +31,25 @@ def _block(src: str, anchor: str) -> str:
     raise AssertionError(f"unbalanced braces after {anchor!r}")
 
 
-def test_the_hook_polls_the_live_route_every_1000ms():
+def test_the_hook_reads_the_live_route_via_the_shared_sse_gate():
+    # Task fix/polling (SSE coordination round): a node's live state now
+    # reaches the screen via a real GET /sse/changes task_changed push
+    # (usePolledResource), not a bare 1000ms setTimeout poll -- "very fast
+    # linked to view" is satisfied by the push itself, not a fixed clock.
     src = _HOOK.read_text(encoding="utf-8")
-    assert "const POLL_MS = 1000;" in src, (
-        "the live channel must poll at 1000ms -- a node's live state has "
-        "to reach the screen in about a second")
     assert "/api/workflows/live" in src
+    assert "usePolledResource" in src
+    assert "TASK_CHANGED_KINDS" in src
+    assert "setTimeout(" not in src
+    assert "setInterval(" not in src
 
 
-def test_the_hook_pauses_while_hidden_and_resumes_on_visibilitychange():
+def test_the_hook_keeps_its_external_contract_unchanged():
+    # The Workflows canvas (owned by a sibling fixer) calls
+    # useWorkflowLive(project) and reads a WorkflowLivePayload | null --
+    # that contract must survive the poll -> push swap unchanged.
     src = _HOOK.read_text(encoding="utf-8")
-    tick = _block(src, "const tick = ()")
-    assert 'document.visibilityState !== "visible") return;' in tick, (
-        "a hidden tab must not keep polling every second in the background")
-    listener = _block(src, "const onVisibility = ()")
-    assert 'document.visibilityState === "visible"' in listener
-    assert "tick();" in listener, (
-        "visibilitychange must resume the poll IMMEDIATELY, not wait for "
-        "the next tick")
-    assert 'addEventListener("visibilitychange", onVisibility)' in src
-
-
-def test_the_hook_backs_off_after_three_consecutive_failures():
-    src = _HOOK.read_text(encoding="utf-8")
-    assert "const BACKOFF_MS = 5000;" in src
-    assert "const FAILURES_BEFORE_BACKOFF = 3;" in src
-    catch_block = _block(src, ".catch(() => {")
-    assert "failures += 1;" in catch_block
-    assert "failures >= FAILURES_BEFORE_BACKOFF" in catch_block
+    assert "export function useWorkflowLive(project: string): WorkflowLivePayload | null {" in src
 
 
 def test_the_page_overlays_live_data_under_the_same_freeze_guard():
