@@ -43,13 +43,14 @@ def setup_function(_fn) -> None:
 def test_changed_since_reports_a_kind_newer_than_the_baseline():
     since = time.time()
     time.sleep(0.01)
-    wakeups.signal("task_changed", "prism")
+    wakeups.signal("task_changed", "prism", task_id="t-1")
     changes = wakeups.changed_since({"task_changed", "shipped"}, "prism", since)
     assert len(changes) == 1
-    kind, project, ts = changes[0]
+    kind, project, ts, task_id = changes[0]
     assert kind == "task_changed"
     assert project == "prism"
     assert ts > since
+    assert task_id == "t-1"
 
 
 def test_changed_since_ignores_a_signal_before_the_baseline():
@@ -84,6 +85,36 @@ def test_changed_since_reports_each_kind_that_moved():
 
 
 # ---------------------------------------------------------------------------
+# debug_sources -- GET /api/changes?debug=1's "which call site is noisy"
+# ---------------------------------------------------------------------------
+
+def test_debug_sources_names_the_calling_file_and_line():
+    wakeups.signal("task_changed", "prism")
+    sources = wakeups.debug_sources()
+    assert len(sources) == 1
+    row = sources[0]
+    assert row["kind"] == "task_changed"
+    assert "test_sse_changes.py:" in row["source"]
+    assert row["count"] == 1
+
+
+def test_debug_sources_counts_repeat_calls_from_the_same_site():
+    for _ in range(3):
+        wakeups.signal("activity", "prism")
+    sources = wakeups.debug_sources()
+    assert sources[0]["count"] == 3
+
+
+def test_debug_sources_ranks_the_busiest_site_first():
+    for _ in range(5):
+        wakeups.signal("task_changed", "prism")
+    wakeups.signal("shipped", "prism")
+    sources = wakeups.debug_sources()
+    assert sources[0]["kind"] == "task_changed"
+    assert sources[0]["count"] == 5
+
+
+# ---------------------------------------------------------------------------
 # GET /sse/changes -- the real generator, driven directly (see _FakeRequest
 # above: TestClient's synchronous HTTP layer buffers a StreamingResponse's
 # chunks unpredictably against an infinite generator, which hung a first
@@ -107,11 +138,12 @@ def test_sse_changes_streams_a_real_signal_to_a_connected_client():
         assert first == b": connected\n\n"
         # Signal from THIS (the test) process -- the same-process path,
         # picked up via the in-memory threading.Condition notify_all().
-        wakeups.signal("task_changed", "prism")
+        wakeups.signal("task_changed", "prism", task_id="t-42")
         event = await _next_data_event(gen)
         assert event["kind"] == "task_changed"
         assert event["project"] == "prism"
-        assert isinstance(event["counter"], (int, float))
+        assert event["task_id"] == "t-42"
+        assert isinstance(event["at"], (int, float))
         await gen.aclose()
 
     asyncio.run(run())
