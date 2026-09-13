@@ -110,7 +110,22 @@ def _bounded(deadline: float, fn, *args, **kwargs):
     in time -- the caller then falls back to a best-effort default instead
     of blocking. See the module-level comments above: an abandoned call is
     safe to leave running, and is DEDUPED against the identical (fn, args)
-    call from a later poll rather than resubmitted."""
+    call from a later poll rather than resubmitted.
+
+    Only the poll that actually SUBMITS a fresh call pays the per-call
+    timeout wait -- live instance, task: graph route pegged at a flat
+    ~0.4s (== _GRAPH_CALL_TIMEOUT_S) on every single poll, warm or not.
+    Root cause: a call already in flight from an earlier poll (reused via
+    the dedup above, never cancelled) still made EVERY subsequent poll
+    block for its own fresh `min(_GRAPH_CALL_TIMEOUT_S, remaining)` wait on
+    that same still-pending future, one full timeout per request forever
+    while the underlying transcript read stays slower than the timeout.
+    A poll that only reused someone else's in-flight call gains nothing by
+    waiting the full budget on it again -- it does a near-zero, non-blocking
+    check instead (timeout=0 still gets the value for free the moment the
+    call happens to land in that instant) and otherwise treats it exactly
+    like a fresh timeout: not ready this poll, degrade gracefully, the
+    background read keeps warming the cache for next time."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return None, False
@@ -118,11 +133,13 @@ def _bounded(deadline: float, fn, *args, **kwargs):
            tuple(sorted(kwargs.items())))
     with _INFLIGHT_LOCK:
         fut = _INFLIGHT.get(key)
-        if fut is None or fut.done():
+        fresh = fut is None or fut.done()
+        if fresh:
             fut = _GRAPH_IO_POOL.submit(fn, *args, **kwargs)
             _INFLIGHT[key] = fut
+    wait = min(_GRAPH_CALL_TIMEOUT_S, remaining) if fresh else 0.0
     try:
-        return fut.result(timeout=min(_GRAPH_CALL_TIMEOUT_S, remaining)), True
+        return fut.result(timeout=wait), True
     except Exception:
         return None, False
 
