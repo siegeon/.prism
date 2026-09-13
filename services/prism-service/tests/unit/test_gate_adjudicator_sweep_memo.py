@@ -58,6 +58,7 @@ def setup_function(_):
     ga._BACKOFF.clear()
     ga._LAST_PROJECT_SCAN.clear()
     ga._LAST_PROJECT_ELIGIBLE.clear()
+    ga._LAST_PROJECT_CURSOR.clear()
     gam.reset_for_tests()
     wakeups._reset_for_tests()
 

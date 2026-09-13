@@ -237,6 +237,39 @@ _last_top_slow: list[tuple[str, float]] = []
 _LAST_PROJECT_SCAN: dict[str, float] = {}
 _LAST_PROJECT_ELIGIBLE: dict[str, int] = {}
 
+# FAIRNESS CURSOR (task a65c66e5, fourth round, 2026-09-13). Every pass used
+# to walk a project's gate-eligible tasks starting from the SAME position
+# every time -- fine while the whole backlog fits in one _SWEEP_BUDGET_S
+# window, but live, two tasks positioned early in that stable order (see
+# the `inconclusive` backoff fix just above) ate an ever-larger slice of
+# every single pass, so nothing behind them in the list -- a65c66e5
+# included -- was EVER reached across 10 consecutive passes. Holds the id
+# of the last gate-eligible task each pass actually reached (whether
+# processed, backed off, or merely deferred by the time budget), so the
+# NEXT pass resumes right after it instead of restarting at the front --
+# round-robin across passes, never favoring the same prefix forever.
+_LAST_PROJECT_CURSOR: dict[str, str] = {}
+
+
+def _rotate_from_cursor(tasks: list, cursor_tid: str) -> list:
+    """`tasks`, sorted by id for a stable total order, rotated to start
+    just AFTER `cursor_tid`. Works even when the cursor's own task has
+    since left the pending-gate set entirely (approved, rewound,
+    reassigned) -- it resumes at the first remaining id greater than the
+    cursor, and wraps to the front once nothing sorts higher (a full lap
+    completed, so the next lap starts over)."""
+    ids_and_tasks = sorted(
+        tasks,
+        key=lambda t: (t.get("id") if isinstance(t, dict)
+                      else getattr(t, "id", "")) or "")
+    if not cursor_tid:
+        return ids_and_tasks
+    for i, t in enumerate(ids_and_tasks):
+        tid = t.get("id") if isinstance(t, dict) else getattr(t, "id", "")
+        if tid > cursor_tid:
+            return ids_and_tasks[i:] + ids_and_tasks[:i]
+    return ids_and_tasks
+
 # Wall-clock ceiling on the EXPENSIVE half of one sweep_once() pass (actual
 # rubric/oracle/git adjudication of a task whose key changed) -- owner
 # 2026-09-13: no background pass may hold the GIL long enough to delay a
@@ -340,7 +373,9 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
         except Exception as exc:
             _log(f"{pid}: project unavailable ({exc})")
             continue
+        tasks = _rotate_from_cursor(tasks, _LAST_PROJECT_CURSOR.get(pid, ""))
         project_eligible = 0
+        last_gate_tid = ""
         for t in tasks:
             step = t.get("workflow_step") if isinstance(t, dict) \
                 else getattr(t, "workflow_step", "")
@@ -402,13 +437,23 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
             eligible_count += 1
             project_eligible += 1
             if not force_backoff and _backoff_should_skip(tid, t):
+                # A REAL decision was made about this task this pass
+                # ("not now, still in cooldown") -- the fairness cursor
+                # advances past it so the next pass does not keep
+                # re-deciding the same thing at the same position.
+                last_gate_tid = tid
                 continue
             if time.monotonic() > deadline:
                 # Over the per-sweep time budget (owner 2026-09-13: no
                 # background pass may hold the GIL long enough to delay a
                 # live request). Leave this task's memo untouched so the
-                # NEXT tick retries it -- deferred, never dropped.
+                # NEXT tick retries it -- deferred, never dropped. Do NOT
+                # advance the fairness cursor here (task a65c66e5, fourth
+                # round): this task never got a real look at all, so it
+                # must be the FIRST thing the next pass reaches, not
+                # something rotation skips past a second time.
                 continue
+            last_gate_tid = tid
             changed_count += 1
             _task_started = time.monotonic()
             try:
@@ -514,7 +559,22 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
                     if task is not None and step == "green_gate":
                         from prism_service.services import green_rewind
                         rw = green_rewind.maybe_rewind(ctx, task, pid)
-                        if rw:
+                        # task a65c66e5, fourth round: `rw.get("inconclusive")`
+                        # is a THIRD, non-terminal shape -- the receipt exists
+                        # but could not be judged (ST_MANUAL/ST_ERROR), so
+                        # maybe_rewind only re-stamps gate_reason and makes NO
+                        # state change at all. Treating it the same as a real
+                        # rewind/park (`continue`, skipping the backoff write
+                        # below) meant a manual-evidence green_gate NEVER got a
+                        # backoff entry and was re-attempted on every single
+                        # pass forever -- live, tasks 09dd9464/7a72ebcb ate an
+                        # ever-larger share of each pass's time budget this
+                        # way, crowding out the rest of a real backlog. Only a
+                        # genuine terminal outcome (a rewind, or the rewind
+                        # budget spent) should skip the normal decline/backoff
+                        # path below; the inconclusive stamp must fall through
+                        # to it like any other non-decided gate.
+                        if rw and not rw.get("inconclusive"):
                             _log(f"{pid}/{tid[:8]}: green_gate rewind "
                                  f"-> {rw.get('to_step') or 'parked'}")
                             continue
@@ -567,6 +627,8 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
                     _log(f"{pid}/{tid[:8]}: reason-surface skipped ({exc})")
         _LAST_PROJECT_SCAN[pid] = time.time()
         _LAST_PROJECT_ELIGIBLE[pid] = project_eligible
+        if last_gate_tid:
+            _LAST_PROJECT_CURSOR[pid] = last_gate_tid
     _last_eligible_count = eligible_count
     _last_changed_count = changed_count
     _last_decided_count = decided_count

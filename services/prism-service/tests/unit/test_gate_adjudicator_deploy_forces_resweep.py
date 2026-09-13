@@ -63,6 +63,7 @@ def setup_function(_):
     ga._BACKOFF.clear()
     ga._LAST_PROJECT_SCAN.clear()
     ga._LAST_PROJECT_ELIGIBLE.clear()
+    ga._LAST_PROJECT_CURSOR.clear()
     gam.reset_for_tests()
     wakeups._reset_for_tests()
 
@@ -346,3 +347,125 @@ def test_top_3_slowest_tasks_are_surfaced(monkeypatch):
     slow_ids = [t for t, _ in ga._last_top_slow]
     assert slow_ids == ["t0", "t2", "t4"], ga._last_top_slow
     assert len(ga._last_top_slow) == 3
+
+
+# ---------------------------------------------------------------------------
+# Fourth round continued: WHY task a65c66e5 was never reached at all -- two
+# real, distinct bugs found live from the instrumentation above.
+#
+# (1) green_rewind.maybe_rewind's "inconclusive" (manual-evidence-required)
+#     shape is truthy but represents NO decision and NO state change; the
+#     caller treated any truthy return as terminal and skipped the normal
+#     backoff write, so an inconclusive green_gate was retried on EVERY
+#     pass forever -- live, tasks 09dd9464/7a72ebcb ate an ever-larger
+#     share of the budget this way.
+# (2) sweep_once always walked a project's gate-eligible tasks starting
+#     from the same position -- fine until (1) let two tasks permanently
+#     consume most of the budget every pass, at which point nothing behind
+#     them (a65c66e5 included) was EVER reached, across 10 real passes.
+# ---------------------------------------------------------------------------
+
+
+def test_an_inconclusive_green_rewind_still_gets_a_backoff_entry(monkeypatch):
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = _make_tasks(1)
+    ctx, svc = _fake_ctx(tasks)
+    _wire(monkeypatch, ctx)
+    svc.adjudicate_green_gate = MagicMock(return_value={"ok": False})
+    monkeypatch.setattr(
+        "prism_service.services.green_rewind.maybe_rewind",
+        lambda *a, **k: {"ok": False, "inconclusive": True,
+                        "task_id": tasks[0].id, "status": "manual",
+                        "reason": "manual evidence required"})
+
+    ga.sweep_once(force=True)
+
+    assert tasks[0].id in ga._BACKOFF, (
+        "an inconclusive (manual-evidence) green_gate must still get a "
+        "backoff entry -- without one it is retried on every single pass "
+        "forever, live: tasks 09dd9464/7a72ebcb")
+
+
+def test_a_real_rewind_or_park_still_skips_the_backoff_write(monkeypatch):
+    """The fix must not over-correct: an ACTUAL rewind (ok=True) or a
+    spent rewind budget (parked=True) is a genuine terminal outcome for
+    this pass and must keep skipping the backoff write, exactly as
+    before."""
+    from prism_service.services import gate_adjudicator as ga
+
+    for shape in ({"ok": True, "task_id": "t0", "to_step": "implement_tasks"},
+                 {"ok": False, "parked": True, "task_id": "t0"}):
+        ga._BACKOFF.clear()
+        tasks = _make_tasks(1)
+        ctx, svc = _fake_ctx(tasks)
+        _wire(monkeypatch, ctx)
+        monkeypatch.setattr(
+            "prism_service.services.green_rewind.maybe_rewind",
+            lambda *a, **k: shape)
+        svc.adjudicate_green_gate = MagicMock(return_value={"ok": False})
+        ga.sweep_once(force=True)
+        assert tasks[0].id not in ga._BACKOFF, (
+            f"a real terminal outcome {shape} must still skip the backoff "
+            f"write (the task moved or parked, not merely re-stamped)")
+
+
+def test_rotate_from_cursor_resumes_right_after_it():
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}]
+    out = ga._rotate_from_cursor(tasks, "b")
+    assert [t["id"] for t in out] == ["c", "d", "a", "b"]
+
+
+def test_rotate_from_cursor_wraps_when_the_cursor_was_last():
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    out = ga._rotate_from_cursor(tasks, "c")
+    assert [t["id"] for t in out] == ["a", "b", "c"]
+
+
+def test_rotate_from_cursor_when_the_cursor_task_has_left_the_set():
+    """The cursor task itself may have been approved/rewound off the
+    pending-gate list entirely between passes -- resume at the first
+    remaining id that sorts after it, never restart at the front."""
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = [{"id": "a"}, {"id": "c"}, {"id": "d"}]
+    out = ga._rotate_from_cursor(tasks, "b")
+    assert [t["id"] for t in out] == ["c", "d", "a"]
+
+
+def test_rotate_from_cursor_with_no_cursor_yet_is_just_sorted():
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = [{"id": "c"}, {"id": "a"}, {"id": "b"}]
+    out = ga._rotate_from_cursor(tasks, "")
+    assert [t["id"] for t in out] == ["a", "b", "c"]
+
+
+def test_a_slow_prefix_no_longer_starves_the_rest_of_the_backlog(
+        monkeypatch):
+    """Integration shape of the live bug: each real adjudication costs
+    enough that only ONE task fits in a pass's budget -- fairness must
+    still let every task get a real look within a bounded number of
+    passes, not restart at the front forever."""
+    from prism_service.services import gate_adjudicator as ga
+
+    tasks = _make_tasks(6)
+    ctx, svc = _fake_ctx(tasks)
+    _wire(monkeypatch, ctx)
+    monkeypatch.setattr(ga, "_SWEEP_BUDGET_S", 0.05)
+
+    def fake_adjudicate(tid):
+        time.sleep(0.03)  # ~1 task fits per 0.05s budget window
+        return {"ok": False}
+
+    svc.adjudicate_green_gate = MagicMock(side_effect=fake_adjudicate)
+
+    for _ in range(6):
+        ga.sweep_once(force=True, force_backoff=False)
+    seen = set(ga._BACKOFF.keys())
+
+    assert seen == {f"t{i}" for i in range(6)}, seen
