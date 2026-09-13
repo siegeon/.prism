@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Activity, AppWindow, Bot, Brain, Eye, FolderTree, Inbox, Info,
@@ -6,11 +6,11 @@ import {
   Radio, ScrollText, Search, Settings, Shapes, Sparkles, Workflow,
   type LucideIcon,
 } from "lucide-react";
-import { api } from "@/lib/api";
 import { Lozenge } from "@/components/Lozenge";
 import { useProject } from "@/lib/project";
 import { useScanActivity } from "@/lib/scan-activity";
 import { useConductorState } from "@/lib/useConductorState";
+import { usePolledResource } from "@/lib/usePolledResource";
 import { currentTheme, toggleTheme } from "@/lib/theme";
 import { useVersion, useVersionNotes } from "@/lib/version";
 import { cn } from "@/lib/utils";
@@ -166,32 +166,20 @@ const SETTINGS_SECTIONS: Section[] = [
 
 type Staleness = { understand: boolean; graph: boolean; brain: boolean };
 
+const STALE_DEFAULT: Staleness = { understand: false, graph: false, brain: false };
+
+// Task fix/polling (2026-09-13): this used to run its own bare 5s
+// setInterval in every mounted tab (task c38ef597 already stopped that in
+// background tabs, but a foregrounded idle tab with nothing stale still
+// re-fetched every 5s forever). usePolledResource gates the same fetch on
+// the shared /api/changes counter, window focus, and a 30s floor instead —
+// still hidden-safe, but idle no longer means "poll anyway".
 function useStaleness(project: string): Staleness {
-  const [stale, setStale] = useState<Staleness>({
-    understand: false, graph: false, brain: false,
-  });
-  useEffect(() => {
-    let cancel = false;
-    const load = () => {
-      api
-        .get<Staleness>(`/api/staleness?project=${encodeURIComponent(project)}`)
-        .then((s) => { if (!cancel) setStale(s); })
-        .catch(() => { /* leave last good state */ });
-    };
-    // Only poll a tab someone is looking at (task c38ef597) — this ran every
-    // 5s in every background tab. Refetch on focus so the badge is current
-    // the moment it is seen.
-    const tick = () => { if (!cancel && !document.hidden) load(); };
-    load();
-    const t = setInterval(tick, 5000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      cancel = true;
-      clearInterval(t);
-      document.removeEventListener("visibilitychange", tick);
-    };
-  }, [project]);
-  return stale;
+  const { data } = usePolledResource<Staleness>(
+    `/api/staleness?project=${encodeURIComponent(project)}`,
+    project,
+  );
+  return data ?? STALE_DEFAULT;
 }
 
 

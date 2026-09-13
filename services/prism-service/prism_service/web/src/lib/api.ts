@@ -17,10 +17,36 @@ export class ApiError extends Error {
   }
 }
 
+// ── Dev-only request-rate overlay ───────────────────────────────────────
+// Answers "which endpoint is actually hammering the network" without
+// opening devtools' Network tab and eyeballing timestamps -- exactly the
+// question this whole polling-discipline pass exists to answer. Never
+// runs in a production build: import.meta.env.DEV is false there.
+const requestCounts = new Map<string, number>();
+let requestLogStarted = false;
+
+function trackRequest(path: string): void {
+  if (!import.meta.env.DEV) return;
+  const endpoint = path.split("?")[0] ?? path;
+  requestCounts.set(endpoint, (requestCounts.get(endpoint) ?? 0) + 1);
+  if (requestLogStarted || typeof window === "undefined") return;
+  requestLogStarted = true;
+  setInterval(() => {
+    if (requestCounts.size === 0) return;
+    const rows = [...requestCounts.entries()]
+      .map(([endpoint_, count]) => ({ endpoint: endpoint_, "requests/10s": count }))
+      .sort((a, b) => b["requests/10s"] - a["requests/10s"]);
+    // eslint-disable-next-line no-console
+    console.table(rows);
+    requestCounts.clear();
+  }, 10_000);
+}
+
 export async function fetchJSON<T = unknown>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
+  trackRequest(path);
   const res = await fetch(path, {
     ...init,
     // authHeaders() is empty on the machine running PRISM (the server trusts
@@ -41,8 +67,50 @@ export async function fetchJSON<T = unknown>(
   return res.json() as Promise<T>;
 }
 
+// ── Conditional GET (ETag) ─────────────────────────────────────────────
+// Opt-in per-URL cache so a route that starts sending `ETag` (the
+// tasks-list poll fixer is adding one) costs a 304 with NO body instead of
+// re-shipping the full payload on every one of usePolledResource's
+// counter/focus/floor-triggered refetches. A no-op, safe default for any
+// route that never sends an ETag: getConditional() then behaves exactly
+// like a plain GET, just with one extra always-empty response header read.
+const etagByUrl = new Map<string, string>();
+const etaggedBodyByUrl = new Map<string, unknown>();
+
+export async function fetchConditional<T = unknown>(path: string): Promise<T> {
+  trackRequest(path);
+  const knownEtag = etagByUrl.get(path);
+  const res = await fetch(path, {
+    headers: {
+      accept: "application/json",
+      ...authHeaders(),
+      ...(knownEtag ? { "If-None-Match": knownEtag } : {}),
+    },
+  });
+  if (res.status === 304) {
+    // Server confirms nothing changed since `knownEtag` -- reuse the body
+    // we already have rather than treating an empty 304 response as data.
+    return etaggedBodyByUrl.get(path) as T;
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, `${res.status} ${res.statusText}: ${text.slice(0, 200)}`);
+  }
+  const etag = res.headers.get("etag");
+  const body = (await res.json()) as T;
+  if (etag) {
+    etagByUrl.set(path, etag);
+    etaggedBodyByUrl.set(path, body);
+  } else {
+    etagByUrl.delete(path);
+    etaggedBodyByUrl.delete(path);
+  }
+  return body;
+}
+
 export const api = {
   get: <T = unknown>(p: string) => fetchJSON<T>(p),
+  getConditional: <T = unknown>(p: string) => fetchConditional<T>(p),
   post: <T = unknown>(p: string, body: unknown) =>
     fetchJSON<T>(p, {
       method: "POST",
