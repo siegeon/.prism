@@ -260,6 +260,19 @@ def run_tick(project: str, state: dict, enabled: dict[str, bool] | None = None) 
             _log(f"pass {name} raised ({project}): {exc}")
         state["last_run"][name] = now
         fired.append(name)
+    if fired:
+        # Task fix/lasttimers: a fired maintenance pass (governance,
+        # verify_staleness, forget, adaptive, quality) is exactly the kind
+        # of event that can move /api/staleness or /api/consolidation/
+        # workers's reply -- signal it so WorkflowsPage's brain-activity
+        # panel refetches on the real event instead of a fixed-interval
+        # poll. Never raises.
+        try:
+            from prism_service.services import wakeups
+
+            wakeups.signal("staleness", project or "*")
+        except Exception:
+            pass
     return fired
 
 

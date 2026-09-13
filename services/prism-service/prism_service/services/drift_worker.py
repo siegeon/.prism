@@ -208,6 +208,14 @@ def sweep_once() -> list[dict]:
         _update_backoff(pid, stats.get("embedded", 0))
         print(f"[drift] {pid}: {detail}", file=sys.stderr)
         results.append({"project": pid, "files": n, "elapsed_ms": elapsed_ms})
+        # Task fix/lasttimers: a completed drift-reindex pass is one of the
+        # events that can move /api/staleness's graph/brain booleans --
+        # signal it so WorkflowsPage's brain-activity panel refetches on
+        # the real event instead of a fixed-interval poll.
+        try:
+            wakeups.signal("staleness", pid or "*")
+        except Exception:
+            pass
 
     return results
 

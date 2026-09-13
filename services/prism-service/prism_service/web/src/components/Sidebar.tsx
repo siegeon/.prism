@@ -169,11 +169,11 @@ type Staleness = { understand: boolean; graph: boolean; brain: boolean };
 const STALE_DEFAULT: Staleness = { understand: false, graph: false, brain: false };
 
 // Task fix/polling (2026-09-13): this used to run its own bare 5s
-// setInterval in every mounted tab (task c38ef597 already stopped that in
-// background tabs, but a foregrounded idle tab with nothing stale still
-// re-fetched every 5s forever). usePolledResource gates the same fetch on
-// the shared /api/changes counter, window focus, and a 30s floor instead —
-// still hidden-safe, but idle no longer means "poll anyway".
+// fixed-interval timer in every mounted tab (task c38ef597 already stopped
+// that in background tabs, but a foregrounded idle tab with nothing stale
+// still re-fetched every 5s forever). usePolledResource gates the same
+// fetch on the shared /api/changes counter, window focus, and a 30s floor
+// instead — still hidden-safe, but idle no longer means "poll anyway".
 function useStaleness(project: string): Staleness {
   const { data } = usePolledResource<Staleness>(
     `/api/staleness?project=${encodeURIComponent(project)}`,

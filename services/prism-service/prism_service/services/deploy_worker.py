@@ -413,6 +413,16 @@ def confirm_pending_deploy(*, task_svc=None, task_id: str = "",
                                     completion_proof=f"deployed version {seen}")
             except Exception:
                 pass
+            # Task fix/lasttimers: this IS the confirmed-restart moment --
+            # signal it so lib/version.ts's watchers (no fixed-interval
+            # poll of their own any more) refetch /api/version on the real
+            # event instead of a timer.
+            try:
+                from prism_service.services import wakeups
+
+                wakeups.signal("deployed", "*")
+            except Exception:
+                pass
             return {"ok": True, "stage": _STAGE_CONFIRMED, "version": seen}
         if time.monotonic() >= deadline:
             why = (f"target={target} not observed after {int(timeout_s)}s "

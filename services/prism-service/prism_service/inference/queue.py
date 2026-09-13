@@ -104,6 +104,21 @@ class JobQueue:
         with open(self._log_path, "a", encoding="utf-8") as fh:
             fh.write(line)
 
+    def _signal_jobs(self) -> None:
+        """Wake the shared wakeups bus (task fix/lasttimers) so the SPA's
+        GET /api/jobs poller (lib/scan-activity.ts) refetches on a real
+        change instead of a fixed-interval timer -- every state-mutating
+        call below (enqueue/claim/complete/fail/cancel) is exactly one of
+        the events that can move that endpoint's reply. Never raises:
+        wakeups.signal itself never raises, and an unavailable bus must
+        never break a queue mutation."""
+        try:
+            from prism_service.services import wakeups
+
+            wakeups.signal("jobs", self._project or "*")
+        except Exception:
+            pass
+
     def _load(self) -> None:
         """Thin wrapper kept for existing callers — folds the log via
         refresh(). A newly constructed instance starts at offset 0, so
@@ -246,7 +261,8 @@ class JobQueue:
             )
             self._jobs[jid] = job
             self._append({"op": "enqueue", "job": asdict(job)})
-            return jid
+        self._signal_jobs()
+        return jid
 
     def cancel_stale_pending(self, current_sha: str) -> list[str]:
         """Cancel every pending job whose target_sha != current_sha.
@@ -273,6 +289,8 @@ class JobQueue:
                                   f"current {current_sha[:8]})",
                     })
                     cancelled.append(job.id)
+        if cancelled:
+            self._signal_jobs()
         return cancelled
 
     def drain(self, max_jobs: int = 10) -> list[AnalysisJob]:
@@ -296,6 +314,8 @@ class JobQueue:
                 job.attempts += 1
                 self._append({"op": "claim", "job_id": job.id, "ts": now})
                 claimed.append(job)
+        if claimed:
+            self._signal_jobs()
         return claimed
 
     def complete(self, job_id: str, result_path: str = "") -> None:
@@ -310,6 +330,7 @@ class JobQueue:
                 "op": "complete", "job_id": job_id,
                 "ts": now, "result_path": result_path,
             })
+        self._signal_jobs()
 
     def fail(self, job_id: str, error: str = "") -> None:
         with self._lock:
@@ -323,6 +344,7 @@ class JobQueue:
                 "op": "fail", "job_id": job_id,
                 "ts": now, "error": error,
             })
+        self._signal_jobs()
 
     def status(self, recent: int = 5) -> dict:
         """Snapshot of queue state for the `understand_status` MCP tool."""
