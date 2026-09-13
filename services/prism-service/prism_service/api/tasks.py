@@ -17,7 +17,8 @@ from prism_service.project_context import get_project
 from prism_service.services.actor_service import get_actor_service
 from prism_service.services.integration_store import get_integration_store
 from prism_service.services.task_service import (
-    DONE_BLOCKED_BY_OPEN_GATE_FIX, SESSION_GATE_FIX, is_open_gate_step,
+    BLOCKED_NEEDS_REASON_FIX, DONE_BLOCKED_BY_OPEN_GATE_FIX,
+    SESSION_GATE_FIX, is_open_gate_step,
 )
 
 router = APIRouter(dependencies=[Depends(authorize_project_request)])
@@ -2182,6 +2183,20 @@ def update_task(
             raise HTTPException(422, DONE_BLOCKED_BY_OPEN_GATE_FIX.format(
                 workflow_step=current.workflow_step,
                 gate_state=current.gate_state))
+    # Wordless-block guard (2026-09-13): the same transition-guard shape as
+    # the two above. 6 of 19 blocked tasks on the live board carried an EMPTY
+    # blocked_reason, each an undiagnosable dead end, because this PATCH had
+    # no guard for `blocked` and the SPA's button sends {status} alone. The
+    # guard is on the TRANSITION, so a row already blocked can still be
+    # edited without retyping its reason.
+    if kwargs.get("status") == "blocked":
+        current = svc.get(task_id)
+        if current is None:
+            raise HTTPException(404, "task not found")
+        reason = str(kwargs.get("blocked_reason")
+                     or getattr(current, "blocked_reason", "") or "").strip()
+        if current.status != "blocked" and not reason:
+            raise HTTPException(422, BLOCKED_NEEDS_REASON_FIX)
     t = svc.update(task_id, **kwargs)
     if not t:
         raise HTTPException(404, "task not found")

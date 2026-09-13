@@ -67,6 +67,21 @@ DONE_BLOCKED_BY_OPEN_GATE_FIX = (
 )
 
 
+# Wordless-block guard (2026-09-13, measured on the live board): 19 of 22
+# live tasks were blocked and 6 of them carried an EMPTY blocked_reason, so
+# the board showed red rows that named nothing anyone could act on. Every
+# WORKER path already passes a reason (dispatch_guard, resume_actuator,
+# ship_worker, task_runner); the hole was the generic status PATCH, whose
+# SPA button sends {status} alone. Refused rather than auto-filled: an
+# invented reason would satisfy the letter and destroy the point, which is
+# that a later reader can act on what it says.
+BLOCKED_NEEDS_REASON_FIX = (
+    "a task cannot be blocked without a reason — send blocked_reason "
+    "alongside status=blocked, saying what this task is waiting on and "
+    "what would release it, so whoever reads the board next can act on it"
+)
+
+
 def is_open_gate_step(workflow_step: str, gate_state: str) -> bool:
     """True when `workflow_step` is a real conductor gate step (per
     models.workflow.WORKFLOW_STEPS) whose decision is not yet settled
