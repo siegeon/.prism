@@ -407,6 +407,49 @@ def test_run_once_for_skips_when_nothing_to_align(project, no_real_worktree):
     assert result == {"skipped": "nothing to align"}
 
 
+def test_unforced_pass_skips_the_dry_run_scan_when_nothing_moved(
+    project, no_real_worktree, monkeypatch,
+):
+    """Tick-cost pass (owner brief, 2026-09-13): the background loop's own
+    unforced run_once_for used to dry-run scan every task's free text on
+    EVERY tick regardless of whether the project had moved since the
+    last look.
+
+    Three calls: (1) real candidates -> a real scan+apply, which itself
+    writes to tasks (moving the fingerprint); (2) nothing left to align,
+    a real (but now zero-candidate) dry-run scan that writes nothing --
+    the pre-existing "nothing to align" path, unaffected by this fix; (3)
+    truly nothing has moved since (2) -- must not even reach
+    language_alignment.align_language."""
+    from prism_service.services import language_alignment, language_alignment_worker as worker
+
+    worker.reset_fingerprint_cache()
+    _seed_tasks(project)
+
+    calls = []
+    real_align = language_alignment.align_language
+
+    def _counting(*a, **kw):
+        calls.append((a, kw))
+        return real_align(*a, **kw)
+    monkeypatch.setattr(language_alignment, "align_language", _counting)
+
+    worker.run_once_for(project)
+    assert calls, "the first, changed pass must still scan for real"
+    calls.clear()
+
+    second = worker.run_once_for(project)
+    assert second == {"skipped": "nothing to align"}
+    assert calls, "a pass right after real changes must still scan for real"
+    calls.clear()
+
+    third = worker.run_once_for(project)
+    assert third == {"skipped": "unchanged since last pass"}
+    assert calls == [], (
+        "an unforced pass over an untouched project must do zero "
+        "language_alignment work, not just a cheap no-op dry run")
+
+
 # ── (6) API / MCP parity ────────────────────────────────────────────────
 
 def _api_client():

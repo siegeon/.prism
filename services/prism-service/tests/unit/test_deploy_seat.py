@@ -413,6 +413,83 @@ def test_tick_starts_new_land_before_confirming_pending(monkeypatch):
     assert order == ["new_land", "pending"]
 
 
+def test_sweep_new_land_skips_the_fetch_when_the_cache_is_warm(tmp_path):
+    """COST tooth (owner brief, 2026-09-13): a fetch is real network+process
+    work, paid every _tick (default 30s). Two sweeps of the SAME clean repo
+    inside the cache TTL, with nothing signalled, must issue exactly ONE
+    `git fetch` between them -- the second sweep answers from the cached
+    ahead-count instead of shelling out again."""
+    _origin, work = _make_repo(tmp_path)
+    deploy_worker.reset_fetch_cache()
+    run = FakeRunner()
+
+    first = deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: None)
+    fetches_after_first = sum(1 for c in run.calls if c[0][:2] == ["git", "fetch"])
+    second = deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: None)
+    fetches_after_second = sum(1 for c in run.calls if c[0][:2] == ["git", "fetch"])
+
+    assert first["stage"] == "skipped"
+    assert second["stage"] == "skipped"
+    assert fetches_after_first == 1
+    assert fetches_after_second == 1  # the second sweep fetched nothing new
+
+
+def test_upstream_ahead_count_only_refetches_when_signalled_or_stale(tmp_path):
+    """The caching primitive itself, isolated from the rest of the deploy
+    pipeline (whose OWN pull step does a second, unrelated fetch once a
+    deploy actually proceeds -- not what this tooth is about). A warm
+    cache answers a second call with ZERO fetches; `signal_land` forces
+    exactly one more, after which the cache is warm again."""
+    _origin, work = _make_repo(tmp_path)
+    deploy_worker.reset_fetch_cache()
+    run = FakeRunner()
+
+    first = deploy_worker._upstream_ahead_count(run, work)
+    fetches_after_first = sum(1 for c in run.calls if c[0][:2] == ["git", "fetch"])
+    assert first == 0
+    assert fetches_after_first == 1
+
+    second = deploy_worker._upstream_ahead_count(run, work)
+    fetches_after_second = sum(1 for c in run.calls if c[0][:2] == ["git", "fetch"])
+    assert second == 0
+    assert fetches_after_second == fetches_after_first  # answered from cache
+
+    deploy_worker.signal_land(work)
+    third = deploy_worker._upstream_ahead_count(run, work)
+    fetches_after_third = sum(1 for c in run.calls if c[0][:2] == ["git", "fetch"])
+    assert third == 0
+    assert fetches_after_third == fetches_after_second + 1  # forced, exactly once
+
+    fourth = deploy_worker._upstream_ahead_count(run, work)
+    fetches_after_fourth = sum(1 for c in run.calls if c[0][:2] == ["git", "fetch"])
+    assert fetches_after_fourth == fetches_after_third  # warm again, no signal left
+
+
+def test_sweep_new_land_notices_a_signalled_land_inside_a_warm_cache(tmp_path):
+    """End to end: a warm cache must never hide a REAL land from the sweep
+    when that land was signalled -- the escape hatch this seat needs since
+    a direct push (this repo's own self-dev carve-out) has no other way to
+    invalidate the cache early."""
+    origin, work = _make_repo(tmp_path)
+    deploy_worker.reset_fetch_cache()
+    run = FakeRunner()
+
+    deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: None)  # warms the cache
+
+    _land_from_elsewhere(tmp_path, origin, version="1.3.0", touch_web=False)
+    deploy_worker.signal_land(work)
+    restarted = []
+    result = deploy_worker.sweep_new_land(
+        repo_root=work, runner=run, request_restart=lambda: restarted.append(1))
+
+    assert result["ok"] is True
+    assert result["target_version"] == "1.3.0"
+    assert restarted == [1]
+
+
 def test_deployer_seat_is_a_registered_machine_seat():
     """AC(e): an unregistered actor writing history resolves to
     ActorKind.UNKNOWN -- the audited defect ship_worker's own suite already
