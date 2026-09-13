@@ -228,6 +228,13 @@ def test_a_refused_draft_never_reaches_write_or_commit():
         calls.append("route-check")
         return {"route": "pytest"}
 
+    # THE GATHER STEP (task ab9166d5's follow-up): a read-only context
+    # lookup that runs BEFORE reason-loop, so it must never be lumped in
+    # with the build handlers a refusal is supposed to block.
+    def _gather(project, body):
+        calls.append("gather")
+        return {"brain_context": "repo material"}
+
     def _draft(project, body):
         calls.append("reason-loop")
         return _Refused()
@@ -239,12 +246,13 @@ def test_a_refused_draft_never_reaches_write_or_commit():
     handlers = {s["route"]: _should_not_run for s in plan["steps"]}
     handlers["reason-loop"] = _draft
     handlers["oracle-route-check"] = _route_check
+    handlers["context-enrich"] = _gather
 
     rows = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers,
         variables={"taskHint": "h", "taskId": "abc123"})
 
-    assert calls == ["route-check", "reason-loop"], (
+    assert calls == ["route-check", "gather", "reason-loop"], (
         f"write-test-file/run-pinned-suite/commit-tests-only ran after a "
         f"refused verdict: {calls}")
     refused_row = next(r for r in rows if r.get("route") == "reason-loop")
@@ -275,6 +283,12 @@ def test_a_passing_draft_still_flows_through_the_whole_chain():
         calls.append("route-check")
         return {"route": "pytest"}
 
+    # THE GATHER STEP (task ab9166d5's follow-up): runs before reason-loop,
+    # a distinct call from the write/run/commit "build" trio below.
+    def _gather(project, body):
+        calls.append("gather")
+        return {"brain_context": "repo material"}
+
     def _draft(project, body):
         calls.append("reason-loop")
         return _Passing()
@@ -287,10 +301,12 @@ def test_a_passing_draft_still_flows_through_the_whole_chain():
     handlers = {s["route"]: _capture for s in plan["steps"]}
     handlers["reason-loop"] = _draft
     handlers["oracle-route-check"] = _route_check
+    handlers["context-enrich"] = _gather
 
     rows = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers,
         variables={"taskHint": "h", "taskId": "abc123"})
 
-    assert calls == ["route-check", "reason-loop", "build", "build", "build"], (
+    assert calls == ["route-check", "gather", "reason-loop",
+                     "build", "build", "build"], (
         f"a passing draft must still run the full chain: {calls}")

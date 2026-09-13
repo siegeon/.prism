@@ -425,11 +425,21 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_oracle_route_check(
             _wf.OracleRouteCheckRequest(**body), project=project)
 
+    # THE GATHER NODE: a read-only ContextBuilder lookup (no model call, no
+    # tools) so a later reason-loop step can name real repo material
+    # (${brainContext}) instead of the model inventing module paths from a
+    # narrow, repo-blind context. See write-failing-tests-loop.json's
+    # "gather" step.
+    def _context_enrich(project: str, body: dict):
+        return _wf.workflow_step_context_enrich(
+            _wf.StepEnrichRequest(**body), project=project)
+
     return {"reason-loop": _reason_loop, "text-challenge": _text_challenge,
             "write-test-file": _write_test_file,
             "run-pinned-suite": _run_pinned_suite,
             "commit-tests-only": _commit_tests_only,
-            "oracle-route-check": _oracle_route_check}
+            "oracle-route-check": _oracle_route_check,
+            "context-enrich": _context_enrich}
 
 
 def _subst(value, variables: dict):
@@ -467,6 +477,13 @@ def _exported_variables(result) -> dict:
 
     Both spellings are exported -- the schema fields are snake_case and the
     declarations are camelCase -- so a declaration may name either.
+
+    A TYPED PYDANTIC STEP RESPONSE (e.g. StepEnrichResponse from
+    /steps/context-enrich) has neither a `.reason` dict nor is it a plain
+    `dict`, so its own scalar fields (model_dump() on pydantic v2, falling
+    back to .dict()/.__dict__) are read here too -- otherwise a `gather`
+    node that calls such a route exports nothing and a later step's
+    ${brainContext} placeholder reaches the model unfilled.
     """
     fields: dict = {}
     reason = getattr(result, "reason", None)
@@ -474,6 +491,14 @@ def _exported_variables(result) -> dict:
         fields.update(reason.get("fields") or {})
     if isinstance(result, dict):
         fields.update(result)
+    else:
+        model_dump = getattr(result, "model_dump", None)
+        if callable(model_dump):
+            fields.update(model_dump() or {})
+        elif hasattr(result, "dict") and callable(getattr(result, "dict")):
+            fields.update(result.dict() or {})
+        elif hasattr(result, "__dict__"):
+            fields.update(vars(result) or {})
     out: dict = {}
     for key, val in fields.items():
         if not isinstance(key, str) or not isinstance(
