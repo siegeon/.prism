@@ -526,14 +526,6 @@ def _loop(interval_s: int) -> None:
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     while True:
-        # Captured fresh, right before this iteration's own sweep -- a
-        # since= carried over from a PRIOR iteration's post-sweep
-        # timestamp double-fires: the signal that just woke this loop is
-        # still the newest entry in wakeups._LAST, so the very next wait()
-        # would see it as "new" all over again and trigger an extra,
-        # unwanted sweep immediately after this one (owner 2026-09-13:
-        # "one signal makes exactly one pass").
-        sweep_started = time.time()
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
                 approved = sweep_once()
@@ -556,14 +548,22 @@ def _loop(interval_s: int) -> None:
         # green_gate or resolve a workspace-freshness refusal exactly like
         # a task_changed row does; waiting on task_changed alone left the
         # fallback timeout as the only way such a change was ever noticed.
-        # since=sweep_started (this iteration's own pre-sweep timestamp,
-        # not a value left over from a previous iteration) is what keeps
-        # one signal to exactly one extra pass. timeout=worker_fallback_s()
-        # is None by default -- no periodic wake at all unless an operator
-        # explicitly opts in (owner 2026-09-13: "it's all reactive and
-        # real time").
+        # since= is deliberately OMITTED here (defaults to None -> baseline
+        # = now, taken AFTER the sweep above, not before it). Task
+        # b490fabc/host-tight-loop: a pre-sweep baseline (the old
+        # `since=sweep_started`) sees this sweep's OWN adjudication
+        # (approving a gate writes task_changed) as a "new" signal the
+        # instant wait() is entered, self-retriggering forever with zero
+        # external cause -- measured ~390 spurious passes/s in isolation,
+        # and live 100% CPU with no signals on the box. A post-sweep
+        # baseline still catches a signal from a DIFFERENT
+        # process/request (the thing this reactive design exists for)
+        # without re-firing on work this very sweep already did.
+        # timeout=worker_fallback_s() is None by default -- no periodic
+        # wake at all unless an operator explicitly opts in (owner
+        # 2026-09-13: "it's all reactive and real time").
         wakeups.wait(["task_changed", "shipped"],
-                     timeout=wakeups.worker_fallback_s(), since=sweep_started)
+                     timeout=wakeups.worker_fallback_s())
 
 
 def start_gate_adjudicator() -> threading.Thread | None:

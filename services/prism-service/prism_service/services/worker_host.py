@@ -35,6 +35,7 @@ import logging
 import os
 import signal
 import threading
+import time
 from typing import Callable, List, Tuple
 
 _log = logging.getLogger("prism.worker_host")
@@ -142,6 +143,75 @@ def start_all_workers() -> None:
                            exc_info=True)
 
 
+def _cpu_governor(stop: threading.Event, poll_s: float = 5.0,
+                   cpu_pct_threshold: float = 50.0, window_s: float = 10.0,
+                   throttle_sleep_s: float = 5.0) -> None:
+    """Belt and braces (task b490fabc/host-tight-loop) on top of the real
+    fix in the worker loops' own wait() calls: if some OTHER self-feedback
+    bug like it ever slips back in, catch it live instead of pegging the
+    box silently. Samples this PROCESS's own CPU every `poll_s`; if it
+    averages over `cpu_pct_threshold` across a full `window_s` while
+    `wakeups` has recorded no new signal at all in that window (in-process
+    OR cross-process -- see `wakeups.changes_snapshot`), something is
+    busy-looping with no real work to justify it. Logs one line, records a
+    `system_activity` "throttled" entry (visible on the Live page), and
+    sleeps `throttle_sleep_s` before resuming -- never raises, never exits
+    the process. The four thresholds default to the production values;
+    tests pass smaller ones so a real subprocess can exercise this in
+    well under a second instead of the real 10s+ window."""
+    try:
+        import resource
+    except ImportError:
+        return  # Windows: no RUSAGE_SELF; the real fix still stands.
+    from prism_service.services import wakeups
+
+    def _cpu_seconds() -> float:
+        u = resource.getrusage(resource.RUSAGE_SELF)
+        return u.ru_utime + u.ru_stime
+
+    last_cpu = _cpu_seconds()
+    last_wall = time.monotonic()
+    last_signal_ts = wakeups.changes_snapshot()
+    high_cpu_since: "float | None" = None
+
+    while not stop.wait(timeout=poll_s):
+        cpu_now = _cpu_seconds()
+        wall_now = time.monotonic()
+        wall_delta = wall_now - last_wall
+        cpu_pct = 100.0 * (cpu_now - last_cpu) / wall_delta if wall_delta > 0 else 0.0
+        signal_ts = wakeups.changes_snapshot()
+        signalled = signal_ts > last_signal_ts
+        last_cpu, last_wall, last_signal_ts = cpu_now, wall_now, signal_ts
+
+        if cpu_pct <= cpu_pct_threshold or signalled:
+            high_cpu_since = None
+            continue
+        if high_cpu_since is None:
+            high_cpu_since = wall_now
+            continue
+        if wall_now - high_cpu_since < window_s:
+            continue
+
+        measured_window_s = wall_now - high_cpu_since
+        _log.warning(
+            "worker host CPU governor: %.0f%% CPU over %.0fs with zero "
+            "signals -- throttling %.0fs (pid=%s)",
+            cpu_pct, measured_window_s, throttle_sleep_s, os.getpid(),
+        )
+        try:
+            from prism_service.services import system_activity
+            system_activity.record(
+                "throttled", "*",
+                f"worker host: {cpu_pct:.0f}% cpu, "
+                f"{measured_window_s:.0f}s no signals",
+                started_at=time.time(), elapsed_ms=0.0, ok=True,
+            )
+        except Exception:
+            pass
+        time.sleep(throttle_sleep_s)
+        high_cpu_since = None
+
+
 def _install_signal_handlers(stop: threading.Event) -> None:
     def _on_term(_signum, _frame) -> None:
         stop.set()
@@ -189,6 +259,8 @@ def main(data_dir: str, env: "dict[str, str] | None" = None) -> None:
 
     stop = threading.Event()
     _install_signal_handlers(stop)
+    threading.Thread(target=_cpu_governor, args=(stop,), daemon=True,
+                      name="prism-worker-host-cpu-governor").start()
     while not stop.is_set():
         stop.wait(timeout=5.0)
     _log.info("stopping (pid=%s)", os.getpid())

@@ -640,12 +640,6 @@ def _loop(interval_s: int) -> None:
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     while True:
-        # Captured fresh, right before this iteration's own tick -- see
-        # gate_adjudicator._loop's comment: a since= left over from a
-        # prior iteration's post-tick timestamp double-fires on the very
-        # signal that just woke this loop (owner 2026-09-13: "one signal
-        # makes exactly one pass").
-        tick_started = time.time()
         _tick()
         # "shipped" wakes this immediately on a same-process land;
         # "task_changed" covers a fresh deploy request queued on a task.
@@ -653,8 +647,17 @@ def _loop(interval_s: int) -> None:
         # caught only via POST /api/deploy/run or an explicit
         # PRISM_WORKER_FALLBACK_S opt-in -- unavoidable without a
         # cross-process land signal.
+        #
+        # since= is OMITTED (defaults to None -> baseline = now, taken
+        # AFTER _tick() above). Task b490fabc/host-tight-loop: the old
+        # pre-tick `since=tick_started` saw this tick's OWN "shipped"
+        # signal (a deploy _tick() just ran raises one) as "new" the
+        # instant wait() was entered, self-retriggering forever with zero
+        # external cause. A post-tick baseline still catches a signal from
+        # a different process/request, without re-firing on this tick's
+        # own work.
         wakeups.wait(["shipped", "task_changed"],
-                     timeout=wakeups.worker_fallback_s(), since=tick_started)
+                     timeout=wakeups.worker_fallback_s())
 
 
 def start_deploy_worker() -> Optional[threading.Thread]:
