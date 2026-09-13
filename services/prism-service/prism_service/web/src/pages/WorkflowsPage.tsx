@@ -298,6 +298,27 @@ function conductorRunGenuinelyActive(conductorTask?: WorkflowRun["data"]["conduc
   return state === "working" || state === "driving";
 }
 
+/** Is a real drive heartbeat behind this task RIGHT NOW -- the honest
+ * "working"/"driving" signal conductor_service.py's activity_for computes
+ * server-side (see SdlcProgress.tsx's Activity docstring: "driving" means a
+ * FRESH task-attributed heartbeat, "working" a real recent transition).
+ * Only this predicate may say "Driving" on the banner/dot/canvas -- naming
+ * a seat that isn't actually beating is the exact defect below. */
+function conductorTaskDriving(task: ManagedTask): boolean {
+  return task.activity?.state === "working" || task.activity?.state === "driving";
+}
+
+/** A task parked at a gate decision (gate_state pending/failed) with NO
+ * live heartbeat behind it -- the gate machinery is still real (a machine
+ * seat re-sweeps it, or a human owes it a click) even though nobody is
+ * mid-step. Kept DISJOINT from conductorTaskDriving on purpose: a task can
+ * satisfy both gate_state pending AND a fresh heartbeat (an agent writing
+ * its own gate evidence), and that case must still read as "Driving", not
+ * "Waiting". */
+function conductorTaskWaitingAtGate(task: ManagedTask): boolean {
+  return (task.gate_state === "pending" || task.gate_state === "failed") && !conductorTaskDriving(task);
+}
+
 /** The SAME genuine-occupancy question as conductorRunGenuinelyActive above,
  * asked of a board row (ManagedTask) instead of a synthesized run's single
  * conductorTask. This drifted out of sync with that check and with
@@ -315,10 +336,19 @@ function conductorRunGenuinelyActive(conductorTask?: WorkflowRun["data"]["conduc
  * `in_progress` at plan_gate (owner, live, on task a65c66e5: "real time
  * progress moving items... it just looks exactly the same"). Route every
  * such check through this one function so the three surfaces can't drift
- * apart again. */
+ * apart again.
+ *
+ * SUPERSEDED IN PART 2026-09-13 (screenshot workflows-342.png): this used
+ * to be the ONLY liveness fact, so a task genuinely `blocked` at green_gate
+ * with no heartbeat and zero tasks in_progress still read "genuinely
+ * active" off gate_state alone, and the status-line banner named it
+ * "Driving <id> · green gate · prism-task-runner" -- a seat that was not
+ * actually beating. This still answers "is this row worth lighting up at
+ * all" (a real occupancy fact either way), but callers that need to WORD
+ * the claim must ask conductorTaskDriving vs conductorTaskWaitingAtGate
+ * separately instead of collapsing both into one string. */
 function conductorTaskGenuinelyActive(task: ManagedTask): boolean {
-  if (task.gate_state === "pending" || task.gate_state === "failed") return true;
-  return task.activity?.state === "working" || task.activity?.state === "driving";
+  return conductorTaskDriving(task) || conductorTaskWaitingAtGate(task);
 }
 
 type FailureEvidence = { location: string | null; lines: string[] };
@@ -985,12 +1015,19 @@ export default function WorkflowsPage() {
   // page already holds (conductorManaged, the same SSE-pushed source the
   // rail reads). A row with no real step ids (a non-FSM/validation entry
   // this page has no ambient data for) reads false, never a guess.
+  // Tri-state (2026-09-13, screenshot workflows-342.png): "driving" (a real
+  // heartbeat, teal) and "waiting" (parked at a gate with nobody beating,
+  // amber) render as different dot colours -- a plain boolean collapsed
+  // them, so a blocked/parked row lit the SAME pulsing dot as a genuinely
+  // driven one and the title claimed "running now" either way.
   const conductorRowLiveness = useMemo(() => {
-    const map = new Map<string, boolean>();
+    const map = new Map<string, "driving" | "waiting">();
     for (const workflow of workflows) {
       const stepIds = conductorStepIdsFor(workflow, workflows);
-      map.set(workflow.id, stepIds.size > 0 && conductorManaged.some((task) =>
-        stepIds.has(task.workflow_step ?? "") && conductorTaskGenuinelyActive(task)));
+      if (stepIds.size === 0) continue;
+      const rowTasks = conductorManaged.filter((task) => stepIds.has(task.workflow_step ?? ""));
+      if (rowTasks.some(conductorTaskDriving)) map.set(workflow.id, "driving");
+      else if (rowTasks.some(conductorTaskWaitingAtGate)) map.set(workflow.id, "waiting");
     }
     return map;
   }, [workflows, conductorManaged]);
@@ -1361,8 +1398,23 @@ export default function WorkflowsPage() {
       const activeTask = conductorRailTasks.find(conductorTaskGenuinelyActive);
       if (activeTask) {
         const step = (activeTask.workflow_step ?? "").replace(/_/g, " ") || "working";
-        const seat = activeTask.activity?.seat;
-        return `Driving ${activeTask.id.slice(0, 8)} · ${step}${seat ? ` · ${seat}` : ""}`;
+        // "Driving" is a claim about a LIVE HEARTBEAT, never about a gate
+        // merely sitting pending/failed with nobody beating -- task
+        // 4c9b39e5 (screenshot workflows-342.png) was `blocked` at
+        // green_gate with no heartbeat and zero tasks in_progress, yet
+        // conductorTaskGenuinelyActive's old single boolean rendered
+        // "Driving 4c9b39e5 · green gate · prism-task-runner" off the
+        // gate_state alone. conductorTaskDriving asks the honest
+        // heartbeat-backed question; a task that's merely parked at a gate
+        // reads as "Waiting", naming who owns the next move instead of a
+        // seat that isn't actually working.
+        if (conductorTaskDriving(activeTask)) {
+          const seat = activeTask.activity?.seat;
+          return `Driving ${activeTask.id.slice(0, 8)} · ${step}${seat ? ` · ${seat}` : ""}`;
+        }
+        const stepDef = selectedWorkflow?.steps.find((candidate) => candidate.id === activeTask.workflow_step);
+        const next = stepDef?.machine_only_gate ? "machine seat next" : "your review";
+        return `Waiting at ${step} · ${activeTask.id.slice(0, 8)} · ${next}`;
       }
       return "running · working";
     }
@@ -1378,7 +1430,7 @@ export default function WorkflowsPage() {
     if (!dataLoaded) return `Loading workflows… (${loadingElapsedS}s)`;
     if (!lastOutcome) return "No runs yet";
     return `No run in progress · last run ${relativeTime(lastOutcome.endedAtIso)} · ${lastOutcome.passed ? "passed" : "failed"}`;
-  }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks, dataLoaded, loadingElapsedS]);
+  }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks, dataLoaded, loadingElapsedS, selectedWorkflow]);
 
   const refreshRunHistory = useCallback(() => {
     if (!selectedWorkflow || selectedWorkflow.id !== "validation") {
@@ -2077,6 +2129,11 @@ export default function WorkflowsPage() {
             averageSeconds: pacing && pacing > 0 ? pacing : null,
             overrunRatio: pacing && pacing > 0 && elapsedSeconds > pacing ? elapsedSeconds / pacing : null,
             taskTitle: activeTask.title,
+            // Same waiting-vs-driving distinction as the banner/dot below:
+            // a task parked at a gate with no live heartbeat gets the
+            // amber "warning" glow, never the teal "active" one a real
+            // heartbeat earns (2026-09-13, screenshot workflows-342.png).
+            tone: conductorTaskWaitingAtGate(activeTask) ? "warning" : undefined,
           };
         }
       } else if (tier === "settling" && lastOutcome) {
@@ -2168,8 +2225,10 @@ export default function WorkflowsPage() {
     // Same ambient live signal as the top-level directory row above -- see
     // its own comment; this is the nested-row half of the SAME contract,
     // reached via renderBranch's own recursion at every depth.
-    const dotLive = (child.id === selectedWorkflowId && workflowRun?.runtime?.status === "running")
-      || conductorRowLiveness.get(child.id);
+    const dotLive: "driving" | "waiting" | undefined =
+      (child.id === selectedWorkflowId && workflowRun?.runtime?.status === "running")
+        ? "driving"
+        : conductorRowLiveness.get(child.id);
     const dotVerdict = child.id === selectedWorkflowId ? lastOutcome : null;
     return [
       <button
@@ -2240,13 +2299,15 @@ export default function WorkflowsPage() {
           <span
             data-live-dot
             aria-hidden="true"
-            title={dotLive ? `${child.name} · running now` : `${dotVerdict?.name} · last run ${dotVerdict?.passed ? "passed" : "failed"}`}
+            title={dotLive === "waiting" ? `${child.name} · waiting on a gate` : dotLive ? `${child.name} · running now` : `${dotVerdict?.name} · last run ${dotVerdict?.passed ? "passed" : "failed"}`}
             className={`h-1.5 w-1.5 shrink-0 self-center rounded-full ${
-              (child.id === selectedWorkflowId && workflowRun?.runtime?.status === "running") || conductorRowLiveness.get(child.id)
+              dotLive === "driving"
                 ? "bg-[color:var(--accent-solid)] animate-pulse"
-                : tier === "settling" && dotVerdict && Date.now() - Date.parse(dotVerdict.endedAtIso) < SETTLE_WINDOW_MS
-                  ? (dotVerdict.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]")
-                  : (dotVerdict?.passed ? "bg-emerald-400" : "bg-red-400")
+                : dotLive === "waiting"
+                  ? "bg-fuchsia-400/70 animate-pulse"
+                  : tier === "settling" && dotVerdict && Date.now() - Date.parse(dotVerdict.endedAtIso) < SETTLE_WINDOW_MS
+                    ? (dotVerdict.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]")
+                    : (dotVerdict?.passed ? "bg-emerald-400" : "bg-red-400")
             }`}
           />
         )}
@@ -2576,8 +2637,10 @@ export default function WorkflowsPage() {
                 // without opening anything. `dotVerdict` (the selected row's
                 // own last outcome) only exists for the one row this page has
                 // fresh data for; every other row gets `running` or nothing.
-                const dotLive = (workflow.id === selectedWorkflowId && workflowRun?.runtime?.status === "running")
-                  || conductorRowLiveness.get(workflow.id);
+                const dotLive: "driving" | "waiting" | undefined =
+                  (workflow.id === selectedWorkflowId && workflowRun?.runtime?.status === "running")
+                    ? "driving"
+                    : conductorRowLiveness.get(workflow.id);
                 const dotVerdict = workflow.id === selectedWorkflowId ? lastOutcome : null;
                 return (
                   <div key={workflow.id}>
@@ -2620,13 +2683,15 @@ export default function WorkflowsPage() {
                         <span
                           data-live-dot
                           aria-hidden="true"
-                          title={dotLive ? `${workflow.name} · running now` : `${dotVerdict?.name} · last run ${dotVerdict?.passed ? "passed" : "failed"}`}
+                          title={dotLive === "waiting" ? `${workflow.name} · waiting on a gate` : dotLive ? `${workflow.name} · running now` : `${dotVerdict?.name} · last run ${dotVerdict?.passed ? "passed" : "failed"}`}
                           className={`h-1.5 w-1.5 shrink-0 self-center rounded-full ${
-                            (workflow.id === selectedWorkflowId && workflowRun?.runtime?.status === "running") || conductorRowLiveness.get(workflow.id)
+                            dotLive === "driving"
                               ? "bg-[color:var(--accent-solid)] animate-pulse"
-                              : tier === "settling" && dotVerdict && Date.now() - Date.parse(dotVerdict.endedAtIso) < SETTLE_WINDOW_MS
-                                ? (dotVerdict.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]")
-                                : (dotVerdict?.passed ? "bg-emerald-400" : "bg-red-400")
+                              : dotLive === "waiting"
+                                ? "bg-fuchsia-400/70 animate-pulse"
+                                : tier === "settling" && dotVerdict && Date.now() - Date.parse(dotVerdict.endedAtIso) < SETTLE_WINDOW_MS
+                                  ? (dotVerdict.passed ? "bg-emerald-400 animate-[pulse_1s_ease-out_1]" : "bg-red-400 animate-[pulse_1s_ease-out_1]")
+                                  : (dotVerdict?.passed ? "bg-emerald-400" : "bg-red-400")
                           }`}
                         />
                       )}

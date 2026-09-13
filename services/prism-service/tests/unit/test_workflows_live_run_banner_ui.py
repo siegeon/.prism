@@ -108,22 +108,40 @@ def test_a_shared_managed_task_liveness_helper_exists():
 
 
 def test_the_liveness_helper_treats_a_pending_or_failed_gate_as_active():
+    # UPDATED 2026-09-13 (screenshot workflows-342.png, task 4c9b39e5): the
+    # single conductorTaskGenuinelyActive boolean this test used to pin
+    # DIRECTLY was too coarse -- it read a task blocked at green_gate with
+    # NO live heartbeat as "genuinely active", and the status-line banner
+    # then said "Driving 4c9b39e5 ... prism-task-runner" for a seat that
+    # was not actually beating. The gate_state/activity checks now live in
+    # two disjoint helpers (conductorTaskDriving, conductorTaskWaitingAtGate)
+    # that conductorTaskGenuinelyActive ORs together -- this test follows
+    # the checks to their new homes instead of one flat function body.
     src = _read(_PAGE)
-    body = _function_body(src, "function conductorTaskGenuinelyActive(")
-    assert re.search(
-        r'task\.gate_state\s*===\s*"pending"\s*\|\|\s*task\.gate_state\s*===\s*"failed"',
-        body,
-    ), (
-        "conductorTaskGenuinelyActive must treat gate_state pending/failed "
-        "as active on its own -- a task at plan_gate with gate_state="
-        "pending IS being worked (the gate adjudicator seat is re-sweeping "
-        "it) even though activity_for reports 'awaiting_gate', never "
-        "'working'/'driving', for exactly that state"
-    )
+    driving_body = _function_body(src, "function conductorTaskDriving(")
     assert re.search(
         r'task\.activity\?\.state\s*===\s*"working"\s*\|\|\s*task\.activity\?\.state\s*===\s*"driving"',
-        body,
-    ), "the working/driving activity check must still be the fallback clause"
+        driving_body,
+    ), "conductorTaskDriving must be the honest live-heartbeat check"
+    waiting_body = _function_body(src, "function conductorTaskWaitingAtGate(")
+    assert re.search(
+        r'task\.gate_state\s*===\s*"pending"\s*\|\|\s*task\.gate_state\s*===\s*"failed"',
+        waiting_body,
+    ), (
+        "conductorTaskWaitingAtGate must treat gate_state pending/failed as "
+        "a real (if not currently driven) gate fact -- the gate adjudicator "
+        "seat re-sweeps it even with nobody mid-step"
+    )
+    assert "!conductorTaskDriving(task)" in waiting_body, (
+        "conductorTaskWaitingAtGate must exclude a task a live heartbeat is "
+        "already driving -- that case is 'Driving', never 'Waiting'"
+    )
+    active_body = _function_body(src, "function conductorTaskGenuinelyActive(")
+    assert "conductorTaskDriving(task)" in active_body and "conductorTaskWaitingAtGate(task)" in active_body, (
+        "conductorTaskGenuinelyActive (the board-wide occupancy fact used by "
+        "the row dot and ambient highlight) must OR the two disjoint facts "
+        "together, not re-derive its own gate_state/activity check"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +166,34 @@ def test_live_running_uses_the_shared_liveness_helper():
 
 
 def test_directory_row_liveness_uses_the_shared_liveness_helper():
+    # UPDATED 2026-09-13: conductorRowLiveness is now tri-state ("driving" |
+    # "waiting" | undefined) so the dot's colour can tell the two facts
+    # apart -- see test_the_directory_dot_distinguishes_driving_from_waiting
+    # below. It routes through the same two disjoint helpers as
+    # conductorTaskGenuinelyActive rather than that one flattened boolean.
     src = _read(_PAGE)
     body = _function_body(src, "const conductorRowLiveness = useMemo(() => {")
-    assert "conductorTaskGenuinelyActive(task)" in body, (
-        "conductorRowLiveness (the directory's per-row live dot) must use "
-        "the shared helper too, so a canvas whose only occupant is a "
-        "pending-gate task still shows its dot lit"
+    assert "conductorTaskDriving" in body and "conductorTaskWaitingAtGate" in body, (
+        "conductorRowLiveness (the directory's per-row live dot) must ask "
+        "both disjoint liveness facts, so a canvas whose only occupant is a "
+        "pending-gate task with no heartbeat still shows its dot lit -- in "
+        "the waiting colour, not the driving one"
+    )
+
+
+def test_the_directory_dot_distinguishes_driving_from_waiting():
+    src = _read(_PAGE)
+    assert src.count('dotLive === "waiting"') >= 2, (
+        "both directory dot renderers (root rows and renderBranch's nested "
+        "rows) must render a distinct 'waiting' colour/title -- a task "
+        "parked at a gate with no heartbeat must not pulse the same "
+        "'running now' teal dot as a task a real heartbeat is driving "
+        "(2026-09-13, screenshot workflows-342.png)"
+    )
+    assert 'bg-fuchsia-400/70 animate-pulse' in src, (
+        "the waiting dot must reuse the SAME fuchsia tone the rail pill "
+        "(conductorPillTone) already uses for a pending/failed gate, not a "
+        "third, newly-invented colour"
     )
 
 
@@ -198,6 +238,23 @@ def test_the_running_status_line_names_the_driven_task_and_seat():
     assert "activeTask.activity?.seat" in body, (
         "the banner must include the driving seat (e.g. "
         "conductor-adjudicator) when the task's activity carries one"
+    )
+    # 2026-09-13 (screenshot workflows-342.png): the "Driving" claim must be
+    # gated on a real heartbeat (conductorTaskDriving), and a task merely
+    # parked at a gate with none must read as "Waiting", naming who owns
+    # the next move instead of a seat that isn't beating.
+    assert "if (conductorTaskDriving(activeTask))" in body, (
+        "the 'Driving ...' return must be gated behind conductorTaskDriving, "
+        "never rendered for a task whose only liveness fact is a pending/"
+        "failed gate_state with no heartbeat"
+    )
+    assert re.search(r"`Waiting at \$\{step\} · \$\{activeTask\.id\.slice\(0,\s*8\)\}", body), (
+        "a task waiting at a gate with no live driver must render "
+        "'Waiting at <step> · <id8> · ...', never 'Driving'"
+    )
+    assert '"machine seat next"' in body and '"your review"' in body, (
+        "the waiting branch must name WHO owns the next move -- the "
+        "machine seat for a machine_only_gate step, the owner otherwise"
     )
 
 
