@@ -3988,27 +3988,52 @@ class Brain:
         self._update_last_index_timestamp()
         return count
 
-    def incremental_reindex(self) -> int:
-        """Re-index only files changed since last index. Returns count reindexed."""
+    def incremental_reindex(self, repo_path: Optional[str] = None) -> int:
+        """Re-index only files changed since last index. Returns count reindexed.
+
+        `repo_path` (task: livehang round 4) scopes the `git diff`/`git
+        ls-files` calls to THAT project's own checkout via `cwd=` --
+        without it, every one of these subprocess calls ran in whatever
+        directory the DAEMON PROCESS happened to be started from,
+        regardless of which project this Brain instance actually belongs
+        to. Every project sharing that one cwd's dirty/untracked state
+        meant every one of them reported drift on the SAME set of files
+        (observed live: nearly every one of ~30 tracked projects logged
+        "reindexed 65 drifted file(s)" — the daemon's own checkout's real
+        diff, re-indexed once per project on every startup sweep), and a
+        project whose checkout was genuinely unchanged could never see
+        its own drift count settle to zero. When `repo_path` is given,
+        every returned path is resolved to an ABSOLUTE path under it
+        before any existence check or index/remove call, so `_index_files`
+        (a plain `Path(filepath).read_text()`) and the on-disk existence
+        check both resolve against the right tree regardless of the
+        daemon's own cwd. `repo_path=None` keeps the prior behavior
+        (cwd-relative) for existing callers/tests."""
+        kwargs: dict = {"capture_output": True, "text": True}
+        if repo_path:
+            kwargs["cwd"] = repo_path
         try:
             changed_out = subprocess.run(
                 ["git", "diff", "--name-only", "--diff-filter=ACMRD", "HEAD"],
-                capture_output=True, text=True,
+                **kwargs,
             ).stdout.strip()
             deleted_out = subprocess.run(
                 ["git", "diff", "--name-only", "--diff-filter=D", "HEAD"],
-                capture_output=True, text=True,
+                **kwargs,
             ).stdout.strip()
             untracked_out = subprocess.run(
                 ["git", "ls-files", "--others", "--exclude-standard"],
-                capture_output=True, text=True,
+                **kwargs,
             ).stdout.strip()
         except (FileNotFoundError, subprocess.SubprocessError):
             changed_out, deleted_out, untracked_out = "", "", ""
 
-        changed = changed_out.split("\n") if changed_out else []
-        deleted = deleted_out.split("\n") if deleted_out else []
-        untracked = untracked_out.split("\n") if untracked_out else []
+        def _abs(f: str) -> str:
+            return str(Path(repo_path) / f) if repo_path else f
+
+        changed = [_abs(f) for f in changed_out.split("\n") if f] if changed_out else []
+        deleted = [_abs(f) for f in deleted_out.split("\n") if f] if deleted_out else []
+        untracked = [_abs(f) for f in untracked_out.split("\n") if f] if untracked_out else []
 
         # Remove entries for explicitly deleted files
         deleted_indexed = [f for f in deleted if f]

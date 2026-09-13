@@ -352,67 +352,40 @@ def start_governance_timer():
 
 
 def start_drift_timer():
-    """Reindex drifted Brain docs per project on a cadence.
+    """Thin while-True wrapper around drift_worker.sweep_once() (task:
+    livehang round 4 -- see that module's docstring for the full story: the
+    OLD version here swept EVERY tracked project on a fixed cadence, fired
+    unconditionally on its very first tick after any restart, and diffed
+    the daemon's own cwd instead of each project's real checkout, which
+    together pegged the CPU at 150-180% and starved every other thread's
+    access to the GIL for 20-30 minutes on every restart.
 
-    Uses a dedicated Brain per project (separate SQLite connections from
-    the request path) so a long reindex transaction doesn't park MCP
-    workers behind the same connection mutex — same fix as issue #38.
-    """
+    sweep_once() itself is idle-gated, active-project-gated, and wall-clock
+    budgeted, so this loop can simply poll it every STALE_CHECK_S with no
+    cadence bookkeeping of its own; PRISM_DRIFT_INTERVAL keeps its old
+    meaning as a hard on/off switch."""
     if DRIFT_INTERVAL_SECONDS <= 0:
         print("Drift timer disabled (PRISM_DRIFT_INTERVAL=0)", file=_sys.stderr)
         return
-    from prism_service.project_context import get_project, get_all_projects
-    from prism_service.engines.brain_engine import Brain
-    from prism_service.services import system_activity
-    print(f"Drift timer running every {DRIFT_INTERVAL_SECONDS}s", file=_sys.stderr)
-    drift_brains: dict[str, Brain] = {}
-    # Tight loop checks for soft-deleted projects every STALE_CHECK_S so
-    # cached Brain SQLite handles release within seconds of a DELETE —
-    # the trash sweeper can then rmtree the .db files. Reindex remains
-    # on the configured DRIFT_INTERVAL_SECONDS cadence.
+    from prism_service.services import drift_worker
     STALE_CHECK_S = 5
-    last_reindex = 0.0
+    print(
+        f"Drift timer running every {STALE_CHECK_S}s "
+        f"(active-project gated, budget={drift_worker.BUDGET_S}s)",
+        file=_sys.stderr,
+    )
+    # Best-effort: this worker competes with every request-serving thread
+    # for the GIL the instant it does real work, so it never gets to run
+    # ahead of a request if the OS scheduler has any say in it. Not
+    # supported on every platform (Windows has no os.nice) -- harmless
+    # no-op there.
+    try:
+        os.nice(10)
+    except Exception:
+        pass
     while True:
         try:
-            live = set(get_all_projects())
-            for stale_pid in [p for p in drift_brains if p not in live]:
-                stale_brain = drift_brains.pop(stale_pid, None)
-                for close_name in ("close", "shutdown"):
-                    close = getattr(stale_brain, close_name, None)
-                    if callable(close):
-                        try:
-                            close()
-                        except Exception:
-                            pass
-                        break
-                print(f"[drift] released stale Brain for {stale_pid}", file=_sys.stderr)
-
-            now = time.time()
-            do_reindex = now - last_reindex >= DRIFT_INTERVAL_SECONDS
-            if not do_reindex:
-                time.sleep(STALE_CHECK_S)
-                continue
-            last_reindex = now
-
-            for pid in live:
-                try:
-                    ctx = get_project(pid)
-                    db_dir = ctx._data_dir
-                    brain = drift_brains.get(pid)
-                    if brain is None:
-                        brain = Brain(
-                            brain_db=str(db_dir / "brain.db"),
-                            graph_db=str(db_dir / "graph.db"),
-                            scores_db=str(db_dir / "scores.db"),
-                            tasks_db=str(db_dir / "tasks.db"),
-                        )
-                        drift_brains[pid] = brain
-                    with system_activity.pass_("drift_reindex", pid, "incremental_reindex"):
-                        n = brain.incremental_reindex()
-                    if n:
-                        print(f"[drift] {pid}: reindexed {n} drifted file(s)", file=_sys.stderr)
-                except Exception as e:
-                    print(f"Drift cycle error ({pid}): {e}", file=_sys.stderr)
+            drift_worker.sweep_once()
         except Exception as e:
             print(f"Drift timer error: {e}", file=_sys.stderr)
         time.sleep(STALE_CHECK_S)
@@ -799,6 +772,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _track_project_activity(request, call_next):
+    """Marks the `?project=` query param of every request as recently-seen
+    (services/project_activity.py) -- the ONLY signal the drift reindexer
+    (services/drift_worker.py, task: livehang round 4) uses to decide a
+    project is actually in use. Reads a query param only, no I/O, so this
+    adds no meaningful per-request cost."""
+    project = request.query_params.get("project") or ""
+    if project:
+        from prism_service.services import project_activity
+        project_activity.mark_seen(project)
+    return await call_next(request)
 
 # JSON API for the SPA + non-API routes (SSE, graph viewer).
 from prism_service.api import api_router
