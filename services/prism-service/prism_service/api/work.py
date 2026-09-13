@@ -80,19 +80,48 @@ _GRAPH_CALL_TIMEOUT_S = float(os.environ.get("PRISM_GRAPH_CALL_TIMEOUT_S", "0.4"
 _GRAPH_IO_POOL = concurrent.futures.ThreadPoolExecutor(
     max_workers=16, thread_name_prefix="work-graph-io")
 
+# IN-FLIGHT DEDUP (round 2 of the live-page transcript-I/O hang, live
+# instance 2026-09-12): round 1 bounded each CALLER's wait, but left a
+# timed-out call running in the background with nothing stopping the NEXT
+# poll from submitting ANOTHER copy of the identical (fn, args) while the
+# first is still going. /live re-fetches this endpoint on every page
+# load/tab and on GraphState's self-heal path (module docstring), so in
+# production this repeats every few seconds -- each repeat that lands
+# before the previous background read finishes piles ONE MORE thread onto
+# `_GRAPH_IO_POOL` reading the SAME cold, multi-hundred-MB transcript.
+# Confirmed live: the daemon's own watchdog (services/watchdog.py, a plain
+# `GET /` self-probe -- nothing to do with this route) started timing out
+# too (24 stack dumps logged), which only makes sense if piled-up CPU-bound
+# background reads (pure-Python json.loads in a tight per-line loop) were
+# starving the GIL for the WHOLE process, not just this endpoint.
+# `_INFLIGHT` keys a call by (fn identity, args, sorted kwargs) so a second
+# poll for the exact same session REUSES the one Future already running
+# instead of submitting a duplicate -- bounding total concurrent background
+# reads to the number of DISTINCT (fn, args) ever outstanding, never to the
+# number of polls.
+_INFLIGHT_LOCK = threading.Lock()
+_INFLIGHT: dict[tuple, concurrent.futures.Future] = {}
+
 
 def _bounded(deadline: float, fn, *args, **kwargs):
     """Run fn(*args, **kwargs) against a per-call timeout AND the shared
     per-request `deadline`. Returns (value, True) on success, (None, False)
     when the overall budget is already spent OR this one call didn't finish
     in time -- the caller then falls back to a best-effort default instead
-    of blocking. See the module-level comment above for why an abandoned
-    call is safe to leave running."""
+    of blocking. See the module-level comments above: an abandoned call is
+    safe to leave running, and is DEDUPED against the identical (fn, args)
+    call from a later poll rather than resubmitted."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         return None, False
+    key = (id(fn), fn.__module__, fn.__qualname__, args,
+           tuple(sorted(kwargs.items())))
+    with _INFLIGHT_LOCK:
+        fut = _INFLIGHT.get(key)
+        if fut is None or fut.done():
+            fut = _GRAPH_IO_POOL.submit(fn, *args, **kwargs)
+            _INFLIGHT[key] = fut
     try:
-        fut = _GRAPH_IO_POOL.submit(fn, *args, **kwargs)
         return fut.result(timeout=min(_GRAPH_CALL_TIMEOUT_S, remaining)), True
     except Exception:
         return None, False
