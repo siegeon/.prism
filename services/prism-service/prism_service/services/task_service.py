@@ -1459,6 +1459,30 @@ class TaskService:
             if value is None or isinstance(value, (str, int, float, bool)):
                 changed_fields[key] = value
 
+        # Auto-clear a stale blocked_reason when status LEAVES "blocked"
+        # without the caller also supplying a replacement (task a65c66e5,
+        # 2026-09-13, ops incident). resume_actuator.release() (the seat's
+        # own re-arm path) already clears this deliberately -- but a raw
+        # operator/API PATCH that flips status back to in_progress without
+        # going through release() left the OLD park text sitting on the
+        # row forever, reading as "still parked" on the card even though
+        # the task was actively driving again. blocked_reason only means
+        # anything while status == "blocked", so this is a general
+        # invariant of the field, not a resume_actuator-specific fix: any
+        # caller that unblocks a task without naming a new reason gets one
+        # cleared for free. A caller re-parking in the SAME call
+        # ("blocked_reason" already in kwargs, e.g. _park re-parking with a
+        # fresh reason) is never overridden here.
+        if (old_status == "blocked" and "blocked_reason" not in kwargs
+                and str(kwargs.get("status", old_status)) != "blocked"
+                and task.blocked_reason):
+            old_blocked_reason = task.blocked_reason
+            task.blocked_reason = ""
+            changes.append(
+                f"blocked_reason: {_history_value_repr(old_blocked_reason)} "
+                "-> '' (auto-cleared: status left blocked)")
+            changed_fields["blocked_reason"] = ""
+
         # STE normalisation (task 36283d72): run on every call that finds
         # a task, so self.last_style always reflects the CURRENT fields —
         # not just the ones this particular call happened to touch. Any
