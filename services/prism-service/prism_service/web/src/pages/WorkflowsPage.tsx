@@ -67,6 +67,42 @@ function childOrderKey(project: string): string {
   return `prism.workflows.childOrder.${project}`;
 }
 
+/** Session-scoped last-good-catalog cache, keyed per project.
+ *
+ * Before this, `workflows` seeded as `[]` on every mount, so a hard reload
+ * or a fresh tab landing on /workflows?workflow=conductor rendered an empty
+ * directory rail and a blank canvas for as long as GET /api/workflows took
+ * to answer -- observed live taking >10s during a post-restart drift-
+ * reindex burst (the owner: "the click through is a dark solid image again
+ * like i asked you fix over and over"). Seeding from sessionStorage instead
+ * repaints the LAST GOOD catalog instantly while the fresh poll is still in
+ * flight, exactly the same posture positionsKey/portsKey above already take
+ * for the owner's own layout -- this is content, not layout, so it's
+ * sessionStorage (cleared per-tab) rather than the permanent localStorage
+ * those use. */
+function catalogCacheKey(project: string): string {
+  return `prism.workflows.catalogCache.${project}`;
+}
+
+function readCatalogCache(project: string): WorkflowCatalogEntry[] | null {
+  try {
+    const raw = sessionStorage.getItem(catalogCacheKey(project));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as WorkflowCatalogEntry[];
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCatalogCache(project: string, workflows: WorkflowCatalogEntry[]): void {
+  try {
+    sessionStorage.setItem(catalogCacheKey(project), JSON.stringify(workflows));
+  } catch {
+    // storage full/unavailable -- the page still works from the live fetch
+  }
+}
+
 /** Reads one saved blob, tolerating absent/corrupt/blocked storage — a bad
  * entry means "boot from the deterministic layout", never a broken page. */
 function readJson<T>(key: string, apply: (raw: T) => void): void {
@@ -491,7 +527,7 @@ export default function WorkflowsPage() {
   // is no run instance to poll; useConductorState is the SAME live, SSE-
   // pushed source LiveBar.tsx already reads for "who's working now", reused
   // here rather than inventing a second one.
-  const { managed: conductorManaged } = useConductorState(project);
+  const { managed: conductorManaged, observed: conductorStateObserved } = useConductorState(project);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<WorkflowGraph>(new WorkflowGraph());
   // prefers-reduced-motion: `reduced` (useReducedMotion() above) already
@@ -519,7 +555,37 @@ export default function WorkflowsPage() {
     return DIRECTORY_DEFAULT_PX;
   });
   const directoryResizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
-  const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[]>(
+    () => readCatalogCache(project) ?? [],
+  );
+  // "Not loaded yet" vs. "genuinely empty" (task: the workflows canvas dark
+  // solid image defect). Seeded true when the session cache above already
+  // has a catalog for this project -- a cache hit means real content is on
+  // screen immediately, so there is nothing left to wait on. `dataLoaded`
+  // is the ONE combined flag every empty-state render below must check
+  // before saying "No runs yet" / "No recent activity", or drawing a blank
+  // canvas: it requires BOTH the catalog poll (this effect) and the
+  // conductor state poll (useConductorState's own `observed`) to have
+  // answered at least once, success or failure either counts as "arrived"
+  // -- a failure already renders its own honest "Connection interrupted"
+  // branch (tier==="disconnected") rather than a false empty claim.
+  const [catalogArrived, setCatalogArrived] = useState(() => readCatalogCache(project) !== null);
+  const dataLoaded = catalogArrived && conductorStateObserved;
+  const loadingStartedAtRef = useRef(Date.now());
+  const [loadingElapsedS, setLoadingElapsedS] = useState(0);
+  useEffect(() => {
+    if (dataLoaded) return;
+    const id = window.setInterval(() => {
+      setLoadingElapsedS(Math.round((Date.now() - loadingStartedAtRef.current) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [dataLoaded]);
+  // A REFRESH poll (after the first) running long, or failing outright --
+  // tracked separately from catalogArrived so already-rendered data is
+  // never discarded: the seconds a currently-in-flight poll has been
+  // running, or the seconds the LAST attempt took before it failed. Null
+  // means "the most recent poll was fine."
+  const [pollSlowS, setPollSlowS] = useState<number | null>(null);
   // The whole /api/workflows payload. Task 0c396de2 kept it so a
   // separate Roles section could render the persona cards; that section
   // is retired (owner 2026-09-10, roles are bots in the tree now), and
@@ -636,19 +702,41 @@ export default function WorkflowsPage() {
     let cancel = false;
     let timer = 0;
     let failures = 0;
+    let slowTick = 0;
+    // A REFRESH poll running long must show something (task: the workflows
+    // canvas dark solid image defect) without touching the full-page
+    // loading overlay, which only ever answers "has the FIRST response
+    // arrived at all". Called right after each poll schedules its NEXT
+    // attempt (both `load` itself and its two `window.setTimeout(load, ...)`
+    // call sites below are pinned literally by an earlier invariant test,
+    // so the arming lives in this sibling function rather than wrapping
+    // either). Ticks every second; cleared on resolution inside load()
+    // below -- success clears it outright, failure leaves the last value
+    // standing so the pill persists alongside "Connection interrupted".
+    const armSlowTick = () => {
+      const requestStartedAt = Date.now();
+      window.clearInterval(slowTick);
+      slowTick = window.setInterval(() => {
+        setPollSlowS(Math.round((Date.now() - requestStartedAt) / 1000));
+      }, 1000);
+    };
     const load = () => {
       fetchWorkflowDef(project)
         .then((def) => {
+          window.clearInterval(slowTick);
           if (cancel) return;
           failures = 0;
           setConnectionInterrupted(false);
           setReconnectAttempt(0);
+          setPollSlowS(null);
+          setCatalogArrived(true);
           setData(def);
           const catalog = connectWorkflowCatalog(def.workflows ?? [{
             id: "conductor", name: "Conductor", description: "PRISM delivery workflow",
             steps: def.steps, bots: def.bots, occupancy: def.occupancy,
           }]);
           setWorkflows(catalog);
+          writeCatalogCache(project, catalog);
           const selected = catalog.find((workflow) => workflow.id === selectedWorkflowRef.current)
             ?? catalog[0];
           // Live occupancy IS the correct default view of the conductor's
@@ -690,13 +778,21 @@ export default function WorkflowsPage() {
             const canvas = canvasRef.current;
             graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
           }
+          armSlowTick();
           timer = window.setTimeout(load, POLL_MS);
         })
         .catch(() => {
+          window.clearInterval(slowTick);
           if (cancel) return;
           failures += 1;
           setConnectionInterrupted(true);
           setReconnectAttempt(failures);
+          // Never clear workflows/data here -- a failed poll keeps the
+          // last good catalog on screen (tier already flips to
+          // "disconnected" -> "Connection interrupted" for the honest
+          // reason it's stale) rather than blanking the canvas.
+          setCatalogArrived(true);
+          armSlowTick();
           const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** (failures - 1));
           timer = window.setTimeout(load, delay);
         });
@@ -705,8 +801,9 @@ export default function WorkflowsPage() {
     // from their default slot to the saved one.
     readJson<Record<string, Point>>(positionsKey(project),
       (raw) => graphRef.current.hydrateOverrides(raw));
+    armSlowTick();
     load();
-    return () => { cancel = true; window.clearTimeout(timer); };
+    return () => { cancel = true; window.clearTimeout(timer); window.clearInterval(slowTick); };
   }, [project]);
 
   // The 1-second live channel (services/workflow_live.py), overlaid on top
@@ -1273,9 +1370,15 @@ export default function WorkflowsPage() {
       && liveEndedAt && Date.now() - Date.parse(liveEndedAt) < SETTLE_WINDOW_MS) {
       return `${lastOutcome.name} ${lastOutcome.passed ? "passed" : "failed"} · just now`;
     }
+    // "No runs yet" is a claim about genuinely-empty history -- it must
+    // never be the fallback for "the first poll hasn't answered yet"
+    // (task: the workflows canvas dark solid image defect). While
+    // !dataLoaded, the canvas's own loading overlay already carries the
+    // elapsed-seconds story; this line stays a plain, honest "loading".
+    if (!dataLoaded) return `Loading workflows… (${loadingElapsedS}s)`;
     if (!lastOutcome) return "No runs yet";
     return `No run in progress · last run ${relativeTime(lastOutcome.endedAtIso)} · ${lastOutcome.passed ? "passed" : "failed"}`;
-  }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks]);
+  }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks, dataLoaded, loadingElapsedS]);
 
   const refreshRunHistory = useCallback(() => {
     if (!selectedWorkflow || selectedWorkflow.id !== "validation") {
@@ -2450,6 +2553,17 @@ export default function WorkflowsPage() {
               {directoryOpen ? "‹" : "›"}
             </button>
           </div>
+          {directoryOpen && !dataLoaded && workflows.length === 0 && (
+            // Rail skeleton: an empty directory before the first catalog
+            // response looks identical to a project that genuinely has no
+            // workflows, unless it says otherwise (task: the workflows
+            // canvas dark solid image defect).
+            <div aria-label="Loading workflow directory" className="space-y-2 px-2 py-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-4 animate-pulse rounded bg-[color:var(--nav-hover)]" style={{ opacity: 1 - i * 0.2 }} />
+              ))}
+            </div>
+          )}
           {directoryOpen && (
             <nav className="py-3" aria-label="Available workflows">
               {workflows.filter((workflow) => !workflow.parent_id).map((workflow) => {
@@ -2747,9 +2861,25 @@ export default function WorkflowsPage() {
             nothing. Its own full-width row under the header, never over
             the canvas. */}
         <div className="border-b border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-4 py-2 text-xs text-[color:var(--text-secondary)]">
-          <div>{statusLineText}</div>
+          <div className="flex items-center gap-2">
+            <span>{statusLineText}</span>
+            {/* A REFRESH poll (not the first) running long or failing must
+                say so in place, never silently blank the board it's still
+                showing the last good data for. Only shows once dataLoaded
+                -- the first-load overlay already carries this story. */}
+            {dataLoaded && pollSlowS !== null && pollSlowS >= 5 && (
+              <span
+                title="A workflows/conductor-state refresh is taking longer than usual; the board below is still the last good data."
+                className="rounded border border-amber-500/50 bg-amber-950/20 px-2 py-0.5 text-2xs uppercase tracking-wide text-amber-300"
+              >
+                backend slow · {pollSlowS}s
+              </span>
+            )}
+          </div>
           <div aria-label="Recent workflow activity" className="mt-1 flex flex-wrap gap-x-6 gap-y-1 text-[color:var(--text-muted)]">
-            {recentEvents.length === 0 ? (
+            {!dataLoaded ? (
+              <div>Loading recent activity…</div>
+            ) : recentEvents.length === 0 ? (
               <div>No recent activity</div>
             ) : (
               recentEvents.map((event) => (
@@ -2767,6 +2897,24 @@ export default function WorkflowsPage() {
             page-level/informational is layered on top of the graph, by
             construction, because the header above already owns that. */}
         <div data-canvas-frame className="relative min-w-0 flex-1">
+        {/* The canvas has NOTHING to draw until the first catalog/state
+            responses land -- an empty graph reads as a dark solid image,
+            which the owner reported repeatedly ("the click through is a
+            dark solid image again like i asked you fix over and over").
+            This overlay is the ONLY thing rendered over the canvas while
+            !dataLoaded; it clears the instant real content (or an honest
+            "Connection interrupted") is ready to take its place. */}
+        {!dataLoaded && (
+          <div
+            aria-label="Loading workflows"
+            className="absolute inset-0 z-40 flex flex-col items-center justify-center gap-3 bg-[color:var(--surface-1)] text-[color:var(--text-secondary)]"
+          >
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-[color:var(--border-default)] border-t-[color:var(--accent-solid)]" />
+            <div className="font-mono text-xs uppercase tracking-widest">
+              Loading workflows… (catalog {loadingElapsedS}s)
+            </div>
+          </div>
+        )}
         {/* AC-6: the timeline content (SdlcProgress for a live run, the
             speed control for a done-instance replay) lives in its OWN bottom
             bar, separate from the box above which now holds only the
