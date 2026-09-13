@@ -517,6 +517,18 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
                         "reason": f"no handler for declared route {route!r}"})
             continue
         body = _subst(decl.get("body") or {}, live)
+        # BIND THE DECLARED WALL CLOCK (task bb3d1f6a): the node file's own
+        # timeoutSeconds is parsed into decl["timeout_s"] by _node_plan but
+        # was never handed to the handler, so a hung reason-loop call ran
+        # unbounded regardless of what the node declared. Merged into the
+        # body rather than passed as a third positional arg so every
+        # existing 2-arg handler/test in this table keeps working
+        # unchanged; a route whose Request model has no such field simply
+        # ignores the extra key (pydantic's default, unforced here).
+        declared_timeout = decl.get("timeout_s")
+        if isinstance(declared_timeout, (int, float)) and declared_timeout > 0 \
+                and "timeout_s" not in body:
+            body = {**body, "timeout_s": declared_timeout}
         try:
             result = fn(project, body)
         except Exception as exc:
