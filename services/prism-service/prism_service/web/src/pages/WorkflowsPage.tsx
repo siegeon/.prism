@@ -732,13 +732,15 @@ export default function WorkflowsPage() {
     };
   }, [connectionInterrupted, reconnectAttempt]);
 
-  // Shared SSE gate (task fix/polling, SSE follow-up): refetch on focus
-  // or as a 60s reconnect safety net -- was a bare 5s setTimeout loop
-  // regardless of whether staleness/workers had changed. No `kinds` yet:
-  // neither source signals a wakeups kind of its own, so this still
-  // refetches on ANY /sse/changes event (a real improvement over the old
-  // unconditional 5s timer, but a follow-up should give staleness/
-  // consolidation-workers their own signal kind for a tighter gate).
+  // Shared SSE gate (task fix/lasttimers, follow-up to fix/polling):
+  // refetch on focus, on a real wakeups.signal("staleness", ...) frame, or
+  // as a 60s reconnect safety net -- was a bare 5s setTimeout loop
+  // regardless of whether staleness/workers had changed, then briefly any
+  // /sse/changes event at all. Backend now signals "staleness" from the
+  // three places that can actually move `/api/staleness` or
+  // `/api/consolidation/workers`'s reply: understand_engine._mark_analyzed
+  // (brain job completion), maintenance_clock.run_tick, and
+  // drift_worker.sweep_once -- see services/wakeups.py's call sites.
   usePolledEffect(useCallback(() => {
     let cancelled = false;
     Promise.all([
@@ -755,7 +757,7 @@ export default function WorkflowsPage() {
       });
     }).catch(() => { /* validation remains usable while learning status reconnects */ });
     return () => { cancelled = true; };
-  }, [project]), project);
+  }, [project]), project, ["staleness"]);
 
   // Definition + live occupancy, refetched on real change events (see
   // reloadNonce/CATALOG_RELOAD_KINDS below) rather than a fixed interval.

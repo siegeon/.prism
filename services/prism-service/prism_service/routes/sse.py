@@ -175,7 +175,18 @@ async def sse_work(request: Request, project: str = "default"):
 # THIS process. `wait()` is a blocking call (threading.Condition), so it
 # runs in a thread via asyncio.to_thread rather than blocking the event
 # loop; its own 15s timeout doubles as the heartbeat interval.
-_CHANGE_KINDS = frozenset({"task_changed", "shipped", "activity"})
+_CHANGE_KINDS = frozenset({
+    "task_changed", "shipped", "activity",
+    # Task fix/lasttimers: three fixed-interval browser timers (a jobs
+    # poll, a staleness+consolidation poll, and two /api/version polls)
+    # were replaced with real backend signals -- these three kinds must
+    # be in this set or those signals never reach a browser at all, and
+    # the "no interval" fix silently regresses to "never refetches until
+    # focus/the reconnect floor". See services/wakeups.py's call sites:
+    # inference/queue.py ("jobs"), understand_engine.py/maintenance_clock.py/
+    # drift_worker.py ("staleness"), deploy_worker.py/main.py ("deployed").
+    "jobs", "staleness", "deployed",
+})
 _CHANGE_HEARTBEAT_S = 15.0
 
 

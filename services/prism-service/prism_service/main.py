@@ -691,6 +691,17 @@ async def lifespan(_app: FastAPI):
             clear_restart_sentinel()
         except Exception:
             pass
+        # Task fix/lasttimers: this boot IS a `deployed` event too (covers
+        # a restart that never went through deploy_worker.confirm_pending_
+        # deploy, e.g. a manual bounce or a crash recovery) -- signal it so
+        # any tab already connected to /sse/changes across the restart
+        # refetches /api/version on the real event instead of a fixed-
+        # interval poll (lib/version.ts).
+        try:
+            from prism_service.services import wakeups
+            wakeups.signal("deployed", "*")
+        except Exception:
+            pass
         threading.Thread(target=start_mcp_server, daemon=True).start()
         _run_workers_in_process = not _workers_process_enabled()
         if _run_workers_in_process:

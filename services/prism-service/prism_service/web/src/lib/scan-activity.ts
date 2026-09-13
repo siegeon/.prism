@@ -13,14 +13,21 @@
  * useJobs() — the raw job rows, for surfaces (Settings) that need to
  * filter/scope them themselves.
  *
- * Polls fast (2s) while there is work, slow (10s) while idle, so the
- * UI feels live without DDoS'ing the API when nothing's happening. An
- * in-flight guard (set before the await, cleared in `finally`) means a
- * scheduled tick never stacks a second request on top of one still
- * outstanding.
+ * Task fix/lasttimers (owner 2026-09-13, "why are you hammering the
+ * server with polling rather than updating with streaming"): this used
+ * to run its own bare setTimeout loop — fast (2s) while anything was in
+ * flight, slow (10s) while idle — so an idle tab still refetched forever.
+ * It now rides the SAME event-driven gate every other resource on this
+ * page sits behind (lib/usePolledResource.ts's usePolledResource):
+ * refetch on a real GET /sse/changes "jobs" frame (backend emits it from
+ * the understand-anything queue on enqueue/claim/complete/fail/cancel —
+ * see inference/queue.py's wakeups.signal call sites), on window focus/
+ * visibility, or as a 60s reconnect safety net while the stream itself
+ * looks unhealthy — never a routine poll while it's healthy, and never
+ * at all while the tab is hidden.
  */
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { useState, useEffect } from "react";
+import { usePolledResource } from "@/lib/usePolledResource";
 
 export type ScanJob = {
   id: string;
@@ -48,102 +55,20 @@ const IDLE: ScanActivity = {
   isActive: false, inProgress: [], pending: 0, failed: 0,
 };
 
-const POLL_HOT_MS = 2000;
-const POLL_COLD_MS = 10000;
+const JOBS_URL = "/api/jobs?limit=200";
+const JOBS_KINDS = ["jobs"];
 
-type JobsState = {
-  jobs: ScanJob[];
-  loaded: boolean;
-  lastLoaded: number | null;
-};
-
-const EMPTY_STATE: JobsState = { jobs: [], loaded: false, lastLoaded: null };
-
-// Module-level (process-wide, one per browser tab) store. Every
-// subscriber shares this one poll loop and one in-flight request.
-let jobsState: JobsState = EMPTY_STATE;
-const subscribers = new Set<(s: JobsState) => void>();
-let timer: ReturnType<typeof setTimeout> | null = null;
-let inFlight = false;
-
-function _notify() {
-  subscribers.forEach((fn) => fn(jobsState));
-}
-
-function _isHot(jobs: ScanJob[]): boolean {
-  return jobs.some((j) => j.state === "pending" || j.state === "in_progress");
-}
-
-function _scheduleNext(hot: boolean) {
-  if (timer !== null) clearTimeout(timer);
-  timer = setTimeout(_load, hot ? POLL_HOT_MS : POLL_COLD_MS);
-}
-
-// HIDDEN TAB = NO POLL (task c38ef597). Skipping the FETCH while hidden
-// — rather than not rescheduling — is what keeps the loop alive, so
-// becoming visible again resumes instead of freezing (the recorded
-// misfire).
-async function _load(): Promise<void> {
-  if (subscribers.size === 0) return; // last unsubscribe already stopped us
-  if (typeof document !== "undefined" && document.hidden) {
-    _scheduleNext(false);
-    return;
-  }
-  if (inFlight) {
-    // A tick landed while a request is still outstanding — reschedule
-    // WITHOUT issuing a second request (AC-6).
-    _scheduleNext(_isHot(jobsState.jobs));
-    return;
-  }
-  inFlight = true;
-  try {
-    const r = await api.get<{ jobs: ScanJob[] }>("/api/jobs?limit=200");
-    jobsState = { jobs: r.jobs, loaded: true, lastLoaded: Date.now() };
-    _notify();
-    _scheduleNext(_isHot(r.jobs));
-  } catch {
-    _scheduleNext(false);
-  } finally {
-    inFlight = false;
-  }
-}
-
-// Come back to a fresh number the moment the tab is looked at again.
-function _onVisible() {
-  if (typeof document === "undefined" || document.hidden) return;
-  if (timer !== null) clearTimeout(timer);
-  _load();
-}
-
-function _subscribe(fn: (s: JobsState) => void): () => void {
-  const first = subscribers.size === 0;
-  subscribers.add(fn);
-  if (first) {
-    document.addEventListener("visibilitychange", _onVisible);
-    _load();
-  }
-  return () => {
-    subscribers.delete(fn);
-    if (subscribers.size === 0) {
-      document.removeEventListener("visibilitychange", _onVisible);
-      if (timer !== null) clearTimeout(timer);
-      timer = null;
-    }
-  };
-}
-
-function _deriveActivity(s: JobsState): ScanActivity {
-  if (!s.loaded) return IDLE;
-  const inProgress = s.jobs.filter((j) => j.state === "in_progress");
-  const pending = s.jobs.filter((j) => j.state === "pending").length;
-  const failed = s.jobs.filter((j) => j.state === "failed").length;
+function _deriveActivity(jobs: ScanJob[], loaded: boolean): ScanActivity {
+  if (!loaded) return IDLE;
+  const inProgress = jobs.filter((j) => j.state === "in_progress");
+  const pending = jobs.filter((j) => j.state === "pending").length;
+  const failed = jobs.filter((j) => j.state === "failed").length;
   return { isActive: inProgress.length > 0 || pending > 0, inProgress, pending, failed };
 }
 
 export function useScanActivity(): ScanActivity {
-  const [s, setS] = useState<JobsState>(jobsState);
-  useEffect(() => _subscribe(setS), []);
-  return _deriveActivity(s);
+  const { data, polled } = usePolledResource<{ jobs: ScanJob[] }>(JOBS_URL, "", JOBS_KINDS);
+  return _deriveActivity(data?.jobs ?? [], polled);
 }
 
 /** Raw job rows for surfaces (Settings) that filter/scope them
@@ -154,15 +79,18 @@ export function useJobs(): {
   lastLoaded: number | null;
   refresh: () => void;
 } {
-  const [s, setS] = useState<JobsState>(jobsState);
-  useEffect(() => _subscribe(setS), []);
+  const { data, polled, refresh } = usePolledResource<{ jobs: ScanJob[] }>(JOBS_URL, "", JOBS_KINDS);
+  // usePolledResource doesn't itself expose "when did the payload last
+  // change" — track it locally off the data reference so JobsPanel's
+  // "Updated Ns ago" label still means something.
+  const [lastLoaded, setLastLoaded] = useState<number | null>(null);
+  useEffect(() => {
+    if (data !== null) setLastLoaded(Date.now());
+  }, [data]);
   return {
-    jobs: s.jobs,
-    loaded: s.loaded,
-    lastLoaded: s.lastLoaded,
-    refresh: () => {
-      if (timer !== null) clearTimeout(timer);
-      _load();
-    },
+    jobs: data?.jobs ?? [],
+    loaded: polled,
+    lastLoaded,
+    refresh,
   };
 }

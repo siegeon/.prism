@@ -14,16 +14,30 @@
  * the user picks up the new bundle without having to hard-refresh.
  *
  * `/api/version`'s default response deliberately OMITS `notes` (task
- * 842248bd: the full changelog is ~262 KB, and this hook's mount fetch plus
- * the 15s poll below only ever read `.version` — shipping the whole
+ * 842248bd: the full changelog is ~262 KB, and the mount fetch plus the
+ * refetches below only ever read `.version` — shipping the whole
  * changelog on every one of those calls was pure waste). Call
  * `useVersionNotes()` for the one place that genuinely wants the full
  * string (Sidebar's tooltip); it fetches `?notes=true` once, lazily,
  * cached module-scope same as `cached` above.
+ *
+ * Task fix/lasttimers (owner 2026-09-13, live idle-tab measurement: 22 of
+ * 37 requests in an idle, focused 33s window were GET /api/version): this
+ * file used to run two fixed timers of its own — a 2s dev-bundle poll and
+ * a 15s SSE-unhealthy fallback poll — so an idle tab hammered /api/version
+ * on a clock even though nothing had changed. Neither timer remains.
+ * Both watchers now refetch only on a real `deployed` wakeups signal
+ * (backend emits it from deploy_worker.confirm_pending_deploy on a
+ * confirmed restart, and once from main.py's lifespan boot — see
+ * services/wakeups.py's call sites) delivered over the SAME /sse/changes
+ * stream every other push-driven refetch in this app rides
+ * (lib/useChanges.ts's subscribeToChangeKind), plus a window `focus`
+ * recheck for a tab that was asleep through the event entirely.
  */
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { subscribeStream } from "@/lib/sharedStream";
+import { subscribeToChangeKind } from "@/lib/useChanges";
 
 export type ServiceVersion = {
   version: string;
@@ -64,7 +78,10 @@ function startDevBundleWatch(initialBuild: string | undefined) {
       })
       .catch(() => {});
   };
-  setInterval(poll, 2000);
+  // No fixed-interval reschedule (fix/lasttimers) — a `deployed` wakeups
+  // frame IS the "a new build might be live" signal; a window focus also
+  // rechecks for a tab that missed the event while backgrounded/asleep.
+  subscribeToChangeKind("deployed", poll);
   window.addEventListener("focus", poll);
 }
 
@@ -83,8 +100,7 @@ function startLiveWatchdog() {
   // Fast path: SSE reconnect after a backend swap surfaces the new version.
   // Subscribes through lib/sharedStream (task b835f639) so this watchdog costs
   // no connection of its own — it used to hold one in EVERY tab, on every page.
-  // Health now arrives via onHealth instead of a locally-owned es.onerror; the
-  // 15s fallback below stays gated on it exactly as before (D-6).
+  // Health now arrives via onHealth instead of a locally-owned es.onerror.
   subscribeStream(
     "/sse/live",
     (data) => {
@@ -93,11 +109,14 @@ function startLiveWatchdog() {
     },
     (healthy) => { sseHealthy = healthy; },
   );
-  // Robust fallback: poll every 15s, but ONLY while the SSE channel above
-  // looks unhealthy — /sse/live already pushes the version on connect and
+  // Robust fallback, but ONLY while the SSE channel above looks
+  // unhealthy — /sse/live already pushes the version on connect and
   // reconnect, so this still covers a throttled/suspended tab whose SSE
-  // stalled, without running a redundant fetch on every healthy tab. Also
-  // re-checks on refocus, when a backgrounded tab wakes up.
+  // stalled, without running a redundant fetch on every healthy tab.
+  // Task fix/lasttimers: no fixed-interval reschedule any more — the
+  // trigger is a real `deployed` wakeups frame (a confirmed daemon
+  // restart) delivered over /sse/changes, plus a visibilitychange
+  // recheck for a tab that wakes up having missed the event entirely.
   const poll = () => {
     if (sseHealthy) return;
     fetch("/api/version", { cache: "no-store" })
@@ -105,7 +124,7 @@ function startLiveWatchdog() {
       .then((r: { version?: string }) => onVersion(r.version))
       .catch(() => {});
   };
-  setInterval(poll, 15000);
+  subscribeToChangeKind("deployed", poll);
   window.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") poll();
   });
@@ -134,8 +153,8 @@ let notesCached: string | null = null;
 let notesInflight: Promise<string> | null = null;
 
 /** Fetches the full changelog via the explicit `?notes=true` opt-in (task
- * 842248bd) — never ridden on the lean default `useVersion()` path or the
- * 15s poll. Task d5465a25: this used to fire inside a bare mount
+ * 842248bd) — never ridden on the lean default `useVersion()` path or
+ * either watcher above. Task d5465a25: this used to fire inside a bare mount
  * `useEffect`, so every Sidebar mount downloaded the whole ~262 KB
  * changelog whether or not the user ever hovered the tooltip. There is no
  * auto-fetch now — the caller must invoke the returned `ensureLoaded()`

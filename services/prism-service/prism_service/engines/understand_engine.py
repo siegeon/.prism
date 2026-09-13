@@ -280,6 +280,17 @@ class UnderstandEngine:
             if store.has(self.project, sha, a):
                 analyzers[a] = {"sha": sha}
         _write_state(self.project, state)
+        # Task fix/lasttimers: this is the mutation that actually flips
+        # /api/staleness's understand/derived-from-source booleans (a brain
+        # job just caught up `last_analyzed_sha` to HEAD) -- signal it so
+        # WorkflowsPage's brain-activity panel refetches on the real event
+        # instead of a fixed-interval poll. Never raises.
+        try:
+            from prism_service.services import wakeups
+
+            wakeups.signal("staleness", self.project or "*")
+        except Exception:
+            pass
 
     def status(self, recent: int = 5) -> dict:
         """Compose source pin state + queue snapshot for the
