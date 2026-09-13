@@ -47,12 +47,88 @@ _SESSION_RECENCY_S = 30 * 60
 # Per-task live-spend cache: (project, task_id) -> (fetched_at, usd). Spend
 # requires walking every linked session's transcript(s) via
 # live_spend_for_session, which is its own directory walk + incremental
-# file reads -- cheap once warm, but not cheap enough to redo for every
-# task on every /live poll. A short TTL keeps the number honest (spend
-# only ever grows) while bounding cost.
+# file reads. `_SPEND_CACHE_TTL_S` is now the STALENESS threshold a reader
+# checks (see `_task_spend_usd`), not a TTL the request path enforces
+# itself -- see the background refresher below.
 _SPEND_CACHE_TTL_S = 5.0
 _TASK_SPEND_CACHE: dict[str, tuple[float, float]] = {}
 _TASK_SPEND_LOCK = threading.Lock()
+
+# BACKGROUND SPEND REFRESH (route-timing pass, owner brief 2026-09-13,
+# final item): a cold/expired spend lookup cost 624ms on a live warm poll
+# (the 5s TTL above expiring mid-request) -- the request path must NEVER
+# call into claude_transcripts at all, however cheap it usually is. A
+# request instead just registers the (project, task_id) it wants priced
+# in `_SPEND_WANTED` and reads whatever `_TASK_SPEND_CACHE` already has
+# (0.0/stale=True on a genuine first-ever miss) -- a low-priority
+# background thread owns every live_spend_for_session call, refreshing
+# every wanted key once per `_SPEND_REFRESH_INTERVAL_S`. This self-heals
+# exactly like the existing `_bounded`/`_INFLIGHT` transcript machinery
+# above: a task nobody has asked about yet prices as 0.0/stale for one
+# poll and is correct from the next background pass onward.
+_SPEND_REFRESH_INTERVAL_S = float(
+    os.environ.get("PRISM_SPEND_REFRESH_INTERVAL_S", "5.0"))
+_SPEND_WANTED_LOCK = threading.Lock()
+# key -> (project, task_id, source_path, override_dir)
+_SPEND_WANTED: dict[str, tuple[str, str, str, str]] = {}
+_SPEND_REFRESHER_LOCK = threading.Lock()
+_SPEND_REFRESHER_STARTED = False
+
+
+def _spend_refresh_once() -> None:
+    """One pass over every key in `_SPEND_WANTED`: recompute total USD
+    spend across the task's linked sessions and update `_TASK_SPEND_CACHE`.
+    This is the ONLY place in the module that calls
+    claude_transcripts.live_spend_for_session -- called repeatedly by
+    `_spend_refresh_loop` on the background thread, and callable directly
+    (as tests do) for one deterministic pass without waiting on the
+    thread's sleep interval."""
+    from prism_service.services.claude_transcripts import live_spend_for_session
+
+    with _SPEND_WANTED_LOCK:
+        wanted = list(_SPEND_WANTED.items())
+    for key, (project, task_id, source_path, override_dir) in wanted:
+        try:
+            ctx = get_project(project)
+            sessions = ctx.task_svc.sessions_for_task(task_id)
+        except Exception:
+            sessions = []
+        total = 0.0
+        for sess in sessions:
+            sid = sess.get("session_id")
+            if not sid:
+                continue
+            try:
+                spend = live_spend_for_session(
+                    sid, source_path, override_dir=override_dir or None)
+                total += spend["total"]["usd"]
+            except Exception:
+                continue
+        with _TASK_SPEND_LOCK:
+            _TASK_SPEND_CACHE[key] = (time.time(), total)
+
+
+def _spend_refresh_loop() -> None:
+    while True:
+        time.sleep(_SPEND_REFRESH_INTERVAL_S)
+        try:
+            _spend_refresh_once()
+        except Exception:
+            pass
+
+
+def _ensure_spend_refresher_started() -> None:
+    global _SPEND_REFRESHER_STARTED
+    if _SPEND_REFRESHER_STARTED:
+        return
+    with _SPEND_REFRESHER_LOCK:
+        if _SPEND_REFRESHER_STARTED:
+            return
+        threading.Thread(
+            target=_spend_refresh_loop,
+            name="work-graph-spend-refresh", daemon=True,
+        ).start()
+        _SPEND_REFRESHER_STARTED = True
 
 # Wall-clock budget for GET /api/work/graph's transcript-backed enrichment
 # (spend_usd + the session/token-motion scan below) -- the live defect this
@@ -150,7 +226,8 @@ def _task_node(task_id: str, title: str, status: str, workflow_step: str,
                queue_depth: int = 0,
                drive_started_at: float | None = None,
                owner_actionable: bool = False,
-               waiting_on: str = "") -> dict:
+               waiting_on: str = "",
+               spend_stale: bool = False) -> dict:
     heartbeat = (activity or {}).get("heartbeat") or {}
     kind = "task"
     return {
@@ -165,6 +242,12 @@ def _task_node(task_id: str, title: str, status: str, workflow_step: str,
         "tok_s": None,
         "tokens_total": None,
         "spend_usd": round(spend_usd or 0.0, 4),
+        # True when the background spend refresher (see _task_spend_usd)
+        # hasn't priced this task yet, or its last pass is more than
+        # _SPEND_CACHE_TTL_S old -- the SPA can dim/label the number rather
+        # than presenting a possibly-behind total as current (route-timing
+        # pass, owner brief 2026-09-13, final item).
+        "spend_stale": bool(spend_stale),
         "gate_waiting_s": gate_waiting_s,
         "queue_depth": queue_depth,
         "drive_started_at": drive_started_at,
@@ -371,67 +454,29 @@ def _gate_actionability(project: str, task_id: str, workflow_step: str,
     return False, "driver"
 
 
-def _task_spend_usd(project: str, task_id: str, task_svc,
-                     source_path: str, override_dir: str,
-                     deadline: float | None = None,
-                     timing_counts: dict[str, int] | None = None) -> float:
-    """Live USD spend summed over `task_id`'s linked sessions, cached per
-    (project, task_id) for _SPEND_CACHE_TTL_S. See module docstring.
-
-    `deadline` (task: live-page transcript-I/O hang) bounds each session's
-    live_spend_for_session call via `_bounded` -- a session that can't
-    price within budget is skipped (its contribution is 0 this poll,
-    exactly like the pre-existing except-Exception-and-skip path below),
-    rather than blocking the request. The running total is still cached
-    under the SAME key, so a since-warmed session is picked up as soon as
-    its background read lands. `deadline=None` (tests, direct callers)
-    means "no bound" -- every call runs inline, unchanged from before.
-
-    `timing_counts` (route-timing pass, external fixer, owner brief
-    2026-09-13): when given, bumps `transcript_calls` for every
-    live_spend_for_session attempt and `bounded_timeouts` for every one
-    that didn't land within `deadline`. None (tests, direct callers)
-    means "don't count" -- unchanged from before."""
+def _task_spend_usd(project: str, task_id: str,
+                     source_path: str, override_dir: str) -> tuple[float, bool]:
+    """Cached USD spend across `task_id`'s linked sessions, as (usd, stale).
+    NEVER calls into claude_transcripts itself -- see the background
+    refresher above. Registers (project, task_id) in `_SPEND_WANTED` so the
+    next refresh pass prices it, then answers from whatever
+    `_TASK_SPEND_CACHE` already has: (0.0, True) on a genuine first-ever
+    miss (nobody has asked about this task before), or the last computed
+    total with `stale` set once it's older than `_SPEND_CACHE_TTL_S` -- the
+    refresher fell behind (an overloaded box, a long project scan) rather
+    than this task having no spend. Either way this call is a dict read
+    plus a dict write, never a file walk."""
     key = f"{project}\x00{task_id}"
-    now = time.time()
+    _ensure_spend_refresher_started()
+    with _SPEND_WANTED_LOCK:
+        _SPEND_WANTED[key] = (project, task_id, source_path, override_dir)
     with _TASK_SPEND_LOCK:
         hit = _TASK_SPEND_CACHE.get(key)
-        if hit is not None and (now - hit[0]) < _SPEND_CACHE_TTL_S:
-            return hit[1]
-
-    from prism_service.services.claude_transcripts import live_spend_for_session
-
-    try:
-        sessions = task_svc.sessions_for_task(task_id)
-    except Exception:
-        sessions = []
-    total = 0.0
-    for sess in sessions:
-        sid = sess.get("session_id")
-        if not sid:
-            continue
-        try:
-            if deadline is None:
-                spend = live_spend_for_session(
-                    sid, source_path, override_dir=override_dir or None)
-            else:
-                if timing_counts is not None:
-                    timing_counts["transcript_calls"] = (
-                        timing_counts.get("transcript_calls", 0) + 1)
-                spend, ok = _bounded(
-                    deadline, live_spend_for_session,
-                    sid, source_path, override_dir=override_dir or None)
-                if not ok:
-                    if timing_counts is not None:
-                        timing_counts["bounded_timeouts"] = (
-                            timing_counts.get("bounded_timeouts", 0) + 1)
-                    continue
-            total += spend["total"]["usd"]
-        except Exception:
-            continue
-    with _TASK_SPEND_LOCK:
-        _TASK_SPEND_CACHE[key] = (now, total)
-    return total
+    if hit is None:
+        return 0.0, True
+    fetched_at, total = hit
+    stale = (time.time() - fetched_at) > _SPEND_CACHE_TTL_S
+    return total, stale
 
 
 @router.get("/graph")
@@ -463,7 +508,7 @@ def work_graph(project: str = Query("default"),
     }
     _counts: dict[str, int] = {
         "transcript_calls": 0, "bounded_timeouts": 0,
-        "sqlite_connections_opened": 0,
+        "sqlite_connections_opened": 0, "spend_stale_nodes": 0,
     }
     ctx = get_project(project)
     conductor = ctx.conductor_svc
@@ -534,6 +579,16 @@ def work_graph(project: str = Query("default"),
     _queue_depth_map = _queue_depth_bulk(task_svc, _dedup_task_ids)
     if _dedup_task_ids:
         _counts["sqlite_connections_opened"] += 1
+    # Same batching for the node-building loop's own task reads (route-
+    # timing pass, owner brief 2026-09-13, final item): the loop below used
+    # to call task_svc.get(id) once PER NODE (122 separate by-id reads,
+    # each its own SQLite round trip, on the live instance -- the dominant
+    # remaining cost in the route's `edges` phase once queue_depth/
+    # phase_progress/activity_for were already batched). One
+    # `WHERE id IN (...)` query for every root+subtask id instead.
+    _task_objs_map = task_svc.get_many(_dedup_task_ids)
+    if _dedup_task_ids:
+        _counts["sqlite_connections_opened"] += 1
     _timing_ms["tasks_query"] = (time.monotonic() - _p0) * 1000
     # Same batching for the child-node activity_for() call below (tick-cost
     # pass, external fixer, owner brief 2026-09-13, no PRISM ticket):
@@ -557,7 +612,7 @@ def work_graph(project: str = Query("default"),
     _loop_start = time.monotonic()
     for r in roots:
         if r["id"] not in seen_node_ids:
-            task_obj = task_svc.get(r["id"])
+            task_obj = _task_objs_map.get(r["id"])
             # gamify round5 item 0 fix: managed_tasks() surfaces an
             # INDEPENDENTLY-ENGAGED child (its own workflow_step/gate_state
             # set, e.g. a subtask sitting at a gate) as its own top-level
@@ -585,14 +640,16 @@ def work_graph(project: str = Query("default"),
                     project, r["id"], r.get("workflow_step") or "",
                     is_root=not parent_id, dirty_reason=_dirty_once())
             _sp0 = time.monotonic()
-            _root_spend = _task_spend_usd(
-                project, r["id"], task_svc, source_path, override_dir,
-                deadline=_deadline, timing_counts=_counts)
+            _root_spend, _root_spend_stale = _task_spend_usd(
+                project, r["id"], source_path, override_dir)
+            if _root_spend_stale:
+                _counts["spend_stale_nodes"] += 1
             _timing_ms["spend"] += (time.monotonic() - _sp0) * 1000
             node = _task_node(
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
                 spend_usd=_root_spend,
+                spend_stale=_root_spend_stale,
                 gate_waiting_s=(
                     conductor.gate_waiting_s(task_obj)
                     if task_obj is not None else None),
@@ -609,7 +666,7 @@ def work_graph(project: str = Query("default"),
             edges.append({"source": r["id"], "target": c["id"], "kind": "parent_of"})
             if c["id"] in seen_node_ids:
                 continue
-            child = task_svc.get(c["id"])
+            child = _task_objs_map.get(c["id"])
             if child is None:
                 continue
             try:
@@ -626,9 +683,10 @@ def work_graph(project: str = Query("default"),
                     getattr(child, "workflow_step", "") or "",
                     is_root=False, dirty_reason=_dirty_once())
             _sp0 = time.monotonic()
-            _child_spend = _task_spend_usd(
-                project, child.id, task_svc, source_path, override_dir,
-                deadline=_deadline, timing_counts=_counts)
+            _child_spend, _child_spend_stale = _task_spend_usd(
+                project, child.id, source_path, override_dir)
+            if _child_spend_stale:
+                _counts["spend_stale_nodes"] += 1
             _timing_ms["spend"] += (time.monotonic() - _sp0) * 1000
             cnode = _task_node(
                 child.id, child.title, child.status,
@@ -636,6 +694,7 @@ def work_graph(project: str = Query("default"),
                 getattr(child, "gate_state", "none"),
                 c_activity,
                 spend_usd=_child_spend,
+                spend_stale=_child_spend_stale,
                 gate_waiting_s=conductor.gate_waiting_s(child),
                 queue_depth=_queue_depth_map.get(child.id, 0),
                 drive_started_at=_drive_started_map.get(child.id),

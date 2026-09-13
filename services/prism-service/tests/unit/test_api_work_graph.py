@@ -415,12 +415,31 @@ def test_task_node_carries_spend_usd_from_linked_sessions(tmp_path, monkeypatch)
     app.include_router(work_api.router, prefix="/api/work")
     client = TestClient(app)
 
+    # First poll: the background spend refresher (route-timing pass, owner
+    # brief 2026-09-13, final item) hasn't priced this task yet -- the
+    # request path never calls claude_transcripts itself, so this is a
+    # genuine first-ever miss: 0.0, marked stale, and the task is now
+    # registered as wanted for the next refresh pass.
     resp = client.get("/api/work/graph?project=gamify")
     assert resp.status_code == 200
     nodes = {n["id"]: n for n in resp.json()["nodes"]}
     root_node = nodes.get(root.id)
     assert root_node is not None, f"root task must appear; got {resp.json()['nodes']!r}"
+    assert root_node["spend_usd"] == 0.0, (
+        f"first-ever poll must never block on claude_transcripts -- "
+        f"expected an honest 0.0 miss, got {root_node!r}")
+    assert root_node["spend_stale"] is True, f"got {root_node!r}"
+
+    # Force one deterministic background-refresh pass (what the real
+    # thread does every _SPEND_REFRESH_INTERVAL_S) instead of sleeping in
+    # the test, then poll again: the real value is now cached and fresh.
+    work_api._spend_refresh_once()
+    resp = client.get("/api/work/graph?project=gamify")
+    assert resp.status_code == 200
+    nodes = {n["id"]: n for n in resp.json()["nodes"]}
+    root_node = nodes[root.id]
     assert root_node["spend_usd"] == 1.2345, f"got {root_node!r}"
+    assert root_node["spend_stale"] is False, f"got {root_node!r}"
 
 
 def test_task_node_spend_usd_defaults_to_zero_with_no_sessions(tmp_path, monkeypatch):

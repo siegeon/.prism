@@ -1056,6 +1056,46 @@ class TaskService:
         ).fetchone()
         return self._row_to_task(row) if row else None
 
+    def get_many(self, task_ids: list[str],
+                 columns: Optional[list[str]] = None) -> dict[str, Task]:
+        """Batched form of `get()`: one `WHERE id IN (...)` query for every
+        id in `task_ids`, instead of one `get(task_id)` round trip each
+        (route-timing pass, owner brief 2026-09-13: GET /api/work/graph's
+        node-building loop called `task_svc.get(id)` once per graph node --
+        122 separate by-id reads on the live instance, each its own SQLite
+        round trip -- the dominant remaining cost in the route's `edges`
+        phase after queue_depth/phase_progress/activity_for were already
+        batched).
+
+        `columns` narrows the SELECT exactly like `list(columns=...)`
+        (task fdb6a1a1) -- `id` is always included so the result can be
+        keyed by it; a name not in `_TASK_COLUMN_NAMES` is silently
+        dropped, same leniency as `list`. `columns=None` (default) keeps
+        the full `SELECT *` shape.
+
+        Returns {id: Task}, ONE entry per id that actually exists --
+        an id with no matching row is simply absent from the result
+        (never a None value, never a KeyError for the caller to catch),
+        so `result.get(task_id)` is the natural miss-handling idiom."""
+        result: dict[str, Task] = {}
+        ids = [t for t in dict.fromkeys(task_ids) if t]
+        if not ids:
+            return result
+        select_cols = "*"
+        if columns is not None:
+            wanted = {c for c in columns if c in _TASK_COLUMN_NAMES}
+            wanted.add("id")
+            select_cols = ", ".join(sorted(wanted)) if wanted else "id"
+        placeholders = ",".join("?" for _ in ids)
+        rows = self._db.execute(
+            f"SELECT {select_cols} FROM tasks WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        for r in rows:
+            task = self._row_to_task(r)
+            result[task.id] = task
+        return result
+
     def find_by_mirror_url(self, url: str) -> Optional[Task]:
         """Find the local task that already backlinks to this exact provider
         issue URL (task_mirror._record_backlink writes ``Mirrored to
