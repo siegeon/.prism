@@ -1259,6 +1259,20 @@ class TaskService:
         "decide", "review", "done",
     )
 
+    #: statuses that mean a task is permanently finished -- gate_sweep_rows
+    #: excludes these so a task that closed long ago (still carrying a gate
+    #: workflow_step forever, since nothing clears it on close) does not
+    #: keep coming back on every sweep pass. Measured live 2026-09-13: 316 of
+    #: 325 rows the sweep fetched were finished (272 of those done +
+    #: green_gate + passed) -- that re-examination, and the task_changed
+    #: churn it emits, is the load behind the box sitting at load 8+ with a
+    #: continuously busy inference engine. Deliberately NOT "pending" /
+    #: "in_progress" / "blocked": a task at workflow_step == "done" whose
+    #: status is still one of those is exactly what gate_adjudicator's
+    #: terminal-step-closure branch (step == "done" -> _close_if_terminal)
+    #: needs to see, so status is excluded, never step.
+    FINISHED_STATUSES = ("done", "cancelled", "deleted", "archived")
+
     def gate_sweep_rows(self) -> list[dict[str, str]]:
         """Lean id/workflow_step/gate_state/updated_at snapshot of every task
         on a step `gate_adjudicator.sweep_once` cares about -- narrows BOTH
@@ -1270,15 +1284,19 @@ class TaskService:
         sweep's own loop a moment later. Tick-cost pass (owner brief,
         2026-09-13): sweep_once used to call the general-purpose `list()`
         (SELECT * across the WHOLE table) once per sweep regardless of how
-        few tasks were actually gate-relevant. Returns plain dicts (the
-        sweep already branches on `isinstance(t, dict)` for every field it
-        reads), never a Task dataclass -- there is deliberately no
+        few tasks were actually gate-relevant. Excludes FINISHED_STATUSES so
+        a task whose status is already terminal is not swept forever just
+        because its workflow_step still names a gate step. Returns plain
+        dicts (the sweep already branches on `isinstance(t, dict)` for every
+        field it reads), never a Task dataclass -- there is deliberately no
         conversion path back to one here."""
-        placeholders = ",".join("?" for _ in self.GATE_SWEEP_STEPS)
+        step_placeholders = ",".join("?" for _ in self.GATE_SWEEP_STEPS)
+        status_placeholders = ",".join("?" for _ in self.FINISHED_STATUSES)
         rows = self._db.execute(
             f"SELECT id, workflow_step, gate_state, updated_at FROM tasks "
-            f"WHERE workflow_step IN ({placeholders})",
-            list(self.GATE_SWEEP_STEPS),
+            f"WHERE workflow_step IN ({step_placeholders}) "
+            f"AND status NOT IN ({status_placeholders})",
+            list(self.GATE_SWEEP_STEPS) + list(self.FINISHED_STATUSES),
         ).fetchall()
         return [
             {"id": r["id"], "workflow_step": r["workflow_step"] or "",
