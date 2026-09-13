@@ -1,22 +1,19 @@
 """UI contract tests for the SPA's shared poll layer (task fix/polling).
 
 The PRISM SPA has NO JS test runner, so this pins the ACTUAL TypeScript
-source of the new shared hooks -- same convention as
+source of the shared hooks -- same convention as
 test_conductor_page_animated_cleanup_ui.py.
 
-THE BUG: an idle Workflows tab issued ~10 independent requests every
-1-2s because every consumer polled its own endpoint on its own fixed
-interval with no notion of "did anything actually change", and several
-of them (Sidebar's staleness poll) kept a private setInterval alive even
-though nothing had moved. lib/useChanges.ts is the ONE shared 1s poll of
-the new GET /api/changes counter; lib/usePolledResource.ts is the
-generic gate ("refetch only when the counter moves, or on focus, or at
-a floor") every data query should sit behind.
-
-These FAIL against a tree with no useChanges.ts / usePolledResource.ts
-and against Sidebar.tsx's old bare 5s setInterval staleness poll. They
-go green only once the shared layer exists and Sidebar has been moved
-onto it.
+HISTORY: round 1 replaced ~10 independently-polled endpoints with a
+shared GET /api/changes 1Hz counter poll. Owner, live: "why are you
+hammering the server with polling rather than updating with streaming".
+Round 2 (this file, current form) replaces that counter POLL with a real
+PUSH: lib/useChanges.ts subscribes to GET /sse/changes (one EventSource
+per tab, via the existing lib/sharedStream.ts leader-election machinery)
+instead of running any timer of its own; lib/usePolledResource.ts's
+generic gate refetches on a matching-kind SSE event, on focus/visibility,
+or a 60s floor used ONLY as a reconnect safety net while the stream looks
+unhealthy -- never as a routine poll substitute.
 """
 
 from __future__ import annotations
@@ -38,68 +35,62 @@ def _read(p: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# lib/useChanges.ts -- ONE shared 1s poll of GET /api/changes per tab
+# lib/useChanges.ts -- ONE SSE subscription (GET /sse/changes) per tab,
+# NO setInterval/setTimeout of its own for change detection.
 # ---------------------------------------------------------------------------
 
-def test_use_changes_polls_the_changes_endpoint():
+def test_use_changes_subscribes_to_the_sse_changes_stream():
     src = _read(_USE_CHANGES)
-    assert "/api/changes" in src
+    assert "/sse/changes" in src
 
 
-def test_use_changes_runs_exactly_one_self_rescheduling_timer_module_scope():
+def test_use_changes_uses_the_shared_stream_not_a_private_eventsource():
     src = _read(_USE_CHANGES)
-    # Module-scope singleton, not one timer per component instance -- the
-    # exact bug class sharedStream.ts/useConductorState.ts already exist to
-    # prevent for SSE and /api/conductor/state. A self-rescheduling
-    # setTimeout (armed once per poll, never a bare fixed setInterval) is
-    # what lets the backoff below stretch the gap without ever having two
-    # timers ticking at once.
-    assert "let timer: ReturnType<typeof setTimeout>" in src
-    assert src.count("setTimeout(runAndReschedule") == 1
+    # ONE EventSource per tab means riding sharedStream.ts's existing
+    # per-URL dedup + cross-tab leader election, never `new EventSource(`
+    # constructed directly here.
+    assert "subscribeStream" in src
+    assert "new EventSource(" not in src
 
 
-def test_use_changes_backs_off_after_repeated_failures_against_an_old_backend():
+def test_use_changes_runs_no_timer_for_change_detection():
     src = _read(_USE_CHANGES)
-    # Live measurement (2026-09-13): polling a 404 (an older backend that
-    # predates GET /api/changes) at 1Hz forever costs ~60 req/min for zero
-    # benefit. After a few consecutive failures the poll must stretch out,
-    # and the very next success must snap it back to full cadence.
-    assert "FAILURES_BEFORE_BACKOFF" in src
-    assert "BACKOFF_MS" in src
-    assert "consecutiveFailures = 0" in src, \
-        "a success must reset the failure count back to full 1Hz cadence"
+    assert "setInterval(" not in src
+    assert "setTimeout(" not in src
 
 
-def test_use_changes_stops_polling_while_the_tab_is_hidden():
+def test_use_changes_exposes_health_for_a_reconnect_safety_floor():
     src = _read(_USE_CHANGES)
-    assert "document.hidden" in src or "visibilityState" in src, \
-        "the poll must pause while the tab is hidden"
-
-
-def test_use_changes_resumes_promptly_on_focus_or_visibility():
-    src = _read(_USE_CHANGES)
-    assert "visibilitychange" in src or "addEventListener(\"focus\"" in src \
-        or "addEventListener('focus'" in src
+    assert "healthy" in src
 
 
 # ---------------------------------------------------------------------------
-# lib/usePolledResource.ts -- the generic counter/focus/floor refetch gate
+# lib/usePolledResource.ts -- the generic event/focus/reconnect-floor gate
 # ---------------------------------------------------------------------------
 
-def test_use_polled_resource_gates_on_the_shared_change_counter():
+def test_use_polled_resource_gates_on_sse_change_events():
     src = _read(_USE_POLLED)
-    assert "useChanges" in src
+    assert "useChangeEvents" in src
 
 
-def test_use_polled_resource_has_a_30s_refetch_floor():
+def test_use_polled_resource_supports_narrowing_by_event_kind():
     src = _read(_USE_POLLED)
-    assert re.search(r"30[_,]?000", src), \
-        "must define a 30s floor so an idle query still self-heals eventually"
+    assert "kinds" in src
 
 
-def test_use_polled_resource_refetches_on_focus():
+def test_use_polled_resource_has_a_60s_reconnect_safety_floor():
+    src = _read(_USE_POLLED)
+    assert re.search(r"60[_,]?000", src), \
+        "the floor must be 60s and gated on stream health, not a routine poll"
+    # The floor must be conditioned on the stream being UNhealthy -- never
+    # fired just because time passed while the stream is fine.
+    assert "if (healthy) return;" in src
+
+
+def test_use_polled_resource_refetches_on_focus_and_visibility():
     src = _read(_USE_POLLED)
     assert "focus" in src
+    assert "visibilitychange" in src
 
 
 def test_use_polled_resource_stops_entirely_while_hidden():
@@ -114,6 +105,11 @@ def test_use_polled_resource_caches_last_payload_module_scope_for_instant_paint(
     # a fresh blank-loading flash, then revalidates in the background.
     assert re.search(r"new Map<", src), \
         "expected a module-scope cache keyed by URL/resource"
+
+
+def test_use_polled_effect_also_supports_kind_narrowing():
+    src = _read(_USE_POLLED)
+    assert "export function usePolledEffect(load: () => void, project = \"\", kinds?: string[])" in src
 
 
 # ---------------------------------------------------------------------------

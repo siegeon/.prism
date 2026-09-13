@@ -31,6 +31,9 @@ type ActivityEntry = {
 type ActivitySnapshot = { running: ActivityEntry[]; recent: ActivityEntry[] };
 
 const EMPTY_SNAPSHOT: ActivitySnapshot = { running: [], recent: [] };
+// Stable identity (module scope, not an inline literal) so usePolledResource
+// never re-subscribes on every render.
+const ACTIVITY_KINDS = ["activity"];
 
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -51,15 +54,16 @@ export default function SystemActivityPanel({ project = "prism" }: { project?: s
   // instead of freezing at the last snapshot's value.
   const [, forceTick] = useState(0);
 
-  // Shared change-counter gate (task fix/polling): refetch only when
-  // /api/changes moves, on focus, or at a 30s floor -- was a bare 1s
-  // setTimeout loop forever. wakeups.py signals on exactly the background
-  // passes this panel exists to show, so a real event still surfaces
-  // within ~1s (the counter's own poll cadence), never slower for the
-  // "lightning fast" visibility this panel was built for.
+  // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
+  // real GET /sse/changes "activity" event (services/system_activity.py's
+  // record()/pass_() now call wakeups.signal("activity", project) at the
+  // instant a pass starts or completes), on focus, or as a 60s reconnect
+  // safety net if the stream itself looks unhealthy -- was a bare 1s
+  // setTimeout loop forever.
   const { data } = usePolledResource<ActivitySnapshot>(
     `/api/system/activity?project=${encodeURIComponent(project)}`,
     project,
+    ACTIVITY_KINDS,
   );
   const snap = data ?? EMPTY_SNAPSHOT;
 

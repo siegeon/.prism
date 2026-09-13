@@ -16,6 +16,10 @@ import { relativeTime } from "@/lib/relativeTime";
 import { useWorkflowLive, type WorkflowLiveNode } from "@/lib/useWorkflowLive";
 import Editor from "@monaco-editor/react";
 
+// Stable identity (module scope) so usePolledEffect never re-subscribes on
+// every render.
+const TASK_CHANGED_KINDS = ["task_changed"];
+
 /** /workflows — the conductor's FSM and the bots that drive it, per project.
  *
  * In PRISM a workflow IS a bot: an FSM that agentically interacts with the
@@ -705,9 +709,13 @@ export default function WorkflowsPage() {
     };
   }, [connectionInterrupted, reconnectAttempt]);
 
-  // Shared change-counter gate (task fix/polling): refetch only when
-  // /api/changes moves, on focus, or at a 30s floor -- was a bare 5s
-  // setTimeout loop regardless of whether staleness/workers had changed.
+  // Shared SSE gate (task fix/polling, SSE follow-up): refetch on focus
+  // or as a 60s reconnect safety net -- was a bare 5s setTimeout loop
+  // regardless of whether staleness/workers had changed. No `kinds` yet:
+  // neither source signals a wakeups kind of its own, so this still
+  // refetches on ANY /sse/changes event (a real improvement over the old
+  // unconditional 5s timer, but a follow-up should give staleness/
+  // consolidation-workers their own signal kind for a tighter gate).
   usePolledEffect(useCallback(() => {
     let cancelled = false;
     Promise.all([
@@ -1198,9 +1206,10 @@ export default function WorkflowsPage() {
       setStrandedTaskIds(new Set());
     }
   }, [isStateMachineWorkflow, conductorStepIds]);
-  // Shared change-counter gate (task fix/polling): refetch only when
-  // /api/changes moves, on focus, or at a 30s floor -- was a bare 10s
-  // setInterval regardless of whether any task had actually moved.
+  // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
+  // real GET /sse/changes task_changed event, on focus, or as a 60s
+  // reconnect safety net -- was a bare 10s setInterval regardless of
+  // whether any task had actually moved.
   usePolledEffect(useCallback(() => {
     if (!isStateMachineWorkflow || conductorStepIds.size === 0) return;
     type DoneTaskRow = ManagedTask & { parent_id?: string };
@@ -1216,7 +1225,7 @@ export default function WorkflowsPage() {
         t.status === "done" && !t.parent_id && conductorStepIds.has(t.workflow_step ?? "")));
       setStrandedTaskIds(new Set(stranded.map((s) => s.task_id)));
     }).catch(() => { /* transient fetch failure; next trigger retries */ });
-  }, [project, isStateMachineWorkflow, conductorStepIds]), project);
+  }, [project, isStateMachineWorkflow, conductorStepIds]), project, TASK_CHANGED_KINDS);
   // BELT: one unit per real step advance. `sendTransition` has always been
   // able to put a visible item on an FSM edge, and nothing ever called it
   // from real work -- so the board could show WHERE tasks were standing
@@ -1781,9 +1790,10 @@ export default function WorkflowsPage() {
   useEffect(() => {
     if (!nodeStatusLayerId || !nodeStatusTaskId) setNodeVerdicts(null);
   }, [nodeStatusLayerId, nodeStatusTaskId]);
-  // Shared change-counter gate (task fix/polling): refetch only when
-  // /api/changes moves, on focus, or at a 30s floor -- was a bare 10s
-  // setInterval regardless of whether the gate had actually decided.
+  // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
+  // real GET /sse/changes task_changed event, on focus, or as a 60s
+  // reconnect safety net -- was a bare 10s setInterval regardless of
+  // whether the gate had actually decided.
   usePolledEffect(useCallback(() => {
     if (!nodeStatusLayerId || !nodeStatusTaskId) return;
     const reqId = ++nodeStatusReqRef.current;
@@ -1809,7 +1819,7 @@ export default function WorkflowsPage() {
         // layer plain rather than freezing a stale answer on the canvas.
         if (!cancelled()) setNodeVerdicts(null);
       });
-  }, [project, nodeStatusLayerId, nodeStatusTaskId]), project);
+  }, [project, nodeStatusLayerId, nodeStatusTaskId]), project, TASK_CHANGED_KINDS);
 
   // The whole state-machine family's own version of validation's "reattach
   // after reload/navigation" effect below: land on ANY bot-family canvas

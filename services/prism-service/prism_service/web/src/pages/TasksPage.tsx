@@ -68,6 +68,10 @@ type WorkItem = {
 // viewer's assigned rows; "team" shows the whole team's work.
 type WorkView = "mine" | "team";
 
+// Stable identity (module scope) so usePolledEffect never re-subscribes
+// on every render.
+const TASK_CHANGED_KINDS = ["task_changed"];
+
 const shortId = (id?: string) => (id ?? "").slice(0, 8) || "—";
 
 function relTime(iso?: string): string {
@@ -228,10 +232,11 @@ export default function TasksPage() {
       .catch(() => setExternal([]));
   }, [project]);
 
-  // Shared change-counter gate (task fix/polling): refetch only when
-  // /api/changes moves, on focus, or at a 30s floor -- never a bare 5s
-  // interval regardless of whether the board actually changed.
-  usePolledEffect(load, project);
+  // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
+  // real GET /sse/changes task_changed event, on focus, or as a 60s
+  // reconnect safety net -- never a bare 5s interval regardless of
+  // whether the board actually changed.
+  usePolledEffect(load, project, TASK_CHANGED_KINDS);
 
   // The unified, filtered, viewer-scoped work list — ONE queue, not two.
   const items = useMemo(() => {

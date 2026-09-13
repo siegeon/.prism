@@ -26,6 +26,8 @@ from collections import deque
 from pathlib import Path
 from typing import Iterator, Optional
 
+from prism_service.services import wakeups
+
 _LOCK = threading.Lock()
 _MAX_RECENT = 500
 
@@ -57,6 +59,13 @@ def record(kind: str, project: str, detail: str, started_at: float,
     entry["ok"] = bool(ok)
     with _LOCK:
         _recent.appendleft(entry)
+    # Task fix/polling (SSE follow-up): the SPA's SystemActivityPanel moved
+    # off its own 1Hz poll onto GET /sse/changes, which is driven by
+    # wakeups signals -- so a completed pass must SIGNAL, or the panel
+    # would never refetch and would show nothing after the very first
+    # answer. Best-effort/never raises, same as every other wakeups.signal
+    # call site.
+    wakeups.signal("activity", project or "*")
     return entry
 
 
@@ -98,6 +107,9 @@ def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[dict]:
     entry["active"] = True
     with _LOCK:
         _running[token] = entry
+    # A pass starting to RUN is itself real activity worth pushing -- an
+    # SSE-driven panel must not wait for completion to see it lit.
+    wakeups.signal("activity", project or "*")
     ok = True
     try:
         yield entry
