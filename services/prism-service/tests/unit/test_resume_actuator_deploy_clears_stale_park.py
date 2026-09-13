@@ -19,6 +19,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
@@ -109,3 +111,49 @@ def test_sweep_once_for_with_force_clears_stale_text_before_anything_else(
     ra.sweep_once_for(project, force=True)
 
     assert ctx.task_svc.get(task.id).blocked_reason == ""
+
+
+# ---------------------------------------------------------------------------
+# Second round, task a65c66e5 (2026-09-13): same fix as gate_adjudicator's --
+# a `deployed` signal fired at API startup is invisible to a wait baseline
+# taken after warmup, so a fresh worker host's FIRST pass must force
+# regardless of any signal.
+# ---------------------------------------------------------------------------
+
+
+class _StopLoop(Exception):
+    pass
+
+
+def test_the_first_pass_after_warmup_is_unconditional_with_no_signals(
+        monkeypatch):
+    from prism_service.services import resume_actuator as ra
+    from prism_service.services import wakeups as wk
+
+    wk._reset_for_tests()
+    forces: list[bool] = []
+
+    def fake_sweep_once(force=False):
+        forces.append(force)
+        return None
+
+    wait_calls = {"n": 0}
+
+    def fake_wait(kinds, timeout=None):
+        wait_calls["n"] += 1
+        if wait_calls["n"] >= 2:
+            raise _StopLoop()
+        return True
+
+    monkeypatch.setattr(ra, "sweep_once", fake_sweep_once)
+    monkeypatch.setattr(wk, "wait_out_startup_warmup", lambda: None)
+    monkeypatch.setattr(wk, "lower_thread_priority", lambda: None)
+    monkeypatch.setattr(wk, "wait", fake_wait)
+    monkeypatch.setattr(wk, "worker_fallback_s", lambda: None)
+
+    with pytest.raises(_StopLoop):
+        ra._loop(60)
+
+    assert forces == [True, False], (
+        f"pass 1 (post-warmup, no signals at all) must force; pass 2 (no "
+        f"new signal since) must not -- got {forces}")

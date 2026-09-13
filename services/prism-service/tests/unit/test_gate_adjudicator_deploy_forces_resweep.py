@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 _HERE = Path(__file__).resolve()
 _SERVICE_ROOT = _HERE.parent.parent.parent
 if str(_SERVICE_ROOT) not in sys.path:
@@ -137,3 +139,50 @@ def test_a_deployed_signal_is_visible_to_changed_since_after_a_baseline():
     assert not wakeups.changed_since(["deployed"], None, later_baseline), (
         "a baseline taken AFTER the signal must not see it again"
     )
+
+
+# ---------------------------------------------------------------------------
+# Second round, task a65c66e5 (2026-09-13): a `deployed` signal fired at API
+# startup is invisible to a wait baseline taken by THIS loop after warmup --
+# the worker-host process (and this thread) does not exist yet when main.py
+# signals it. A fresh worker host must therefore force its FIRST pass
+# unconditionally, never relying on catching that boot signal.
+# ---------------------------------------------------------------------------
+
+
+class _StopLoop(Exception):
+    """Sentinel to escape `_loop`'s `while True` after N iterations."""
+
+
+def test_the_first_pass_after_warmup_is_unconditional_with_no_signals(
+        monkeypatch):
+    from prism_service.services import gate_adjudicator as ga
+    from prism_service.services import wakeups as wk
+
+    wk._reset_for_tests()
+    forces: list[bool] = []
+
+    def fake_sweep_once(force=False):
+        forces.append(force)
+        return []
+
+    wait_calls = {"n": 0}
+
+    def fake_wait(kinds, timeout=None):
+        wait_calls["n"] += 1
+        if wait_calls["n"] >= 2:
+            raise _StopLoop()
+        return True
+
+    monkeypatch.setattr(ga, "sweep_once", fake_sweep_once)
+    monkeypatch.setattr(wk, "wait_out_startup_warmup", lambda: None)
+    monkeypatch.setattr(wk, "lower_thread_priority", lambda: None)
+    monkeypatch.setattr(wk, "wait", fake_wait)
+    monkeypatch.setattr(wk, "worker_fallback_s", lambda: None)
+
+    with pytest.raises(_StopLoop):
+        ga._loop(60)
+
+    assert forces == [True, False], (
+        f"pass 1 (post-warmup, no signals at all) must force; pass 2 (no "
+        f"new signal since) must not -- got {forces}")
