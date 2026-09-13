@@ -825,6 +825,18 @@ class ConductorService:
         # the rows they're derived from with no separate staleness clock.
         self._median_step_cache: Optional[tuple[Any, float]] = None
         self._per_step_typical_cache: Optional[tuple[Any, tuple[dict, dict]]] = None
+        # Route-timing pass, owner brief 2026-09-13 (sibling of the above):
+        # phase_progress()/activity_for() were the OTHER ~half of
+        # managed_tasks()'s per-render cost (526ms of 849ms wall on the real
+        # instance, profiled in-process) -- and GET /api/work/graph calls
+        # BOTH again, once per child, for a task managed_tasks() already
+        # computed them for in the SAME render. `_phase_progress_cache` /
+        # `_activity_cache` are task_id -> (key, result); a repeat call for
+        # the same task_id with an UNCHANGED key is a dict hit. See
+        # `_phase_progress_cache_key`/`_activity_cache_key` for what "same"
+        # means for each.
+        self._phase_progress_cache: dict[str, tuple[tuple, dict]] = {}
+        self._activity_cache: dict[str, tuple[tuple, dict]] = {}
         self._ensure_meta_schema()
         if not enable_engine:
             return
@@ -5597,7 +5609,7 @@ class ConductorService:
                     step = self.INTAKE_STEP
                 else:
                     continue
-            pp = self.phase_progress(t.id)
+            pp = self.phase_progress(t.id, heartbeat_cache=_heartbeat_map)
             # Compact ordered slice list for the tile: done first (by
             # completed_at) then the rest by created_at, so the slice bar reads
             # left-to-right as progress. Only title/status/id — keep it small.
@@ -5913,7 +5925,49 @@ class ConductorService:
         elapsed = end - last
         return elapsed if elapsed > 0 else 0.0
 
-    def phase_progress(self, task_id: str) -> dict:
+    def _phase_progress_cache_key(self, task_id: str,
+                                   heartbeat_cache: Optional[dict]) -> tuple:
+        """Cache key for `phase_progress(task_id)`: (this task's own
+        updated_at, the tasks.db-wide PRAGMA data_version, this task's own
+        latest heartbeat recorded_at). updated_at changes on ANY column
+        write to this row (task_service.py's update() stamps it); the
+        data_version component is the superset that also covers a CHILD
+        row changing (phase_progress's children_done/children_total ratio
+        depends on them) since PRAGMA data_version bumps on any write to
+        the file, not just this row. The heartbeat component catches the
+        case neither of those two see: this task's own live transcript
+        growing (tokens_since_step/token_turns/session_quiet_s) between
+        two task-row-unchanged polls -- a heartbeat is recorded by the
+        SAME step agent that is writing that transcript, so a fresh beat
+        is the signal that those numbers actually moved.
+
+        Known, accepted gap (owner brief 2026-09-13 asked for this exact
+        trade): an EPIC's aggregated child-session tokens (via
+        `_child_task_ids`) can go one extra poll stale if a descendant's
+        transcript grows with no heartbeat recorded anywhere in the whole
+        store and no other task row changing meanwhile -- rare, and self-
+        heals the moment anything else moves."""
+        updated_at = ""
+        if self._task_svc is not None:
+            try:
+                t = self._task_svc.get(task_id)
+                updated_at = getattr(t, "updated_at", "") or "" if t else ""
+            except Exception:
+                updated_at = ""
+        try:
+            data_version = (
+                self._task_svc._db_change_stamp()
+                if self._task_svc is not None else 0)
+        except Exception:
+            data_version = 0
+        beat_marker = None
+        if heartbeat_cache is not None:
+            beat = heartbeat_cache.get(task_id)
+            beat_marker = beat.get("recorded_at") if beat else None
+        return (updated_at, data_version, beat_marker)
+
+    def phase_progress(self, task_id: str,
+                        heartbeat_cache: Optional[dict] = None) -> dict:
         """Blended estimate of how far through the CURRENT workflow step a
         task is. Shape:
           {pct, basis, in_step_s, typical_s,
@@ -5923,7 +5977,43 @@ class ConductorService:
           before the actual advance.
         - override (basis='children'): when child tasks exist (parent_id ==
           task_id), pct is the exact children_done/children_total ratio.
-        """
+
+        `heartbeat_cache` (route-timing pass, owner brief 2026-09-13): an
+        OPTIONAL task_id -> beat dict (as `drive_heartbeat.latest_many`
+        returns). Memoization below is ONLY enabled when this is given --
+        see the caught bug in `_phase_progress_cache_key`'s history: with
+        no heartbeat_cache, the UNCACHED path falls back to a direct
+        `drive_heartbeat.latest()` disk read for freshness, but the cache
+        KEY has no cheap way to represent "no cache given" differently
+        from "no heartbeat exists yet" without paying for that same read
+        itself -- caching on task.updated_at/data_version alone made a
+        heartbeat recorded AFTER the first call (e.g. task_service.py's
+        own update()-triggered phase_progress/activity_for call, which
+        never passes heartbeat_cache, landing before the driver's first
+        beat) invisible on every later call until some UNRELATED task-row
+        write happened to bust it. None (every pre-existing caller) now
+        means "always recompute", i.e. byte-identical to the pre-
+        memoization behavior. Only managed_tasks() and GET /api/work/graph
+        pass a real heartbeat_cache, and those are the two call sites the
+        route-timing pass actually targets.
+
+        Memoized per task_id (task_id -> (key, result)) ONLY when
+        heartbeat_cache is not None: a repeat call for the same task_id
+        with an unchanged key -- e.g. GET /api/work/graph calling this
+        again for a child managed_tasks() already computed it for,
+        moments earlier in the same render, with no write in between --
+        is a dict hit instead of re-walking history/transcripts."""
+        if heartbeat_cache is None:
+            return self._phase_progress_uncached(task_id)
+        key = self._phase_progress_cache_key(task_id, heartbeat_cache)
+        hit = self._phase_progress_cache.get(task_id)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        result = self._phase_progress_uncached(task_id)
+        self._phase_progress_cache[task_id] = (key, result)
+        return result
+
+    def _phase_progress_uncached(self, task_id: str) -> dict:
         typical_s = self._median_step_s()
         in_step_s = self._in_step_s(task_id)
 
@@ -6351,6 +6441,39 @@ class ConductorService:
         except Exception:
             return False
 
+    def _activity_cache_key(self, task, phase_progress: dict,
+                             heartbeat_cache: Optional[dict]) -> tuple:
+        """Cache key for `activity_for(task, phase_progress, ...)`: (this
+        task's own updated_at, the `session_quiet_s` the CALLER passed in
+        via `phase_progress` -- the only field this method reads off that
+        dict, so two calls that hand in different values must never share
+        a cache slot -- the tasks.db-wide data_version, and this task's own
+        heartbeat recorded_at). data_version is the same superset argument
+        as `_phase_progress_cache_key`: it covers a CHILD row changing
+        (status/step), which the children-path branches below depend on.
+
+        Known, accepted gap (same trade the owner brief asked for): a
+        DESCENDANT's heartbeat (recursive `_subtree_beat`/
+        `_subtree_motion_active`, scores.db, not tasks.db) changing with
+        NO task row changing anywhere and no heartbeat on THIS task either
+        can leave a deep epic's state one poll stale. Bounded and self-
+        healing the moment anything else in the store moves."""
+        updated_at = getattr(task, "updated_at", "") or ""
+        quiet = (phase_progress.get("session_quiet_s")
+                 if isinstance(phase_progress, dict) else None)
+        try:
+            data_version = (
+                self._task_svc._db_change_stamp()
+                if self._task_svc is not None else 0)
+        except Exception:
+            data_version = 0
+        beat_marker = None
+        tid = getattr(task, "id", "")
+        if heartbeat_cache is not None:
+            beat = heartbeat_cache.get(tid)
+            beat_marker = beat.get("recorded_at") if beat else None
+        return (updated_at, quiet, data_version, beat_marker)
+
     def activity_for(self, task, phase_progress: dict,
                       heartbeat_cache: Optional[dict] = None) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
@@ -6367,7 +6490,31 @@ class ConductorService:
         the dict in here, instead of this method opening its own fresh
         connection per task (125 opens measured for a 58-task render).
         None (default, every pre-existing caller) preserves the original
-        per-call `drive_heartbeat.latest` behavior exactly."""
+        per-call `drive_heartbeat.latest` behavior exactly -- including
+        skipping the memoization below entirely (see `phase_progress`'s
+        docstring for the caught bug this avoids: without a heartbeat_cache
+        to key on, a task-service-internal call landing BEFORE a driver's
+        first beat would otherwise cache "no heartbeat" indefinitely,
+        invisible to a later call with the same task row/data_version).
+
+        Memoized per task_id -- see `_activity_cache_key` -- ONLY when
+        heartbeat_cache is not None. Same target as `phase_progress`'s
+        memoization: GET /api/work/graph calling this again for a child
+        managed_tasks() already computed it for, in the same render, with
+        nothing having changed, is a dict hit."""
+        if heartbeat_cache is None:
+            return self._activity_for_uncached(task, phase_progress, heartbeat_cache)
+        tid = getattr(task, "id", "")
+        key = self._activity_cache_key(task, phase_progress, heartbeat_cache)
+        hit = self._activity_cache.get(tid)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        result = self._activity_for_uncached(task, phase_progress, heartbeat_cache)
+        self._activity_cache[tid] = (key, result)
+        return result
+
+    def _activity_for_uncached(self, task, phase_progress: dict,
+                                heartbeat_cache: Optional[dict] = None) -> dict:
         status = (getattr(task, "status", "") or "")
         step = (getattr(task, "workflow_step", "") or "")
         gate = (getattr(task, "gate_state", "none") or "none")
