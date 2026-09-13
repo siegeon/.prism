@@ -1502,41 +1502,26 @@ def test_sdlc_progress_reuse_never_touches_validation_or_a_finished_replay():
     assert guard == phase_memo.index("if (")
 
 
-def test_every_bot_family_canvas_auto_attaches_its_own_live_task():
-    # Owner: "each step here should have a playback mode where the workflow
-    # it is on is filling from left to right... look at how we did it with
-    # build and test". Build and test (validation) has always auto-reattached
-    # to its own in-flight run with no click (see the effect right above this
-    # one); every other bot-family canvas required an explicit rail-pill
-    # click to ever show a fill. This pins the generalized counterpart.
+def test_no_bot_family_canvas_auto_attaches_a_live_task_on_mount():
+    # SUPERSEDED 2026-09-13 (owner, verbatim, with a screenshot of the
+    # conductor canvas replaying "LOADING RUN · 9/11/2026" while real work
+    # was in flight elsewhere): "the playing is supposed to be IN the graph
+    # like in a normal game, and it should be real time as we get updates
+    # from the process." The auto-attach effect this test used to pin
+    # (`test_every_bot_family_canvas_auto_attaches_its_own_live_task`)
+    # picked a "working"/"driving" task with NO click and opened its
+    # instance/replay view on mount -- exactly what silently swapped the
+    # live whole-board occupancy view for a single stale task's overlay.
+    # It is now gone outright: the board defaults to live whole-board
+    # occupancy always, and an instance/replay view opens only from an
+    # explicit rail-pill click or a `?task=` deep link. See
+    # tests/unit/test_workflows_opens_on_live_work.py for the full pin.
     page = _read("pages", "WorkflowsPage.tsx")
-    attach = _function_body_like(
-        page,
-        "if (!isStateMachineWorkflow || workflowRun || searchParams.get(\"task\")) return;",
-        "}, [isStateMachineWorkflow, workflowRun, searchParams, conductorRailTasks, openConductorInstance]);",
-    )
-    # Skips when the ?task= handler (the effect immediately above) already
-    # owns opening a specific instance, so the two never race onto
-    # different pills for the same canvas.
-    assert 'searchParams.get("task")' in attach
-    # Only a task genuinely IN FLIGHT right now counts -- a done task is
-    # history, and clicking into history stays an explicit rail action
-    # (mirrors validation, which never auto-replays a finished run either).
-    assert 'task.status !== "done"' in attach
-    # SUPERSEDED 2026-08-28 by task a928f3d5: this used to also require
-    # '"pending"', treating a task parked at a gate as "in flight". It is
-    # not -- it is waiting for a PERSON -- and attaching to one sets
-    # viewingInstanceRef, which stops the definition poll from re-applying
-    # live occupancy, freezing the whole board on a task doing nothing
-    # (measured: a task awaiting review for 32 hours pinned the canvas while
-    # 8 tasks drove through implement_tasks unseen). In flight now means
-    # exactly activity working/driving.
-    assert '"working"' in attach and '"driving"' in attach
-    assert "gate_state" not in attach
-    assert "openConductorInstance(live)" in attach
-    # Most-recently-updated live task wins, not the oldest -- conductorRailTasks
-    # is sorted ascending, so this must walk it in reverse.
-    assert "[...conductorRailTasks].reverse()" in attach
+    assert 'if (live) openConductorInstance(live);' not in page
+    assert (
+        "}, [isStateMachineWorkflow, workflowRun, searchParams, "
+        "conductorRailTasks, openConductorInstance]);"
+    ) not in page
 
 
 def test_version_bumped_for_the_conductor_live_instance_legibility_fix():
