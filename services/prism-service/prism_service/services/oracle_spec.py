@@ -637,6 +637,20 @@ def _run_pytest_ids(spec: OracleSpec, ctx: dict) -> tuple[list, list, bool, str,
     passed = rc == 0
     obs = [_obs("pytest_pass", "positive", "rc==0", rc, passed)]
     tail = (out or err or "").strip().splitlines()[-1:] or [""]
+    # rc==4 (USAGE_ERROR, e.g. "file or directory not found") and rc==5 (no
+    # tests collected) mean pytest never reached a single assertion -- the
+    # cwd/ids resolved to the wrong tree (a stale, reaped, or otherwise gone
+    # workspace), not that any pinned test ran and failed. Reporting that as
+    # ST_FAILED (task d0b392b3, live) reads identically to a genuine red
+    # test to every downstream consumer, which is exactly what let a
+    # post-land re-check with a gone workspace rewind an ALREADY-SHIPPED
+    # task back into implement_tasks. This is the honest ST_MANUAL-shaped
+    # boundary instead: the runner could not judge, so it must never look
+    # like a failure of the code under test.
+    if rc in (4, 5):
+        reason = (f"pytest_ids: could not collect {' '.join(ids)} at "
+                  f"cwd={cwd} (rc={rc}) -- {tail[0][:160]}")
+        return obs, [], False, ST_ERROR, reason
     reason = f"pytest_ids: {' '.join(ids)} -> rc={rc} ({tail[0][:160]})"
     return obs, [], passed, (ST_PASSED if passed else ST_FAILED), reason
 

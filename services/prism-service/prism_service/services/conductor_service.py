@@ -2269,6 +2269,19 @@ class ConductorService:
             elif latest.status == osp.ST_MANUAL:
                 detail = ("latest receipt is manual_evidence_required "
                           f"(adapter={latest.adapter}): {latest.reason}")
+            elif latest.status == osp.ST_ERROR:
+                # INCONCLUSIVE IS NOT FAILED (same doctrine as ST_MANUAL,
+                # and as green_rewind.py's own comment): a run that could
+                # not even collect its tests (rc=4/5, a stale or gone
+                # workspace) never demonstrated the code is wrong, so this
+                # must never read as "FAILED" -- the literal word
+                # `_evaluate_green_gate_rewind` scans for to decide whether
+                # to reopen implementation (task d0b392b3, live: a post-land
+                # re-check against a reaped workspace said "FAILED" and
+                # rewound an already-shipped task).
+                detail = ("latest receipt is inconclusive — the runner "
+                          f"could not judge it (adapter={latest.adapter}): "
+                          f"{latest.reason}")
             elif not latest.passed:
                 detail = (f"latest receipt FAILED: {latest.reason}")
             elif (_policy_hash and latest.policy_hash
@@ -2664,6 +2677,25 @@ class ConductorService:
             "rewound_to": rewound_to,
         }
 
+    def _post_land_repo_path(self, task) -> str:
+        """A git repo usable for a shipped-ness check even after this
+        task's own workspace has been reaped (task d0b392b3): the task's
+        own checkout when it still exists on disk, else the daemon's own
+        source checkout (PRISM_SOURCE_PATH, else cwd) -- which carries the
+        identical origin/main, since `_is_shipped_on_main` only ever reads
+        commit MESSAGES on origin/main, never anything task-specific in
+        the working tree itself."""
+        repo = ""
+        try:
+            from prism_service.services import task_workspace
+            ws = task_workspace.workspace_for(getattr(task, "id", "") or "") or {}
+            repo = str(ws.get("path") or "")
+        except Exception:
+            repo = ""
+        if repo and os.path.isdir(repo):
+            return repo
+        return os.environ.get("PRISM_SOURCE_PATH") or os.getcwd()
+
     def _evaluate_green_gate_rewind(self, task, tree_sha, tried, refusal,
                                     remint_attempted):
         """Decide the backward edge for a refused green_gate.
@@ -2673,6 +2705,32 @@ class ConductorService:
         if self._task_svc is None or not refusal:
             return None
         if self._human_reject_stands(task_id):
+            return None
+        # NEVER REOPEN ALREADY-SHIPPED WORK (task d0b392b3, live). This
+        # sweep is independent of ship_worker's own land -> reap sequence:
+        # once a branch is merged, `_reap_after_land` removes the task's
+        # worktree, and the NEXT adjudicator pass can still land here (it
+        # has no memory of the land) with a refusal minted against that now
+        # -gone workspace -- a re-mint that collects zero tests reports
+        # "FAILED" (see oracle_spec._run_pytest_ids / ST_ERROR fix
+        # alongside this one), and this function used to read that as a
+        # real red test and rewind a task whose code was already on
+        # origin/main. A shipped task's own commit trailer is checked FIRST,
+        # via a repo path that still resolves after the task's own worktree
+        # is gone -- and if it is reachable from origin/main, this parks at
+        # green_gate with the refusal recorded instead of ever rewinding.
+        try:
+            repo = self._post_land_repo_path(task)
+            from prism_service.api.tasks import _is_shipped_on_main
+            shipped = bool(repo) and _is_shipped_on_main(repo, task_id)
+        except Exception:
+            shipped = False
+        if shipped:
+            msg = (f"green_gate: this task's [task:{task_id[:8]}] commit is "
+                   "already on origin/main -- a post-land oracle re-check is "
+                   "not evidence about the merged code and must not reopen "
+                   f"implementation of it. Latest re-check: {refusal}")
+            self._park_green_refusal(task_id, msg)
             return None
         text = refusal.upper()
         if "FAILED" in text and (tried or remint_attempted):
