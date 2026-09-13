@@ -1821,31 +1821,19 @@ export default function WorkflowsPage() {
       });
   }, [project, nodeStatusLayerId, nodeStatusTaskId]), project, TASK_CHANGED_KINDS);
 
-  // The whole state-machine family's own version of validation's "reattach
-  // after reload/navigation" effect below: land on ANY bot-family canvas
-  // (not just the top "conductor" one) with a task genuinely in flight on
-  // one of its steps right now, and its fill/clock should already be
-  // playing -- no click needed -- the same way "Build and test" has always
-  // auto-attached to its own active run (owner: "each step here should
-  // have a playback mode... look at how we did it with build and test").
-  // Skips when ?task= is already being handled above, so the two effects
-  // never race onto different pills for the same canvas.
-  useEffect(() => {
-    if (!isStateMachineWorkflow || workflowRun || searchParams.get("task")) return;
-    // A task parked at a gate is waiting for a PERSON, not working -- and
-    // attaching to one sets viewingInstanceRef, which stops the definition
-    // poll from re-applying live occupancy to the whole board. Measured on
-    // 7.13.150 (task a928f3d5): opening /workflows pinned the canvas to a
-    // task that had been awaiting review for 32 hours while 8 tasks were
-    // driving through implement_tasks, none of them visible. Attach only to
-    // work that is actually moving; with nothing moving, the board keeps
-    // live occupancy, which is the honest whole-board view.
-    const live = [...conductorRailTasks].reverse().find((task) =>
-      task.status !== "done"
-      && (task.activity?.state === "working" || task.activity?.state === "driving"));
-    if (live) openConductorInstance(live);
-  }, [isStateMachineWorkflow, workflowRun, searchParams, conductorRailTasks, openConductorInstance]);
-
+  // SUPERSEDED 2026-09-13 (owner, verbatim, with a screenshot of the
+  // conductor canvas replaying "LOADING RUN · 9/11/2026"): "the playing is
+  // supposed to be IN the graph like in a normal game, and it should be
+  // real time as we get updates from the process." This effect used to
+  // auto-attach the canvas to whichever task looked "working"/"driving" the
+  // instant the page mounted -- no click needed -- which is exactly what
+  // silently swapped the live whole-board occupancy view for a single
+  // task's instance/replay overlay with nobody having asked for one. The
+  // canvas now shows the whole board's live occupancy by DEFAULT, always;
+  // an instance/replay view opens ONLY from an explicit user action --
+  // clicking a rail pill (openConductorInstance's other call site, line
+  // ~1309) or a `?task=` deep link (the effect just above this one). See
+  // tests/unit/test_workflows_opens_on_live_work.py for what this replaced.
   useEffect(() => {
     // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
     // instance route that does not exist for a conductor task id, nor for

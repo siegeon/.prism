@@ -11,11 +11,23 @@ import { usePolledResource } from "@/lib/usePolledResource";
  * the maintenance-clock's brain-hygiene passes, ship_worker) and none of
  * it was visible AS it happened -- only CPU burn and a dark /live canvas.
  *
- * A compact overlay, docked top-right so it never collides with the
- * gate-decision panel (inset-3, opens on demand) or the reset-layout
- * button (bottom-left). Polls GET /api/system/activity every 1s -- its
- * own fetch, independent of the canvas's /api/work/graph boot and /sse/
- * work stream, so a slow or stalled graph fetch never blanks this panel.
+ * REPOSITIONED 2026-09-13 (owner, verbatim, with a screenshot of the
+ * conductor canvas): "i dont want the panel on the top, the playing is
+ * supposed to be IN the graph like in a normal game." A floating top-right
+ * overlay read as a second, competing surface instead of something drawn
+ * INTO the board it describes. This is a stopgap repositioning only --
+ * pulsing the actual graph nodes for each activity kind (task_runner -> the
+ * step node of the task being driven, gate_adjudicator -> pending-gate
+ * nodes, deploy -> the deploy node, etc.) belongs in the canvas renderer
+ * (live/draw.ts + live/graphState.ts), which this slice does not own and
+ * so does not touch. Until that lands, this renders as a collapsed-by-
+ * default drawer docked along the BOTTOM of the canvas -- out of the way
+ * of the gate-decision panel (inset-3) and the reset-layout button
+ * (bottom-left, this drawer sits to its right) -- rather than floating over
+ * the graph. Still polls GET /api/system/activity via the shared
+ * change-counter gate (usePolledResource), independent of the canvas's own
+ * /api/work/graph boot and /sse/work stream, so a slow or stalled graph
+ * fetch never blanks this panel.
  */
 
 type ActivityEntry = {
@@ -48,7 +60,10 @@ function kindLabel(kind: string): string {
 }
 
 export default function SystemActivityPanel({ project = "prism" }: { project?: string }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed by default (owner 2026-09-13: the panel must not compete with
+  // the graph) -- a single click still opens the drawer for the same detail
+  // this panel has always shown, it just never imposes itself unasked.
+  const [collapsed, setCollapsed] = useState(true);
   // Recomputed every tick from `started_at`, independent of when the last
   // fetch happened -- a running pass's elapsed keeps climbing between polls
   // instead of freezing at the last snapshot's value.
@@ -78,7 +93,7 @@ export default function SystemActivityPanel({ project = "prism" }: { project?: s
 
   return (
     <div
-      className="absolute top-3 right-3 z-10 w-72 max-w-[calc(100%-1.5rem)] rounded-lg border text-[11px] overflow-hidden"
+      className="absolute bottom-3 right-3 z-10 w-72 max-w-[calc(100%-1.5rem)] rounded-lg border text-[11px] overflow-hidden"
       style={{ background: "var(--surface-1)", borderColor: "var(--border-default)" }}
     >
       <button
