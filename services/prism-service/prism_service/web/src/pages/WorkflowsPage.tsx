@@ -768,22 +768,25 @@ export default function WorkflowsPage() {
     let cancel = false;
     let timer = 0;
     let failures = 0;
-    // requestAnimationFrame handle for the "how long has this fetch been
-    // running" ticker -- never a JS timer of any kind, per the
+    // requestAnimationFrame handle for the "how long has THIS IN-FLIGHT
+    // fetch been running" ticker -- never a JS timer of any kind, per the
     // no-timer-polling policy on this page. Purely visual (no network of
-    // its own): it only ever recomputes elapsed time locally.
+    // its own): it only ever recomputes elapsed time locally, and only
+    // while a request is actually outstanding.
     let slowTick = 0;
-    // A REFRESH fetch running long must show something (task: the workflows
+    // A REQUEST running long must show something (task: the workflows
     // canvas dark solid image defect) without touching the full-page
     // loading overlay, which only ever answers "has the FIRST response
-    // arrived at all". Called right after each fetch settles (both `load`
-    // itself and its own `window.setTimeout(load, delay)` failure-retry
-    // call site below are pinned literally by an earlier invariant test, so
-    // the arming lives in this sibling function rather than wrapping
-    // either). Ticks every frame (React bails on a same-second value, so
-    // this costs no extra render); cleared on resolution inside load()
-    // below -- success clears it outright, failure leaves the last value
-    // standing so the pill persists alongside "Connection interrupted".
+    // arrived at all". Armed ONLY at the moment a fetch is actually
+    // started (the top of load(), below) -- never after a fetch settles --
+    // so the pill measures an in-flight request's own age, never the idle
+    // time since the last successful poll (fix/pill: idle time between
+    // event-driven refetches was ticking this past the 3s bar and reading
+    // "backend slow · 35s" while every route answered under 200ms).
+    // Cleared on BOTH resolution paths inside load() below -- success and
+    // failure alike -- so a settled request never leaves a stale reading
+    // behind; "Connection interrupted" (a separate flag) is what still
+    // tells the viewer a poll is failing.
     const armSlowTick = () => {
       const requestStartedAt = Date.now();
       cancelAnimationFrame(slowTick);
@@ -794,14 +797,17 @@ export default function WorkflowsPage() {
       slowTick = requestAnimationFrame(tick);
     };
     const load = () => {
+      // Arm at request start, not at the previous request's end -- this is
+      // the one and only place a fetch begins for this effect.
+      armSlowTick();
       fetchWorkflowDef(project)
         .then((def) => {
           cancelAnimationFrame(slowTick);
+          setPollSlowS(null);
           if (cancel) return;
           failures = 0;
           setConnectionInterrupted(false);
           setReconnectAttempt(0);
-          setPollSlowS(null);
           setCatalogArrived(true);
           setData(def);
           const catalog = connectWorkflowCatalog(def.workflows ?? [{
@@ -851,7 +857,9 @@ export default function WorkflowsPage() {
             const canvas = canvasRef.current;
             graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
           }
-          armSlowTick();
+          // No re-arm here -- the request just settled, so nothing is
+          // in-flight; the next arm happens at the top of the next load()
+          // call, whenever reloadNonce's event-driven trigger fires it.
           // No blind reschedule here -- the effect re-runs (a fresh `load()`
           // fires from the top) only when reloadNonce changes, which the
           // event-driven trigger effect below bumps on a real signal, a
@@ -859,6 +867,7 @@ export default function WorkflowsPage() {
         })
         .catch(() => {
           cancelAnimationFrame(slowTick);
+          setPollSlowS(null);
           if (cancel) return;
           failures += 1;
           setConnectionInterrupted(true);
@@ -866,9 +875,13 @@ export default function WorkflowsPage() {
           // Never clear workflows/data here -- a failed poll keeps the
           // last good catalog on screen (tier already flips to
           // "disconnected" -> "Connection interrupted" for the honest
-          // reason it's stale) rather than blanking the canvas.
+          // reason it's stale) rather than blanking the canvas. The pill
+          // itself DOES clear on this settle (this request is no longer
+          // in-flight) -- "Connection interrupted" is the honest signal
+          // for a failing poll; the pill is only ever about an OUTSTANDING
+          // request's own age, re-armed when the retry below actually
+          // starts.
           setCatalogArrived(true);
-          armSlowTick();
           const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_MIN_MS * 2 ** (failures - 1));
           timer = window.setTimeout(load, delay);
         });
@@ -877,7 +890,6 @@ export default function WorkflowsPage() {
     // from their default slot to the saved one.
     readJson<Record<string, Point>>(positionsKey(project),
       (raw) => graphRef.current.hydrateOverrides(raw));
-    armSlowTick();
     load();
     return () => { cancel = true; window.clearTimeout(timer); cancelAnimationFrame(slowTick); };
   }, [project, reloadNonce]);
@@ -3029,11 +3041,16 @@ export default function WorkflowsPage() {
         <div className="border-b border-[color:var(--nav-line)] bg-[color:var(--surface-1)] px-4 py-2 text-xs text-[color:var(--text-secondary)]">
           <div className="flex items-center gap-2">
             <span>{bannerText}</span>
-            {/* A REFRESH poll (not the first) running long or failing must
+            {/* An IN-FLIGHT refresh poll (not the first) running long must
                 say so in place, never silently blank the board it's still
-                showing the last good data for. Only shows once dataLoaded
+                showing the last good data for. pollSlowS is only ever the
+                age of a currently-outstanding request (armed at the top of
+                load(), cleared the instant it settles, success or failure
+                alike) -- idle time between event-driven refetches never
+                counts, so this can never read "backend slow" while nothing
+                is actually in flight (fix/pill). Only shows once dataLoaded
                 -- the first-load overlay already carries this story. */}
-            {dataLoaded && pollSlowS !== null && pollSlowS >= 5 && (
+            {dataLoaded && pollSlowS !== null && pollSlowS >= 3 && (
               <span
                 title="A workflows/conductor-state refresh is taking longer than usual; the board below is still the last good data."
                 className="rounded border border-amber-500/50 bg-amber-950/20 px-2 py-0.5 text-2xs uppercase tracking-wide text-amber-300"
