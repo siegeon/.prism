@@ -98,9 +98,15 @@ def test_the_canvas_is_handed_the_verdicts():
 
 
 def test_a_failed_read_is_not_a_verdict():
-    """A stale answer frozen on the canvas is worse than a plain layer."""
+    """A stale answer frozen on the canvas is worse than a plain layer.
+
+    Task fix/polling: this poll moved off its own useEffect+setInterval
+    (whose closure-scoped `cancelled` boolean flipped in a cleanup
+    function) onto the shared usePolledEffect gate, which has no per-call
+    cleanup — out-of-order-response guarding is now a per-request id ref
+    instead (`cancelled()` as a function, not a boolean)."""
     src = _PAGE.read_text(encoding="utf-8")
-    assert "if (!cancelled) setNodeVerdicts(null);" in src
+    assert "if (!cancelled()) setNodeVerdicts(null);" in src
 
 
 def test_a_verdict_never_paints_a_progress_claim():

@@ -9,6 +9,7 @@ import {
   type ExternalEntity,
 } from "@/lib/api";
 import { useProject } from "@/lib/project";
+import { usePolledEffect } from "@/lib/usePolledResource";
 import { Page } from "@/components/ui";
 import { stepLabel } from "@/lib/workflowChips";
 import { Lozenge } from "@/components/Lozenge";
@@ -227,15 +228,10 @@ export default function TasksPage() {
       .catch(() => setExternal([]));
   }, [project]);
 
-  // Only poll a tab someone is looking at (Sidebar useStaleness precedent);
-  // refetch on focus so the board is current the moment it is seen.
-  useEffect(() => {
-    const tick = () => { if (!document.hidden) load(); };
-    load();
-    const t = setInterval(tick, 5000);
-    document.addEventListener("visibilitychange", tick);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", tick); };
-  }, [load]);
+  // Shared change-counter gate (task fix/polling): refetch only when
+  // /api/changes moves, on focus, or at a 30s floor -- never a bare 5s
+  // interval regardless of whether the board actually changed.
+  usePolledEffect(load, project);
 
   // The unified, filtered, viewer-scoped work list — ONE queue, not two.
   const items = useMemo(() => {

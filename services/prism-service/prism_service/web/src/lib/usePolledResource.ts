@@ -96,20 +96,76 @@ export function usePolledResource<T>(url: string | null, project = ""): PolledRe
     }
   }, [counter, url, load]);
 
-  // Focus + 30s floor, both gated on visibility -- never fetch while hidden.
+  // Focus/visibility + 30s floor, both gated on visibility -- never fetch
+  // while hidden. Both listeners, not just one: switching OS apps fires
+  // window focus/blur, but switching BETWEEN TABS in the same browser
+  // window only fires document visibilitychange -- a page that only
+  // listened for focus would miss exactly the "tab someone just switched
+  // back to" case this whole layer exists to catch promptly.
   useEffect(() => {
     if (!url) return;
-    const onFocus = () => { if (!document.hidden) load(); };
-    window.addEventListener("focus", onFocus);
+    const onVisible = () => { if (!document.hidden) load(); };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
     const floor = setInterval(() => {
       if (document.hidden) return;
       if (performance.now() - lastFetchAtRef.current >= FLOOR_MS) load();
     }, 5000);
     return () => {
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
       clearInterval(floor);
     };
   }, [url, load]);
 
   return { data, polled, error, refresh: load };
+}
+
+/**
+ * Same policy as usePolledResource (counter move / focus / 30s floor,
+ * never while hidden), for a page's own composite `load()` that fetches
+ * more than one URL at once (Promise.all(...)) and so cannot be expressed
+ * as a single `usePolledResource<T>(url)` call. Runs `load` once on mount
+ * and again on every trigger; `load` itself owns its state updates and
+ * caching exactly as before -- this hook only owns WHEN it fires.
+ */
+export function usePolledEffect(load: () => void, project = ""): void {
+  const { counter } = useChanges(project);
+  const lastCounterRef = useRef<number | null>(null);
+  const lastRunAtRef = useRef(0);
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
+  const run = useCallback(() => {
+    lastRunAtRef.current = performance.now();
+    loadRef.current();
+  }, []);
+
+  useEffect(() => { run(); }, [run]);
+
+  useEffect(() => {
+    if (lastCounterRef.current === null) {
+      lastCounterRef.current = counter;
+      return;
+    }
+    if (counter !== lastCounterRef.current) {
+      lastCounterRef.current = counter;
+      run();
+    }
+  }, [counter, run]);
+
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) run(); };
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
+    const floor = setInterval(() => {
+      if (document.hidden) return;
+      if (performance.now() - lastRunAtRef.current >= FLOOR_MS) run();
+    }, 5000);
+    return () => {
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(floor);
+    };
+  }, [run]);
 }

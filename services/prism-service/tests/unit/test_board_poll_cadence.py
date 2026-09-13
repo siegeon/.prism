@@ -100,9 +100,18 @@ def test_changed_board_returns_full_fresh_payload(tmp_path, monkeypatch):
 
 
 def test_tasks_page_skips_hidden_tab_and_refetches_on_visibility():
+    # Task fix/polling: TasksPage moved its own inline document.hidden /
+    # visibilitychange handling onto the shared usePolledEffect gate
+    # (lib/usePolledResource.ts), which provides the identical guarantee
+    # (never fetch while hidden, refetch on focus AND visibilitychange) to
+    # every consumer at once instead of each page reimplementing it.
     src = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "pages"
            / "TasksPage.tsx").read_text(encoding="utf-8")
-    assert "document.hidden" in src, (
-        "TasksPage must skip polls while the tab is hidden")
-    assert "visibilitychange" in src, (
-        "TasksPage must refetch the moment the tab becomes visible again")
+    assert "usePolledEffect" in src, (
+        "TasksPage must ride the shared hidden/visibility-aware poll gate")
+    shared = (_SERVICE_ROOT / "prism_service" / "web" / "src" / "lib"
+              / "usePolledResource.ts").read_text(encoding="utf-8")
+    assert "document.hidden" in shared, (
+        "the shared gate must skip polls while the tab is hidden")
+    assert "visibilitychange" in shared, (
+        "the shared gate must refetch the moment the tab becomes visible again")
