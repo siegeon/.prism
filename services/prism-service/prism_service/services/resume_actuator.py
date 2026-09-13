@@ -793,15 +793,28 @@ def sweep_once() -> Optional[dict]:
     return None
 
 
+_IDLE_FALLBACK_S = 900.0  # owner 2026-09-13: an idle worker should stop polling
+
+
 def _loop(interval_s: int) -> None:
-    _log(f"started; interval={interval_s}s")
+    from prism_service.services import wakeups
+
+    _log(f"started; interval={interval_s}s (event-driven; falls back to "
+         f"{max(interval_s, _IDLE_FALLBACK_S):.0f}s when nothing changed)")
+    wakeups.lower_thread_priority()
+    wakeups.wait_out_startup_warmup()
+    last_checked = time.time()
     while True:
         try:
-            with system_activity.pass_("resume_actuator", "*", "sweep_once"):
-                sweep_once()
+            with system_activity.pass_("resume_actuator", "*", "sweep_once") as info:
+                res = sweep_once()
+                info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        time.sleep(interval_s)
+        checked_at = time.time()
+        wakeups.wait(["task_changed"], timeout=max(interval_s, _IDLE_FALLBACK_S),
+                     since=last_checked)
+        last_checked = checked_at
 
 
 def start_resume_actuator() -> threading.Thread | None:

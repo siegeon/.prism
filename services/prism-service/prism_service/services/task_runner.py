@@ -2370,10 +2370,18 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
     interval, which used to cope by permanently stubbing `sweep_once` to
     a no-op instead, breaking every later test that calls it directly."""
     _log(f"started; interval={interval_s}s (event-driven, interval is a fallback)")
+    from prism_service.services import wakeups
+    wakeups.lower_thread_priority()
+    wakeups.wait_out_startup_warmup()
     while stop_event is None or not stop_event.is_set():
         try:
-            with system_activity.pass_("task_runner", "*", "sweep_once"):
-                sweep_once()
+            # `info["active"]` left False when the sweep found nothing
+            # eligible: the System Activity panel collapses a run of quiet
+            # ticks into one throttled "idle" entry instead of climbing on
+            # a clock that did nothing (owner 2026-09-13).
+            with system_activity.pass_("task_runner", "*", "sweep_once") as info:
+                res = sweep_once()
+                info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
         if _wake_event.wait(timeout=interval_s):

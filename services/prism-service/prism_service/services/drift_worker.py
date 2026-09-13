@@ -142,9 +142,21 @@ def sweep_once() -> list[dict]:
             )
             _drift_brains[pid] = brain
 
+        from prism_service.services import wakeups
+
         t0 = time.monotonic()
-        with system_activity.pass_("drift_reindex", pid, "incremental_reindex"):
-            n = brain.incremental_reindex(repo_path=repo_path)
+        # Serialized with the other pure-maintenance sweeps (see
+        # dispatch_guard._loop's comment) -- never task_runner/
+        # resume_actuator/ship_worker/gate_adjudicator.
+        with wakeups.serial_slot():
+            with system_activity.pass_(
+                    "drift_reindex", pid, "incremental_reindex") as info:
+                n = brain.incremental_reindex(repo_path=repo_path)
+                # A clean project (n==0, the common case once its own
+                # baseline has settled) collapses into the throttled idle
+                # entry instead of one ring-buffer line per in-use project
+                # per tick.
+                info["active"] = bool(n)
         elapsed_ms = (time.monotonic() - t0) * 1000.0
         print(f"[drift] {pid}: {n} file(s) in {elapsed_ms:.0f}ms", file=sys.stderr)
         results.append({"project": pid, "files": n, "elapsed_ms": elapsed_ms})

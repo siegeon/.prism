@@ -383,6 +383,13 @@ def start_drift_timer():
         os.nice(10)
     except Exception:
         pass
+    # No worker's first tick fires in the first PRISM_WORKER_WARMUP_S
+    # seconds after process start (default 120s) -- owner measurement
+    # 2026-09-13: 6+ standing workers all firing within the same ~20s
+    # startup window pegged CPU at 150% and made ordinary HTTP routes
+    # take 10-25s. Nothing has had time to drift yet this early anyway.
+    from prism_service.services import wakeups
+    wakeups.wait_out_startup_warmup()
     while True:
         try:
             drift_worker.sweep_once()

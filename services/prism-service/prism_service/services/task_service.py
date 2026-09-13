@@ -1170,6 +1170,16 @@ class TaskService:
         except Exception:
             logging.getLogger(__name__).warning(
                 "task_runner.wake() failed for %s", task.id, exc_info=True)
+        # Same event, on the shared wakeups bus (services/wakeups.py) so
+        # every OTHER event-driven worker (gate_adjudicator, resume_actuator,
+        # ...) reacts immediately too, instead of each polling its own fixed
+        # interval regardless of whether anything actually changed.
+        try:
+            from prism_service.services import wakeups
+
+            wakeups.signal("task_changed", self.project or "*", task.id)
+        except Exception:
+            pass
 
     def publish_activity_changed(self, task_id: str) -> None:
         """Push a fresh `activity` reading for `task_id` with no column

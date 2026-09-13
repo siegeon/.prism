@@ -561,20 +561,45 @@ def is_enabled() -> bool:
     return _interval_s() > 0
 
 
+_IDLE_FALLBACK_S = 900.0  # owner 2026-09-13: an idle worker should stop polling
+
+
 def _loop(interval_s: int,
           stop_event: Optional[threading.Event] = None) -> None:
-    _log(f"started; interval={interval_s}s")
+    from prism_service.services import wakeups
+
+    fallback = max(interval_s, _IDLE_FALLBACK_S)
+    _log(f"started; interval={interval_s}s (event-driven; falls back to "
+         f"{fallback:.0f}s when nothing changed)")
+    wakeups.lower_thread_priority()
+    if stop_event is None:  # never delay a test-driven loop
+        wakeups.wait_out_startup_warmup()
+    last_checked = time.time()
     while stop_event is None or not stop_event.is_set():
         try:
-            with system_activity.pass_("reap_sweep", "*", "sweep_reap"):
-                sweep_reap()
+            # Serialized with the other pure-maintenance sweeps (never
+            # task_runner/resume_actuator/ship_worker/gate_adjudicator,
+            # which can each legitimately run for minutes and must stay
+            # independently responsive) -- owner measurement 2026-09-13:
+            # 5+ short maintenance passes overlapping in the same ~20s
+            # startup window pegged CPU at 150% and stalled ordinary HTTP
+            # routes for 10-25s.
+            with wakeups.serial_slot():
+                with system_activity.pass_("reap_sweep", "*", "sweep_reap") as info:
+                    res = sweep_reap()
+                    info["active"] = bool(res)
         except Exception as exc:
             _log(f"sweep error: {exc}")
+        checked_at = time.time()
         if stop_event is not None:
+            # Test-only plumbing (never passed by start_dispatch_reaper):
+            # keep the plain interval wait here so a stop_event-driven
+            # test still ends the loop the way it always has.
             if stop_event.wait(interval_s):
                 break
         else:
-            time.sleep(interval_s)
+            wakeups.wait(["task_changed"], timeout=fallback, since=last_checked)
+        last_checked = checked_at
 
 
 def start_dispatch_reaper() -> Optional[threading.Thread]:

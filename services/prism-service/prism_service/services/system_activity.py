@@ -57,19 +57,36 @@ def record(kind: str, project: str, detail: str, started_at: float,
     return entry
 
 
+_IDLE_MIN_INTERVAL_S = 600.0  # collapse idle passes to at most 1 entry/10min
+_last_idle_at: dict[tuple[str, str], float] = {}
+_idle_skipped: dict[tuple[str, str], int] = {}
+
+
 @contextlib.contextmanager
-def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[None]:
+def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[dict]:
     """Wrap one worker tick/sweep. Records it as running immediately on
     entry, and moves it into `recent` on exit -- ok=True unless the body
     raised, in which case ok=False and the exception propagates untouched
-    (never swallow a worker's real exception)."""
+    (never swallow a worker's real exception).
+
+    Yields a mutable `info` dict the body may set `info["active"] = False`
+    on when the pass found NOTHING to do (a sweep with zero eligible
+    tasks, no pending gates, nothing to reap, ...). A caller that never
+    touches `info` keeps the old behaviour (every pass recorded) -- opt
+    in explicitly. An inactive pass is never lost silently: it collapses
+    into at most one "idle" entry per `kind`+`project` per
+    `_IDLE_MIN_INTERVAL_S`, carrying how many quiet passes it stands in
+    for, so the System Activity panel reads QUIET on an idle system
+    instead of climbing on a clock tick that did nothing (owner
+    2026-09-13)."""
     token = uuid.uuid4().hex[:12]
     started = time.time()
     with _LOCK:
         _running[token] = _entry(token, kind, project, detail, started)
+    info: dict = {"active": True}
     ok = True
     try:
-        yield
+        yield info
     except BaseException:
         ok = False
         raise
@@ -77,7 +94,30 @@ def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[None]:
         elapsed_ms = (time.time() - started) * 1000.0
         with _LOCK:
             _running.pop(token, None)
-        record(kind, project, detail, started, elapsed_ms, ok=ok)
+        active = bool(info.get("active", True))
+        if active or not ok:
+            key = (kind, project or "*")
+            with _LOCK:
+                _last_idle_at.pop(key, None)
+                _idle_skipped.pop(key, None)
+            record(kind, project, detail, started, elapsed_ms, ok=ok)
+        else:
+            _record_idle(kind, project, detail, started, elapsed_ms)
+
+
+def _record_idle(kind: str, project: str, detail: str, started: float,
+                  elapsed_ms: float) -> None:
+    key = (kind, project or "*")
+    now = time.time()
+    with _LOCK:
+        last = _last_idle_at.get(key, 0.0)
+        if now - last < _IDLE_MIN_INTERVAL_S:
+            _idle_skipped[key] = _idle_skipped.get(key, 0) + 1
+            return
+        skipped = _idle_skipped.pop(key, 0)
+        _last_idle_at[key] = now
+    idle_detail = f"idle · {skipped} skipped" if skipped else "idle"
+    record(kind, project, idle_detail or detail, started, elapsed_ms, ok=True)
 
 
 def _matches(entry_project: str, project: Optional[str]) -> bool:
@@ -86,11 +126,17 @@ def _matches(entry_project: str, project: Optional[str]) -> bool:
     return entry_project == project or entry_project == "*"
 
 
+_QUIET_WINDOW_S = 60.0
+
+
 def snapshot(project: Optional[str] = None, limit: int = 20) -> dict:
     """Answer from memory only -- no sqlite, no git, no locks held across
     I/O. `running` is every currently in-flight pass (own live elapsed
     computed at read time); `recent` is the most recent `limit` completed
-    passes, newest first."""
+    passes, newest first. `quiet` is True when nothing is running and no
+    non-idle pass completed in the last minute -- the panel's QUIET
+    header (owner 2026-09-13: an idle system should read as idle, not as
+    churn)."""
     now = time.time()
     with _LOCK:
         running_snap = list(_running.values())
@@ -104,7 +150,13 @@ def snapshot(project: Optional[str] = None, limit: int = 20) -> dict:
         running_out.append(d)
     running_out.sort(key=lambda e: e["started_at"])
     recent_out = [r for r in recent_snap if _matches(r["project"], project)]
-    return {"running": running_out, "recent": recent_out[: max(0, limit)]}
+    quiet = not running_out and not any(
+        (now - r["started_at"]) <= _QUIET_WINDOW_S
+        and not str(r.get("detail", "")).startswith("idle")
+        for r in recent_out
+    )
+    return {"running": running_out, "recent": recent_out[: max(0, limit)],
+            "quiet": quiet}
 
 
 def _reset_for_tests() -> None:
@@ -112,3 +164,5 @@ def _reset_for_tests() -> None:
     with _LOCK:
         _running.clear()
         _recent.clear()
+        _last_idle_at.clear()
+        _idle_skipped.clear()

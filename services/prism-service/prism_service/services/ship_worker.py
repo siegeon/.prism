@@ -676,6 +676,17 @@ def ship_task(task_id: str, project: str = "default", *,
     except Exception:
         pass
 
+    # Wake deploy_worker's sweep on the shared bus the instant a branch
+    # actually landed on origin/main -- deploy_worker still has to poll
+    # git itself (a land can come from OUTSIDE this process, e.g. a
+    # fixer's own `git push`), but a same-process land no longer has to
+    # wait out deploy_worker's own fallback interval.
+    try:
+        from prism_service.services import wakeups
+        wakeups.signal("shipped", project, task_id)
+    except Exception:
+        pass
+
     land = on_landed or _replay_owner_approval
     replayed = land(task_svc, cond, task_id)
     _reap_after_land(task_svc, task_id, project)
@@ -1139,15 +1150,28 @@ def sweep_once() -> Optional[dict]:
     return last
 
 
+_IDLE_FALLBACK_S = 900.0  # owner 2026-09-13: an idle worker should stop polling
+
+
 def _loop(interval_s: int) -> None:
-    _log(f"started; interval={interval_s}s")
+    from prism_service.services import wakeups
+
+    fallback = max(interval_s, _IDLE_FALLBACK_S)
+    _log(f"started; interval={interval_s}s (event-driven; falls back to "
+         f"{fallback:.0f}s when nothing changed)")
+    wakeups.lower_thread_priority()
+    wakeups.wait_out_startup_warmup()
+    last_checked = time.time()
     while True:
         try:
-            with system_activity.pass_("ship_worker", "*", "sweep_once"):
-                sweep_once()
+            with system_activity.pass_("ship_worker", "*", "sweep_once") as info:
+                res = sweep_once()
+                info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        time.sleep(interval_s)
+        checked_at = time.time()
+        wakeups.wait(["task_changed"], timeout=fallback, since=last_checked)
+        last_checked = checked_at
 
 
 def start_ship_worker() -> Optional[threading.Thread]:

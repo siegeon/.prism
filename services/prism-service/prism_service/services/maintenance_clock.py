@@ -286,10 +286,34 @@ def is_enabled() -> bool:
     return _env_truthy("PRISM_MAINTENANCE_CLOCK", default=True)
 
 
-def _loop(interval_s: int, initial_delay_s: float) -> None:
+#: how recently a project must have had a real client request to still
+#: count as "in use" for this clock's own scoping -- mirrors
+#: drift_worker.ACTIVE_WINDOW_S's default (10 minutes).
+_ACTIVE_WINDOW_S = 600.0
+
+
+def _in_scope_projects() -> list[str]:
+    """Projects this tick actually needs to visit: whatever's been touched
+    by a client request recently (project_activity.py, the same signal
+    drift_worker.py already uses), or -- when NONE have (a fresh boot, or
+    no HTTP traffic at all yet) -- every known project, so brain hygiene
+    still eventually runs rather than silently never firing. Owner
+    2026-09-13: workers iterating every tracked project regardless of use
+    is exactly the idle-churn complaint."""
     from prism_service.project_context import get_all_projects
+    from prism_service.services import project_activity
+    live = get_all_projects()
+    used = [p for p in live if project_activity.seen_within(p, _ACTIVE_WINDOW_S)]
+    return used if used else live
+
+
+def _loop(interval_s: int, initial_delay_s: float) -> None:
+    from prism_service.services import wakeups
+
+    wakeups.lower_thread_priority()
     if initial_delay_s > 0:
         time.sleep(initial_delay_s)
+    wakeups.wait_out_startup_warmup()
     # One cadence state PER project so each project's passes gate
     # independently. The global adaptive pass is deduped per tick below.
     states: dict[str, dict] = {}
@@ -302,15 +326,22 @@ def _loop(interval_s: int, initial_delay_s: float) -> None:
             _stamp_sweep()
             enabled = pass_enabled()
             adaptive_ran_this_tick = False
-            for pid in get_all_projects():
+            for pid in _in_scope_projects():
                 st = states.setdefault(pid, new_clock_state())
                 # adaptive_policy.run_once() already sweeps ALL projects, so
                 # let it fire on at most one project per tick.
                 per_proj = dict(enabled)
                 if adaptive_ran_this_tick:
                     per_proj["adaptive"] = False
-                with system_activity.pass_("brain_jobs", pid, "run_tick"):
-                    fired = run_tick(pid, st, enabled=per_proj)
+                # Most ticks fire NOTHING (each pass gates on its own
+                # cadence) -- info["active"] lets the panel collapse that
+                # into one throttled idle entry instead of one per tick.
+                # Serialized with the other pure-maintenance sweeps (see
+                # dispatch_guard._loop's comment).
+                with wakeups.serial_slot():
+                    with system_activity.pass_("brain_jobs", pid, "run_tick") as info:
+                        fired = run_tick(pid, st, enabled=per_proj)
+                        info["active"] = bool(fired)
                 if "adaptive" in fired:
                     adaptive_ran_this_tick = True
                 if fired:

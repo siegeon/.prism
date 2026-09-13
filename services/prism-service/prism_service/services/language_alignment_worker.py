@@ -190,12 +190,23 @@ def run_once_for(project: str, force: bool = False) -> dict:
 
 
 def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None:
+    from prism_service.services import wakeups
+
     _log(f"started; interval={interval_s}s")
+    wakeups.lower_thread_priority()
+    if stop_event is None:  # never delay a test-driven loop
+        wakeups.wait_out_startup_warmup()
     while stop_event is None or not stop_event.is_set():
         for project in _projects_in_scope():
             try:
-                with system_activity.pass_("language_alignment", project, "run_once_for"):
-                    res = run_once_for(project)
+                # Serialized with the other pure-maintenance sweeps (see
+                # dispatch_guard._loop's comment) -- never task_runner/
+                # resume_actuator/ship_worker/gate_adjudicator.
+                with wakeups.serial_slot():
+                    with system_activity.pass_(
+                            "language_alignment", project, "run_once_for") as info:
+                        res = run_once_for(project)
+                        info["active"] = "skipped" not in res
                 if "skipped" not in res:
                     _log(f"{project}: {res}")
             except Exception as exc:

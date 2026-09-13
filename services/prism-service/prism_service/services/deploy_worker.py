@@ -523,22 +523,56 @@ def _tick() -> None:
     land the sweep has not seen yet BEFORE confirming anything a previous
     tick (or a task-scoped land) already requested -- either half's own
     exception never stops the other, same as the loop's own posture."""
-    with system_activity.pass_("deploy_sweep", "*", "sweep_new_land+sweep_pending"):
-        try:
-            sweep_new_land()
-        except Exception as exc:
-            _log(f"sweep new-land error: {exc}")
-        try:
-            sweep_pending()
-        except Exception as exc:
-            _log(f"sweep error: {exc}")
+    from prism_service.services import wakeups
+
+    # Serialized with the other pure-maintenance sweeps (see
+    # dispatch_guard._loop's comment) -- never task_runner/resume_actuator/
+    # ship_worker/gate_adjudicator, which can each legitimately run for
+    # minutes. Deploy's own git fetch + possible build/restart was measured
+    # overlapping with 5 other workers in the same ~20s startup window
+    # (owner 2026-09-13), taking 35s while pegging CPU for everyone.
+    with wakeups.serial_slot():
+        with system_activity.pass_(
+                "deploy_sweep", "*", "sweep_new_land+sweep_pending") as info:
+            active = False
+            try:
+                res = sweep_new_land()
+                if isinstance(res, dict) and res.get("stage") != _STAGE_SKIPPED:
+                    active = True
+            except Exception as exc:
+                _log(f"sweep new-land error: {exc}")
+                active = True
+            try:
+                sweep_pending()
+            except Exception as exc:
+                _log(f"sweep error: {exc}")
+                active = True
+            info["active"] = active
+
+
+_IDLE_FALLBACK_S = 900.0  # owner 2026-09-13: an idle worker should stop polling
 
 
 def _loop(interval_s: int) -> None:
-    _log(f"started; interval={interval_s}s")
+    from prism_service.services import wakeups
+
+    fallback = max(interval_s, _IDLE_FALLBACK_S)
+    _log(f"started; interval={interval_s}s (event-driven; falls back to "
+         f"{fallback:.0f}s when nothing changed)")
+    wakeups.lower_thread_priority()
+    wakeups.wait_out_startup_warmup()
+    last_checked = time.time()
     while True:
         _tick()
-        time.sleep(interval_s)
+        checked_at = time.time()
+        # "shipped" wakes this immediately on a same-process land;
+        # "task_changed" covers a fresh deploy request queued on a task.
+        # A land from OUTSIDE this process (a fixer's own `git push`) is
+        # still only caught by the fallback poll -- unavoidable without a
+        # cross-process channel.
+        wakeups.wait(["shipped", "task_changed"], timeout=fallback,
+                     since=last_checked)
+        last_checked = checked_at
 
 
 def start_deploy_worker() -> Optional[threading.Thread]:

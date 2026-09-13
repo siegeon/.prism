@@ -174,11 +174,24 @@ def _backoff_clear(tid: str) -> None:
     _BACKOFF.pop(tid, None)
 
 
+#: set by the most recent `sweep_once()` -- how many gate-step tasks were
+#: actually eligible for adjudication this pass (pending/failed on a gate
+#: step this seat handles), REGARDLESS of whether any were approved or
+#: skipped by backoff. `_loop` reads this right after calling `sweep_once`
+#: to decide whether the next wait should use the fast (pending-gate)
+#: cadence or fall back to the long idle ceiling -- a module global rather
+#: than a return-shape change so nothing that already calls `sweep_once()`
+#: for its `approved` list needs to change.
+_last_eligible_count = 0
+
+
 def sweep_once() -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
     Returns the list of approvals made (empty when nothing was decidable)."""
+    global _last_eligible_count
     from prism_service.project_context import get_all_projects, get_project
     approved: list[dict] = []
+    eligible_count = 0
     for pid in get_all_projects():
         try:
             ctx = get_project(pid)
@@ -241,6 +254,11 @@ def sweep_once() -> list[dict]:
                     continue
             elif gate != "pending":
                 continue
+            # Reached here: a real gate-step task this seat is responsible
+            # for this pass, whether or not backoff ends up skipping it --
+            # this is what "a gate is genuinely parked" means for the
+            # loop's fast-vs-idle cadence decision below.
+            eligible_count += 1
             if _backoff_should_skip(tid, t):
                 continue
             try:
@@ -392,18 +410,38 @@ def sweep_once() -> list[dict]:
                     _backoff_note_refused(tid, ctx.task_svc.get(tid) or task)
                 except Exception as exc:
                     _log(f"{pid}/{tid[:8]}: reason-surface skipped ({exc})")
+    _last_eligible_count = eligible_count
     return approved
 
 
+#: floor for the idle fallback wait -- this seat's configured interval
+#: (e.g. 60s on the AOS dev instance) stays the cadence ONLY while a gate
+#: is genuinely parked pending; once nothing is waiting, the wait grows
+#: to this ceiling instead of still polling every 60s forever (owner
+#: 2026-09-13: workers ticked "whether or not anything changed").
+_IDLE_FALLBACK_S = 900.0
+
+
 def _loop(interval_s: int) -> None:
-    _log(f"started; interval={interval_s}s")
+    from prism_service.services import wakeups
+
+    _log(f"started; interval={interval_s}s (fast cadence only while a gate "
+         f"is pending; otherwise falls back to {_IDLE_FALLBACK_S:.0f}s)")
+    wakeups.lower_thread_priority()
+    wakeups.wait_out_startup_warmup()
+    last_checked = time.time()
     while True:
         try:
-            with system_activity.pass_("gate_adjudicator", "*", "sweep_once"):
-                sweep_once()
+            with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
+                approved = sweep_once()
+                info["active"] = bool(approved) or _last_eligible_count > 0
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        time.sleep(interval_s)
+        checked_at = time.time()
+        fallback = interval_s if _last_eligible_count > 0 else \
+            max(interval_s, _IDLE_FALLBACK_S)
+        wakeups.wait(["task_changed"], timeout=fallback, since=last_checked)
+        last_checked = checked_at
 
 
 def start_gate_adjudicator() -> threading.Thread | None:
