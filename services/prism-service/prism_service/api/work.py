@@ -613,7 +613,8 @@ def work_graph(project: str = Query("default"),
             if child is None:
                 continue
             try:
-                pp = conductor.phase_progress(child.id)
+                pp = conductor.phase_progress(
+                    child.id, heartbeat_cache=_heartbeat_map)
                 c_activity = conductor.activity_for(
                     child, pp, heartbeat_cache=_heartbeat_map)
             except Exception:
