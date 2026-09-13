@@ -107,6 +107,66 @@ def test_a_slow_or_failed_refresh_poll_never_blanks_prior_data():
         "a failed poll must never clear the workflow definition to null")
 
 
+# ---------------------------------------------------------------------------
+# fix/pill (2026-09-13, owner-reported): the live board showed "BACKEND
+# SLOW · 35S" while every route answered under 200ms. Root cause: armSlowTick
+# was called again right after a fetch SETTLED (both the success and the
+# retry-scheduling branches), so pollSlowS kept ticking up measuring IDLE
+# time since the last completed poll -- there was no request in flight at
+# all. Fixed: armSlowTick is called exactly once, at the top of load(), the
+# moment a request actually starts; it is cleared (never re-armed) on both
+# resolution paths. These assertions pin that shape directly so a future
+# edit cannot reintroduce a post-settle re-arm.
+# ---------------------------------------------------------------------------
+
+def test_the_slow_poll_pill_only_measures_an_in_flight_requests_age():
+    src = _read()
+    load_idx = src.index("const load = () => {")
+    then_idx = src.index(".then((def) => {", load_idx)
+    catch_idx = src.index(".catch(() => {", then_idx)
+    catch_end_idx = src.index("});", catch_idx)
+
+    # armSlowTick must be called at the very top of load(), before the
+    # fetch itself -- this is what makes it measure the OUTGOING request's
+    # own age rather than time elapsed since the previous one settled.
+    pre_fetch = src[load_idx:src.index("fetchWorkflowDef(project)", load_idx)]
+    assert "armSlowTick();" in pre_fetch, (
+        "armSlowTick must be armed at the top of load(), the moment a "
+        "request actually starts -- arming it after a fetch settles "
+        "measures idle time between polls, not an in-flight request")
+
+    # Neither settle branch (success .then, or failure .catch) may call
+    # armSlowTick again -- a settled request has nothing left in flight to
+    # measure, and idle time between event-driven refetches must never
+    # count toward the pill.
+    then_block = src[then_idx:catch_idx]
+    assert "armSlowTick()" not in then_block, (
+        "the success branch must never re-arm the slow-poll ticker -- the "
+        "request just settled, so there is nothing in flight to measure "
+        "until the NEXT load() call starts one")
+    catch_block = src[catch_idx:catch_end_idx]
+    assert "armSlowTick()" not in catch_block, (
+        "the failure branch must never re-arm the slow-poll ticker either "
+        "-- it must clear pollSlowS on this settle, same as success, and "
+        "let the eventual retry's own load() call do the next arming")
+
+    # Both settle branches must clear pollSlowS -- "it clears on response
+    # or error" (a stale reading must never survive a request settling).
+    assert "setPollSlowS(null);" in then_block, (
+        "a successful fetch must clear pollSlowS")
+    assert "setPollSlowS(null);" in catch_block, (
+        "a failed fetch must also clear pollSlowS -- 'Connection "
+        "interrupted' is the honest signal for a failing poll, not a "
+        "frozen 'backend slow' reading")
+
+    # The pill's own threshold: an in-flight request only reads as slow
+    # past 3s, per the fixed contract (was 5s against last-success age,
+    # which is a different and now-removed measurement entirely).
+    assert "pollSlowS >= 3" in src, (
+        "the pill must fire once the CURRENT in-flight request has been "
+        "outstanding for 3 seconds")
+
+
 def test_a_session_cache_lets_navigation_repaint_instantly():
     src = _read()
     assert "sessionStorage" in src, (
