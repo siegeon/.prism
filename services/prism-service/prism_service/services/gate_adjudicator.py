@@ -236,6 +236,14 @@ _LAST_PROJECT_ELIGIBLE: dict[str, int] = {}
 # next tick; its memo is never written, so it is retried, never dropped.
 _SWEEP_BUDGET_S = 2.0
 
+# Ceiling on back-to-back FORCED passes `_loop` runs right after warmup to
+# drain a real boot-time backlog (task a65c66e5, third round) -- a backstop
+# against a pathological signal loop, never expected to bind in practice
+# (31 real pending gates drained in a handful of passes live); if it ever
+# does, the loop falls through to normal reactive waiting rather than
+# holding up startup forever.
+_MAX_BOOT_DRAIN_PASSES = 25
+
 
 def _project_needs_scan(pid: str, wakeups_mod) -> bool:
     last = _LAST_PROJECT_SCAN.get(pid)
@@ -259,18 +267,32 @@ def _project_needs_scan(pid: str, wakeups_mod) -> bool:
                             project=pid, timeout=0, since=last)
 
 
-def sweep_once(force: bool = False) -> list[dict]:
+def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
+              ) -> list[dict]:
     """One pass over every project: adjudicate each PENDING green_gate.
     Returns the list of approvals made (empty when nothing was decidable).
 
-    `force=True` bypasses BOTH the project-level scan skip
-    (`_project_needs_scan`) and the per-task backoff (`_backoff_should_skip`)
-    for this one pass -- task a65c66e5, 2026-09-13: a `deployed` signal means
-    the CODE that reads a parked row may have just changed (the certainty
-    seat's own self-heal), not the row itself, so neither memo -- both keyed
-    on the row being unchanged -- would ever notice on its own. Used by
-    `_loop` for exactly one pass after a `deployed` wakeup; every other pass
-    keeps the normal reactive skip."""
+    `force=True` bypasses the project-level scan skip (`_project_needs_
+    scan`) for this one pass -- task a65c66e5, 2026-09-13: a `deployed`
+    signal means the CODE that reads a parked row may have just changed
+    (the certainty seat's own self-heal), not the row itself, so the
+    project memo -- keyed on the row being unchanged -- would never
+    notice on its own.
+
+    `force_backoff` (defaults to the SAME value as `force`, so an existing
+    `force=True` caller keeps bypassing both memos exactly as before)
+    separately controls the per-task backoff (`_backoff_should_skip`).
+    Pass `force=True, force_backoff=False` explicitly for a DRAIN
+    CONTINUATION pass (task a65c66e5, third round): `_loop` keeps forcing
+    the project scan across several back-to-back passes to work through a
+    boot-time backlog bigger than one `_SWEEP_BUDGET_S` window, but a task
+    already refused earlier THIS SAME boot must still respect its fresh
+    backoff delay -- bypassing it too would let the seat spend every
+    pass's budget re-attempting the same already-refused, front-of-list
+    tasks forever, starving the never-yet-touched ones (like a65c66e5
+    itself, live) further back in the same backlog."""
+    if force_backoff is None:
+        force_backoff = force
     global _last_eligible_count, _last_changed_count, _last_decided_count
     from prism_service.project_context import get_all_projects, get_project
     from prism_service.services import wakeups
@@ -357,7 +379,7 @@ def sweep_once(force: bool = False) -> list[dict]:
             # loop's fast-vs-idle cadence decision below.
             eligible_count += 1
             project_eligible += 1
-            if not force and _backoff_should_skip(tid, t):
+            if not force_backoff and _backoff_should_skip(tid, t):
                 continue
             if time.monotonic() > deadline:
                 # Over the per-sweep time budget (owner 2026-09-13: no
@@ -536,18 +558,16 @@ def _loop(interval_s: int) -> None:
     wakeups.wait_out_startup_warmup()
     baseline = time.time()
     first_pass = True
+    boot_drain_passes = 0
     while True:
-        # THE FIRST PASS AFTER WARMUP IS UNCONDITIONAL (task a65c66e5,
-        # 2026-09-13, second round): relying on a `deployed` signal to
-        # force a re-sweep only works for an in-process restart that lands
-        # AFTER this loop is already waiting -- main.py's own boot signal
-        # fires at API startup, before the worker-host process (and this
-        # loop) even exists, so a fresh process never sees it and a fix
-        # that only landed in a new deploy would sit unswept until the
-        # NEXT deploy. A deploy is exactly the moment this seat's own code
-        # can least be trusted to have already looked at every pending
-        # gate with the new logic, so the very first pass ignores both
-        # memos regardless of any signal.
+        # THE FIRST PASS(ES) AFTER WARMUP ARE UNCONDITIONAL (task a65c66e5,
+        # 2026-09-13, second and third rounds): relying on a `deployed`
+        # signal to force a re-sweep only works for an in-process restart
+        # that lands AFTER this loop is already waiting -- main.py's own
+        # boot signal fires at API startup, before the worker-host process
+        # (and this loop) even exists, so a fresh process never sees it and
+        # a fix that only landed in a new deploy would sit unswept until
+        # the NEXT deploy.
         #
         # A `deployed` signal since the last wait() (a LATER in-process
         # restart is not possible for this thread, but a landing that
@@ -555,12 +575,20 @@ def _loop(interval_s: int) -> None:
         # reads a parked gate may have just changed, not the row itself --
         # force one more full pass, bypassing both the project-level scan
         # skip and the per-task backoff, so that park is re-evaluated too.
-        force = first_pass or bool(
+        deployed_since = bool(
             wakeups.changed_since(["deployed"], None, baseline))
-        first_pass = False
+        force = first_pass or deployed_since
+        # Bypass the per-task backoff too on the VERY FIRST pass (nothing
+        # has a backoff entry yet) and on a fresh `deployed` signal (a
+        # landing may make an already-backed-off task decidable again) --
+        # but NOT on a boot-drain CONTINUATION pass (boot_drain_passes >
+        # 0 below): real backoff must keep gating whatever this same boot
+        # already refused, so the budget goes to never-yet-touched tasks
+        # instead (see sweep_once's own docstring).
+        force_backoff = deployed_since or boot_drain_passes == 0
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
-                approved = sweep_once(force=force)
+                approved = sweep_once(force=force, force_backoff=force_backoff)
                 # "active" means real work happened -- a changed key was
                 # actually adjudicated, or something was decided. A
                 # backlog of unchanged pending gates (the common case once
@@ -576,6 +604,33 @@ def _loop(interval_s: int) -> None:
                                   f"{len(approved)} decided")
         except Exception as exc:
             _log(f"sweep error: {exc}")
+            first_pass = False
+
+        if first_pass:
+            # DRAIN THE FULL BOOT BACKLOG BEFORE GOING REACTIVE. Live
+            # 2026-09-13: sweep_once's own per-pass time budget
+            # (_SWEEP_BUDGET_S, 2s -- no background pass may hold the GIL
+            # that long) left MOST of a real 31-gate backlog merely
+            # DEFERRED after just one forced pass (10 changed, then the
+            # loop would have gone reactive) -- and once reactive, a
+            # deferred task's own eventual write happens BEFORE the
+            # post-sweep wait() baseline below, so it can never
+            # self-trigger the very re-look it still needs; it sits stuck
+            # until some UNRELATED external signal happens to arrive.
+            # `eligible_count > changed_count` on a FORCED pass (backoff
+            # is bypassed, so the only reason something is not "changed"
+            # is the time budget) means real work is still waiting -- so
+            # force another pass immediately, no wait() in between, each
+            # still capped at _SWEEP_BUDGET_S so the GIL is never held
+            # longer in any single call. A single-gate boot (the shape
+            # this seat's own tests pin) drains in exactly one pass, since
+            # nothing there ever hits the budget.
+            boot_drain_passes += 1
+            still_draining = (_last_eligible_count > _last_changed_count
+                              and boot_drain_passes < _MAX_BOOT_DRAIN_PASSES)
+            if still_draining:
+                continue
+            first_pass = False
         # Wake on "shipped" too -- a push landing (ship_worker) can free a
         # green_gate or resolve a workspace-freshness refusal exactly like
         # a task_changed row does; waiting on task_changed alone left the
