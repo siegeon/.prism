@@ -84,6 +84,7 @@ CORE_WORKERS = {
     "prism_service.services.claude_transcripts.start_transcript_importer",
     "prism_service.services.work_stream.start_work_ticker",
     "prism_service.engines.brain_engine.warm_embedder",
+    "prism_service.services.warm_start.warm_polled_route_caches",
     "prism_service.services.maintenance_clock._loop",
     "prism_service.services.watchdog._loop",
     "prism_service.services.drive_activity_observer._loop",

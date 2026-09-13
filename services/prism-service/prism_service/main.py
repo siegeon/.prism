@@ -632,6 +632,21 @@ async def lifespan(_app: FastAPI):
         # answers without calling the internet).
         from prism_service.engines.brain_engine import warm_embedder
         threading.Thread(target=warm_embedder, daemon=True).start()
+        # Tick-cost pass (external fixer, owner brief 2026-09-13, no PRISM
+        # ticket): the FIRST GET /api/conductor/state or /api/work/graph
+        # after a restart pays every cold cache at once (managed_tasks'
+        # advance-rows/history/list snapshots, drive_heartbeat's batched
+        # read, control_plane's policy_hash, claude_transcripts' per-file
+        # mtime cache) -- measured live at 3.2-3.6s for a project actually
+        # in use, versus warm numbers under 200ms. Same shape as
+        # warm_embedder just above: a low-priority background thread primes
+        # both routes for every project ALREADY in use (project_activity.
+        # is_in_use -- a real request in the last 10 minutes, or a task in
+        # motion right now, so a genuinely idle/unopened project is never
+        # paid for) so the first real user request lands on warm caches
+        # instead of paying the cold-start cost itself.
+        from prism_service.services.warm_start import warm_polled_route_caches
+        threading.Thread(target=warm_polled_route_caches, daemon=True).start()
         # Phase 3 (epic 4fd1e6b4) — TIMERS RETIRED ONTO THE BUS. The
         # Reflection Worker and Memory Summary Worker no longer run on their
         # own polling clocks; session.imported reflects (coalesced, read-
