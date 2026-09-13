@@ -776,6 +776,54 @@ def _build_task_hint(task) -> str:
     return f"{task_title}\n\n{task_desc}".strip()
 
 
+def _text_field(task, name: str) -> str:
+    """A string field off `task`, or "" -- never the literal "None".
+
+    `getattr(task, name, "")` alone still yields the word "None" for a
+    field that exists but was set to None (a real, observed shape on
+    persisted tasks), which would land in a prompt as literal text.
+    """
+    val = getattr(task, name, "") or ""
+    return str(val).strip()
+
+
+def _list_field(task, name: str) -> str:
+    """A list field off `task`, newline-joined, or "" -- never "None"/"[]"."""
+    val = getattr(task, name, None) or []
+    try:
+        return "\n".join(str(v).strip() for v in val if str(v).strip())
+    except TypeError:
+        return ""
+
+
+def _build_step_variables(task, task_id: str, project: str) -> dict:
+    """Every field a declared node might need to ask for, one dict.
+
+    THE DEFECT THIS CLOSES (task bb3d1f6a). `_dispatch_declared_steps` was
+    called with exactly {"taskHint", "taskId", "project"}, so no node file
+    could ever interpolate `task.verify` (the pinned pytest ids red_gate
+    demands), `task.oracle`, `task.allowed_files`, `task.stop_if` or
+    `task.plan_doc` -- the model was asked to hit a target it was never
+    shown. `taskHint`/`taskId`/`project` are kept byte-for-byte so every
+    existing node declaration keeps working unchanged; the rest are ADDED,
+    never substituted for what was already there. A missing/empty field
+    always interpolates to "", never the word "None" (task_runner has been
+    bitten by this exact bug before -- see PATCH /api/tasks/{id} dropping
+    premise_notes and rendering "None" into a prompt).
+    """
+    return {
+        "taskHint": _build_task_hint(task),
+        "taskId": task_id,
+        "project": project,
+        "verify": _list_field(task, "verify"),
+        "oracle": _text_field(task, "oracle"),
+        "allowedFiles": _list_field(task, "allowed_files"),
+        "stopIf": _list_field(task, "stop_if"),
+        "planDoc": _text_field(task, "plan_doc"),
+        "title": _text_field(task, "title"),
+    }
+
+
 def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
     """The NARROW prompt the node's agentic middle is written for, or "".
 
@@ -849,7 +897,15 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
         task_hint = _build_task_hint(task)
         if not declared or not task_hint:
             return ""
-        return declared.replace("${taskHint}", task_hint)
+        # SUBSTITUTE EVERY VARIABLE, not just ${taskHint}. This fallback
+        # serves the SAME declared prompt the node file carries, and that
+        # file now asks for ${verify}/${oracle} too -- a bare taskHint
+        # replace would hand the model the literal text "${verify}" on the
+        # one path taken precisely when the declared chain could not run.
+        # project is not in scope here; it renders "" rather than a stray
+        # placeholder, which is still strictly better than leaving it raw.
+        return _subst(declared,
+                      _build_step_variables(task, getattr(task, "id", "") or "", ""))
     return ""
 
 
@@ -2138,11 +2194,9 @@ def _run_one_step(project: str, task_id: str) -> dict:
             # failing test ... for this task: Draft a failing test ... for this
             # task: A running step agent ...". verify_plan shares this path and
             # had the same duplication.
-            task_hint = _build_task_hint(task)
             dispatched = _dispatch_declared_steps(
                 project, plan,
-                variables={"taskHint": task_hint, "taskId": task_id,
-                           "project": project},
+                variables=_build_step_variables(task, task_id, project),
                 task_id=task_id, step=job["step"])
             for row in dispatched:
                 route = row.get("route") or "?"
