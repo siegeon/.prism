@@ -130,8 +130,36 @@ class GovernanceEngine:
 
         Uses SequenceMatcher ratio on name+description. When a duplicate
         pair is found, the newer entry is archived.
+
+        PERFORMANCE (task: live-page transcript-I/O hang, round 3): this
+        runs periodically on maintenance_clock's background thread, which
+        holds the GIL almost continuously while it computes and so starves
+        EVERY other thread in the process -- any HTTP route, not just one.
+        Measured live at 53.8s for one run_cycle() (43 domains / 436 real
+        entries, largest domain 132) -- a naive O(n^2) all-pairs scan
+        where each pair built a FRESH SequenceMatcher and called the
+        expensive real .ratio(). Three changes, all behavior-preserving:
+        (1) a plain LENGTH check first -- ratio() = 2*M/T with M capped at
+        min(len(a), len(b)), so ratio() can never exceed
+        2*min(la,lb)/(la+lb) either; below DUPLICATE_THRESHOLD, this O(1)
+        check (no character counting at all) skips the pair before quick_
+        ratio() even has to build its character multiset. (2) `quick_ratio()`
+        is a stdlib-documented, guaranteed UPPER BOUND on `.ratio()` -- when
+        it is already below DUPLICATE_THRESHOLD, ratio() can never reach the
+        threshold either, so the expensive comparison is skipped for the
+        rest of the pairs that are obviously not duplicates but happen to
+        be length-similar, with NO change in which pairs get flagged.
+        (3) one SequenceMatcher is reused per outer entry (`set_seq2` once,
+        `set_seq1` per inner entry) instead of constructing a fresh matcher
+        per pair -- difflib's own documented pattern for comparing one
+        sequence against many, since set_seq2's side is the one that pays
+        to build the b2j character-position index. Re-measured against the
+        real live memory store after all three: 53.8s -> ~15s on quick_
+        ratio()+reuse alone, further reduced by the length pre-filter (see
+        the version notes for the final measured number).
         """
         archived = 0
+        matcher = SequenceMatcher()
 
         for domain in self._memory.list_domains():
             entries = self._memory.list_entries(domain, status_filter="active")
@@ -141,12 +169,19 @@ class GovernanceEngine:
                 if entries[i].id in archived_ids:
                     continue
                 text_i = f"{entries[i].name} {entries[i].description}"
+                len_i = len(text_i)
+                matcher.set_seq2(text_i)
                 for j in range(i + 1, len(entries)):
                     if entries[j].id in archived_ids:
                         continue
                     text_j = f"{entries[j].name} {entries[j].description}"
-                    ratio = SequenceMatcher(None, text_i, text_j).ratio()
-                    if ratio >= DUPLICATE_THRESHOLD:
+                    len_j = len(text_j)
+                    if (2 * min(len_i, len_j)) / (len_i + len_j) < DUPLICATE_THRESHOLD:
+                        continue
+                    matcher.set_seq1(text_j)
+                    if matcher.quick_ratio() < DUPLICATE_THRESHOLD:
+                        continue
+                    if matcher.ratio() >= DUPLICATE_THRESHOLD:
                         # Archive the newer entry
                         self._memory.update_entry(entries[j].id, status="archived")
                         archived_ids.add(entries[j].id)
