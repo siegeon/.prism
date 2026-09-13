@@ -49,3 +49,27 @@ def idle_for(seconds: float) -> bool:
     with _lock:
         last = _last_request_at
     return last == 0.0 or (time.time() - last) >= seconds
+
+
+# Default "in use" window, shared by every caller of is_in_use() below --
+# 10 minutes covers a normal working session with gaps for reading/
+# thinking without re-triggering background work the instant a tab goes
+# quiet.
+DEFAULT_ACTIVE_WINDOW_S = 600.0
+
+
+def is_in_use(project_id: str, active_window_s: float = DEFAULT_ACTIVE_WINDOW_S) -> bool:
+    """True when `project_id` counts as "in use" right now: a real client
+    request within `active_window_s`, OR a task actively in motion (an
+    in-progress task means someone/something is working this project even
+    without direct API traffic in that exact window). The one signal
+    every "only do background work for the project actually open" gate
+    shares -- drift_worker.sweep_once() and maintenance_clock._run_
+    governance() both use this (task: livehang rounds 4-5)."""
+    if seen_within(project_id, active_window_s):
+        return True
+    try:
+        from prism_service.project_context import get_project
+        return bool(get_project(project_id).task_svc.active_ids())
+    except Exception:
+        return False

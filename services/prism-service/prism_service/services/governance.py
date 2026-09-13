@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Optional
 
 from prism_service.config import (
@@ -15,6 +19,14 @@ from prism_service.config import (
     USAGE_DECAY_DAYS,
 )
 from prism_service.models.memory import HealthReport
+from prism_service.services import system_activity
+
+# Per-slice wall-clock budget for _detect_duplicates' comparison loop (task:
+# livehang round 5) -- a route sharing the GIL with this worker never waits
+# longer than one slice: the loop checks elapsed time against this and
+# yields (time.sleep(0)) before continuing, so a slow scan degrades into
+# many short slices instead of one long, request-starving one.
+_DUP_SCAN_SLICE_S = 0.05
 
 
 class GovernanceEngine:
@@ -43,14 +55,26 @@ class GovernanceEngine:
     # Main cycle
     # ------------------------------------------------------------------
 
-    def run_cycle(self) -> HealthReport:
-        """Execute all governance rules and return a health report."""
+    def run_cycle(self, project: str = "", scan_duplicates: bool = True) -> HealthReport:
+        """Execute all governance rules and return a health report.
+
+        `project` (task: livehang round 5) names this project for the
+        system_activity feed the duplicate scan records itself under --
+        cosmetic when omitted (the scan just reports under an empty
+        project label). `scan_duplicates=False` skips ONLY the duplicate
+        scan (by far the most expensive rule here -- everything else in
+        this method finishes in well under a second even on the real
+        live memory store): the caller (maintenance_clock._run_governance)
+        passes False for a project nobody is currently using, per the
+        owner directive that background work should track actual use,
+        not sweep every tracked project on a timer regardless."""
         report = HealthReport()
         report.last_governance_run = datetime.now(timezone.utc).isoformat()
 
         report.archived_this_cycle += self._enforce_ttl()
         report.archived_this_cycle += self._enforce_budget_caps()
-        report.archived_this_cycle += self._detect_duplicates()
+        if scan_duplicates:
+            report.archived_this_cycle += self._detect_duplicates(project=project)
         report.archived_this_cycle += self._decay_unused()
         report.stale_brain_docs = self._flag_stale_brain_docs()
         report.flagged_conflicts = self._detect_conflicts()
@@ -125,68 +149,139 @@ class GovernanceEngine:
     # Rule: duplicate detection
     # ------------------------------------------------------------------
 
-    def _detect_duplicates(self) -> int:
+    def _dup_hash_cache_path(self) -> Path:
+        """Where per-entry text hashes persist across runs (task: livehang
+        round 5) -- a sibling of the memory store's own "expertise" dir,
+        never inside it (so it's never mistaken for a real entry file)."""
+        return Path(self._memory._dir).parent / "governance_dup_hashes.json"
+
+    def _load_dup_hashes(self) -> dict[str, str]:
+        try:
+            return json.loads(self._dup_hash_cache_path().read_text())
+        except Exception:
+            return {}
+
+    def _save_dup_hashes(self, hashes: dict[str, str]) -> None:
+        try:
+            self._dup_hash_cache_path().write_text(json.dumps(hashes))
+        except Exception:
+            pass
+
+    def _detect_duplicates(self, project: str = "") -> int:
         """Auto-merge near-duplicate entries within each domain.
 
         Uses SequenceMatcher ratio on name+description. When a duplicate
         pair is found, the newer entry is archived.
 
-        PERFORMANCE (task: live-page transcript-I/O hang, round 3): this
-        runs periodically on maintenance_clock's background thread, which
-        holds the GIL almost continuously while it computes and so starves
-        EVERY other thread in the process -- any HTTP route, not just one.
-        Measured live at 53.8s for one run_cycle() (43 domains / 436 real
-        entries, largest domain 132) -- a naive O(n^2) all-pairs scan
-        where each pair built a FRESH SequenceMatcher and called the
-        expensive real .ratio(). Three changes, all behavior-preserving:
-        (1) a plain LENGTH check first -- ratio() = 2*M/T with M capped at
-        min(len(a), len(b)), so ratio() can never exceed
-        2*min(la,lb)/(la+lb) either; below DUPLICATE_THRESHOLD, this O(1)
-        check (no character counting at all) skips the pair before quick_
-        ratio() even has to build its character multiset. (2) `quick_ratio()`
-        is a stdlib-documented, guaranteed UPPER BOUND on `.ratio()` -- when
-        it is already below DUPLICATE_THRESHOLD, ratio() can never reach the
-        threshold either, so the expensive comparison is skipped for the
-        rest of the pairs that are obviously not duplicates but happen to
-        be length-similar, with NO change in which pairs get flagged.
-        (3) one SequenceMatcher is reused per outer entry (`set_seq2` once,
-        `set_seq1` per inner entry) instead of constructing a fresh matcher
-        per pair -- difflib's own documented pattern for comparing one
-        sequence against many, since set_seq2's side is the one that pays
-        to build the b2j character-position index. Re-measured against the
-        real live memory store after all three: 53.8s -> ~15s on quick_
-        ratio()+reuse alone, further reduced by the length pre-filter (see
-        the version notes for the final measured number).
+        PERFORMANCE (task: live-page transcript-I/O hang, rounds 3 and 5):
+        this runs periodically on maintenance_clock's background thread,
+        which holds the GIL almost continuously while it computes and so
+        starves EVERY other thread in the process -- any HTTP route, not
+        just one. Measured live at 53.8s for one run_cycle() (43 domains /
+        436 real entries, largest domain 132) -- a naive O(n^2) all-pairs
+        scan where each pair built a FRESH SequenceMatcher and called the
+        expensive real .ratio(). Round 3 (quick_ratio() pre-filter + one
+        reused matcher + a plain length check, all provably
+        behavior-preserving upper bounds on ratio()) cut that to ~14s --
+        real, but still a 14-second GIL-hogging tick, still a hang from a
+        request's point of view. Round 5 adds the two changes that
+        actually fix that:
+
+        INCREMENTAL (persisted per-entry hash): every entry's compare-text
+        hash is persisted (_dup_hash_cache_path, a small JSON file next to
+        this project's own memory store, never shared across projects).
+        A domain where NO entry's hash has changed since the last run is
+        skipped ENTIRELY -- zero length checks, zero quick_ratio() calls,
+        zero real ratio() calls, not merely fewer of them. A domain WITH
+        changes still only compares CHANGED entries against the rest (an
+        unchanged-vs-unchanged pair was already resolved in a prior run
+        and neither side has moved since, so re-comparing it can only
+        repeat the same answer at the same cost). This is what makes a
+        settled store cost ~0 on every tick after the first, instead of
+        paying the full O(n^2) scan every 5 minutes forever.
+
+        CHUNKED: the comparison loop checks elapsed wall-clock time every
+        iteration and, once a slice (_DUP_SCAN_SLICE_S, default 50ms) is
+        spent, calls time.sleep(0) to actually yield the GIL before
+        continuing -- so even a large first-ever scan (or a domain with
+        genuinely many real changes) never holds the GIL for one long
+        continuous stretch; a request queued behind it gets a turn every
+        slice instead of waiting for the whole scan to finish.
+
+        Recorded via system_activity.pass_("governance", project,
+        "detect_duplicates") so a scan in progress is visible on the Live
+        page, same as the other standing workers.
         """
+        stored_hashes = self._load_dup_hashes()
+        new_hashes = dict(stored_hashes)
         archived = 0
         matcher = SequenceMatcher()
+        slice_start = time.monotonic()
 
-        for domain in self._memory.list_domains():
-            entries = self._memory.list_entries(domain, status_filter="active")
-            archived_ids: set[str] = set()
+        with system_activity.pass_("governance", project, "detect_duplicates"):
+            for domain in self._memory.list_domains():
+                entries = self._memory.list_entries(domain, status_filter="active")
 
-            for i in range(len(entries)):
-                if entries[i].id in archived_ids:
+                texts: dict[str, str] = {}
+                changed_ids: set[str] = set()
+                for e in entries:
+                    text = f"{e.name} {e.description}"
+                    texts[e.id] = text
+                    h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                    key = f"{domain}:{e.id}"
+                    if stored_hashes.get(key) != h:
+                        changed_ids.add(e.id)
+                    new_hashes[key] = h
+                # Prune hashes for entries that no longer exist/are no
+                # longer active in this domain (archived/deleted since the
+                # last run) -- otherwise the cache grows forever and a
+                # reused id could false-match a stale hash.
+                live_keys = {f"{domain}:{e.id}" for e in entries}
+                for stale_key in [k for k in new_hashes
+                                  if k.startswith(f"{domain}:") and k not in live_keys]:
+                    new_hashes.pop(stale_key, None)
+
+                if not changed_ids:
+                    # Nothing in this domain has changed since the last
+                    # pass -- every pairing here was already resolved then
+                    # and neither side has moved, so there is NOTHING to
+                    # (re)compare. Zero ratio() calls, zero quick_ratio()
+                    # calls, zero length checks.
                     continue
-                text_i = f"{entries[i].name} {entries[i].description}"
-                len_i = len(text_i)
-                matcher.set_seq2(text_i)
-                for j in range(i + 1, len(entries)):
-                    if entries[j].id in archived_ids:
-                        continue
-                    text_j = f"{entries[j].name} {entries[j].description}"
-                    len_j = len(text_j)
-                    if (2 * min(len_i, len_j)) / (len_i + len_j) < DUPLICATE_THRESHOLD:
-                        continue
-                    matcher.set_seq1(text_j)
-                    if matcher.quick_ratio() < DUPLICATE_THRESHOLD:
-                        continue
-                    if matcher.ratio() >= DUPLICATE_THRESHOLD:
-                        # Archive the newer entry
-                        self._memory.update_entry(entries[j].id, status="archived")
-                        archived_ids.add(entries[j].id)
-                        archived += 1
 
+                archived_ids: set[str] = set()
+                for i in range(len(entries)):
+                    if entries[i].id in archived_ids:
+                        continue
+                    text_i = texts[entries[i].id]
+                    len_i = len(text_i)
+                    matcher.set_seq2(text_i)
+                    for j in range(i + 1, len(entries)):
+                        if entries[j].id in archived_ids:
+                            continue
+                        if (entries[i].id not in changed_ids
+                                and entries[j].id not in changed_ids):
+                            # Neither side changed -- already resolved.
+                            continue
+
+                        if time.monotonic() - slice_start >= _DUP_SCAN_SLICE_S:
+                            time.sleep(0)  # actually yield the GIL
+                            slice_start = time.monotonic()
+
+                        text_j = texts[entries[j].id]
+                        len_j = len(text_j)
+                        if (2 * min(len_i, len_j)) / (len_i + len_j) < DUPLICATE_THRESHOLD:
+                            continue
+                        matcher.set_seq1(text_j)
+                        if matcher.quick_ratio() < DUPLICATE_THRESHOLD:
+                            continue
+                        if matcher.ratio() >= DUPLICATE_THRESHOLD:
+                            # Archive the newer entry
+                            self._memory.update_entry(entries[j].id, status="archived")
+                            archived_ids.add(entries[j].id)
+                            archived += 1
+
+        self._save_dup_hashes(new_hashes)
         return archived
 
     # ------------------------------------------------------------------

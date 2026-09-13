@@ -132,10 +132,25 @@ def pass_enabled() -> dict[str, bool]:
 def _run_governance(project: str) -> None:
     """TTL + decay + duplicate-detect via Governance.run_cycle, plus the
     bounded retention sweep on the governance cadence (folded from the old
-    start_governance_timer)."""
+    start_governance_timer).
+
+    The duplicate scan (by far the most expensive of governance's rules --
+    the rest all finish in well under a second even on the real live
+    memory store) is gated to projects actually in use (task: livehang
+    round 5, project_activity.is_in_use -- a real client request in the
+    last 10 minutes, or an in-progress task): _loop above iterates EVERY
+    tracked project every tick, and running the full duplicate scan for
+    all of them regardless of use is the same "sweep everything on a
+    timer" shape the drift reindexer had (round 4) -- fixed the same way.
+    The cheap rules (TTL, budget caps, decay, conflicts, stuck-tasks) still
+    run for every project; they are not the GIL-hogging concern."""
     from prism_service.project_context import get_project
+    from prism_service.services import project_activity
     try:
-        get_project(project).governance.run_cycle()
+        get_project(project).governance.run_cycle(
+            project=project,
+            scan_duplicates=project_activity.is_in_use(project),
+        )
     except Exception as exc:
         _log(f"governance cycle error ({project}): {exc}")
     try:
