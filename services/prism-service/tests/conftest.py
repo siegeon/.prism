@@ -389,3 +389,35 @@ def _mirror_singleton_isolation():
         integration_store.set_integration_store(store)
         integration_outbox.set_outbox(outbox)
         sync_prefs.set_sync_preferences(prefs)
+
+
+@pytest.fixture(autouse=True)
+def _gate_adjudicator_scan_memo_isolation():
+    """Snapshot/restore gate_adjudicator's project-level scan memo (task
+    adjmemo, 2026-09-13) around every test -- the same class of leak as
+    _dispatch_guard_open_tickets_isolation above but for a different
+    process-global dict.
+
+    _LAST_PROJECT_SCAN/_LAST_PROJECT_ELIGIBLE record, per project id, when
+    sweep_once() last actually fetched that project's tasks. A test that
+    calls sweep_once() against a fake project id populates these dicts for
+    that id and never clears them (most tests' own setup_function only
+    knows to reset the older, per-task ga._BACKOFF) -- observed live:
+    test_gate_adjudicator_sweep_cost.py's own two tests both use project id
+    "proj", and the second test's very first sweep_once() call was silently
+    skipped as "nothing changed since the earlier test's scan" once run
+    after the first, well inside the 300s safety net. Living in the root
+    conftest guarantees this runs outside-in around every test regardless
+    of which test file's fixtures do or do not know this dict exists."""
+    from prism_service.services import gate_adjudicator, gate_adjudicator_memo
+
+    scan_before = dict(gate_adjudicator._LAST_PROJECT_SCAN)
+    eligible_before = dict(gate_adjudicator._LAST_PROJECT_ELIGIBLE)
+    try:
+        yield
+    finally:
+        gate_adjudicator._LAST_PROJECT_SCAN.clear()
+        gate_adjudicator._LAST_PROJECT_SCAN.update(scan_before)
+        gate_adjudicator._LAST_PROJECT_ELIGIBLE.clear()
+        gate_adjudicator._LAST_PROJECT_ELIGIBLE.update(eligible_before)
+        gate_adjudicator_memo.reset_for_tests()
