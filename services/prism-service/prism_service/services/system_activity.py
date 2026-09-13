@@ -72,24 +72,35 @@ def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[dict]:
     raised, in which case ok=False and the exception propagates untouched
     (never swallow a worker's real exception).
 
-    Yields a mutable `info` dict the body may set `info["active"] = False`
-    on when the pass found NOTHING to do (a sweep with zero eligible
-    tasks, no pending gates, nothing to reap, ...). A caller that never
-    touches `info` keeps the old behaviour (every pass recorded) -- opt
-    in explicitly. An inactive pass is never lost silently: it collapses
-    into at most one "idle" entry per `kind`+`project` per
-    `_IDLE_MIN_INTERVAL_S`, carrying how many quiet passes it stands in
-    for, so the System Activity panel reads QUIET on an idle system
-    instead of climbing on a clock tick that did nothing (owner
-    2026-09-13)."""
+    Yields the mutable entry dict, which doubles as the `info` handle for
+    two independent, composable opt-ins:
+
+    - Set `entry["active"] = False` when the pass found NOTHING to do (a
+      sweep with zero eligible tasks, no pending gates, nothing to
+      reap, ...). A caller that never touches this keeps the old
+      behaviour (every pass recorded). An inactive pass is never lost
+      silently: it collapses into at most one "idle" entry per
+      `kind`+`project` per `_IDLE_MIN_INTERVAL_S`, carrying how many quiet
+      passes it stands in for, so the System Activity panel reads QUIET
+      on an idle system instead of climbing on a clock tick that did
+      nothing (owner 2026-09-13).
+    - Set `entry["detail"] = "..."` once the body learns its real numbers
+      partway through (e.g. drift's own "N candidates, M changed, K
+      embedded" summary, known only after the reindex call returns) to
+      have THAT string recorded at completion instead of the placeholder
+      passed in at entry (task: livehang round 6).
+
+    Both are optional and independent -- a pass can set either, both, or
+    neither."""
     token = uuid.uuid4().hex[:12]
     started = time.time()
+    entry = _entry(token, kind, project, detail, started)
+    entry["active"] = True
     with _LOCK:
-        _running[token] = _entry(token, kind, project, detail, started)
-    info: dict = {"active": True}
+        _running[token] = entry
     ok = True
     try:
-        yield info
+        yield entry
     except BaseException:
         ok = False
         raise
@@ -97,15 +108,16 @@ def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[dict]:
         elapsed_ms = (time.time() - started) * 1000.0
         with _LOCK:
             _running.pop(token, None)
-        active = bool(info.get("active", True))
+        final_detail = entry.get("detail", detail)
+        active = bool(entry.get("active", True))
         if active or not ok:
             key = (kind, project or "*")
             with _LOCK:
                 _last_idle_at.pop(key, None)
                 _idle_skipped.pop(key, None)
-            record(kind, project, detail, started, elapsed_ms, ok=ok)
+            record(kind, project, final_detail, started, elapsed_ms, ok=ok)
         else:
-            _record_idle(kind, project, detail, started, elapsed_ms)
+            _record_idle(kind, project, final_detail, started, elapsed_ms)
 
 
 def _record_idle(kind: str, project: str, detail: str, started: float,

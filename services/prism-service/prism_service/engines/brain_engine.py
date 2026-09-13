@@ -13,6 +13,7 @@ deps are unavailable.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -3988,8 +3989,21 @@ class Brain:
         self._update_last_index_timestamp()
         return count
 
-    def incremental_reindex(self, repo_path: Optional[str] = None) -> int:
-        """Re-index only files changed since last index. Returns count reindexed.
+    def _file_content_hash(self, filepath: str) -> Optional[str]:
+        """sha256 of `filepath`'s current bytes, or None if it can't be
+        read (caller then treats it as changed -- fail toward re-indexing,
+        never toward silently skipping something real)."""
+        try:
+            return hashlib.sha256(Path(filepath).read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    def incremental_reindex(
+        self, repo_path: Optional[str] = None, stats: Optional[dict] = None,
+    ) -> int:
+        """Re-index only files changed since last index. Returns count
+        actually re-embedded (backward-compatible with every existing
+        caller, which all treat this as a plain count).
 
         `repo_path` (task: livehang round 4) scopes the `git diff`/`git
         ls-files` calls to THAT project's own checkout via `cwd=` --
@@ -4008,7 +4022,27 @@ class Brain:
         (a plain `Path(filepath).read_text()`) and the on-disk existence
         check both resolve against the right tree regardless of the
         daemon's own cwd. `repo_path=None` keeps the prior behavior
-        (cwd-relative) for existing callers/tests."""
+        (cwd-relative) for existing callers/tests.
+
+        PERFORMANCE (task: livehang round 6): `git diff HEAD` names every
+        file the working tree still disagrees with HEAD on, REGARDLESS of
+        whether that file's CONTENT has changed since the last time this
+        method actually re-embedded it -- a file that is edited once and
+        then left uncommitted (the normal state of active development)
+        showed up as a "candidate" on every single pass and got fully
+        re-parsed and re-embedded every time, forever, even though nothing
+        about it had changed since the previous pass. Observed live:
+        drift_reindex passes of 3-9s back to back every ~5s, all re-
+        embedding the identical 72 dirty files of an actively-worked
+        checkout, ~147% sustained CPU. Each git-diff CANDIDATE's content
+        is now sha256-hashed and compared against a hash persisted in
+        THIS Brain's own index_meta table (keyed by absolute path) --
+        a candidate whose hash still matches is skipped entirely: no
+        _remove_entries_by_source, no _index_files, no re-embed. Only
+        candidates whose content genuinely changed reach the expensive
+        path, and their new hash is persisted for the next pass. `stats`,
+        when given, is filled with {"candidates": N, "changed": M,
+        "embedded": M} for the caller's own log/activity-feed line."""
         kwargs: dict = {"capture_output": True, "text": True}
         if repo_path:
             kwargs["cwd"] = repo_path
@@ -4039,18 +4073,50 @@ class Brain:
         deleted_indexed = [f for f in deleted if f]
         if deleted_indexed:
             self._remove_entries_by_source(deleted_indexed)
+            for f in deleted_indexed:
+                self._brain.execute(
+                    "DELETE FROM index_meta WHERE key = ?", (f"file_hash:{f}",))
+            self._brain.commit()
 
-        to_index = [
+        candidates = [
             f for f in changed + untracked
             if f and self._should_index(f) and Path(f).exists()
         ]
 
+        to_index: list[str] = []
+        new_hashes: dict[str, str] = {}
+        for f in candidates:
+            content_hash = self._file_content_hash(f)
+            if content_hash is None:
+                to_index.append(f)  # unreadable now -- let _index_files fail it honestly
+                continue
+            key = f"file_hash:{f}"
+            row = self._brain.execute(
+                "SELECT value FROM index_meta WHERE key = ?", (key,)
+            ).fetchone()
+            if row is not None and row["value"] == content_hash:
+                continue  # content unchanged since the last real re-embed
+            to_index.append(f)
+            new_hashes[key] = content_hash
+
         if to_index:
             self._remove_entries_by_source(to_index)
             self._index_files(to_index)
+        if new_hashes:
+            for key, value in new_hashes.items():
+                self._brain.execute(
+                    "INSERT OR REPLACE INTO index_meta (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+            self._brain.commit()
 
         self._purge_deleted()
         self._update_last_index_timestamp()
+
+        if stats is not None:
+            stats["candidates"] = len(candidates)
+            stats["changed"] = len(to_index)
+            stats["embedded"] = len(to_index)
         return len(to_index)
 
     # ------------------------------------------------------------------
