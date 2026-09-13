@@ -268,6 +268,95 @@ def _merge_spend_sections(sections: list[dict]) -> dict:
     return out
 
 
+# Session file-set resolution cache (external fixer perf pass, owner brief
+# 2026-09-13 "graphtx"): live_spend_for_session and live_token_events_for_
+# session each independently re-walked EVERY project directory under
+# ~/.claude/projects (440 on the live instance) plus rglob'd the session's
+# own subagent directory, from scratch, on EVERY single call -- the per-FILE
+# CONTENT is already cached by (mtime, size) in _SPEND_CACHE/
+# _TOKEN_EVENTS_CACHE above/below, but the WALK that finds which files exist
+# was never cached at all. Measured live: GET /api/work/graph answered in
+# ~0.46s on every poll, warm (the walk redone per session, per call,
+# dominates on this host's filesystem -- see api/work.py's
+# _GRAPH_CALL_TIMEOUT_S comment for the request-side symptom: a call that
+# can't finish inside its 0.4s per-call timeout costs the request the full
+# 0.4s AND returns nothing). Caching the resolved path LIST for
+# `_SESSION_FILES_TTL_S` turns every call after the first, for a session
+# whose file set hasn't changed recently, into direct path/stat lookups
+# (already fast) instead of a fresh directory walk.
+_SESSION_FILES_TTL_S = 10.0
+_SESSION_FILES_LOCK = threading.Lock()
+_SESSION_FILES_CACHE: dict[tuple, tuple[float, list, list]] = {}
+
+
+def _scan_session_files(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> tuple[list[Path], list[Path]]:
+    """(main_paths, background_paths) for `session_id`: the flat
+    <dir>/<sid>.jsonl plus every nested workflow-subagent transcript under
+    <dir>/<sid>/, either under `override_dir` directly or slug-scanned
+    across every project dir under `claude_home`/projects. This is the walk
+    both live_spend_for_session and live_token_events_for_session need --
+    see `_cached_session_files` below, which is what callers should use."""
+    main_paths: list[Path] = []
+    bg_paths: list[Path] = []
+    if override_dir and override_dir.strip():
+        d = Path(override_dir.strip())
+        if d.is_dir():
+            main = d / f"{session_id}.jsonl"
+            if main.is_file():
+                main_paths.append(main)
+            sess_dir = d / session_id
+            if sess_dir.is_dir():
+                bg_paths.extend(sorted(sess_dir.rglob("*.jsonl")))
+        return main_paths, bg_paths
+    if not project_path:
+        return main_paths, bg_paths
+    claude_home = claude_home or resolve_claude_home()
+    projects_dir = claude_home / "projects"
+    if not projects_dir.is_dir():
+        return main_paths, bg_paths
+    seen: set[Path] = set()
+    for sub in projects_dir.iterdir():
+        if not sub.is_dir() or not slug_matches(sub.name, project_path):
+            continue
+        main = sub / f"{session_id}.jsonl"
+        if main.is_file() and main not in seen:
+            main_paths.append(main)
+            seen.add(main)
+        sess_dir = sub / session_id
+        if sess_dir.is_dir():
+            for f in sess_dir.rglob("*.jsonl"):
+                if f not in seen:
+                    bg_paths.append(f)
+                    seen.add(f)
+    return main_paths, bg_paths
+
+
+def _cached_session_files(
+    session_id: str, project_path: str, claude_home: Path | None = None,
+    override_dir: str | None = None,
+) -> tuple[list[Path], list[Path]]:
+    """TTL-cached wrapper over `_scan_session_files` -- see its comment
+    above for why this exists. A cache miss/expiry does the real walk and
+    stores it; a hit returns the same (main_paths, bg_paths) with zero
+    filesystem access."""
+    if not session_id:
+        return [], []
+    key = (session_id, project_path, str(claude_home or ""), override_dir or "")
+    now = time.time()
+    with _SESSION_FILES_LOCK:
+        hit = _SESSION_FILES_CACHE.get(key)
+        if hit is not None and (now - hit[0]) < _SESSION_FILES_TTL_S:
+            return hit[1], hit[2]
+    main_paths, bg_paths = _scan_session_files(
+        session_id, project_path, claude_home, override_dir)
+    with _SESSION_FILES_LOCK:
+        _SESSION_FILES_CACHE[key] = (now, main_paths, bg_paths)
+    return main_paths, bg_paths
+
+
 def live_spend_for_session(
     session_id: str, project_path: str, claude_home: Path | None = None,
     override_dir: str | None = None,
@@ -285,35 +374,8 @@ def live_spend_for_session(
             "total": _empty_spend_section(),
             "priced": True,
         }
-    main_paths: list[Path] = []
-    bg_paths: list[Path] = []
-    if override_dir and override_dir.strip():
-        d = Path(override_dir.strip())
-        if d.is_dir():
-            main = d / f"{session_id}.jsonl"
-            if main.is_file():
-                main_paths.append(main)
-            sess_dir = d / session_id
-            if sess_dir.is_dir():
-                bg_paths.extend(sorted(sess_dir.rglob("*.jsonl")))
-    elif project_path:
-        claude_home = claude_home or resolve_claude_home()
-        projects_dir = claude_home / "projects"
-        if projects_dir.is_dir():
-            seen: set[Path] = set()
-            for sub in projects_dir.iterdir():
-                if not sub.is_dir() or not slug_matches(sub.name, project_path):
-                    continue
-                main = sub / f"{session_id}.jsonl"
-                if main.is_file() and main not in seen:
-                    main_paths.append(main)
-                    seen.add(main)
-                sess_dir = sub / session_id
-                if sess_dir.is_dir():
-                    for f in sess_dir.rglob("*.jsonl"):
-                        if f not in seen:
-                            bg_paths.append(f)
-                            seen.add(f)
+    main_paths, bg_paths = _cached_session_files(
+        session_id, project_path, claude_home, override_dir)
     main_section = _merge_spend_sections([_spend_for_path(p) for p in main_paths])
     bg_section = _merge_spend_sections([_spend_for_path(p) for p in bg_paths])
     total_section = _merge_spend_sections([main_section, bg_section])
@@ -1353,33 +1415,13 @@ def live_token_events_for_session(
     nested <override_dir>/<sid>/ directly instead of slug-scanning."""
     if not session_id:
         return []
-    if override_dir and override_dir.strip():
-        out: list[tuple[float, int]] = []
-        for p in _override_session_paths(override_dir, session_id):
-            out.extend(_token_events(p))
-        out.sort(key=lambda e: e[0])
-        return out
-    if not project_path:
-        return []
-    claude_home = claude_home or resolve_claude_home()
-    projects_dir = claude_home / "projects"
-    if not projects_dir.is_dir():
-        return []
+    main_paths, bg_paths = _cached_session_files(
+        session_id, project_path, claude_home, override_dir)
     out: list[tuple[float, int]] = []
-    seen: set[Path] = set()
-    for sub in projects_dir.iterdir():
-        if not sub.is_dir() or not slug_matches(sub.name, project_path):
-            continue
-        main = sub / f"{session_id}.jsonl"
-        if main.is_file() and main not in seen:
-            out.extend(_token_events(main))
-            seen.add(main)
-        sess_dir = sub / session_id
-        if sess_dir.is_dir():
-            for f in sess_dir.rglob("*.jsonl"):
-                if f not in seen:
-                    out.extend(_token_events(f))
-                    seen.add(f)
+    for p in main_paths:
+        out.extend(_token_events(p))
+    for p in bg_paths:
+        out.extend(_token_events(p))
     out.sort(key=lambda e: e[0])
     return out
 
