@@ -137,7 +137,14 @@ def test_task_changed_signal_reevaluates_only_that_task(monkeypatch):
     assert called_tid == "t5", called_tid
 
 
-def test_a_safety_net_forces_a_rescan_even_with_no_signal(monkeypatch):
+def test_no_signal_never_forces_a_rescan_by_default(monkeypatch):
+    """Supersedes test_a_safety_net_forces_a_rescan_even_with_no_signal
+    (removed 2026-09-13, owner: "that 15 min thing is dumb, it's all
+    reactive and real time") -- the old default 300s wall-clock safety
+    net is gone. With PRISM_WORKER_FALLBACK_S unset (the default), a
+    project with no task_changed/shipped signal must stay skipped no
+    matter how long it has been, even a simulated day."""
+    monkeypatch.delenv("PRISM_WORKER_FALLBACK_S", raising=False)
     tasks = _make_tasks(3)
     ctx, svc = _fake_ctx(tasks)
     monkeypatch.setattr(
@@ -156,13 +163,46 @@ def test_a_safety_net_forces_a_rescan_even_with_no_signal(monkeypatch):
     ga.sweep_once()
     ctx.task_svc.gate_sweep_rows.reset_mock()
 
-    # Pretend the safety net has elapsed -- no signal at all, but the
-    # bound must still force a rescan (belt-and-braces for a write that
-    # bypassed task_service.update()/ship_worker's own signal calls).
-    ga._LAST_PROJECT_SCAN["proj1"] = (
-        time.time() - ga._PROJECT_SCAN_SAFETY_NET_S - 1.0)
+    ga._LAST_PROJECT_SCAN["proj1"] = time.time() - 86400.0
+
+    ga.sweep_once()
+
+    assert ctx.task_svc.gate_sweep_rows.call_count == 0, (
+        "age alone must never force a rescan when PRISM_WORKER_FALLBACK_S "
+        "is unset"
+    )
+
+
+def test_prism_worker_fallback_s_opts_a_project_into_a_periodic_rescan(
+    monkeypatch,
+):
+    """The explicit opt-in still works for an environment that genuinely
+    needs it (a write path that bypasses task_service.update()/
+    ship_worker's own signal calls)."""
+    monkeypatch.setenv("PRISM_WORKER_FALLBACK_S", "5")
+    tasks = _make_tasks(3)
+    ctx, svc = _fake_ctx(tasks)
+    monkeypatch.setattr(
+        "prism_service.project_context.get_all_projects",
+        lambda: ["proj1"])
+    monkeypatch.setattr(
+        "prism_service.project_context.get_project", lambda pid: ctx)
+    monkeypatch.setattr(
+        "prism_service.services.green_rewind.maybe_rewind",
+        lambda *a, **k: None)
+    monkeypatch.setattr(
+        "prism_service.services.gate_agent.adjudicate",
+        lambda *a, **k: None)
+    monkeypatch.setattr(gam, "workspace_head_sha", lambda tid: "")
+
+    ga.sweep_once()
+    ctx.task_svc.gate_sweep_rows.reset_mock()
+
+    ga._LAST_PROJECT_SCAN["proj1"] = time.time() - 6.0
 
     ga.sweep_once()
 
     assert ctx.task_svc.gate_sweep_rows.call_count == 1, (
-        "the safety net must force a rescan once it elapses")
+        "an explicit PRISM_WORKER_FALLBACK_S must still force a rescan "
+        "once it elapses"
+    )

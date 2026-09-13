@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 from prism_service.services import system_activity
 
@@ -217,12 +218,14 @@ _last_decided_count = 0
 # fetched and reconstructed EVERY task row in EVERY project (946 rows) just
 # to re-discover the same ~26 gate candidates. If nothing has moved for a
 # project since this seat last looked at it -- no `task_changed`/`shipped`
-# wakeup, and the safety net has not elapsed -- skip the fetch entirely and
-# reuse last pass's eligible count for the idle-vs-fast cadence decision in
-# `_loop`. A signal is the fast path; `_PROJECT_SCAN_SAFETY_NET_S` is the
-# belt-and-braces bound for writes that bypass task_service.update()/
-# ship_worker's own signal calls (a direct DB poke, a crash mid-write).
-_PROJECT_SCAN_SAFETY_NET_S = 300.0
+# wakeup -- skip the fetch entirely and reuse last pass's eligible count for
+# the idle-vs-fast cadence decision in `_loop`. Owner 2026-09-13 ("it's all
+# reactive and real time"): there is no default wall-clock safety net any
+# more -- a write that bypasses task_service.update()/ship_worker's own
+# signal calls (a direct DB poke) is invisible to this skip by design,
+# same as every other reactive worker in this file's family. An operator
+# who genuinely needs a periodic re-scan for such an environment opts in
+# explicitly with PRISM_WORKER_FALLBACK_S (unset by default).
 _LAST_PROJECT_SCAN: dict[str, float] = {}
 _LAST_PROJECT_ELIGIBLE: dict[str, int] = {}
 
@@ -234,11 +237,25 @@ _LAST_PROJECT_ELIGIBLE: dict[str, int] = {}
 _SWEEP_BUDGET_S = 2.0
 
 
+def _scan_fallback_s() -> Optional[float]:
+    """Explicit opt-in ONLY: PRISM_WORKER_FALLBACK_S, unset by default --
+    see deploy_worker._fetch_fallback_s, same contract, same env var,
+    shared across every worker in this reactive family."""
+    raw = os.environ.get("PRISM_WORKER_FALLBACK_S", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
+
+
 def _project_needs_scan(pid: str, wakeups_mod) -> bool:
     last = _LAST_PROJECT_SCAN.get(pid)
     if last is None:
         return True
-    if time.time() - last >= _PROJECT_SCAN_SAFETY_NET_S:
+    fallback = _scan_fallback_s()
+    if fallback is not None and time.time() - last >= fallback:
         return True
     # wait(..., timeout=0) rather than last_signal_at(): the worker-host
     # process split (task workerproc) moved this seat into a SEPARATE OS

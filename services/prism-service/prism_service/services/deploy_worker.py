@@ -434,18 +434,35 @@ def deploy_after_land(task_svc, task_id: str, project: str = "default") -> None:
 # _tick ran a real `git fetch origin` + `git rev-list` even when nothing
 # had landed anywhere -- a network round trip and a process spawn, paid on
 # a clock, for a "no" the last check already gave. Cached PER REPO ROOT
-# (never global -- tests exercise many throwaway repos in one process) for
-# `_FETCH_CACHE_TTL_S`; `signal_land` (called from `deploy_after_land`, the
-# one place this process learns of a REAL land via the normal ship path)
-# invalidates it early so a genuine event is never made to wait out the
-# TTL. A direct push (this repo's own self-dev carve-out) has no such
-# hook, so it is still caught within the TTL by the ordinary poll -- the
-# same bound `sweep_new_land`'s own docstring already accepts for that
-# path. In-memory, like task_runner's/gate_adjudicator's own backoff
-# caches: a restart re-fetches once, which is the correct bias.
-_FETCH_CACHE_TTL_S = 900.0  # 15 minutes
+# (never global -- tests exercise many throwaway repos in one process),
+# forever, until `signal_land` (called from `deploy_after_land`, the one
+# place this process learns of a REAL land via the normal ship path) forces
+# the next fetch -- a direct push (this repo's own self-dev carve-out) has
+# no such hook and reaches this cache only via `/api/deploy/run`'s own
+# direct call to `deploy_once` (never through this cache at all) or a
+# person's explicit PRISM_WORKER_FALLBACK_S opt-in below. Owner 2026-09-13,
+# on the earlier age-based 15-minute TTL this replaced: "it's all reactive
+# and real time" -- there is no default clock here any more. In-memory,
+# like task_runner's/gate_adjudicator's own backoff caches: a restart
+# re-fetches once, which is the correct bias.
 _FETCH_CACHE: dict[str, tuple[float, int]] = {}   # repo key -> (fetched_at, ahead)
 _LAND_SIGNALLED: dict[str, bool] = {}             # repo key -> force next fetch
+
+
+def _fetch_fallback_s() -> Optional[float]:
+    """Explicit opt-in ONLY: PRISM_WORKER_FALLBACK_S, unset by default. When
+    unset (the default), a cached ahead-count is served forever until a
+    real land signal forces a fetch -- no age-based re-fetch happens on its
+    own. Set this only to add back a periodic safety net for an
+    environment whose lands never reach `signal_land` (e.g. a push from
+    somewhere this process's `deploy_after_land` hook never runs)."""
+    raw = os.environ.get("PRISM_WORKER_FALLBACK_S", "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
 
 
 def signal_land(repo_root: Optional[Path] = None) -> None:
@@ -470,19 +487,22 @@ def _upstream_ahead_count(run: Runner, repo_root: Path) -> int:
     """Commits the checkout's upstream (`@{u}`) is ahead of HEAD.
 
     Fetches origin FOR REAL only when a land was signalled for this repo
-    or the last real fetch is older than `_FETCH_CACHE_TTL_S` -- otherwise
-    answers from the cached ahead-count, which cannot have changed without
-    one of those two triggers. -1 on any git failure -- no upstream
-    configured, a detached HEAD, an unreachable remote -- so an ambiguous
-    comparison never triggers a deploy attempt (and is never cached, so
-    the next call retries for real)."""
+    (`signal_land`) or the operator opted into a PRISM_WORKER_FALLBACK_S
+    safety net and that many seconds have passed since the last real
+    fetch -- unset (the default), a cached ahead-count is served forever
+    once a fetch has happened, never re-fetched on age alone. -1 on any
+    git failure -- no upstream configured, a detached HEAD, an unreachable
+    remote -- so an ambiguous comparison never triggers a deploy attempt
+    (and is never cached, so the next call retries for real)."""
     key = str(repo_root)
     now = time.monotonic()
     forced = _LAND_SIGNALLED.pop(key, False)
     if not forced:
         cached = _FETCH_CACHE.get(key)
-        if cached is not None and (now - cached[0]) < _FETCH_CACHE_TTL_S:
-            return cached[1]
+        if cached is not None:
+            fallback = _fetch_fallback_s()
+            if fallback is None or (now - cached[0]) < fallback:
+                return cached[1]
     rc, _out, _err = run(["git", "fetch", "origin"], repo_root)
     if rc != 0:
         return -1
