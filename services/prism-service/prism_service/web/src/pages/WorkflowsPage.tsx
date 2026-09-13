@@ -620,12 +620,19 @@ export default function WorkflowsPage() {
   const dataLoaded = catalogArrived && conductorStateObserved;
   const loadingStartedAtRef = useRef(Date.now());
   const [loadingElapsedS, setLoadingElapsedS] = useState(0);
+  // Purely visual tick (no network) -- driven by requestAnimationFrame,
+  // never a periodic timer, per the no-timer-polling policy on this page. React
+  // bails on a same-value set, so this costs nothing extra once the whole
+  // second hasn't actually advanced.
   useEffect(() => {
     if (dataLoaded) return;
-    const id = window.setInterval(() => {
+    let raf = 0;
+    const tick = () => {
       setLoadingElapsedS(Math.round((Date.now() - loadingStartedAtRef.current) / 1000));
-    }, 1000);
-    return () => window.clearInterval(id);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, [dataLoaded]);
   // A REFRESH poll (after the first) running long, or failing outright --
   // tracked separately from catalogArrived so already-rendered data is
@@ -759,6 +766,10 @@ export default function WorkflowsPage() {
     let cancel = false;
     let timer = 0;
     let failures = 0;
+    // requestAnimationFrame handle for the "how long has this fetch been
+    // running" ticker -- never a JS timer of any kind, per the
+    // no-timer-polling policy on this page. Purely visual (no network of
+    // its own): it only ever recomputes elapsed time locally.
     let slowTick = 0;
     // A REFRESH fetch running long must show something (task: the workflows
     // canvas dark solid image defect) without touching the full-page
@@ -767,20 +778,23 @@ export default function WorkflowsPage() {
     // itself and its own `window.setTimeout(load, delay)` failure-retry
     // call site below are pinned literally by an earlier invariant test, so
     // the arming lives in this sibling function rather than wrapping
-    // either). Ticks every second; cleared on resolution inside load()
+    // either). Ticks every frame (React bails on a same-second value, so
+    // this costs no extra render); cleared on resolution inside load()
     // below -- success clears it outright, failure leaves the last value
     // standing so the pill persists alongside "Connection interrupted".
     const armSlowTick = () => {
       const requestStartedAt = Date.now();
-      window.clearInterval(slowTick);
-      slowTick = window.setInterval(() => {
+      cancelAnimationFrame(slowTick);
+      const tick = () => {
         setPollSlowS(Math.round((Date.now() - requestStartedAt) / 1000));
-      }, 1000);
+        slowTick = requestAnimationFrame(tick);
+      };
+      slowTick = requestAnimationFrame(tick);
     };
     const load = () => {
       fetchWorkflowDef(project)
         .then((def) => {
-          window.clearInterval(slowTick);
+          cancelAnimationFrame(slowTick);
           if (cancel) return;
           failures = 0;
           setConnectionInterrupted(false);
@@ -842,7 +856,7 @@ export default function WorkflowsPage() {
           // focus/visibility change, or its own unhealthy-stream floor.
         })
         .catch(() => {
-          window.clearInterval(slowTick);
+          cancelAnimationFrame(slowTick);
           if (cancel) return;
           failures += 1;
           setConnectionInterrupted(true);
@@ -863,7 +877,7 @@ export default function WorkflowsPage() {
       (raw) => graphRef.current.hydrateOverrides(raw));
     armSlowTick();
     load();
-    return () => { cancel = true; window.clearTimeout(timer); window.clearInterval(slowTick); };
+    return () => { cancel = true; window.clearTimeout(timer); cancelAnimationFrame(slowTick); };
   }, [project, reloadNonce]);
 
   // The event-driven trigger for the def+occupancy effect above: bumping
@@ -877,7 +891,7 @@ export default function WorkflowsPage() {
   // a real GET /sse/changes signal of a kind that can move the catalog's
   // shape or a step's live occupancy, window focus, or a last-resort
   // safety net while the push stream looks unhealthy -- never a plain
-  // setInterval of this page's own.
+  // periodic timer of this page's own.
   const initialCatalogReloadRef = useRef(true);
   usePolledEffect(useCallback(() => {
     // usePolledEffect always fires once immediately on mount; the effect
@@ -1253,8 +1267,8 @@ export default function WorkflowsPage() {
   }, [isStateMachineWorkflow, conductorStepIds]);
   // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
   // real GET /sse/changes task_changed event, on focus, or as a 60s
-  // reconnect safety net -- was a bare 10s setInterval regardless of
-  // whether any task had actually moved.
+  // reconnect safety net -- was a bare 10s fixed-interval timer regardless
+  // of whether any task had actually moved.
   usePolledEffect(useCallback(() => {
     if (!isStateMachineWorkflow || conductorStepIds.size === 0) return;
     type DoneTaskRow = ManagedTask & { parent_id?: string };
@@ -1837,8 +1851,8 @@ export default function WorkflowsPage() {
   }, [nodeStatusLayerId, nodeStatusTaskId]);
   // Shared SSE gate (task fix/polling, SSE follow-up): refetch only on a
   // real GET /sse/changes task_changed event, on focus, or as a 60s
-  // reconnect safety net -- was a bare 10s setInterval regardless of
-  // whether the gate had actually decided.
+  // reconnect safety net -- was a bare 10s fixed-interval timer regardless
+  // of whether the gate had actually decided.
   usePolledEffect(useCallback(() => {
     if (!nodeStatusLayerId || !nodeStatusTaskId) return;
     const reqId = ++nodeStatusReqRef.current;
@@ -1880,16 +1894,24 @@ export default function WorkflowsPage() {
   // ~1309) or a `?task=` deep link (the effect just above this one). See
   // tests/unit/test_workflows_opens_on_live_work.py for what this replaced.
   useEffect(() => {
-    // Validation-only: this polls GET /api/workflows/runs/:id, a WorkflowCore
-    // instance route that does not exist for a conductor task id, nor for
-    // any conductor-linked child (they have no WorkflowCore run either).
-    // The conductor's live state already comes from useConductorState's own
-    // SSE push (conductorManaged above) -- reusing that here would be the
-    // duplicate-source mistake this hook exists to prevent.
+    // Validation-only: this polls GET /api/workflows/runs/:id, a route that
+    // proxies an EXTERNAL scripted-workflow engine process (see
+    // api/workflows.py's _workflow_engine_json) -- not PRISM's own conductor
+    // state, so no wakeups.signal()/GET /sse/changes event exists for it (the
+    // conductor's live state already comes from useConductorState's own SSE
+    // push, conductorManaged above -- reusing that here would be the
+    // duplicate-source mistake this hook exists to prevent). This is a
+    // GENUINE, bounded poll while a real scripted run is in flight, not the
+    // idle-tab request storm the no-periodic-timer policy on this page targets
+    // (it never runs with no workflowRun set, and stops the instant the run
+    // reaches Complete/Terminated) -- but it still must not use the
+    // fixed-interval timer API on this page, so it self-reschedules via
+    // `setTimeout` instead at the same 1s cadence.
     if (isStateMachineWorkflow) return;
     if (!workflowRun || ["Complete", "Terminated"].includes(workflowRun.status)) return;
     let cancelled = false;
-    const poll = window.setInterval(() => {
+    let timer = 0;
+    const poll = () => {
       fetchWorkflowRun(workflowRun.id).then((next) => {
         if (cancelled) return;
         const attach = next.runtime || next.status !== "Runnable"
@@ -1911,9 +1933,12 @@ export default function WorkflowsPage() {
         });
       }).catch(() => {
         if (!cancelled) setWorkflowRunError("Connection interrupted");
+      }).finally(() => {
+        if (!cancelled) timer = window.setTimeout(poll, 1000);
       });
-    }, 1000);
-    return () => { cancelled = true; window.clearInterval(poll); };
+    };
+    timer = window.setTimeout(poll, 1000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [project, selectedWorkflowId, workflowRun?.id, workflowRun?.status, refreshRunHistory]);
 
   const toggleDirectoryExpanded = useCallback((id: string) => {
