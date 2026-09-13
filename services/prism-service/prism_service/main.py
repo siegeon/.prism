@@ -453,6 +453,76 @@ _WORKER_HOST_PROC = None  # multiprocessing.Process, once spawned
 _WORKER_HOST_SUPERVISOR_STOP = threading.Event()
 
 
+def _worker_host_pidfile() -> Path:
+    return Path(DATA_DIR) / "worker_host.pid"
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _pid_is_prism_worker_host(pid: int) -> bool:
+    """Best-effort fingerprint: is `pid` actually a worker-host child
+    spawned against THIS data dir, not some unrelated process that has
+    since reused the number? multiprocessing's "spawn" start method execs
+    a bare `python -c "from multiprocessing.spawn import spawn_main; ..."`
+    -- `worker_host` never appears in argv, so cmdline text cannot tell
+    one spawned child from another. `/proc/<pid>/environ` (same-user
+    readable on Linux) still carries the PRISM_DATA_DIR that
+    worker_host.main() sets explicitly on entry -- a reliable fingerprint
+    where cmdline has none. Anything unreadable is treated as "not
+    provably ours" so a stale/foreign pidfile can never block a fresh
+    spawn indefinitely."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return False
+    marker = f"PRISM_DATA_DIR={DATA_DIR}".encode()
+    return marker in raw.split(b"\x00")
+
+
+def _write_worker_host_pidfile(pid: int) -> None:
+    try:
+        _worker_host_pidfile().write_text(str(pid), encoding="utf-8")
+    except OSError:
+        _log.warning("could not write worker host pidfile", exc_info=True)
+
+
+def _read_worker_host_pidfile() -> "int | None":
+    try:
+        return int(_worker_host_pidfile().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _clear_worker_host_pidfile() -> None:
+    try:
+        _worker_host_pidfile().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _terminate_pid(pid: int, grace_s: float = 5.0) -> None:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.time() + grace_s
+    while time.time() < deadline:
+        if not _pid_alive(pid):
+            return
+        time.sleep(0.1)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def _truthy_env(name: str) -> "bool | None":
     raw = os.environ.get(name, "").strip().lower()
     if raw in ("1", "true", "yes", "on"):
@@ -473,7 +543,28 @@ def _spawn_worker_host():
     """Start the worker-host child process against this process's data
     dir. Import deferred to call time so a PRISM_WORKERS_PROCESS=0 boot
     never even imports `multiprocessing`'s spawn machinery or
-    `worker_host` (and, transitively, every standing worker's module)."""
+    `worker_host` (and, transitively, every standing worker's module).
+
+    Guarantees exactly one live host per data dir (task
+    b490fabc/host-tight-loop): an in-place os.execv restart (auto-update,
+    PRISM_DEV_WATCH) replaces THIS process's image but does NOT touch
+    already-running child processes, so the in-memory `_WORKER_HOST_PROC`
+    Process object from before the execv is gone while its OS process can
+    still be alive -- the freshly re-exec'd image used to call this
+    unconditionally and spawn a second host on top of it. The pidfile
+    survives the execv (same file, new process image) so it is checked
+    FIRST and any live, fingerprint-matching prior host is terminated
+    before a replacement is started -- never two hosts running at once."""
+    stale_pid = _read_worker_host_pidfile()
+    if stale_pid is not None and _pid_alive(stale_pid) and \
+            _pid_is_prism_worker_host(stale_pid):
+        _log.warning(
+            "worker host pidfile names a LIVE pid=%s; terminating it "
+            "before spawning a replacement (never two hosts at once)",
+            stale_pid,
+        )
+        _terminate_pid(stale_pid)
+
     import multiprocessing
     from prism_service.services import worker_host as _wh
     ctx = multiprocessing.get_context("spawn")
@@ -484,6 +575,7 @@ def _spawn_worker_host():
         name="prism-worker-host",
     )
     proc.start()
+    _write_worker_host_pidfile(proc.pid)
     _log.info("worker host process started (pid=%s)", proc.pid)
     try:
         from prism_service.services import system_activity
@@ -867,6 +959,13 @@ async def lifespan(_app: FastAPI):
             _WORKER_HOST_PROC.join(timeout=5.0)
         except Exception:
             _log.warning("worker host process shutdown failed", exc_info=True)
+        # Clear the pidfile only on a clean stop of a host THIS process
+        # actually knows about -- on an os.execv restart this code path
+        # runs (lifespan shutdown happens before the re-exec) and the
+        # pidfile is correctly emptied; _spawn_worker_host's own guard
+        # still covers the case where it somehow didn't (e.g. terminate()
+        # raised) so a stray live pid is never left unaccounted for.
+        _clear_worker_host_pidfile()
     try:
         from prism_service.services.watchdog import stop_watchdog
         stop_watchdog()

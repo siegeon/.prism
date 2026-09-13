@@ -1158,20 +1158,20 @@ def _loop(interval_s: int) -> None:
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     while True:
-        # Captured fresh, right before this iteration's own sweep -- see
-        # gate_adjudicator._loop's comment: a since= left over from a
-        # prior iteration's post-sweep timestamp double-fires on the very
-        # signal that just woke this loop (owner 2026-09-13: "one signal
-        # makes exactly one pass").
-        sweep_started = time.time()
         try:
             with system_activity.pass_("ship_worker", "*", "sweep_once") as info:
                 res = sweep_once()
                 info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s(),
-                     since=sweep_started)
+        # since= OMITTED (defaults to None -> baseline = now, taken AFTER
+        # the sweep above). Task b490fabc/host-tight-loop: a pre-sweep
+        # baseline sees a ship this very sweep just landed (which itself
+        # raises "shipped"/task_changed at line ~686) as "new" the instant
+        # wait() is entered, self-retriggering forever with zero external
+        # cause -- see gate_adjudicator._loop's comment for the measured
+        # numbers.
+        wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s())
 
 
 def start_ship_worker() -> Optional[threading.Thread]:

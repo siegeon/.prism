@@ -228,14 +228,6 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
     if stop_event is None:  # never delay a test-driven loop
         wakeups.wait_out_startup_warmup()
     while stop_event is None or not stop_event.is_set():
-        # Captured fresh, right before this iteration's own sweep -- NOT
-        # carried over from the timestamp the PREVIOUS iteration's wait()
-        # already consumed. Using a stale prior baseline here double-fires:
-        # the signal that woke the previous wait() is still the newest
-        # entry in wakeups._LAST, so a since= older than it (e.g. the
-        # previous sweep's own start time) sees it as "new" all over again
-        # and triggers an extra, unwanted pass immediately after this one.
-        sweep_started = time.time()
         for project in _projects_in_scope():
             try:
                 # Serialized with the other pure-maintenance sweeps (see
@@ -264,11 +256,19 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
             # ticking `interval_s` whether or not anything changed.
             # timeout=worker_fallback_s() is None by default -- no
             # periodic wake at all unless an operator explicitly opts in.
-            # `since=sweep_started` (this iteration's own pre-sweep
-            # timestamp, not a value left over from a previous iteration)
-            # is what keeps one signal to exactly one extra pass.
-            wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s(),
-                         since=sweep_started)
+            #
+            # since= is OMITTED (defaults to None -> baseline = now, taken
+            # AFTER the sweep above). Task b490fabc/host-tight-loop: the
+            # old pre-sweep `since=sweep_started` saw run_once_for's own
+            # completion write (task_svc.update(..., status="done") at the
+            # end of a real pass) as a "new" task_changed the instant
+            # wait() was entered, self-retriggering forever with zero
+            # external cause -- measured live as this worker's passes
+            # running back-to-back at ~0.2s with 100% CPU and nothing
+            # actually changing. A post-sweep baseline still catches a
+            # signal from a genuinely different mutation without
+            # re-firing on this sweep's own write.
+            wakeups.wait(["task_changed"], timeout=wakeups.worker_fallback_s())
 
 
 def start_language_alignment_worker() -> Optional[threading.Thread]:
