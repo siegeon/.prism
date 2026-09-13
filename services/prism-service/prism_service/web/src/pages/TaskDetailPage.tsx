@@ -1543,12 +1543,33 @@ export default function TaskDetailPage() {
   }, [id, project]);
 
   const setStatus = async (status: string) => {
+    // A block must say what it is waiting on (task_service's
+    // BLOCKED_NEEDS_REASON_FIX). Measured 2026-09-13: 6 of 19 blocked tasks
+    // on the live board carried an EMPTY blocked_reason, every one of them
+    // minted by this button, which used to send {status} alone -- a red row
+    // naming nothing anyone could act on. Ask here rather than let the
+    // server's refusal read as a button that simply does not work; an empty
+    // answer or a cancel aborts, so a wordless block is never sent.
+    let blockedReason: string | undefined;
+    if (status === "blocked" && task?.status !== "blocked") {
+      const answer = window.prompt(
+        "Why is this task blocked? Say what it is waiting on and what would "
+        + "release it.");
+      if (answer === null) return;            // cancelled — do nothing
+      blockedReason = answer.trim();
+      if (!blockedReason) {
+        setNotice("Not moved: a block needs a reason.");
+        return;
+      }
+    }
     setBusy(true);
     try {
       const r = await fetch(`/api/tasks/${id}?project=${project}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify(
+          blockedReason ? { status, blocked_reason: blockedReason }
+                        : { status }),
       });
       // fetch() only rejects on a network error, never on a non-2xx status
       // -- unchecked, a refused PATCH (e.g. the open-gate close guard)
