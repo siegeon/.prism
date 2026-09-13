@@ -11,6 +11,7 @@ import { draw } from "@/live/draw";
 import { actionStripHitTest, exploreHrefFor } from "@/live/cards";
 import type { GraphSnapshot, WorkEvent } from "@/live/types";
 import LiveGatePanel from "@/components/live/LiveGatePanel";
+import SystemActivityPanel from "@/components/live/SystemActivityPanel";
 
 /** localStorage key for a project's manual card-position overrides (owner
  * ask: "the individual panels should be able to be moved") — read once
@@ -592,6 +593,7 @@ export default function LivePage() {
             onClose={() => setGatePanelTaskId(null)}
           />
         )}
+        <SystemActivityPanel project={project} />
       </div>
     </Page>
   );

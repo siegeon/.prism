@@ -363,6 +363,7 @@ def start_drift_timer():
         return
     from prism_service.project_context import get_project, get_all_projects
     from prism_service.engines.brain_engine import Brain
+    from prism_service.services import system_activity
     print(f"Drift timer running every {DRIFT_INTERVAL_SECONDS}s", file=_sys.stderr)
     drift_brains: dict[str, Brain] = {}
     # Tight loop checks for soft-deleted projects every STALE_CHECK_S so
@@ -406,7 +407,8 @@ def start_drift_timer():
                             tasks_db=str(db_dir / "tasks.db"),
                         )
                         drift_brains[pid] = brain
-                    n = brain.incremental_reindex()
+                    with system_activity.pass_("drift_reindex", pid, "incremental_reindex"):
+                        n = brain.incremental_reindex()
                     if n:
                         print(f"[drift] {pid}: reindexed {n} drifted file(s)", file=_sys.stderr)
                 except Exception as e:

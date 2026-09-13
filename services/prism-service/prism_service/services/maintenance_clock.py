@@ -27,6 +27,8 @@ import sys as _sys
 import threading
 import time
 
+from prism_service.services import system_activity
+
 WORKER_ID = "maintenance_clock"
 WORKER_LABEL = "Memory maintenance clock"
 
@@ -292,7 +294,8 @@ def _loop(interval_s: int, initial_delay_s: float) -> None:
                 per_proj = dict(enabled)
                 if adaptive_ran_this_tick:
                     per_proj["adaptive"] = False
-                fired = run_tick(pid, st, enabled=per_proj)
+                with system_activity.pass_("brain_jobs", pid, "run_tick"):
+                    fired = run_tick(pid, st, enabled=per_proj)
                 if "adaptive" in fired:
                     adaptive_ran_this_tick = True
                 if fired:

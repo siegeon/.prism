@@ -54,7 +54,7 @@ import threading
 import time
 from typing import Optional
 
-from prism_service.services import drive_heartbeat
+from prism_service.services import drive_heartbeat, system_activity
 
 SEAT = "prism-dispatch-guard"
 
@@ -444,7 +444,8 @@ def _loop(interval_s: int,
     _log(f"started; interval={interval_s}s")
     while stop_event is None or not stop_event.is_set():
         try:
-            sweep_reap()
+            with system_activity.pass_("reap_sweep", "*", "sweep_reap"):
+                sweep_reap()
         except Exception as exc:
             _log(f"sweep error: {exc}")
         if stop_event is not None:

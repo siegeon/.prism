@@ -49,6 +49,8 @@ import time
 import uuid
 from typing import Optional
 
+from prism_service.services import system_activity
+
 DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
 SEAT_ID = "prism-task-runner"  # distinct-actor identity on every report
 # Real coding work needs more than READ_ONLY_TOOLS (batch analyzers never
@@ -2338,7 +2340,8 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
     _log(f"started; interval={interval_s}s (event-driven, interval is a fallback)")
     while stop_event is None or not stop_event.is_set():
         try:
-            sweep_once()
+            with system_activity.pass_("task_runner", "*", "sweep_once"):
+                sweep_once()
         except Exception as exc:
             _log(f"sweep error: {exc}")
         if _wake_event.wait(timeout=interval_s):

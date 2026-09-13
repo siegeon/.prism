@@ -26,6 +26,8 @@ import threading
 import time
 from typing import Optional
 
+from prism_service.services import system_activity
+
 DEFAULT_INTERVAL_S = 0  # OFF unless an environment explicitly opts in
 SEAT = "prism-resume-actuator"  # distinct-actor identity on every report
 
@@ -601,7 +603,8 @@ def _loop(interval_s: int) -> None:
     _log(f"started; interval={interval_s}s")
     while True:
         try:
-            sweep_once()
+            with system_activity.pass_("resume_actuator", "*", "sweep_once"):
+                sweep_once()
         except Exception as exc:
             _log(f"sweep error: {exc}")
         time.sleep(interval_s)

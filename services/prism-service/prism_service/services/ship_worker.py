@@ -41,7 +41,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from prism_service.services import brain_health
+from prism_service.services import brain_health, system_activity
 
 SEAT_ID = "conductor-shipper"  # registered in actor_service.MACHINE_SEATS
 
@@ -1143,7 +1143,8 @@ def _loop(interval_s: int) -> None:
     _log(f"started; interval={interval_s}s")
     while True:
         try:
-            sweep_once()
+            with system_activity.pass_("ship_worker", "*", "sweep_once"):
+                sweep_once()
         except Exception as exc:
             _log(f"sweep error: {exc}")
         time.sleep(interval_s)

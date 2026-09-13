@@ -65,6 +65,8 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+from prism_service.services import system_activity
+
 SEAT_ID = "conductor-deployer"  # registered in actor_service.MACHINE_SEATS
 
 DEPLOY_ENV = "PRISM_DEPLOY_ON_LAND"
@@ -521,14 +523,15 @@ def _tick() -> None:
     land the sweep has not seen yet BEFORE confirming anything a previous
     tick (or a task-scoped land) already requested -- either half's own
     exception never stops the other, same as the loop's own posture."""
-    try:
-        sweep_new_land()
-    except Exception as exc:
-        _log(f"sweep new-land error: {exc}")
-    try:
-        sweep_pending()
-    except Exception as exc:
-        _log(f"sweep error: {exc}")
+    with system_activity.pass_("deploy_sweep", "*", "sweep_new_land+sweep_pending"):
+        try:
+            sweep_new_land()
+        except Exception as exc:
+            _log(f"sweep new-land error: {exc}")
+        try:
+            sweep_pending()
+        except Exception as exc:
+            _log(f"sweep error: {exc}")
 
 
 def _loop(interval_s: int) -> None:

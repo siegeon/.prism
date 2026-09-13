@@ -36,6 +36,8 @@ import threading
 import time
 from typing import Optional
 
+from prism_service.services import system_activity
+
 SEAT_ID = "prism-language-alignment-worker"
 _ENV_PREFIX = "PRISM_LANGUAGE_ALIGNMENT_WORKER"
 _RULE_NAMES = ("text-is-plain", "text-uses-canonical-terms")
@@ -192,7 +194,8 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
     while stop_event is None or not stop_event.is_set():
         for project in _projects_in_scope():
             try:
-                res = run_once_for(project)
+                with system_activity.pass_("language_alignment", project, "run_once_for"):
+                    res = run_once_for(project)
                 if "skipped" not in res:
                     _log(f"{project}: {res}")
             except Exception as exc:
