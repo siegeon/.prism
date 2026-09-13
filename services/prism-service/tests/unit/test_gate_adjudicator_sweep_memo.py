@@ -5,9 +5,9 @@ Measured live at 7.13.338 with ZERO in_progress tasks: gate_adjudicator.
 sweep_once ran 136.8s, then 94s+, on EVERY cadence, over 26 tasks parked at
 pending gates none of which changed -- the daemon sat at 157% CPU and every
 API route hung while it ran. RED BY CONSTRUCTION at the base commit: before
-this task, `sweep_once()` unconditionally called `ctx.task_svc.list()` and
-re-ran the per-task backoff check for every project on every pass, with no
-way to skip a whole project when nothing about it had moved.
+this task, `sweep_once()` unconditionally re-fetched every project's gate
+snapshot and re-ran the per-task backoff check on every pass, with no way
+to skip a whole project when nothing about it had moved.
 """
 from __future__ import annotations
 
@@ -42,7 +42,10 @@ def _make_tasks(n=26):
 
 def _fake_ctx(tasks):
     ctx = MagicMock()
-    ctx.task_svc.list = MagicMock(return_value=tasks)
+    # sweep_once reads the lean gate_sweep_rows() snapshot (tick-cost pass,
+    # 2026-09-13), never the project-wide list() -- see
+    # test_gate_adjudicator_sweep_cost.py's own pin on that contract.
+    ctx.task_svc.gate_sweep_rows = MagicMock(return_value=tasks)
     by_id = {t.id: t for t in tasks}
     ctx.task_svc.get = MagicMock(side_effect=lambda tid: by_id.get(tid))
     svc = ctx.conductor_svc
@@ -78,11 +81,11 @@ def test_second_sweep_with_nothing_changed_makes_zero_adjudicate_calls_and_is_fa
 
     first = ga.sweep_once()
     assert first == []
-    assert ctx.task_svc.list.call_count == 1
+    assert ctx.task_svc.gate_sweep_rows.call_count == 1
     assert svc.adjudicate_green_gate.call_count == 26, (
         "first pass must judge every eligible task once")
 
-    ctx.task_svc.list.reset_mock()
+    ctx.task_svc.gate_sweep_rows.reset_mock()
     svc.adjudicate_green_gate.reset_mock()
 
     started = time.monotonic()
@@ -90,7 +93,7 @@ def test_second_sweep_with_nothing_changed_makes_zero_adjudicate_calls_and_is_fa
     elapsed_ms = (time.monotonic() - started) * 1000.0
 
     assert second == []
-    assert ctx.task_svc.list.call_count == 0, (
+    assert ctx.task_svc.gate_sweep_rows.call_count == 0, (
         "nothing changed -- the project must not even be re-fetched")
     assert svc.adjudicate_green_gate.call_count == 0, (
         "nothing changed -- zero adjudicate_* calls on the second sweep")
@@ -115,7 +118,7 @@ def test_task_changed_signal_reevaluates_only_that_task(monkeypatch):
 
     ga.sweep_once()
     svc.adjudicate_green_gate.reset_mock()
-    ctx.task_svc.list.reset_mock()
+    ctx.task_svc.gate_sweep_rows.reset_mock()
 
     # Simulate a real mutation: task t5's row actually changed AND the
     # write path signalled it -- exactly what task_service.update() does
@@ -125,7 +128,7 @@ def test_task_changed_signal_reevaluates_only_that_task(monkeypatch):
 
     ga.sweep_once()
 
-    assert ctx.task_svc.list.call_count == 1, (
+    assert ctx.task_svc.gate_sweep_rows.call_count == 1, (
         "a real signal must trigger exactly one re-fetch of the project"
     )
     assert svc.adjudicate_green_gate.call_count == 1, (
@@ -151,7 +154,7 @@ def test_a_safety_net_forces_a_rescan_even_with_no_signal(monkeypatch):
     monkeypatch.setattr(gam, "workspace_head_sha", lambda tid: "")
 
     ga.sweep_once()
-    ctx.task_svc.list.reset_mock()
+    ctx.task_svc.gate_sweep_rows.reset_mock()
 
     # Pretend the safety net has elapsed -- no signal at all, but the
     # bound must still force a rescan (belt-and-braces for a write that
@@ -161,5 +164,5 @@ def test_a_safety_net_forces_a_rescan_even_with_no_signal(monkeypatch):
 
     ga.sweep_once()
 
-    assert ctx.task_svc.list.call_count == 1, (
+    assert ctx.task_svc.gate_sweep_rows.call_count == 1, (
         "the safety net must force a rescan once it elapses")
