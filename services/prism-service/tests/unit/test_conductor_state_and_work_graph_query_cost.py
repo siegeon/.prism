@@ -196,18 +196,34 @@ def test_conductor_state_loads_the_unfiltered_board_at_most_once(
         f"got {len(boards)}: {boards}")
 
 
-def test_a_second_state_call_within_the_ttl_reuses_everything(
+def test_a_second_state_call_within_the_ttl_skips_the_heavy_recompute(
         tmp_path, monkeypatch):
     """A repeat /state poll inside the 2.5s TTL must be served from the
-    existing payload cache -- no SQL at all."""
+    existing managed_tasks()/step_buckets()/board_health payload cache --
+    _state_payload's own TTL cache (api/conductor.py:220). The report-
+    signal/drive-seat enrichment (_with_report_signal/_with_drive_seat)
+    deliberately runs OUTSIDE that cache on every call by design (task
+    e9625a4d/1c6d59e9: "so staleness stays live") -- cheap, one
+    by-id task_svc.get() + one drive_heartbeat.latest() per row, already
+    bounded to O(tasks), not O(tasks) MORE THAN ONCE. So this asserts the
+    EXPENSIVE, cache-worthy statements are gone on the second call, not
+    that the route issues zero SQL."""
     ctx, task_svc, ids = _seed(tmp_path)
     conductor_api = _state_client(ctx, monkeypatch)
 
     conductor_api.state(project="p")  # warm the TTL cache
     _, statements = _traced(task_svc, lambda: conductor_api.state(project="p"))
-    assert not statements, (
-        f"a /state call inside the TTL window re-ran SQL instead of "
-        f"serving the cached payload: {statements[:5]}")
+
+    for label, pattern in (
+        ("unfiltered board load", _UNFILTERED_BOARD),
+        ("per-task history read", _PER_TASK_HISTORY),
+        ("corpus scan", _CORPUS_SCAN),
+        ("parent_id-scoped read", _PARENT_SCOPED),
+    ):
+        hits = [s for s in statements if pattern.search(s)]
+        assert not hits, (
+            f"a /state call inside the TTL window re-ran a {label} instead "
+            f"of serving the cached managed_tasks payload: {hits[:3]}")
 
 
 # ----------------------------------------------------------------------
