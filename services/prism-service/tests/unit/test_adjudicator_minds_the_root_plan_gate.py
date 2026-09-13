@@ -208,8 +208,17 @@ def test_certainty_computes_each_signal_independently(dp_env, tmp_path):
                 _RICH_MISFIRE)
     out = dp.plan_gate_certainty(dp_env, task.id, task)
     signals = out["signals"]
+    # SUPERSEDED 2026-09-13 by tests/unit/
+    # test_plan_gate_certainty_reads_the_plan.py: a fifth signal,
+    # plan_grounding, reads the PLAN's own AC/oracle lines (the four below all
+    # grade shape, which let a real placeholder plan score 1.00 and clear a
+    # root plan_gate). It is a veto multiplier on the four-signal base, not a
+    # fifth averaged member, so every score here is unchanged when it is 1.0.
+    # The invariant this line protects -- the signals are not one constant
+    # wearing several names -- is kept, just across five.
     assert set(signals) == {"plan_completeness", "oracle_quality",
-                            "diagram_quality", "scope_alignment"}, signals
+                            "diagram_quality", "scope_alignment",
+                            "plan_grounding"}, signals
     # SUPERSEDED as the sole proof of independence by
     # test_all_four_signals_discriminate_a_rich_packet_from_a_thin_one below
     # (owner audit, 2026-08-30): this line alone can pass with only TWO of
@@ -240,8 +249,13 @@ def test_all_four_signals_discriminate_a_rich_packet_from_a_thin_one(
 
     baseline = _rich_task(task_svc)
     base = dp.plan_gate_certainty(dp_env, baseline.id, baseline)["signals"]
+    # plan_grounding added 2026-09-13 (see the note in
+    # test_certainty_computes_each_signal_independently above). _RICH_PLAN
+    # carries an `oracle:` line under every AC, so it grounds at 1.0 and the
+    # baseline is still all-ones.
     assert base == {"plan_completeness": 1.0, "oracle_quality": 1.0,
-                    "diagram_quality": 1.0, "scope_alignment": 1.0}, base
+                    "diagram_quality": 1.0, "scope_alignment": 1.0,
+                    "plan_grounding": 1.0}, base
 
     thin_plan = _task(task_svc, "AC-1: covered.", _RICH_DIAGRAM,
                       _RICH_ORACLE, _RICH_MISFIRE)

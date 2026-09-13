@@ -351,6 +351,53 @@ def _stop_if_citations(stop_if: list) -> set:
     return out
 
 
+#: An `AC-<n>` acceptance-criterion id, and the `oracle:` line that says how
+#: that AC is checked -- the plan's OWN convention, the same one
+#: arc_governance._ac_lines reads for the story/plan rubrics.
+_AC_ID_RE = re.compile(r"(?mi)^\s*[-*]?\s*(AC-\d+)\b")
+_ORACLE_LINE_RE = re.compile(r"(?mi)^\s*[-*]?\s*oracle\s*:")
+
+
+def _plan_grounding(plan_doc: str) -> tuple:
+    """How far the PLAN ITSELF is grounded, as (score, reasons).
+
+    The other four signals all grade the packet's SHAPE -- word count, a
+    diagram that parses, and an oracle read off the TICKET AUTHOR's own
+    task.oracle field rather than the plan. Measured live 2026-09-13, that
+    let a placeholder plan (AC-123/456/789, zero `oracle:` lines, one
+    non-existent path) score 1.00 on all four and clear a root plan_gate 91
+    seconds after a human seat had rejected its predecessor. 21 of 21
+    certainty approvals in the live DB had scored exactly 1.00.
+
+    This reads the plan's body instead:
+      - every `AC-<n>` must carry an `oracle:` line saying how it is checked;
+        the score is that coverage ratio.
+    A path-existence cap was BUILT AND DROPPED here, deliberately. Scoring it
+    over the 391 live plans flagged 110 as citing only non-existent files,
+    and reading the samples showed almost all were false positives: plans
+    cite paths relative to the PACKAGE root (`api/tasks.py`,
+    `web/src/pages/SettingsPage.tsx`, `services/lexicon.py`), which resolve
+    under services/prism-service/prism_service/, not the repo root. A check
+    that refuses good plans at that rate is worse than no check, and the
+    missing `oracle:` lines already separate the junk on their own.
+    """
+    doc = plan_doc or ""
+    ac_ids = {m.group(1) for m in _AC_ID_RE.finditer(doc)}
+    if not ac_ids:
+        return 0.0, ["plan_doc names no AC-<n> acceptance criteria at all"]
+
+    oracle_lines = len(_ORACLE_LINE_RE.findall(doc))
+    score = min(1.0, oracle_lines / float(len(ac_ids)))
+    reasons: list = []
+    if oracle_lines < len(ac_ids):
+        reasons.append(
+            f"plan_doc carries {len(ac_ids)} AC(s) but only {oracle_lines} "
+            "`oracle:` line(s) - every acceptance criterion must name how it "
+            "is checked")
+
+    return round(score, 3), reasons
+
+
 def certainty_threshold() -> float:
     """PRISM_PLAN_GATE_CERTAINTY_THRESHOLD, defaulting to 0.90 on an unset,
     unparsable, or out-of-[0,1] value - mirrors gate_adjudicator._interval_s's
@@ -428,15 +475,30 @@ def plan_gate_certainty(project: str, task_id: str, task) -> dict:
     scope_alignment = (0.0 if (below_order or out_of_contract
                               or missed_stop_targets) else 1.0)
 
+    plan_grounding, grounding_reasons = _plan_grounding(plan_doc)
+
     signals = {
         "plan_completeness": round(plan_completeness, 3),
         "oracle_quality": round(oracle_quality, 3),
         "diagram_quality": round(diagram_quality, 3),
         "scope_alignment": round(scope_alignment, 3),
+        "plan_grounding": plan_grounding,
     }
-    score = round(sum(signals.values()) / len(signals), 3)
+    # plan_grounding is a VETO MULTIPLIER, never a fifth averaged member.
+    # Averaging it in would let a well-grounded plan RAISE a packet that the
+    # original four signals had correctly parked: the rich-plan/vague-oracle
+    # fixture scored (1+0.5+1+1)/4 = 0.875 and parked, and as a fifth member
+    # at 1.0 it became (1+0.5+1+1+1)/5 = 0.9 and cleared. A new honesty
+    # signal must only ever be able to LOWER a score, so it multiplies the
+    # four-signal base instead: grounding 1.0 leaves every existing packet
+    # scored exactly as before, and an ungrounded plan collapses to 0.0.
+    base_names = ("plan_completeness", "oracle_quality",
+                  "diagram_quality", "scope_alignment")
+    base = sum(signals[n] for n in base_names) / float(len(base_names))
+    score = round(base * plan_grounding, 3)
 
     reasons: list[str] = []
+    reasons.extend(grounding_reasons)
     if plan_completeness < 1.0:
         reasons.append(
             f"plan_doc is thin ({words} word(s) against a "
