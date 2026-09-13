@@ -2027,16 +2027,35 @@ export default function WorkflowsPage() {
     graphRef.current.sendTransition(from, to);
   }, []);
 
+  // Fixed contract (task fix/stream): this effect must depend ONLY on
+  // `project` -- the one thing that actually changes the SSE URL. Before
+  // this fix it also listed `nodeStatusTaskId`, `animateTokenAlong` and
+  // `refreshFlowRuns`, so every time the routine catalog reload above gave
+  // `selectedWorkflow` a fresh object identity (any `task_changed` event on
+  // this live, busy daemon -- 946 tasks, dozens of active drives -- fires
+  // that reload), `refreshFlowRuns`'s identity changed too, this effect's
+  // cleanup ran, and sharedStream tore down and reopened a BRAND NEW
+  // /sse/work EventSource. Measured live: GET /sse/work reopened six times
+  // in 60s on an otherwise-idle tab, each reopen triggering a fresh round
+  // of workflows/staleness/workflows-live/tasks/tasks-stranded refetches --
+  // not a server-side drop (a raw `curl -N /sse/work` on the same daemon
+  // held one connection open past two 25s keepalives with zero closes).
+  // `workEventRef` carries the latest closures so the frame handler still
+  // sees current state without forcing a resubscribe on every render.
+  const workEventRef = useRef({ nodeStatusTaskId, animateTokenAlong, refreshFlowRuns });
+  workEventRef.current = { nodeStatusTaskId, animateTokenAlong, refreshFlowRuns };
+
   useEffect(() => {
     return subscribeStream(`/sse/work?project=${encodeURIComponent(project)}`, (frame) => {
       const ev = frame as { type?: string; task_id?: string; node_id?: string };
       if (ev?.type !== "flow.node") return;
-      if (nodeStatusTaskId && ev.task_id && ev.task_id !== nodeStatusTaskId) return;
-      animateTokenAlong(lastFlowNodeRef.current, String(ev.node_id || ""));
+      const current = workEventRef.current;
+      if (current.nodeStatusTaskId && ev.task_id && ev.task_id !== current.nodeStatusTaskId) return;
+      current.animateTokenAlong(lastFlowNodeRef.current, String(ev.node_id || ""));
       lastFlowNodeRef.current = String(ev.node_id || "");
-      refreshFlowRuns();
+      current.refreshFlowRuns();
     });
-  }, [project, nodeStatusTaskId, animateTokenAlong, refreshFlowRuns]);
+  }, [project]);
 
   // Crisp at devicePixelRatio: backing store scaled, CSS size unscaled.
   useEffect(() => {
