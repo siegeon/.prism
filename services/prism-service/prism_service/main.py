@@ -434,9 +434,10 @@ def start_quality_timer():
 # prism_service/services/worker_host.py for the full story and the
 # worker list. PRISM_WORKERS_PROCESS=1 spawns them there instead of
 # starting them as threads in THIS process; =0 keeps today's behavior
-# unchanged. Unset defaults to "1 when PRISM_DEV_MODE is on" (dev's `prism
-# start` opts in), "0" otherwise (a release/docker boot keeps the
-# single-process shape unless an operator opts in explicitly).
+# unchanged. Unset defaults ON (owner speed-mode directive, 2026-09-13:
+# ship the fix live without requiring a separate opt-in) -- an operator
+# who genuinely needs the old single-process shape sets
+# PRISM_WORKERS_PROCESS=0 explicitly.
 # ---------------------------------------------------------------------------
 
 _WORKER_HOST_PROC = None  # multiprocessing.Process, once spawned
@@ -456,7 +457,7 @@ def _workers_process_enabled() -> bool:
     explicit = _truthy_env("PRISM_WORKERS_PROCESS")
     if explicit is not None:
         return explicit
-    return bool(_truthy_env("PRISM_DEV_MODE"))
+    return True
 
 
 def _spawn_worker_host():

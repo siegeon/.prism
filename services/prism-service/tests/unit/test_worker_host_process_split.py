@@ -71,18 +71,18 @@ def test_workers_process_enabled_explicit_off_overrides_dev_mode(monkeypatch):
     assert main_mod._workers_process_enabled() is False
 
 
-def test_workers_process_enabled_defaults_on_in_dev_mode(monkeypatch):
-    import prism_service.main as main_mod
-    monkeypatch.delenv("PRISM_WORKERS_PROCESS", raising=False)
-    monkeypatch.setenv("PRISM_DEV_MODE", "1")
-    assert main_mod._workers_process_enabled() is True
-
-
-def test_workers_process_enabled_defaults_off_outside_dev_mode(monkeypatch):
+def test_workers_process_enabled_defaults_on_regardless_of_dev_mode(monkeypatch):
+    # Owner speed-mode directive (2026-09-13): ship the fix live without a
+    # separate opt-in -- unset PRISM_WORKERS_PROCESS means ON, whether or
+    # not PRISM_DEV_MODE is set. An operator who needs the old
+    # single-process shape sets PRISM_WORKERS_PROCESS=0 explicitly (see
+    # test_workers_process_enabled_explicit_off_overrides_dev_mode above).
     import prism_service.main as main_mod
     monkeypatch.delenv("PRISM_WORKERS_PROCESS", raising=False)
     monkeypatch.delenv("PRISM_DEV_MODE", raising=False)
-    assert main_mod._workers_process_enabled() is False
+    assert main_mod._workers_process_enabled() is True
+    monkeypatch.setenv("PRISM_DEV_MODE", "1")
+    assert main_mod._workers_process_enabled() is True
 
 
 # ---------------------------------------------------------------------------
