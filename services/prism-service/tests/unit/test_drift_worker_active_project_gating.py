@@ -29,8 +29,12 @@ class _StubBrain:
     def __init__(self, **kw):
         self.calls: list[str | None] = []
 
-    def incremental_reindex(self, repo_path=None):
+    def incremental_reindex(self, repo_path=None, stats=None):
         self.calls.append(repo_path)
+        if stats is not None:
+            stats["candidates"] = 0
+            stats["changed"] = 0
+            stats["embedded"] = 0
         return 0
 
 
