@@ -1212,6 +1212,55 @@ def _attach_node_trend(scores_db, steps: list[dict]) -> None:
         step["token_indeterminate"] = t.get("indeterminate", True)
 
 
+def _attach_node_trend_batch(scores_db, entries: list[dict]) -> None:
+    """Same per-step stamping as _attach_node_trend, but ONE call each to
+    node_token_trend/node_run_counts/node_recent_runs/node_last_run across
+    EVERY behaviour entry's steps combined, instead of _attach_node_trend
+    called once per entry (each of those 4 functions opens its own sqlite
+    connection). With ~20 behaviour entries that was ~80 connects on every
+    single GET /api/workflows -- this collapses it to 4, regardless of how
+    many entries there are. Speed-mode follow-up to the engine-round-trip
+    cache above; same GIL-reacquisition-count reasoning applies to sqlite
+    connects under a live background pass."""
+    def _key(step: dict) -> str:
+        route = step.get("route")
+        if route:
+            return str(route)
+        url = step.get("url") or step.get("action") or ""
+        if "/steps/" in url:
+            return url.split("/steps/")[-1].split("?")[0]
+        return step["id"]
+
+    all_steps = [s for e in entries for s in (e.get("steps") or [])]
+    keys = [_key(s) for s in all_steps]
+    try:
+        trend = node_token_trend(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        trend = {}
+    try:
+        counts = node_run_counts(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        counts = {}
+    try:
+        recent = node_recent_runs(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        recent = {}
+    try:
+        last_run = node_last_run(str(scores_db), keys) if scores_db else {}
+    except Exception:
+        last_run = {}
+    for step in all_steps:
+        step["run_count"] = counts.get(_key(step), 0)
+        step["running_now"] = bool(recent.get(_key(step), 0))
+        step["last_run_at"] = last_run.get(_key(step))
+        t = trend.get(_key(step)) or {}
+        step["token_multiplier"] = t.get("multiplier")
+        step["avg_tokens"] = t.get("avg_tokens")
+        step["token_sample_count"] = t.get("sample_count", 0)
+        step["token_window"] = t.get("window", NODE_TREND_WINDOW)
+        step["token_indeterminate"] = t.get("indeterminate", True)
+
+
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     return _cached_engine_structure(
         "conductor_behaviors", project,
@@ -1732,11 +1781,15 @@ def get_workflows(project: str = Query("default")) -> dict:
         drive_heartbeat.latest_many(
             str(_scores_db / "scores.db"), _active_task_steps.keys())
         if _scores_db is not None and _active_task_steps else {})
+    # ONE batch of sqlite reads across every behaviour entry's steps
+    # combined, not one per entry (see _attach_node_trend_batch docstring)
+    # -- same discipline as the _svc.list()/drive_heartbeat.latest_many
+    # calls immediately above, which already learned this lesson once.
+    _attach_node_trend_batch(
+        (_scores_db / "scores.db") if _scores_db is not None else None,
+        conductor_behaviors)
     for _entry in conductor_behaviors:
         _steps = _entry.get("steps") or []
-        _attach_node_trend(
-            (_scores_db / "scores.db") if _scores_db is not None else None,
-            _steps)
         # The canvas reads `occupancy` to decide what is live. It was a
         # dict of zeros built at construction time, which is why a node
         # that had just run still drew as idle.

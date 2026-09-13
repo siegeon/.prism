@@ -123,6 +123,49 @@ def test_editing_a_behavior_file_busts_the_cache(tmp_path, monkeypatch):
     )
 
 
+def test_node_trend_is_fetched_once_across_every_behaviour_entry_not_once_per_entry(
+    monkeypatch,
+):
+    """Speed-mode follow-up (owner 2026-09-13): _attach_node_trend_batch
+    replaces a per-entry _attach_node_trend call (each of node_token_trend/
+    node_run_counts/node_recent_runs/node_last_run opens its own sqlite
+    connection) with ONE call to each across every behaviour entry's steps
+    combined -- ~20 entries x 4 connects was ~80 opens per request."""
+    from prism_service.api import workflows as wf
+
+    calls = {"trend": 0, "counts": 0, "recent": 0, "last_run": 0}
+
+    def _mk(counter_key, per_key_value):
+        def _fn(db, keys):
+            calls[counter_key] += 1
+            return {k: per_key_value for k in keys}
+        return _fn
+
+    monkeypatch.setattr(wf, "node_token_trend", _mk(
+        "trend", {"multiplier": 1.0, "avg_tokens": 10, "sample_count": 2,
+                   "window": 20, "indeterminate": False}))
+    monkeypatch.setattr(wf, "node_run_counts", _mk("counts", 3))
+    monkeypatch.setattr(wf, "node_recent_runs", _mk("recent", 1))
+    monkeypatch.setattr(wf, "node_last_run", _mk("last_run", "2026-09-13T00:00:00Z"))
+
+    entries = [
+        {"id": "e1", "steps": [{"id": "a"}, {"id": "b"}]},
+        {"id": "e2", "steps": [{"id": "c"}]},
+        {"id": "e3", "steps": [{"id": "d"}, {"id": "e"}, {"id": "f"}]},
+    ]
+
+    wf._attach_node_trend_batch("scores.db", entries)
+
+    assert calls == {"trend": 1, "counts": 1, "recent": 1, "last_run": 1}, (
+        f"each trend function must be called exactly once total, saw {calls}"
+    )
+    for entry in entries:
+        for step in entry["steps"]:
+            assert step["run_count"] == 3
+            assert step["running_now"] is True
+            assert step["token_multiplier"] == 1.0
+
+
 def test_project_validation_workflow_is_also_memoized(monkeypatch):
     from prism_service.api import workflows as wf
 
