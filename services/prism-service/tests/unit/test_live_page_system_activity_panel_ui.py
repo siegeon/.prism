@@ -37,7 +37,12 @@ def test_live_page_imports_and_mounts_the_panel() -> None:
 def test_panel_polls_the_real_system_activity_route() -> None:
     src = _read(_PANEL)
     assert "/api/system/activity" in src
-    assert "POLL_MS = 1000" in src
+    # Task fix/polling: moved off its own bare 1s setTimeout loop onto the
+    # shared change-counter gate (counter move / focus / 30s floor, never
+    # while hidden) -- still effectively ~1Hz-responsive since wakeups.py
+    # signals on exactly the background passes this panel shows.
+    assert "usePolledResource" in src
+    assert "POLL_MS = 1000" not in src
 
 
 def test_panel_renders_a_running_section_with_live_elapsed() -> None:

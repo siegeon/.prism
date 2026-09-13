@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { usePolledResource } from "@/lib/usePolledResource";
 
 /**
  * Task fixer-brief/activity (owner: "this is all about visibility /
@@ -30,7 +30,7 @@ type ActivityEntry = {
 
 type ActivitySnapshot = { running: ActivityEntry[]; recent: ActivityEntry[] };
 
-const POLL_MS = 1000;
+const EMPTY_SNAPSHOT: ActivitySnapshot = { running: [], recent: [] };
 
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
@@ -45,30 +45,23 @@ function kindLabel(kind: string): string {
 }
 
 export default function SystemActivityPanel({ project = "prism" }: { project?: string }) {
-  const [snap, setSnap] = useState<ActivitySnapshot>({ running: [], recent: [] });
   const [collapsed, setCollapsed] = useState(false);
   // Recomputed every tick from `started_at`, independent of when the last
   // fetch happened -- a running pass's elapsed keeps climbing between polls
   // instead of freezing at the last snapshot's value.
   const [, forceTick] = useState(0);
-  const cancelledRef = useRef(false);
 
-  useEffect(() => {
-    cancelledRef.current = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const poll = () => {
-      api.get<ActivitySnapshot>(
-        `/api/system/activity?project=${encodeURIComponent(project)}`,
-      )
-        .then((s) => { if (!cancelledRef.current) setSnap(s); })
-        .catch(() => { /* transient fetch failure -- keep showing the last snapshot */ })
-        .finally(() => {
-          if (!cancelledRef.current) timer = setTimeout(poll, POLL_MS);
-        });
-    };
-    poll();
-    return () => { cancelledRef.current = true; if (timer) clearTimeout(timer); };
-  }, [project]);
+  // Shared change-counter gate (task fix/polling): refetch only when
+  // /api/changes moves, on focus, or at a 30s floor -- was a bare 1s
+  // setTimeout loop forever. wakeups.py signals on exactly the background
+  // passes this panel exists to show, so a real event still surfaces
+  // within ~1s (the counter's own poll cadence), never slower for the
+  // "lightning fast" visibility this panel was built for.
+  const { data } = usePolledResource<ActivitySnapshot>(
+    `/api/system/activity?project=${encodeURIComponent(project)}`,
+    project,
+  );
+  const snap = data ?? EMPTY_SNAPSHOT;
 
   // A separate, faster ticker so a running pass's elapsed counter moves
   // smoothly rather than jumping once per 1s fetch.

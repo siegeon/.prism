@@ -7,6 +7,7 @@ import { subscribeStream } from "@/lib/sharedStream";
 import { api } from "@/lib/api";
 import { fetchActiveWorkflowRun, fetchConductorRunFromTask, fetchWorkflowDef, fetchWorkflowRun, fetchWorkflowRunHistory, requestWorkflowFix, startWorkflowRun, type WorkflowCatalogEntry, type WorkflowDef, type WorkflowRun, type WorkflowStepDef } from "@/lib/useWorkflowDef";
 import { useConductorState, type ManagedTask } from "@/lib/useConductorState";
+import { usePolledEffect } from "@/lib/usePolledResource";
 import SdlcProgress, { type Activity, type PhaseProgress } from "@/components/conductor/SdlcProgress";
 import { WorkflowGraph, drawWorkflows, MIN_ZOOM, type ActiveNodeProgress, type NodeVerdict, type RunView } from "@/live/workflowGraph";
 import type { SegmentGrab, WireEnd } from "@/live/wireEditing";
@@ -704,10 +705,12 @@ export default function WorkflowsPage() {
     };
   }, [connectionInterrupted, reconnectAttempt]);
 
-  useEffect(() => {
+  // Shared change-counter gate (task fix/polling): refetch only when
+  // /api/changes moves, on focus, or at a 30s floor -- was a bare 5s
+  // setTimeout loop regardless of whether staleness/workers had changed.
+  usePolledEffect(useCallback(() => {
     let cancelled = false;
-    let timer = 0;
-    const load = () => Promise.all([
+    Promise.all([
       api.get<{ brain: boolean; graph: boolean }>(`/api/staleness?project=${encodeURIComponent(project)}`),
       api.get<{ workers: Array<{ id: string; running: boolean; queue_depth?: number; in_flight?: number }> }>(`/api/consolidation/workers?project=${encodeURIComponent(project)}`),
     ]).then(([staleness, workers]) => {
@@ -719,11 +722,9 @@ export default function WorkflowsPage() {
         queueDepth: learning?.queue_depth ?? 0,
         inFlight: learning?.in_flight ?? 0,
       });
-    }).catch(() => { /* validation remains usable while learning status reconnects */ })
-      .finally(() => { if (!cancelled) timer = window.setTimeout(load, 5_000); });
-    load();
-    return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [project]);
+    }).catch(() => { /* validation remains usable while learning status reconnects */ });
+    return () => { cancelled = true; };
+  }, [project]), project);
 
   // Definition + live occupancy, polled. Re-applying a payload only refreshes
   // counts and which wires read live; node geometry is derived, so a poll
@@ -1195,11 +1196,15 @@ export default function WorkflowsPage() {
     if (!isStateMachineWorkflow || conductorStepIds.size === 0) {
       setDoneConductorTasks([]);
       setStrandedTaskIds(new Set());
-      return;
     }
-    let cancelled = false;
+  }, [isStateMachineWorkflow, conductorStepIds]);
+  // Shared change-counter gate (task fix/polling): refetch only when
+  // /api/changes moves, on focus, or at a 30s floor -- was a bare 10s
+  // setInterval regardless of whether any task had actually moved.
+  usePolledEffect(useCallback(() => {
+    if (!isStateMachineWorkflow || conductorStepIds.size === 0) return;
     type DoneTaskRow = ManagedTask & { parent_id?: string };
-    const load = () => Promise.all([
+    Promise.all([
       api.get<{ tasks: DoneTaskRow[] }>(
         `/api/tasks?project=${encodeURIComponent(project)}&fields=id,title,status,workflow_step,gate_state,updated_at,parent_id`,
       ),
@@ -1207,15 +1212,11 @@ export default function WorkflowsPage() {
         `/api/tasks/stranded?project=${encodeURIComponent(project)}`,
       ),
     ]).then(([{ tasks }, { stranded }]) => {
-      if (cancelled) return;
       setDoneConductorTasks(tasks.filter((t) =>
         t.status === "done" && !t.parent_id && conductorStepIds.has(t.workflow_step ?? "")));
       setStrandedTaskIds(new Set(stranded.map((s) => s.task_id)));
-    }).catch(() => { /* transient fetch failure; next poll retries */ });
-    load();
-    const id = window.setInterval(load, 10_000);
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, [project, isStateMachineWorkflow, conductorStepIds]);
+    }).catch(() => { /* transient fetch failure; next trigger retries */ });
+  }, [project, isStateMachineWorkflow, conductorStepIds]), project);
   // BELT: one unit per real step advance. `sendTransition` has always been
   // able to put a visible item on an FSM edge, and nothing ever called it
   // from real work -- so the board could show WHERE tasks were standing
@@ -1776,44 +1777,39 @@ export default function WorkflowsPage() {
   const nodeStatusLayerId = selectedWorkflow?.parent_id && selectedWorkflowId !== "validation"
     ? selectedWorkflowId
     : null;
+  const nodeStatusReqRef = useRef(0);
   useEffect(() => {
-    if (!nodeStatusLayerId || !nodeStatusTaskId) {
-      setNodeVerdicts(null);
-      return;
-    }
-    let cancelled = false;
-    const load = () => {
-      api.get<{ nodes: Array<{ id: string; state: string; reason?: string }> }>(
-        `/api/workflows/${encodeURIComponent(nodeStatusLayerId)}/node-status`
-        + `?project=${encodeURIComponent(project)}`
-        + `&task_id=${encodeURIComponent(nodeStatusTaskId)}`,
-      )
-        .then((res) => {
-          if (cancelled) return;
-          const next: Record<string, NodeVerdict> = {};
-          for (const node of res.nodes ?? []) {
-            next[node.id] = {
-              state: node.state as NodeVerdict["state"],
-              reason: node.reason ?? "",
-            };
-          }
-          setNodeVerdicts(Object.keys(next).length > 0 ? next : null);
-        })
-        .catch(() => {
-          // A failed read is NOT a verdict. Clearing back to null draws the
-          // layer plain rather than freezing a stale answer on the canvas.
-          if (!cancelled) setNodeVerdicts(null);
-        });
-    };
-    load();
-    // A gate check answers on the same timescale as a task transition -- the
-    // same 10s cadence this page already polls its definition on.
-    const timer = window.setInterval(load, 10000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [project, nodeStatusLayerId, nodeStatusTaskId]);
+    if (!nodeStatusLayerId || !nodeStatusTaskId) setNodeVerdicts(null);
+  }, [nodeStatusLayerId, nodeStatusTaskId]);
+  // Shared change-counter gate (task fix/polling): refetch only when
+  // /api/changes moves, on focus, or at a 30s floor -- was a bare 10s
+  // setInterval regardless of whether the gate had actually decided.
+  usePolledEffect(useCallback(() => {
+    if (!nodeStatusLayerId || !nodeStatusTaskId) return;
+    const reqId = ++nodeStatusReqRef.current;
+    const cancelled = () => reqId !== nodeStatusReqRef.current;
+    api.get<{ nodes: Array<{ id: string; state: string; reason?: string }> }>(
+      `/api/workflows/${encodeURIComponent(nodeStatusLayerId)}/node-status`
+      + `?project=${encodeURIComponent(project)}`
+      + `&task_id=${encodeURIComponent(nodeStatusTaskId)}`,
+    )
+      .then((res) => {
+        if (cancelled()) return;
+        const next: Record<string, NodeVerdict> = {};
+        for (const node of res.nodes ?? []) {
+          next[node.id] = {
+            state: node.state as NodeVerdict["state"],
+            reason: node.reason ?? "",
+          };
+        }
+        setNodeVerdicts(Object.keys(next).length > 0 ? next : null);
+      })
+      .catch(() => {
+        // A failed read is NOT a verdict. Clearing back to null draws the
+        // layer plain rather than freezing a stale answer on the canvas.
+        if (!cancelled()) setNodeVerdicts(null);
+      });
+  }, [project, nodeStatusLayerId, nodeStatusTaskId]), project);
 
   // The whole state-machine family's own version of validation's "reattach
   // after reload/navigation" effect below: land on ANY bot-family canvas
