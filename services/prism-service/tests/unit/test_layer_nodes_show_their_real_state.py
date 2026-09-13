@@ -192,7 +192,12 @@ def test_a_drilled_layers_own_occupancy_poll_is_never_frozen():
     one case safe to keep refreshing regardless of the freeze.
     """
     src = _PAGE.read_text(encoding="utf-8")
-    poll = _block(src, "// Definition + live occupancy, polled.")
+    # Anchor text updated (task fix/canvasplay, 2026-09-13): this fetch is no
+    # longer on a fixed poll interval, it refetches on real change events --
+    # see test_workflows_catalog_poll_is_event_driven.py. The invariant this
+    # test pins (the viewingInstanceRef freeze, relaxed by parent_id) is
+    # unchanged; only the comment this anchors on moved.
+    poll = _block(src, "// Definition + live occupancy, refetched on real change events")
     assert "viewingInstanceRef.current" in poll
     assert "selected.parent_id" in poll, (
         "the poll's freeze check does not know a nested behaviour layer is "

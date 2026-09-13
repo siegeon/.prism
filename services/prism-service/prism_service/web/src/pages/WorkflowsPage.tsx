@@ -130,9 +130,21 @@ function writeJson(key: string, value: unknown): void {
 /** Screen-space px a pointer must travel before a press becomes a pan or a
  * node drag — keeps a plain click from being swallowed by a pixel of jitter. */
 const DRAG_THRESHOLD_PX = 5;
-const POLL_MS = 10_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 10_000;
+// Task fix/canvasplay (owner 2026-09-13: "why are you hammering the server
+// with polling rather than updating with streaming"). The def+occupancy
+// fetch below used to reschedule itself unconditionally every 10s -- the
+// single largest remaining request source on this page -- regardless of
+// whether the catalog's shape or any step's live occupancy had actually
+// moved. It now refetches only on a real GET /sse/changes signal of a kind
+// that can move either one (a ship landed, a task's step/gate changed, the
+// daemon's own activity ticked, or a workspace write), on window focus, or
+// as a last-resort safety net while the push stream itself looks unhealthy
+// -- via the SAME usePolledEffect gate every other composite fetch on this
+// page already sits behind (see the staleness/workers and stranded-tasks
+// polls below). No fixed-interval reschedule is left for this fetch.
+const CATALOG_RELOAD_KINDS = ["shipped", "workspace_written", "task_changed", "activity"];
 // A role id (what a step's `persona` carries, and what a bot node's
 // `sub` field holds) mapped to the catalog entry that IS that bot --
 // api/workflows.py _ROLE_BOT_IDS is the same map on the server side.
@@ -621,6 +633,10 @@ export default function WorkflowsPage() {
   // running, or the seconds the LAST attempt took before it failed. Null
   // means "the most recent poll was fine."
   const [pollSlowS, setPollSlowS] = useState<number | null>(null);
+  // Bumped by the event-driven trigger effect below (near CATALOG_RELOAD_KINDS'
+  // usePolledEffect call) to re-run the def+occupancy fetch effect -- replaces
+  // that effect's old unconditional 10s reschedule.
+  const [reloadNonce, setReloadNonce] = useState(0);
   // The whole /api/workflows payload. Task 0c396de2 kept it so a
   // separate Roles section could render the persona cards; that section
   // is retired (owner 2026-09-10, roles are bots in the tree now), and
@@ -734,21 +750,23 @@ export default function WorkflowsPage() {
     return () => { cancelled = true; };
   }, [project]), project);
 
-  // Definition + live occupancy, polled. Re-applying a payload only refreshes
-  // counts and which wires read live; node geometry is derived, so a poll
-  // never disturbs a layout the owner has dragged.
+  // Definition + live occupancy, refetched on real change events (see
+  // reloadNonce/CATALOG_RELOAD_KINDS below) rather than a fixed interval.
+  // Re-applying a payload only refreshes counts and which wires read live;
+  // node geometry is derived, so a refresh never disturbs a layout the
+  // owner has dragged.
   useEffect(() => {
     let cancel = false;
     let timer = 0;
     let failures = 0;
     let slowTick = 0;
-    // A REFRESH poll running long must show something (task: the workflows
+    // A REFRESH fetch running long must show something (task: the workflows
     // canvas dark solid image defect) without touching the full-page
     // loading overlay, which only ever answers "has the FIRST response
-    // arrived at all". Called right after each poll schedules its NEXT
-    // attempt (both `load` itself and its two `window.setTimeout(load, ...)`
-    // call sites below are pinned literally by an earlier invariant test,
-    // so the arming lives in this sibling function rather than wrapping
+    // arrived at all". Called right after each fetch settles (both `load`
+    // itself and its own `window.setTimeout(load, delay)` failure-retry
+    // call site below are pinned literally by an earlier invariant test, so
+    // the arming lives in this sibling function rather than wrapping
     // either). Ticks every second; cleared on resolution inside load()
     // below -- success clears it outright, failure leaves the last value
     // standing so the pill persists alongside "Connection interrupted".
@@ -782,7 +800,7 @@ export default function WorkflowsPage() {
           // own canvas -- but while an instance overlay is open (a replay,
           // or a conductor task's live current-step progress),
           // re-applying the board's real, constantly-changing occupancy
-          // here on every POLL_MS tick stomps the deliberately-chosen
+          // here on every refetch stomps the deliberately-chosen
           // instance's own synthetic occupancy, which is what read as
           // "random animations" instead of a deliberate step-through
           // (owner, live evidence: conductor's real occupancy right now is
@@ -818,7 +836,10 @@ export default function WorkflowsPage() {
             graphRef.current.fit(canvas?.clientWidth || 800, canvas?.clientHeight || 600);
           }
           armSlowTick();
-          timer = window.setTimeout(load, POLL_MS);
+          // No blind reschedule here -- the effect re-runs (a fresh `load()`
+          // fires from the top) only when reloadNonce changes, which the
+          // event-driven trigger effect below bumps on a real signal, a
+          // focus/visibility change, or its own unhealthy-stream floor.
         })
         .catch(() => {
           window.clearInterval(slowTick);
@@ -843,7 +864,31 @@ export default function WorkflowsPage() {
     armSlowTick();
     load();
     return () => { cancel = true; window.clearTimeout(timer); window.clearInterval(slowTick); };
-  }, [project]);
+  }, [project, reloadNonce]);
+
+  // The event-driven trigger for the def+occupancy effect above: bumping
+  // reloadNonce re-runs it (a fresh `load()` from the top), replacing the
+  // fixed 10s reschedule that effect used to give itself regardless of
+  // whether anything had changed -- the single largest remaining request
+  // source on this page (owner 2026-09-13: "why are you hammering the
+  // server with polling rather than updating with streaming"). Reuses the
+  // SAME usePolledEffect gate every other composite fetch on this page
+  // already sits behind (staleness/workers above, stranded-tasks below):
+  // a real GET /sse/changes signal of a kind that can move the catalog's
+  // shape or a step's live occupancy, window focus, or a last-resort
+  // safety net while the push stream looks unhealthy -- never a plain
+  // setInterval of this page's own.
+  const initialCatalogReloadRef = useRef(true);
+  usePolledEffect(useCallback(() => {
+    // usePolledEffect always fires once immediately on mount; the effect
+    // above already does its own initial load(), so that first call is a
+    // no-op here -- only a REAL subsequent trigger bumps the nonce.
+    if (initialCatalogReloadRef.current) {
+      initialCatalogReloadRef.current = false;
+      return;
+    }
+    setReloadNonce((n) => n + 1);
+  }, []), project, CATALOG_RELOAD_KINDS);
 
   // The 1-second live channel (services/workflow_live.py), overlaid on top
   // of the LAST full definition the poll above stored. This never fetches
