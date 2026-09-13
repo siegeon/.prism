@@ -33,7 +33,7 @@ import os
 import threading
 import time
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Response
 
 from prism_service.project_context import get_project
 
@@ -328,7 +328,8 @@ def _gate_actionability(project: str, task_id: str, workflow_step: str,
 
 def _task_spend_usd(project: str, task_id: str, task_svc,
                      source_path: str, override_dir: str,
-                     deadline: float | None = None) -> float:
+                     deadline: float | None = None,
+                     timing_counts: dict[str, int] | None = None) -> float:
     """Live USD spend summed over `task_id`'s linked sessions, cached per
     (project, task_id) for _SPEND_CACHE_TTL_S. See module docstring.
 
@@ -339,7 +340,13 @@ def _task_spend_usd(project: str, task_id: str, task_svc,
     rather than blocking the request. The running total is still cached
     under the SAME key, so a since-warmed session is picked up as soon as
     its background read lands. `deadline=None` (tests, direct callers)
-    means "no bound" -- every call runs inline, unchanged from before."""
+    means "no bound" -- every call runs inline, unchanged from before.
+
+    `timing_counts` (route-timing pass, external fixer, owner brief
+    2026-09-13): when given, bumps `transcript_calls` for every
+    live_spend_for_session attempt and `bounded_timeouts` for every one
+    that didn't land within `deadline`. None (tests, direct callers)
+    means "don't count" -- unchanged from before."""
     key = f"{project}\x00{task_id}"
     now = time.time()
     with _TASK_SPEND_LOCK:
@@ -363,10 +370,16 @@ def _task_spend_usd(project: str, task_id: str, task_svc,
                 spend = live_spend_for_session(
                     sid, source_path, override_dir=override_dir or None)
             else:
+                if timing_counts is not None:
+                    timing_counts["transcript_calls"] = (
+                        timing_counts.get("transcript_calls", 0) + 1)
                 spend, ok = _bounded(
                     deadline, live_spend_for_session,
                     sid, source_path, override_dir=override_dir or None)
                 if not ok:
+                    if timing_counts is not None:
+                        timing_counts["bounded_timeouts"] = (
+                            timing_counts.get("bounded_timeouts", 0) + 1)
                     continue
             total += spend["total"]["usd"]
         except Exception:
@@ -377,9 +390,35 @@ def _task_spend_usd(project: str, task_id: str, task_svc,
 
 
 @router.get("/graph")
-def work_graph(project: str = Query("default")) -> dict:
+def work_graph(response: Response, project: str = Query("default")) -> dict:
     """One snapshot: {nodes, edges, generated_at}. See module docstring
-    for the shape contract the /live SPA page relies on."""
+    for the shape contract the /live SPA page relies on.
+
+    Carries a `timing` block (owner brief 2026-09-13, "like 200ms, fan
+    out sub agents") so a slow live poll can be diagnosed from the
+    response itself rather than re-guessed in-process against a db
+    copy: per-phase wall-clock ms (tasks_query, edges, heartbeats,
+    spend, token_events, sessions, serialize, total) plus counts
+    (nodes, sessions_seen, transcript_calls, bounded_timeouts,
+    sqlite_connections_opened -- the last is a lower bound: it counts
+    only the connections THIS module opens or triggers directly, not
+    every one behind conductor.gate_waiting_s/activity_for in
+    conductor_service.py, which this route calls but doesn't own).
+    `edges` and `sessions` are each "time in this loop minus time
+    already attributed to a more specific phase" (spend / token_events
+    respectively) so the phases sum to `total` without double-counting.
+    The same total_ms also rides the X-Prism-Timing response header for
+    a curl -D- one-liner with no JSON parsing."""
+    _t0 = time.monotonic()
+    _timing_ms: dict[str, float] = {
+        "tasks_query": 0.0, "edges": 0.0, "heartbeats": 0.0,
+        "spend": 0.0, "token_events": 0.0, "sessions": 0.0,
+        "serialize": 0.0,
+    }
+    _counts: dict[str, int] = {
+        "transcript_calls": 0, "bounded_timeouts": 0,
+        "sqlite_connections_opened": 0,
+    }
     ctx = get_project(project)
     conductor = ctx.conductor_svc
     task_svc = ctx.task_svc
@@ -427,6 +466,7 @@ def work_graph(project: str = Query("default")) -> dict:
             _dirty_state["checked"] = True
         return _dirty_state["reason"]  # type: ignore[return-value]
 
+    _p0 = time.monotonic()
     roots = conductor.managed_tasks()
 
     # Batched drive_started_at read (task 356ffdd2 AC-3): one
@@ -437,8 +477,11 @@ def work_graph(project: str = Query("default")) -> dict:
         _all_task_ids.append(r["id"])
         for c in r.get("subtasks") or []:
             _all_task_ids.append(c["id"])
-    _drive_started_map = _drive_started_at_bulk(
-        scores_db, list(dict.fromkeys(_all_task_ids)))
+    _dedup_task_ids = list(dict.fromkeys(_all_task_ids))
+    _drive_started_map = _drive_started_at_bulk(scores_db, _dedup_task_ids)
+    if scores_db and _dedup_task_ids:
+        _counts["sqlite_connections_opened"] += 1
+    _timing_ms["tasks_query"] = (time.monotonic() - _p0) * 1000
     # Same batching for the child-node activity_for() call below (tick-cost
     # pass, external fixer, owner brief 2026-09-13, no PRISM ticket):
     # drive_heartbeat.latest_many() once, on one connection, instead of
@@ -447,15 +490,18 @@ def work_graph(project: str = Query("default")) -> dict:
     # already ran its own latest_many() covering every task in the store
     # (roots included), so a flat/no-children request opens zero further
     # heartbeat connections here.
+    _p0 = time.monotonic()
     _heartbeat_map: dict = {}
     if any(r.get("subtasks") for r in roots):
         try:
             from prism_service.services import drive_heartbeat as _dhb
-            _heartbeat_map = _dhb.latest_many(
-                scores_db, list(dict.fromkeys(_all_task_ids)))
+            _heartbeat_map = _dhb.latest_many(scores_db, _dedup_task_ids)
+            _counts["sqlite_connections_opened"] += 1
         except Exception:
             _heartbeat_map = {}
+    _timing_ms["heartbeats"] = (time.monotonic() - _p0) * 1000
 
+    _loop_start = time.monotonic()
     for r in roots:
         if r["id"] not in seen_node_ids:
             task_obj = task_svc.get(r["id"])
@@ -485,12 +531,15 @@ def work_graph(project: str = Query("default")) -> dict:
                 _oa, _wo = _gate_actionability(
                     project, r["id"], r.get("workflow_step") or "",
                     is_root=not parent_id, dirty_reason=_dirty_once())
+            _sp0 = time.monotonic()
+            _root_spend = _task_spend_usd(
+                project, r["id"], task_svc, source_path, override_dir,
+                deadline=_deadline, timing_counts=_counts)
+            _timing_ms["spend"] += (time.monotonic() - _sp0) * 1000
             node = _task_node(
                 r["id"], r["title"], r["status"], r.get("workflow_step"),
                 r.get("gate_state"), r.get("activity"),
-                spend_usd=_task_spend_usd(
-                    project, r["id"], task_svc, source_path, override_dir,
-                    deadline=_deadline),
+                spend_usd=_root_spend,
                 gate_waiting_s=(
                     conductor.gate_waiting_s(task_obj)
                     if task_obj is not None else None),
@@ -522,14 +571,17 @@ def work_graph(project: str = Query("default")) -> dict:
                     project, child.id,
                     getattr(child, "workflow_step", "") or "",
                     is_root=False, dirty_reason=_dirty_once())
+            _sp0 = time.monotonic()
+            _child_spend = _task_spend_usd(
+                project, child.id, task_svc, source_path, override_dir,
+                deadline=_deadline, timing_counts=_counts)
+            _timing_ms["spend"] += (time.monotonic() - _sp0) * 1000
             cnode = _task_node(
                 child.id, child.title, child.status,
                 getattr(child, "workflow_step", ""),
                 getattr(child, "gate_state", "none"),
                 c_activity,
-                spend_usd=_task_spend_usd(
-                    project, child.id, task_svc, source_path, override_dir,
-                    deadline=_deadline),
+                spend_usd=_child_spend,
                 gate_waiting_s=conductor.gate_waiting_s(child),
                 queue_depth=_queue_depth(task_svc, child.id),
                 drive_started_at=_drive_started_map.get(child.id),
@@ -538,6 +590,8 @@ def work_graph(project: str = Query("default")) -> dict:
             cnode["kind"] = "subtask"
             nodes.append(cnode)
             seen_node_ids.add(child.id)
+    _timing_ms["edges"] = max(
+        0.0, (time.monotonic() - _loop_start) * 1000 - _timing_ms["spend"])
 
     # Sessions linked to any task/subtask node, gated to recent token
     # motion (last _SESSION_RECENCY_S) so a stale historical link doesn't
@@ -550,6 +604,7 @@ def work_graph(project: str = Query("default")) -> dict:
 
     now = time.time()
     seen_sessions: set[str] = set()
+    _sessions_start = time.monotonic()
     for n in list(nodes):
         task_id = n["id"]
         try:
@@ -560,9 +615,14 @@ def work_graph(project: str = Query("default")) -> dict:
             sid = sess.get("session_id")
             if not sid or sid in seen_sessions:
                 continue
+            _counts["transcript_calls"] += 1
+            _te0 = time.monotonic()
             events, _ok = _bounded(
                 _deadline, live_token_events_for_session,
                 sid, source_path, override_dir=override_dir or None)
+            _timing_ms["token_events"] += (time.monotonic() - _te0) * 1000
+            if not _ok:
+                _counts["bounded_timeouts"] += 1
             if not _ok or not events or (now - events[-1][0]) > _SESSION_RECENCY_S:
                 # A timed-out/exhausted-budget lookup (task: live-page
                 # transcript-I/O hang) is treated exactly like "no recent
@@ -585,6 +645,7 @@ def work_graph(project: str = Query("default")) -> dict:
             role = model = step = None
             if scores_db:
                 try:
+                    _counts["sqlite_connections_opened"] += 1
                     run_rows = get_agent_runs(scores_db, limit=1, session_id=sid)
                     if run_rows:
                         role = run_rows[0].get("role")
@@ -611,8 +672,21 @@ def work_graph(project: str = Query("default")) -> dict:
                 "href": f"/sessions/{sid}",
             })
             edges.append({"source": sid, "target": task_id, "kind": "driven_in"})
+    _timing_ms["sessions"] = max(
+        0.0,
+        (time.monotonic() - _sessions_start) * 1000 - _timing_ms["token_events"])
 
-    return {"nodes": nodes, "edges": edges, "generated_at": now}
+    _ser0 = time.monotonic()
+    result = {"nodes": nodes, "edges": edges, "generated_at": now}
+    _timing_ms["serialize"] = (time.monotonic() - _ser0) * 1000
+    _timing_ms["total"] = (time.monotonic() - _t0) * 1000
+    timing: dict = {f"{k}_ms": round(v, 2) for k, v in _timing_ms.items()}
+    timing["nodes"] = len(nodes)
+    timing["sessions_seen"] = len(seen_sessions)
+    timing.update(_counts)
+    result["timing"] = timing
+    response.headers["X-Prism-Timing"] = f"total_ms={timing['total_ms']}"
+    return result
 
 
 @router.post("/sim-tokens")
