@@ -2356,6 +2356,15 @@ class ReasonLoopResponse(BaseModel):
     observe: dict
     reason: dict
     validation: dict
+    # STOP THE DECLARED CHAIN ON A REFUSED VERDICT (task bb3d1f6a). A rubric
+    # like test_drafted can REFUSE a draft (e.g. unresolvable imports), but
+    # that verdict used to be informational only -- _dispatch_declared_steps
+    # had no signal telling it to skip the remaining steps, so
+    # write-test-file/run-pinned-suite/commit-tests-only still ran and
+    # committed the refused draft as the task's red anchor. True only when a
+    # rubric was declared AND it refused; a passing verdict or a node with no
+    # rubric at all leaves this False, so the chain runs exactly as before.
+    stop_chain: bool = False
 
 
 @router.post("/steps/reason-loop")
@@ -2448,9 +2457,15 @@ def workflow_step_reason_loop(
         }
 
         # --- Validate: reuse the SAME pure rubric scorers story/plan-gate-check wrap ---
+        stop_chain = False
         if body.rubric:
             verdict = _score_rubric(body.rubric, fields, project)
             validation = {"ok": verdict.get("ok", False), "reason": verdict.get("reason", "")}
+            # A declared rubric that REFUSES must stop the rest of this
+            # node's chain (write-test-file/run-pinned-suite/commit-tests-
+            # only) -- see _dispatch_declared_steps' generic early-exit,
+            # which already breaks on stop_chain from any route.
+            stop_chain = validation["ok"] is False
         else:
             validation = {"ok": None, "reason": "no rubric specified -- Validate skipped"}
 
@@ -2471,7 +2486,8 @@ def workflow_step_reason_loop(
             except Exception:
                 pass
 
-        return ReasonLoopResponse(observe=observe, reason=reason, validation=validation)
+        return ReasonLoopResponse(observe=observe, reason=reason, validation=validation,
+                                  stop_chain=stop_chain)
 
 
 # ----------------------------------------------------------------------
