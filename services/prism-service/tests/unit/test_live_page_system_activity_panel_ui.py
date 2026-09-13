@@ -9,6 +9,12 @@ unused component), and SystemActivityPanel.tsx must poll the real
 /api/system/activity route, render a live-elapsed "running" section and a
 "recent" completed-passes section, and be positioned so it never collides
 with the existing gate-decision overlay or reset-layout button.
+
+Docking position SUPERSEDED 2026-09-13 (owner, verbatim, with a screenshot
+of the conductor canvas): "i dont want the panel on the top, the playing is
+supposed to be IN the graph like in a normal game." The panel moved from a
+top-right float to a bottom-right, collapsed-by-default drawer -- see the
+docking/collapsed tests below for what replaced the old top-right pin.
 """
 
 from __future__ import annotations
@@ -60,9 +66,25 @@ def test_panel_renders_a_recent_completed_section() -> None:
     assert "recent.slice(0, 20)" in src
 
 
-def test_panel_is_docked_top_right_so_it_never_collides_with_other_overlays() -> None:
+def test_panel_is_docked_bottom_right_so_it_never_collides_with_other_overlays() -> None:
+    # SUPERSEDED 2026-09-13 (owner, verbatim, with a screenshot of the
+    # conductor canvas): "i dont want the panel on the top, the playing is
+    # supposed to be IN the graph like in a normal game." A top-right float
+    # competed with the board it was meant to describe; it now docks along
+    # the bottom, out of the way of the gate-decision panel (inset-3) and
+    # the reset-layout button (bottom-left).
     src = _read(_PANEL)
-    assert "absolute top-3 right-3" in src
+    assert "absolute bottom-3 right-3" in src
+    assert "absolute top-3 right-3" not in src
+
+
+def test_panel_is_collapsed_by_default() -> None:
+    # Same owner note: the panel must not impose itself unasked -- it opens
+    # to the same detail on a click, but never starts expanded over the
+    # graph it now sits beside.
+    src = _read(_PANEL)
+    assert "useState(true)" in src[:src.index("return (")], (
+        "collapsed must default to true; the panel must not auto-expand")
 
 
 def test_panel_distinguishes_failed_passes_in_the_recent_list() -> None:
