@@ -9,7 +9,7 @@
  * counter-poll fix was itself measured still polling):
  *
  *   - refetch when a matching-kind event arrives over GET /sse/changes
- *     (lib/useChanges.ts's useChangeEvents — a real push, not a poll),
+ *     (lib/useChanges.ts's useChanges — a real push, not a poll),
  *   - refetch on window focus or document visibilitychange,
  *   - a 60s floor fires ONLY as a reconnect safety net -- while the SSE
  *     stream itself looks unhealthy (no frames flowing) -- never as a
@@ -29,7 +29,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
-import { useChangeEvents } from "@/lib/useChanges";
+import { useChanges } from "@/lib/useChanges";
 
 const FLOOR_MS = 60_000;
 
@@ -58,8 +58,8 @@ export function usePolledResource<T>(
   const [data, setData] = useState<T | null>(cached?.data ?? null);
   const [polled, setPolled] = useState(cached !== undefined);
   const [error, setError] = useState(false);
-  const { event, healthy } = useChangeEvents(project);
-  const lastSeqRef = useRef<number | null>(null);
+  const { counter, last, healthy } = useChanges(project);
+  const lastCounterRef = useRef<number | null>(null);
   const lastFetchAtRef = useRef(0);
 
   const load = useCallback(() => {
@@ -89,16 +89,16 @@ export function usePolledResource<T>(
     load();
   }, [url, load]);
 
-  // Event-driven refetch: a NEW /sse/changes frame (by seq, so the same
-  // event never double-fires this) of a kind this query cares about.
+  // Event-driven refetch: a NEW /sse/changes frame (by counter, so the
+  // same event never double-fires this) of a kind this query cares about.
   useEffect(() => {
-    if (!url || !event) return;
-    if (lastSeqRef.current === event.seq) return;
-    lastSeqRef.current = event.seq;
-    if (kinds && kinds.length > 0 && !kinds.includes(event.kind)) return;
+    if (!url || !last) return;
+    if (lastCounterRef.current === counter) return;
+    lastCounterRef.current = counter;
+    if (kinds && kinds.length > 0 && !kinds.includes(last.kind)) return;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event, url, load]);
+  }, [counter, last, url, load]);
 
   // Focus/visibility (unconditional refetch trigger) + a 60s floor that
   // fires ONLY while the stream looks unhealthy (reconnect safety net,
@@ -129,8 +129,8 @@ export function usePolledResource<T>(
  * cannot be expressed as a single `usePolledResource<T>(url)` call.
  */
 export function usePolledEffect(load: () => void, project = "", kinds?: string[]): void {
-  const { event, healthy } = useChangeEvents(project);
-  const lastSeqRef = useRef<number | null>(null);
+  const { counter, last, healthy } = useChanges(project);
+  const lastCounterRef = useRef<number | null>(null);
   const lastRunAtRef = useRef(0);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -143,13 +143,13 @@ export function usePolledEffect(load: () => void, project = "", kinds?: string[]
   useEffect(() => { run(); }, [run]);
 
   useEffect(() => {
-    if (!event) return;
-    if (lastSeqRef.current === event.seq) return;
-    lastSeqRef.current = event.seq;
-    if (kinds && kinds.length > 0 && !kinds.includes(event.kind)) return;
+    if (!last) return;
+    if (lastCounterRef.current === counter) return;
+    lastCounterRef.current = counter;
+    if (kinds && kinds.length > 0 && !kinds.includes(last.kind)) return;
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [event, run]);
+  }, [counter, last, run]);
 
   useEffect(() => {
     const onVisible = () => { if (!document.hidden) run(); };

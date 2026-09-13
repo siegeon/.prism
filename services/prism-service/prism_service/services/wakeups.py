@@ -30,6 +30,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sqlite3
+import sys
 import threading
 import time
 from typing import Iterable, Iterator, Optional
@@ -42,6 +43,23 @@ _COND = threading.Condition(_LOCK)
 # it is watching, since most mutation points don't always know a caller's
 # project (or the signal is genuinely project-agnostic).
 _LAST: dict[tuple[str, str], float] = {}
+
+# (kind, project) -> the task_id of the MOST RECENT signal of that shape,
+# tracked separately from _LAST so wait()/_has_new/_cross_has_new (the hot,
+# heavily-tested path every standing worker calls) are untouched. Backs
+# GET /sse/changes's {kind, project, task_id, at} payload (task fix/polling,
+# SSE coordination round) -- last-write-wins, same limitation _LAST already
+# accepts for its own timestamp.
+_LAST_TASK_ID: dict[tuple[str, str], Optional[str]] = {}
+
+# (kind, "file:line") -> call count since the last _reset_for_tests() (or
+# process start). Debug/diagnostic ONLY -- lets GET /api/changes?debug=1
+# name which CALL SITE is actually driving signal volume (task fix/polling,
+# owner 2026-09-13: "265/min on an idle system means the bus is noisy, not
+# the pages"). `sys._getframe` rather than `inspect.stack()`: the latter
+# walks and formats the WHOLE call stack on every call, which would itself
+# become a real cost on a hot signalling path.
+_SOURCE_COUNTS: dict[tuple[str, str], int] = {}
 
 # ---------------------------------------------------------------------------
 # Cross-process signalling (task: worker-host process split, 2026-09-13).
@@ -91,6 +109,14 @@ def _cross_conn() -> Optional[sqlite3.Connection]:
                 "kind TEXT NOT NULL, project TEXT NOT NULL, ts REAL NOT NULL, "
                 "PRIMARY KEY (kind, project))"
             )
+            # Migration (task fix/polling, SSE coordination round): an
+            # existing wakeups.db predates this column. ADD COLUMN has no
+            # IF NOT EXISTS in sqlite, so the try/except IS the guard --
+            # harmless no-op on a table that already has it.
+            try:
+                conn.execute("ALTER TABLE signals ADD COLUMN task_id TEXT")
+            except sqlite3.OperationalError:
+                pass
         except Exception:
             return None
         _CROSS_CACHE["conn"] = conn
@@ -98,16 +124,17 @@ def _cross_conn() -> Optional[sqlite3.Connection]:
         return conn
 
 
-def _cross_signal(kind: str, project: str, ts: float) -> None:
+def _cross_signal(kind: str, project: str, ts: float,
+                   task_id: Optional[str] = None) -> None:
     conn = _cross_conn()
     if conn is None:
         return
     try:
         with _CROSS_LOCK:
             conn.execute(
-                "INSERT INTO signals(kind, project, ts) VALUES (?, ?, ?) "
-                "ON CONFLICT(kind, project) DO UPDATE SET ts=excluded.ts",
-                (kind, project, ts),
+                "INSERT INTO signals(kind, project, ts, task_id) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(kind, project) DO UPDATE SET ts=excluded.ts, task_id=excluded.task_id",
+                (kind, project, ts, task_id),
             )
     except Exception:
         pass
@@ -152,10 +179,28 @@ def signal(kind: str, project: str = "*", task_id: Optional[str] = None) -> None
     try:
         with _COND:
             _LAST[(kind, project or "*")] = now
+            _LAST_TASK_ID[(kind, project or "*")] = task_id
             _COND.notify_all()
     except Exception:
         pass
-    _cross_signal(kind, project or "*", now)
+    _cross_signal(kind, project or "*", now, task_id)
+    try:
+        frame = sys._getframe(1)
+        source = f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}"
+        with _LOCK:
+            key = (kind, source)
+            _SOURCE_COUNTS[key] = _SOURCE_COUNTS.get(key, 0) + 1
+    except Exception:
+        pass
+
+
+def debug_sources(top: int = 20) -> list[dict]:
+    """The busiest (kind, call site) pairs since the last reset -- GET
+    /api/changes?debug=1 (api/changes.py). Diagnostic only; never called
+    from a hot path itself."""
+    with _LOCK:
+        rows = sorted(_SOURCE_COUNTS.items(), key=lambda kv: -kv[1])[:top]
+    return [{"kind": k, "source": s, "count": c} for (k, s), c in rows]
 
 
 def _has_new(kinds: set, project: Optional[str], baseline: float) -> bool:
@@ -235,16 +280,18 @@ def wait(kinds: Iterable[str], project: Optional[str] = None,
 
 
 def changed_since(kinds: Iterable[str], project: Optional[str],
-                   baseline: float) -> list[tuple[str, str, float]]:
+                   baseline: float) -> list[tuple[str, str, float, Optional[str]]]:
     """Which of `kinds` have a signal newer than `baseline` (for `project`,
     or every project when None) -- across BOTH the in-memory record and
-    the cross-process table, deduped to the single newest (project, ts)
-    per kind. Backs GET /sse/changes (routes/sse.py): after `wait()`
-    returns True, this answers WHICH kind(s) actually moved, so the
-    stream can emit one real event per change instead of a bare "something
-    happened" ping the client would have to re-poll to interpret."""
+    the cross-process table, deduped to the single newest (project, ts,
+    task_id) per kind. Backs GET /sse/changes (routes/sse.py): after
+    `wait()` returns True, this answers WHICH kind(s) actually moved (and,
+    best-effort, which task_id -- last-write-wins, same limitation the
+    timestamp itself already accepts), so the stream can emit one real
+    event per change instead of a bare "something happened" ping the
+    client would have to re-poll to interpret."""
     kinds_set = set(kinds)
-    best: dict[str, tuple[str, float]] = {}
+    best: dict[str, tuple[str, float, Optional[str]]] = {}
     with _LOCK:
         for (ek, ep), ts in _LAST.items():
             if ek not in kinds_set or ts <= baseline:
@@ -252,26 +299,26 @@ def changed_since(kinds: Iterable[str], project: Optional[str],
             if project and ep != "*" and ep != project:
                 continue
             if ek not in best or ts > best[ek][1]:
-                best[ek] = (ep, ts)
+                best[ek] = (ep, ts, _LAST_TASK_ID.get((ek, ep)))
     conn = _cross_conn()
     if conn is not None:
         placeholders = ",".join("?" for _ in kinds_set) or "NULL"
         try:
             with _CROSS_LOCK:
                 rows = conn.execute(
-                    f"SELECT kind, project, ts FROM signals WHERE kind IN ({placeholders})",
+                    f"SELECT kind, project, ts, task_id FROM signals WHERE kind IN ({placeholders})",
                     tuple(kinds_set),
                 ).fetchall()
         except Exception:
             rows = []
-        for ek, ep, ts in rows:
+        for ek, ep, ts, tid in rows:
             if ts <= baseline:
                 continue
             if project and ep != "*" and ep != project:
                 continue
             if ek not in best or ts > best[ek][1]:
-                best[ek] = (ep, ts)
-    return [(k, p, t) for k, (p, t) in best.items()]
+                best[ek] = (ep, ts, tid)
+    return [(k, p, t, tid) for k, (p, t, tid) in best.items()]
 
 
 def changes_snapshot(project: Optional[str] = None) -> float:
@@ -318,6 +365,8 @@ def _reset_for_tests() -> None:
     to one throwaway dir for the whole session, not per-test)."""
     with _LOCK:
         _LAST.clear()
+        _LAST_TASK_ID.clear()
+        _SOURCE_COUNTS.clear()
     conn = _cross_conn()
     if conn is not None:
         try:

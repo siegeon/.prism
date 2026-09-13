@@ -70,7 +70,22 @@ def test_use_changes_exposes_health_for_a_reconnect_safety_floor():
 
 def test_use_polled_resource_gates_on_sse_change_events():
     src = _read(_USE_POLLED)
-    assert "useChangeEvents" in src
+    assert "useChanges" in src
+
+
+def test_use_changes_exposes_the_coordination_interface():
+    # Published interface (task fix/polling, SSE coordination round) --
+    # another fixer's canvas rebuild rebases onto this exact shape.
+    src = _read(_USE_CHANGES)
+    assert "export function useChanges(project = \"\")" in src
+    assert "counter" in src
+    assert "last" in src
+    assert "task_id" in src
+
+
+def test_use_changes_offers_an_imperative_kind_subscription():
+    src = _read(_USE_CHANGES)
+    assert "export function subscribeToChangeKind(" in src
 
 
 def test_use_polled_resource_supports_narrowing_by_event_kind():

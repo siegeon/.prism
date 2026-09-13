@@ -107,9 +107,16 @@ def pass_(kind: str, project: str = "*", detail: str = "") -> Iterator[dict]:
     entry["active"] = True
     with _LOCK:
         _running[token] = entry
-    # A pass starting to RUN is itself real activity worth pushing -- an
-    # SSE-driven panel must not wait for completion to see it lit.
-    wakeups.signal("activity", project or "*")
+    # NO signal here: this fires on EVERY tick of every one of the nine
+    # standing workers, active or not, and several of them wake on each
+    # other's own task_changed/shipped signals -- unconditionally
+    # signalling "activity" the instant a pass merely STARTS turned one
+    # real task change into a burst of activity signals across every
+    # worker it woke (measured live, 2026-09-13, task fix/polling: a
+    # meaningful contributor to 265 req/min on a nominally idle tab).
+    # record() below already fires only for a pass that was genuinely
+    # active or failed (never a collapsed idle pass) -- that is the one
+    # true signal point.
     ok = True
     try:
         yield entry

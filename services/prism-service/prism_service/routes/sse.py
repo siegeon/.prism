@@ -208,9 +208,9 @@ async def _gen_changes(request: Request, project: str):
             continue
         changes = wakeups.changed_since(_CHANGE_KINDS, project, baseline)
         baseline = time.time()
-        for kind, proj, ts in changes:
+        for kind, proj, ts, task_id in changes:
             payload = json.dumps(
-                {"kind": kind, "project": proj, "counter": ts},
+                {"kind": kind, "project": proj, "task_id": task_id, "at": ts},
                 separators=(",", ":"),
             )
             yield f"data: {payload}\n\n".encode("utf-8")

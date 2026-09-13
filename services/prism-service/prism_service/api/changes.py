@@ -1,17 +1,10 @@
-"""GET /api/changes -- the ONE tiny endpoint the SPA's shared poll layer
-watches, so every page-level data query can gate its own refetch on "did
-anything change" instead of guessing on a private fixed-interval timer.
-
-Observed live (owner 2026-09-13): an idle Workflows tab issued ~10
-independent requests every 1-2s -- version, staleness, workflows/live,
-conductor/state, consolidation/workers, tasks, tasks/stranded, jobs,
-sse/work -- because every consumer polled its own endpoint on its own
-clock with no notion of whether the underlying data had moved.
-
-Backed by services/wakeups.py's existing signal bus (the same mutation
-points that already wake standing workers) -- no new entity, no new
-storage, just a read of the newest signal timestamp visible to the
-caller's project. Cheap by design: the SPA polls this every second.
+"""GET /api/changes -- originally the SPA's shared poll target (task
+fix/polling); superseded by GET /sse/changes (routes/sse.py) once the SPA
+moved from polling to a real push. Kept alive as a DEBUG/diagnostic
+surface: `?debug=1` names the busiest (kind, call site) pairs on the
+wakeups signal bus, for exactly the question "the bus is noisy, not the
+pages" needs answered (owner 2026-09-13, live measurement: 265 req/min on
+a nominally idle tab).
 """
 
 from __future__ import annotations
@@ -26,6 +19,12 @@ router = APIRouter()
 
 
 @router.get("")
-def changes(project: str = Query("", description="Project scope; empty sees every project.")) -> dict:
+def changes(
+    project: str = Query("", description="Project scope; empty sees every project."),
+    debug: bool = Query(False, description="Include the busiest (kind, call site) pairs since the last reset."),
+) -> dict:
     counter = wakeups.changes_snapshot(project or None)
-    return {"counter": counter, "at": time.time()}
+    body: dict = {"counter": counter, "at": time.time()}
+    if debug:
+        body["top_sources"] = wakeups.debug_sources()
+    return body
