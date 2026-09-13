@@ -477,6 +477,17 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
         rec["recreated_from"] = recovered_from
     idx[task_id] = rec
     _save_index(idx)
+    # A task's worktree just came into existence on disk -- the reactive
+    # workers that care about real filesystem changes (drift/brain
+    # reindex, maintenance) wake on this instead of polling for it (owner
+    # 2026-09-13: "it's all reactive and real time"). Best-effort, never
+    # raises: an unresolvable wakeups module must never fail a workspace
+    # creation that already succeeded.
+    try:
+        from prism_service.services import wakeups
+        wakeups.signal("workspace_written", "*", task_id=task_id)
+    except Exception:
+        pass
     return rec
 
 

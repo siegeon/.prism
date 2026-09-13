@@ -348,7 +348,18 @@ def _loop(interval_s: int, initial_delay_s: float) -> None:
                     _log(f"{pid}: ran passes {fired}")
         except Exception as exc:
             _log(f"tick error: {exc}")
-        time.sleep(interval_s)
+        # Owner 2026-09-13 ("it's all reactive and real time"): this tick
+        # used to fire on a bare clock regardless of whether anything had
+        # changed. Now it wakes on a real signal; each individual pass
+        # STILL gates on its own wall-clock cadence via `run_tick`'s
+        # last_run comparison above, so a pass genuinely due (governance
+        # every 300s, quality every 6h, etc.) fires the next time anything
+        # signals -- it simply does not fire on a schedule of its own when
+        # nothing is happening at all. PRISM_WORKER_FALLBACK_S (unset by
+        # default) is the one explicit opt-in for a periodic wake, shared
+        # with every other standing worker.
+        wakeups.wait(["task_changed", "shipped", "workspace_written"],
+                     timeout=wakeups.worker_fallback_s())
 
 
 def start_maintenance_clock(

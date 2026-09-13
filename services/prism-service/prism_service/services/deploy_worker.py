@@ -163,12 +163,20 @@ def dirty_policy_reason(run: Runner, repo_root: Path) -> str:
 def dirty_checkout_reason(run: Runner, repo_root: Path) -> str:
     """Non-empty when the daemon's own checkout is not clean: either a
     POLICY_FILES entry is dirty (the security tooth `dirty_policy_reason`
-    applies), or the tree has ANY other uncommitted change -- a pull/build
-    must never run against uncommitted local edits it did not ask for."""
+    applies), or a TRACKED file has an uncommitted change -- a pull/build
+    must never run against uncommitted local edits it did not ask for.
+
+    --untracked-files=no deliberately: an untracked file (a stray
+    screenshot, a scratch script someone left in the repo root) proves
+    nothing about whether the daemon executes the code it claims to, and
+    blocking a deploy on one is a false refusal -- confirmed live
+    2026-09-13, `git status --short | grep -v '^??'` empty while the
+    checkout still parked with "uncommitted changes"."""
     policy = dirty_policy_reason(run, repo_root)
     if policy:
         return policy
-    rc, out, _err = run(["git", "status", "--short"], repo_root)
+    rc, out, _err = run(
+        ["git", "status", "--porcelain", "--untracked-files=no"], repo_root)
     if rc == 0 and (out or "").strip():
         return ("uncommitted changes in the checkout -- commit or discard "
                "them before deploying")
@@ -450,19 +458,16 @@ _LAND_SIGNALLED: dict[str, bool] = {}             # repo key -> force next fetch
 
 
 def _fetch_fallback_s() -> Optional[float]:
-    """Explicit opt-in ONLY: PRISM_WORKER_FALLBACK_S, unset by default. When
-    unset (the default), a cached ahead-count is served forever until a
-    real land signal forces a fetch -- no age-based re-fetch happens on its
-    own. Set this only to add back a periodic safety net for an
+    """Explicit opt-in ONLY: PRISM_WORKER_FALLBACK_S, unset by default --
+    see wakeups.worker_fallback_s, same contract, same env var, shared
+    across every worker in this reactive family (no per-file duplicate).
+    Unset (the default): a cached ahead-count is served forever until a
+    real land signal forces a fetch -- no age-based re-fetch happens on
+    its own. Set this only to add back a periodic safety net for an
     environment whose lands never reach `signal_land` (e.g. a push from
     somewhere this process's `deploy_after_land` hook never runs)."""
-    raw = os.environ.get("PRISM_WORKER_FALLBACK_S", "").strip()
-    if not raw:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except ValueError:
-        return None
+    from prism_service.services import wakeups
+    return wakeups.worker_fallback_s()
 
 
 def signal_land(repo_root: Optional[Path] = None) -> None:
@@ -627,15 +632,11 @@ def _tick() -> None:
             info["active"] = active
 
 
-_IDLE_FALLBACK_S = 900.0  # owner 2026-09-13: an idle worker should stop polling
-
-
 def _loop(interval_s: int) -> None:
     from prism_service.services import wakeups
 
-    fallback = max(interval_s, _IDLE_FALLBACK_S)
-    _log(f"started; interval={interval_s}s (event-driven; falls back to "
-         f"{fallback:.0f}s when nothing changed)")
+    _log(f"started; interval={interval_s}s (signal only unless "
+         "PRISM_WORKER_FALLBACK_S is set)")
     wakeups.lower_thread_priority()
     wakeups.wait_out_startup_warmup()
     while True:
@@ -649,10 +650,11 @@ def _loop(interval_s: int) -> None:
         # "shipped" wakes this immediately on a same-process land;
         # "task_changed" covers a fresh deploy request queued on a task.
         # A land from OUTSIDE this process (a fixer's own `git push`) is
-        # still only caught by the fallback poll -- unavoidable without a
-        # cross-process channel.
-        wakeups.wait(["shipped", "task_changed"], timeout=fallback,
-                     since=tick_started)
+        # caught only via POST /api/deploy/run or an explicit
+        # PRISM_WORKER_FALLBACK_S opt-in -- unavoidable without a
+        # cross-process land signal.
+        wakeups.wait(["shipped", "task_changed"],
+                     timeout=wakeups.worker_fallback_s(), since=tick_started)
 
 
 def start_deploy_worker() -> Optional[threading.Thread]:
