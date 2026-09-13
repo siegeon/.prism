@@ -160,12 +160,20 @@ def _with_drive_seat(managed_tasks: list, scores_db: str, task_svc=None) -> list
                            when a task is parked at one with nothing beating
       dispatch_count       dispatches of the CURRENT step
     """
+    # Tick-cost pass (external fixer, owner brief 2026-09-13, no PRISM
+    # ticket): one drive_heartbeat.latest_many() call/connection for every
+    # row in this render instead of one fresh connection per row.
+    try:
+        _heartbeat_map = drive_heartbeat.latest_many(
+            scores_db, [str(r.get("id") or "") for r in managed_tasks])
+    except Exception:
+        _heartbeat_map = {}
     out = []
     for row in managed_tasks:
         row = dict(row)
         task_id = str(row.get("id") or "")
         activity = dict(row.get("activity") or {})
-        beat = drive_heartbeat.latest(scores_db, task_id) if task_id else None
+        beat = _heartbeat_map.get(task_id) if task_id else None
         seat = None
         if beat:
             age = beat.get("age_s")

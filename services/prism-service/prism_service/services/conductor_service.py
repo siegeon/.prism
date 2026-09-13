@@ -5556,6 +5556,17 @@ class ConductorService:
             tasks = self._task_svc.list()
         except Exception:
             return []
+        # Tick-cost pass (external fixer, owner brief 2026-09-13, no PRISM
+        # ticket): one drive_heartbeat.latest_many() call/connection for the
+        # WHOLE render instead of activity_for() opening its own fresh
+        # sqlite connection per task (125 opens measured for a 58-task
+        # render). Best-effort -- a lookup failure degrades to activity_for's
+        # own per-task fallback (heartbeat_cache=None), never fails the page.
+        try:
+            _heartbeat_map = drive_heartbeat.latest_many(
+                self._scores_db, [t.id for t in tasks])
+        except Exception:
+            _heartbeat_map = {}
         out: list[dict] = []
         for t in tasks:
             step = getattr(t, "workflow_step", "") or ""
@@ -5621,7 +5632,7 @@ class ConductorService:
                 "phase_progress": pp,
                 # Honest work state (working/adrift/stalled/awaiting_gate/…) —
                 # the tile pill + live pulse read this, NOT the raw status.
-                "activity": self.activity_for(t, pp),
+                "activity": self.activity_for(t, pp, heartbeat_cache=_heartbeat_map),
                 # Real progress: the epic's non-cancelled slices, done-first.
                 # Omitted (empty) for leaf tasks — the tile only renders a slice
                 # bar when this is non-empty.
@@ -6340,12 +6351,23 @@ class ConductorService:
         except Exception:
             return False
 
-    def activity_for(self, task, phase_progress: dict) -> dict:
+    def activity_for(self, task, phase_progress: dict,
+                      heartbeat_cache: Optional[dict] = None) -> dict:
         """Honest {state, task_motion_s, session_quiet_s} for a task. 'working'
         means a REAL recent conductor transition on THIS task (<=120s); when
         uncertain we UNDER-claim (stalled/adrift over working). session_quiet_s
         rides in on the already-computed phase_progress dict (transcript recency)
-        so we don't re-read the transcript."""
+        so we don't re-read the transcript.
+
+        ``heartbeat_cache`` (tick-cost pass, external fixer, owner brief
+        2026-09-13, no PRISM ticket): an OPTIONAL task_id -> beat dict, as
+        returned by ``drive_heartbeat.latest_many`` -- a caller rendering
+        many tasks in one request (managed_tasks/work_graph) fetches every
+        task's heartbeat in ONE query on ONE connection up front and passes
+        the dict in here, instead of this method opening its own fresh
+        connection per task (125 opens measured for a 58-task render).
+        None (default, every pre-existing caller) preserves the original
+        per-call `drive_heartbeat.latest` behavior exactly."""
         status = (getattr(task, "status", "") or "")
         step = (getattr(task, "workflow_step", "") or "")
         gate = (getattr(task, "gate_state", "none") or "none")
@@ -6357,7 +6379,11 @@ class ConductorService:
         # the owner's "stalled must mean the owner has something to do"
         # complaint. heartbeat_age_s is scoped per task_id (never global);
         # a stale/absent heartbeat is None/over-window and changes nothing.
-        beat = drive_heartbeat.latest(self._scores_db, getattr(task, "id", ""))
+        tid = getattr(task, "id", "")
+        if heartbeat_cache is not None:
+            beat = heartbeat_cache.get(tid)
+        else:
+            beat = drive_heartbeat.latest(self._scores_db, tid)
         heartbeat_age = beat["age_s"] if beat is not None else None
         driving = (heartbeat_age is not None
                    and heartbeat_age <= drive_heartbeat.HEARTBEAT_WINDOW_S)

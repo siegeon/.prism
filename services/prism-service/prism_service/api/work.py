@@ -422,6 +422,22 @@ def work_graph(project: str = Query("default")) -> dict:
             _all_task_ids.append(c["id"])
     _drive_started_map = _drive_started_at_bulk(
         scores_db, list(dict.fromkeys(_all_task_ids)))
+    # Same batching for the child-node activity_for() call below (tick-cost
+    # pass, external fixer, owner brief 2026-09-13, no PRISM ticket):
+    # drive_heartbeat.latest_many() once, on one connection, instead of
+    # activity_for() opening its own fresh connection per child node. Only
+    # fetched when there IS a child loop to feed -- managed_tasks() above
+    # already ran its own latest_many() covering every task in the store
+    # (roots included), so a flat/no-children request opens zero further
+    # heartbeat connections here.
+    _heartbeat_map: dict = {}
+    if any(r.get("subtasks") for r in roots):
+        try:
+            from prism_service.services import drive_heartbeat as _dhb
+            _heartbeat_map = _dhb.latest_many(
+                scores_db, list(dict.fromkeys(_all_task_ids)))
+        except Exception:
+            _heartbeat_map = {}
 
     for r in roots:
         if r["id"] not in seen_node_ids:
@@ -479,7 +495,8 @@ def work_graph(project: str = Query("default")) -> dict:
                 continue
             try:
                 pp = conductor.phase_progress(child.id)
-                c_activity = conductor.activity_for(child, pp)
+                c_activity = conductor.activity_for(
+                    child, pp, heartbeat_cache=_heartbeat_map)
             except Exception:
                 c_activity = {}
             _c_oa, _c_wo = (False, "")
