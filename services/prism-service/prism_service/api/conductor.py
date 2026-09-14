@@ -536,13 +536,54 @@ def gate_readiness(task_id: str, project: str = Query("default")) -> dict:
                     _swept = _r
                     break
         if _swept is not None and _swept.status != osp.ST_RED:
+            # HONEST CAUSE, HONEST NEXT STEP (task bb3d1f6a). This used to
+            # claim "the pinned suite passes there" for EVERY non-red
+            # receipt, including a collection error (rc=4: pytest never even
+            # collected the pinned ids) — a false statement about the
+            # evidence, and it always said "needs a distinct actor's
+            # decision" even after plan_rewind.maybe_rewind (task 1bcb2b24)
+            # started auto-rewinding a "passed" verdict to
+            # write_failing_tests, so a driver was told to fetch a human for
+            # a gate the machine was already about to redraft on its own.
+            from prism_service.services import plan_rewind
+            _kind = osp.red_refusal_kind(_swept)
+            if _kind in ("passed", "collection_error"):
+                _what = ("the pinned suite passes at this anchor"
+                         if _kind == "passed" else
+                         "the drafted tests could not even be collected")
+                _enabled = True
+                try:
+                    from prism_service.services import gate_adjudicator as _ga
+                    _enabled = _ga.is_enabled()
+                except Exception:
+                    pass
+                _budget = plan_rewind.rewind_budget(project)
+                _spent = plan_rewind.rewind_count(s._task_svc, task_id,
+                                                  "red_gate")
+                if _enabled and _spent < _budget:
+                    return {"receipt_ok": False,
+                            "receipt_refusal": (
+                                f"{str(_swept.reason)[:300]} — {_what}, so "
+                                "the machine seat is redrafting the failing "
+                                f"tests (rewind {_spent + 1}/{_budget}) on "
+                                "its next sweep; no owner action needed")}
+                _why_stuck = (
+                    f"the rewind budget ({_budget}) is already spent"
+                    if _spent >= _budget else
+                    "the machine gate seat is off in this environment "
+                    "(PRISM_GATE_ADJUDICATOR_INTERVAL)")
+                return {"receipt_ok": False,
+                        "receipt_refusal": (
+                            f"{str(_swept.reason)[:300]} — {_what}, and "
+                            f"{_why_stuck}: this gate needs a distinct "
+                            "actor's decision now.")}
             return {"receipt_ok": False,
                     "receipt_refusal": (
                         f"{str(_swept.reason)[:300]} — the machine seat "
-                        "already swept this anchor and will not retry (the "
-                        "pinned suite passes there, so a red demonstration "
-                        "can never be produced from this history). This "
-                        "gate needs a distinct actor's decision now.")}
+                        "could not judge this anchor at all (a runner or "
+                        "environment failure, never a verdict on the draft) "
+                        "and will not retry unattended. This gate needs a "
+                        "distinct actor's decision now.")}
         # Does the machine red seat actually TAKE this ticket? Promising "no
         # owner action needed" for a sweep that can never come is how an owner
         # waits forever (owner 2026-07-21: task 89e90d1a sat at red_gate while

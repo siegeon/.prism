@@ -10,6 +10,21 @@ pending for ever. Observed live on task 1bcb2b24 on 2026-09-08.
   AC-2  a red_gate an actor already decided is never rewound.
   AC-3  a spent rewind budget parks and names itself.
   AC-4  "cannot measure" is not "refused" - the 7.13.190 green_rewind bug.
+
+SUPERSEDED IN PART (task bb3d1f6a, 2026-09-13): `_refusal_for`'s red_gate
+branch originally read `task.gate_reason` for a literal "NOT red" prefix,
+which only ever recognised the suite-PASSES verdict shape and never a
+COLLECTION ERROR (pytest never collected a single pinned id -- a missing
+test id, an import error in the draft), whose reason reads "red not
+demonstrated at ... (rc=4, wanted rc==1 test failures): ...". That exact
+shape dead-ended task bb3d1f6a at red_gate forever, because the seat's own
+`tried` guard abstains once ANY non-red receipt is on file for the anchor,
+so nothing ever re-swept it into a form the old prefix match recognised.
+`_refusal_for` now reads the red-step EvidenceReceipt directly via
+`oracle_spec.latest_receipt` + `oracle_spec.red_refusal_kind`, exactly like
+green_rewind already does for green_gate, so these tests inject a fake
+receipt instead of a `gate_reason` string. The AC's stay the same; only the
+plumbing that produces a "refused" verdict changed.
 """
 from __future__ import annotations
 
@@ -17,11 +32,20 @@ from types import SimpleNamespace
 
 import pytest
 
+from prism_service.services import oracle_spec as osp
 from prism_service.services import plan_rewind
 
 
-_NOT_RED = ("NOT red: the spec's tests PASS at the red-step commit "
-            "c43012b7afa3 (pytest_ids: tests/unit/test_x.py -> rc=0)")
+_PASSED_REASON = ("NOT red: the spec's tests PASS at the red-step commit "
+                  "c43012b7afa3 (pytest_ids: tests/unit/test_x.py -> rc=0)")
+_COLLECTION_ERROR_REASON = (
+    "red not demonstrated at 086f410105bd (rc=4, wanted rc==1 test "
+    "failures): pytest_ids: could not collect tests/unit/test_new.py")
+
+
+def _receipt(status, rc, reason):
+    obs = [] if rc is None else [{"name": "pytest_pass", "observed": rc}]
+    return SimpleNamespace(status=status, reason=reason, observations=obs)
 
 
 class _FakeTaskSvc:
@@ -42,9 +66,9 @@ class _FakeTaskSvc:
         return list(self.rows)
 
 
-def _task(gate_state="pending", gate_reason=_NOT_RED, step="red_gate"):
+def _task(gate_state="pending", step="red_gate"):
     return SimpleNamespace(id="t-red", workflow_step=step,
-                           gate_state=gate_state, gate_reason=gate_reason)
+                           gate_state=gate_state, gate_reason="")
 
 
 @pytest.fixture()
@@ -52,9 +76,16 @@ def ctx():
     return SimpleNamespace(task_svc=_FakeTaskSvc(), conductor_svc=None)
 
 
-def test_a_refused_red_gate_returns_to_write_failing_tests(ctx):
+def _wire_receipt(monkeypatch, status, rc, reason):
+    monkeypatch.setattr(osp, "latest_receipt",
+                        lambda project, task_id: _receipt(status, rc, reason))
+
+
+def test_a_refused_red_gate_returns_to_write_failing_tests(ctx, monkeypatch):
     """AC-1: the whole point. Before this slice _STEP_BEFORE had no
     red_gate key, so maybe_rewind returned None and nothing moved."""
+    _wire_receipt(monkeypatch, osp.ST_FAILED, 0, _PASSED_REASON)
+
     got = plan_rewind.maybe_rewind(ctx, _task(), "prism")
 
     assert got is not None, "red_gate must be rewindable"
@@ -75,21 +106,45 @@ def test_a_refused_red_gate_returns_to_write_failing_tests(ctx):
     assert "red_gate -> write_failing_tests" in row.details
 
 
-def test_a_decided_red_gate_is_never_rewound(ctx):
+def test_a_collection_error_also_rewinds(ctx, monkeypatch):
+    """The gap this slice closes: a DEFECTIVE DRAFT (pytest never collected
+    a pinned id -- rc=4) reads as status=ST_FAILED exactly like a genuine
+    suite-passes verdict, and the old "NOT red" prefix match never
+    recognised this shape -- task bb3d1f6a's actual dead end."""
+    _wire_receipt(monkeypatch, osp.ST_FAILED, 4, _COLLECTION_ERROR_REASON)
+
+    got = plan_rewind.maybe_rewind(ctx, _task(), "prism")
+
+    assert got is not None and got["ok"] is True, got
+    assert got["to_step"] == "write_failing_tests"
+    upd = ctx.task_svc.updates[-1]
+    assert "could not collect" in upd["gate_reason"]
+
+
+def test_a_decided_red_gate_is_never_rewound(ctx, monkeypatch):
     """AC-2: undoing a decision an actor already made would erase a real
-    judgement. Only a PENDING gate rewinds."""
+    judgement. Only a PENDING gate rewinds. No receipt is wired at all --
+    the gate_state guard must short-circuit before oracle_spec is ever
+    consulted."""
+    def _boom(*a, **k):
+        raise AssertionError("must not read a receipt for a decided gate")
+    monkeypatch.setattr(osp, "latest_receipt", _boom)
+
     for decided in ("passed", "failed", "none"):
         assert plan_rewind.maybe_rewind(
             ctx, _task(gate_state=decided), "prism") is None, decided
     assert ctx.task_svc.updates == []
 
 
-def test_a_seat_that_could_not_measure_is_not_a_refusal(ctx):
+def test_a_seat_that_could_not_measure_is_not_a_refusal(ctx, monkeypatch):
     """AC-4: "cannot judge" is NOT "refused" - the distinction green_rewind
     shipped wrong in 7.13.190 by testing a boolean false for every
-    non-pass. A reason that does not say NOT red must not burn a rewind."""
-    quiet = _task(gate_reason="awaiting a trusted run of the pinned suite")
-    got = plan_rewind.maybe_rewind(ctx, quiet, "prism")
+    non-pass. status=ST_ERROR (a git worktree/subprocess failure) must not
+    burn a rewind."""
+    _wire_receipt(monkeypatch, osp.ST_ERROR, None,
+                 "red oracle: could not check out red-step commit")
+
+    got = plan_rewind.maybe_rewind(ctx, _task(), "prism")
     assert got is not None and got.get("ok") is not True, got
     assert got.get("inconclusive") is True, got
     assert not any(u.get("workflow_step") for u in ctx.task_svc.updates)
@@ -99,6 +154,7 @@ def test_a_spent_budget_parks_and_names_itself(ctx, monkeypatch):
     """AC-3: the budget must bound the retry. Each red rewind re-runs a
     step agent on a real USD budget, so an unbounded loop is expensive as
     well as useless."""
+    _wire_receipt(monkeypatch, osp.ST_FAILED, 0, _PASSED_REASON)
     monkeypatch.setattr(plan_rewind, "rewind_budget", lambda project: 2)
     task = _task()
 
@@ -115,6 +171,7 @@ def test_a_spent_budget_parks_and_names_itself(ctx, monkeypatch):
 def test_the_red_budget_is_its_own(ctx, monkeypatch):
     """A plan rewind must not spend the red budget. rewind_count scopes by
     from-step for exactly this reason."""
+    _wire_receipt(monkeypatch, osp.ST_FAILED, 0, _PASSED_REASON)
     monkeypatch.setattr(plan_rewind, "rewind_budget", lambda project: 1)
     ctx.task_svc.record_history(
         "t-red", action=plan_rewind.REWIND_ACTION,
