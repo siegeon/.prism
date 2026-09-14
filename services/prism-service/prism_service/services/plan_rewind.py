@@ -116,7 +116,28 @@ def _refusal_for(ctx, task, step: str, project: str) -> str:
             return ""
         if step == "plan_gate":
             from prism_service.services import plan_gate_checks
-            return str(plan_gate_checks.refusal(task, project) or "")
+            teeth = str(plan_gate_checks.refusal(task, project) or "")
+            if teeth:
+                return teeth
+            # THE RUBRIC'S OWN REFUSAL COUNTS TOO (task 6bc3e6c2, 2026-09-14):
+            # plan_coverage refused a plan with no AC ids ("story carries no
+            # AC-<n> ids to diff coverage against"), but this reader looked
+            # only at the deterministic teeth, answered "", and the gate
+            # flip-flopped between that refusal and "no actionable refusal"
+            # every sweep, parked, and never rewound. story_gate above has
+            # read its rubric this way all along; plan_gate now does the
+            # same, so a rubric refusal reaches verify_plan and the recall
+            # step hands it to the planner.
+            conductor = getattr(ctx, "conductor_svc", None)
+            if conductor is None:
+                return ""
+            validation = conductor._validation_for_gate(step)
+            if not validation:
+                return ""
+            check = conductor._verify_rubric_gate(task, validation) or {}
+            if check.get("verified") is not True:
+                return str(check.get("reason") or "")
+            return ""
         if step == "red_gate":
             # The red seat has ALREADY measured the pinned suite and left
             # its verdict as an EvidenceReceipt (task a5e8d877). Read THAT

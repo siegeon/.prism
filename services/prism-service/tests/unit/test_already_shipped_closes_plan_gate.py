@@ -119,6 +119,49 @@ def test_the_adjudicator_leaves_an_unshipped_task_alone(monkeypatch):
     assert ga.close_if_already_shipped(SimpleNamespace(task_svc=svc), _TID, "prism", None) is None
 
 
+# AC-5 (round 2, task 83dcd479) -- a shipped-direct tag counts as shipped
+def test_a_shipped_direct_tag_on_main_is_a_finding_without_a_trailer(monkeypatch):
+    runner = _wire(monkeypatch, sha="")
+    import prism_service.api.tasks as _tasks
+
+    def _git(repo, *args):
+        if args[0] == "rev-parse":
+            return 0, "572c3f75aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+        if args[0] == "merge-base":
+            return 0, ""
+        return 1, ""
+    monkeypatch.setattr(_tasks, "_git", _git)
+    task = _task()
+    task.tags = ["ci", "shipped-direct-572c3f75"]
+    finding = pgc.already_shipped(task, "prism", runner=runner)
+    assert finding.startswith("already shipped: 572c3f75 on origin/main is the commit its shipped-direct tag names")
+
+
+def test_a_shipped_direct_tag_not_on_main_is_no_finding(monkeypatch):
+    runner = _wire(monkeypatch, sha="")
+    import prism_service.api.tasks as _tasks
+    monkeypatch.setattr(_tasks, "_git", lambda repo, *a: (0, "abc\n") if a[0] == "rev-parse" else (1, ""))
+    task = _task()
+    task.tags = ["shipped-direct-abc1234"]
+    assert pgc.already_shipped(task, "prism", runner=runner) == ""
+
+
+# AC-6 (round 2, task 6bc3e6c2) -- the rewind reader hears the coverage rubric
+def test_the_plan_gate_rewind_reader_falls_back_to_the_rubric_refusal(monkeypatch):
+    from prism_service.services import plan_rewind
+    monkeypatch.setattr(pgc, "refusal", lambda task, project: "")
+    reason = "plan_coverage: story carries no AC-<n> ids to diff coverage against"
+    conductor = SimpleNamespace(
+        _validation_for_gate=lambda step: {"rubric": "plan_coverage"},
+        _verify_rubric_gate=lambda task, validation: {"verified": False, "reason": reason})
+    ctx = SimpleNamespace(conductor_svc=conductor)
+    assert plan_rewind._refusal_for(ctx, _task(), "plan_gate", "prism") == reason
+    conductor._verify_rubric_gate = lambda task, validation: {"verified": True}
+    assert plan_rewind._refusal_for(ctx, _task(), "plan_gate", "prism") == ""
+    monkeypatch.setattr(pgc, "refusal", lambda task, project: "plan_checks: tooth first")
+    assert plan_rewind._refusal_for(ctx, _task(), "plan_gate", "prism") == "plan_checks: tooth first"
+
+
 # AC-4 ------------------------------------------------------------------
 def test_the_plan_gate_node_asks_the_closer_first():
     node = json.loads(_NODE.read_text(encoding="utf-8"))

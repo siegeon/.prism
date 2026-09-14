@@ -682,7 +682,15 @@ def already_shipped(task, project: str = "default", *,
             return ""
         from prism_service.api.tasks import _shipped_sha_on_main
         from prism_service.services.task_workspace import _prism_repo_root
-        sha = _shipped_sha_on_main(str(_prism_repo_root()), tid) or ""
+        repo = str(_prism_repo_root())
+        sha = _shipped_sha_on_main(repo, tid) or ""
+        how = "carries this task's trailer"
+        if not sha:
+            # A hand landing writes tag `shipped-direct-<sha>` and often no
+            # trailer (task 83dcd479: 572c3f75 is a chore(version) commit).
+            # The tag counts when its commit is an ancestor of origin/main.
+            sha = _shipped_direct_sha_on_main(repo, getattr(task, "tags", None))
+            how = "is the commit its shipped-direct tag names"
         if not sha:
             return ""
         root = repo_root_for(task, project)
@@ -693,11 +701,37 @@ def already_shipped(task, project: str = "default", *,
         run = runner or _run_at_rev
         if run(root, base, targets) != 0:
             return ""
-        return (f"already shipped: {sha[:8]} on origin/main carries this "
-                f"task's trailer and the pinned suite passes at {base[:8]} "
+        return (f"already shipped: {sha[:8]} on origin/main {how} and the "
+                f"pinned suite passes at {base[:8]} "
                 f"({', '.join(targets)}). Nothing is left to plan.")
     except Exception:
         return ""
+
+
+_SHIPPED_DIRECT_TAG_RE = re.compile(r"^shipped-direct-([0-9a-f]{7,40})$")
+
+
+def _shipped_direct_sha_on_main(repo: str, tags) -> str:
+    """The commit a `shipped-direct-<sha>` tag names, when that commit is an
+    ancestor of origin/main; "" otherwise (no tag, unknown sha, or a sha
+    that never reached main)."""
+    try:
+        from prism_service.api.tasks import _git
+        for raw in (tags or []):
+            m = _SHIPPED_DIRECT_TAG_RE.match(str(raw).strip())
+            if not m:
+                continue
+            rc, out = _git(repo, "rev-parse", "--verify", "--quiet",
+                           m.group(1) + "^{commit}")
+            full = (out or "").strip()
+            if rc != 0 or not full:
+                continue
+            rc, _ = _git(repo, "merge-base", "--is-ancestor", full, "origin/main")
+            if rc == 0:
+                return full
+    except Exception:
+        pass
+    return ""
 
 
 # ----------------------------------------------------------------------
