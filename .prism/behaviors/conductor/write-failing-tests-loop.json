@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Write failing tests (Route-Observe-Reason-Write-Run-Commit)",
-  "version": 6,
+  "version": 8,
   "steps": [
     {
       "id": "route",
@@ -20,10 +20,24 @@
       "timeoutSeconds": 30
     },
     {
+      "id": "recall",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/refusal-recall?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    },
+    {
+      "id": "scaffold",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/test-scaffold?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 30
+    },
+    {
       "id": "loop",
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
-      "body": "{\"persona\": \"qa\", \"prompt\": \"Draft a failing test (do NOT write it to disk, this is a DRAFT only) for this task: ${taskHint}\\n\\nTHE EXACT PYTEST TARGET(S) YOU MUST PRODUCE (pinned by red_gate, verbatim, one per line):\\n${verify}\\n\\nWrite test_file_path as the module path before '::' in the target above, and give each test function the exact name after '::'. If no target is listed above, choose a sensible path under tests/unit/ instead.\\n\\nThe task's oracle -- the observable outcome that proves this task is done -- is: ${oracle}\\n\\nTHE REAL REPO MATERIAL YOU MUST GROUND YOUR IMPORTS IN (from the project's own code graph -- do not invent a module path that is not shown here):\\n${brainContext}\\n\\nImport ONLY modules and symbols that appear in the material above, or in the pinned pytest target's own path. If the capability under test genuinely does not exist yet, do not guess its future module path -- assert on the absence/current shape of the parent module instead (see the failure-mode guidance below).\\n\\nThe test must exercise the story's acceptance criteria and currently fail because the behavior doesn't exist yet.\\n\\nTHE FAILURE MUST BE A GENUINE ASSERTION FAILURE (pytest exit code 1), NEVER an uncaught exception, import error, or a raw lookup that raises before any assertion runs (e.g. str.index() on a missing substring, dict[key] on a missing key, or importing a module/symbol that does not exist yet). This repo's red-gate verifier explicitly refuses to count a collection error or an unhandled exception as red demonstrated (pytest exit code 2 or 4) - only rc==1 (tests ran and genuinely failed an assertion) counts. If the target module or symbol does not exist yet, do NOT import it directly; either import the existing parent module and assert on the absence/current shape of the not-yet-added capability (e.g. `assert hasattr(mod, 'new_thing'), \\\"not implemented yet\\\"`), or use `assert needle in haystack, \\\"reason\\\"` style checks (never `haystack.index(needle)`) so a missing needle raises a clear AssertionError instead of an uncaught ValueError.\\n\\nReturn the test code, the file path it would live at, and why it's expected to fail.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"test_code\": {\"type\": \"string\"}, \"test_file_path\": {\"type\": \"string\"}, \"expected_failure_reason\": {\"type\": \"string\"}}, \"required\": [\"test_code\", \"test_file_path\", \"expected_failure_reason\"]}, \"rubric\": \"test_drafted\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "body": "{\"persona\": \"qa\", \"prompt\": \"Draft a failing test (do NOT write it to disk, this is a DRAFT only) for this task: ${taskHint}\\n\\n${refusalBlock}\\n\\n${scaffoldBlock}\\n\\nTHE EXACT PYTEST TARGET(S) YOU MUST PRODUCE (pinned by red_gate, verbatim, one per line):\\n${verify}\\n\\nWrite test_file_path as the module path before '::' in the target above, and give each test function the exact name after '::'. If no target is listed above, choose a sensible path under tests/unit/ instead.\\n\\nThe task's oracle -- the observable outcome that proves this task is done -- is: ${oracle}\\n\\nTHE REAL REPO MATERIAL YOU MUST GROUND YOUR IMPORTS IN (from the project's own code graph -- do not invent a module path that is not shown here):\\n${brainContext}\\n\\nImport ONLY modules and symbols that appear in the material above, or in the pinned pytest target's own path. If the capability under test genuinely does not exist yet, do not guess its future module path -- assert on the absence/current shape of the parent module instead (see the failure-mode guidance below).\\n\\nThe test must exercise the story's acceptance criteria and currently fail because the behavior doesn't exist yet.\\n\\nTHE FAILURE MUST BE A GENUINE ASSERTION FAILURE (pytest exit code 1), NEVER an uncaught exception, import error, or a raw lookup that raises before any assertion runs (e.g. str.index() on a missing substring, dict[key] on a missing key, or importing a module/symbol that does not exist yet). This repo's red-gate verifier explicitly refuses to count a collection error or an unhandled exception as red demonstrated (pytest exit code 2 or 4) - only rc==1 (tests ran and genuinely failed an assertion) counts. If the target module or symbol does not exist yet, do NOT import it directly; either import the existing parent module and assert on the absence/current shape of the not-yet-added capability (e.g. `assert hasattr(mod, 'new_thing'), \\\"not implemented yet\\\"`), or use `assert needle in haystack, \\\"reason\\\"` style checks (never `haystack.index(needle)`) so a missing needle raises a clear AssertionError instead of an uncaught ValueError.\\n\\nReturn the test code, the file path it would live at, and why it's expected to fail.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"test_code\": {\"type\": \"string\"}, \"test_file_path\": {\"type\": \"string\"}, \"expected_failure_reason\": {\"type\": \"string\"}}, \"required\": [\"test_code\", \"test_file_path\", \"expected_failure_reason\"]}, \"rubric\": \"test_drafted\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
     },
     {

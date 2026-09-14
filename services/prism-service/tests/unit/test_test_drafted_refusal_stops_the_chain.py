@@ -235,6 +235,19 @@ def test_a_refused_draft_never_reaches_write_or_commit():
         calls.append("gather")
         return {"brain_context": "repo material"}
 
+    # THE RECALL STEP (task 08e666ff): another read-only lookup, between
+    # gather and the loop -- same reasoning as gather above.
+    def _recall(project, body):
+        calls.append("recall")
+        return {"refusal_block": ""}
+
+    # THE SCAFFOLD STEP (task 08e666ff's follow-up): a third read-only
+    # lookup, between recall and the loop -- same reasoning as gather/
+    # recall above, never one of the build trio a refusal must block.
+    def _scaffold(project, body):
+        calls.append("scaffold")
+        return {"scaffold_block": ""}
+
     def _draft(project, body):
         calls.append("reason-loop")
         return _Refused()
@@ -247,12 +260,14 @@ def test_a_refused_draft_never_reaches_write_or_commit():
     handlers["reason-loop"] = _draft
     handlers["oracle-route-check"] = _route_check
     handlers["context-enrich"] = _gather
+    handlers["refusal-recall"] = _recall
+    handlers["test-scaffold"] = _scaffold
 
     rows = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers,
         variables={"taskHint": "h", "taskId": "abc123"})
 
-    assert calls == ["route-check", "gather", "reason-loop"], (
+    assert calls == ["route-check", "gather", "recall", "scaffold", "reason-loop"], (
         f"write-test-file/run-pinned-suite/commit-tests-only ran after a "
         f"refused verdict: {calls}")
     refused_row = next(r for r in rows if r.get("route") == "reason-loop")
@@ -289,6 +304,18 @@ def test_a_passing_draft_still_flows_through_the_whole_chain():
         calls.append("gather")
         return {"brain_context": "repo material"}
 
+    # THE RECALL STEP (task 08e666ff): runs between gather and the loop,
+    # also distinct from the build trio.
+    def _recall(project, body):
+        calls.append("recall")
+        return {"refusal_block": ""}
+
+    # THE SCAFFOLD STEP (task 08e666ff's follow-up): also runs between
+    # recall and the loop, also distinct from the build trio.
+    def _scaffold(project, body):
+        calls.append("scaffold")
+        return {"scaffold_block": ""}
+
     def _draft(project, body):
         calls.append("reason-loop")
         return _Passing()
@@ -302,11 +329,13 @@ def test_a_passing_draft_still_flows_through_the_whole_chain():
     handlers["reason-loop"] = _draft
     handlers["oracle-route-check"] = _route_check
     handlers["context-enrich"] = _gather
+    handlers["refusal-recall"] = _recall
+    handlers["test-scaffold"] = _scaffold
 
     rows = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers,
         variables={"taskHint": "h", "taskId": "abc123"})
 
-    assert calls == ["route-check", "gather", "reason-loop",
-                     "build", "build", "build"], (
+    assert calls == ["route-check", "gather", "recall", "scaffold",
+                     "reason-loop", "build", "build", "build"], (
         f"a passing draft must still run the full chain: {calls}")
