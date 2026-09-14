@@ -711,6 +711,93 @@ def _run_sweep_once(*args, **kwargs):
 register_block(ADJUDICATOR_DRAIN_BLOCK, _run_sweep_once)
 
 
+def _should_force_this_pass(first_pass: bool, deployed_since: bool) -> bool:
+    """THE UNCONDITIONAL-FIRST-SWEEP RULE, named (owner 2026-09-13, task
+    a65c66e5, second/third rounds): the first pass after warmup, or any
+    pass since a `deployed` signal, bypasses the project-level scan skip
+    -- because a fresh process boots with no knowledge of a `deployed`
+    signal that fired before it existed (main.py's own boot signal fires
+    at API startup, before this loop's thread does). Extracted from a
+    bare `force = first_pass or deployed_since` inline in `_loop` so the
+    rule is a registered Block (adjudicator.unconditional_first_sweep)
+    instead of invisible Python -- the call site in `_loop` is otherwise
+    UNCHANGED (this is a pure boolean, called once per pass; routing it
+    through run_block's per-call recording would add a sqlite write to
+    every single sweep tick for no operator-visible benefit)."""
+    return first_pass or deployed_since
+
+
+ADJUDICATOR_UNCONDITIONAL_FIRST_SWEEP_BLOCK = Block(
+    id="adjudicator.unconditional_first_sweep",
+    title="Force a full pass after warmup or a deploy signal",
+    kind="deterministic",
+    owner_seat="gate_adjudicator",
+    scope="project",
+    on_failure="stop",
+    cost_hint="zero",
+    inputs=["first_pass", "deployed_since"],
+    outputs=["force"],
+    description=(
+        "The first pass after warmup, or any pass since a deployed "
+        "signal, bypasses the project-level scan skip -- a fresh "
+        "process has no memory of a signal that fired before it "
+        "existed."),
+)
+register_block(ADJUDICATOR_UNCONDITIONAL_FIRST_SWEEP_BLOCK,
+              _should_force_this_pass)
+
+ADJUDICATOR_FAIR_CURSOR_BLOCK = Block(
+    id="adjudicator.fair_cursor",
+    title="Rotate the pending-gate scan to start after the last cursor",
+    kind="deterministic",
+    owner_seat="gate_adjudicator",
+    scope="project",
+    on_failure="stop",
+    cost_hint="zero",
+    inputs=["tasks", "cursor_tid"],
+    outputs=["tasks"],
+    description=(
+        "Rotates a project's pending-gate task list to resume just "
+        "after the last task this seat looked at, wrapping to the "
+        "front once a full lap completes -- so a budget-limited sweep "
+        "spends its time across the whole backlog instead of always "
+        "re-examining the same front-of-list tasks first. NOT yet "
+        "routed through run_block: it runs inside sweep_once's hot "
+        "per-project loop, and this landing does not touch that loop's "
+        "call sites -- registered here for catalog visibility, same "
+        "posture as the other two in-loop blocks beside it."),
+)
+register_block(ADJUDICATOR_FAIR_CURSOR_BLOCK, _rotate_from_cursor)
+
+
+def _run_maybe_rewind(*args, **kwargs):
+    """Resolves green_rewind.maybe_rewind by MODULE-GLOBAL NAME at call
+    time (same reason as _run_sweep_once above)."""
+    from prism_service.services import green_rewind
+    return green_rewind.maybe_rewind(*args, **kwargs)
+
+
+ADJUDICATOR_INCONCLUSIVE_REWIND_BACKOFF_BLOCK = Block(
+    id="adjudicator.inconclusive_rewind_backoff",
+    title="Rewind on a fresh failed receipt, or fall through to backoff",
+    kind="deterministic",
+    owner_seat="gate_adjudicator",
+    scope="task",
+    on_failure="stop",
+    cost_hint="low",
+    inputs=["ctx", "task", "project"],
+    outputs=["rewound", "inconclusive"],
+    description=(
+        "A fresh FAILED green-gate evidence receipt rewinds the task; "
+        "an INCONCLUSIVE result (no fresh receipt to judge either way) "
+        "falls through to the seat's normal per-task backoff instead of "
+        "being read as a terminal outcome. green_rewind.maybe_rewind's "
+        "own body, unchanged. NOT yet routed through run_block for the "
+        "same in-hot-loop reason as adjudicator.fair_cursor beside it."),
+)
+register_block(ADJUDICATOR_INCONCLUSIVE_REWIND_BACKOFF_BLOCK, _run_maybe_rewind)
+
+
 def _loop(interval_s: int) -> None:
     from prism_service.services import wakeups
 
@@ -744,7 +831,7 @@ def _loop(interval_s: int) -> None:
         # skip and the per-task backoff, so that park is re-evaluated too.
         deployed_since = bool(
             wakeups.changed_since(["deployed"], None, baseline))
-        force = first_pass or deployed_since
+        force = _should_force_this_pass(first_pass, deployed_since)
         # Bypass the per-task backoff too on the VERY FIRST pass (nothing
         # has a backoff entry yet) and on a fresh `deployed` signal (a
         # landing may make an already-backed-off task decidable again) --

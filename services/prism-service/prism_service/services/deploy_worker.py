@@ -448,6 +448,43 @@ def deploy_after_land(task_svc, task_id: str, project: str = "default") -> None:
         pass
 
 
+# Multiplier block (owner 2026-09-13/14, task b490fabc): the land-triggered
+# deploy hook above, declared as a registered, typed, run-counted unit --
+# see prism_service/blocks/__init__.py. Body unchanged (deploy_after_land);
+# registering it only names and records it. ship_worker.py's call site is
+# routed through run_block for real (single, already exception-swallowing
+# call site -- low risk, matching the posture landing 1's clean call sites
+# used).
+from prism_service.blocks import Block, register_block  # noqa: E402
+
+
+def _run_deploy_after_land(*args, **kwargs):
+    """Resolves deploy_after_land by MODULE-GLOBAL NAME at call time (same
+    reason as every other wrapper in this codebase's block registrations
+    -- a test that monkeypatches this module's own name must still be
+    honoured)."""
+    return deploy_after_land(*args, **kwargs)
+
+
+DEPLOY_ON_SIGNAL_BLOCK = Block(
+    id="deploy.on_signal",
+    title="Reach the running dev instance after a land",
+    kind="deterministic",
+    owner_seat="deploy_worker",
+    scope="task",
+    on_failure="continue",
+    cost_hint="low",
+    inputs=["task_svc", "task_id", "project"],
+    outputs=[],
+    description=(
+        "On a successful land, pull/build/restart/poll the running dev "
+        "instance so a shipped build reaches it without a hand -- "
+        "best-effort, never fails or re-runs an already-successful "
+        "ship, and a no-op unless this environment opted in."),
+)
+register_block(DEPLOY_ON_SIGNAL_BLOCK, _run_deploy_after_land)
+
+
 # FETCH COST (owner tick-cost brief, 2026-09-13). Measured live: every
 # _tick ran a real `git fetch origin` + `git rev-list` even when nothing
 # had landed anywhere -- a network round trip and a process spawn, paid on

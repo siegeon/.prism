@@ -162,10 +162,16 @@ def test_catalog_exposes_conductor_and_build_test_validation(tmp_path, monkeypat
     # between the root workflows and the conductor's behaviours. They are
     # derived from the conductor's OWN steps grouped by persona, not a
     # new persisted entity, so the "no new entities" spirit above holds.
+    # SUPERSEDED AGAIN 2026-09-13/14 (owner: "how many tasks, and how few
+    # workflow nodes"): worker_seat_blocks joins as a ninth root workflow,
+    # surfacing the registered multiplier-block registry
+    # (prism_service/blocks/) as its own catalog entry -- same "no new
+    # entities" spirit, it reads an existing in-process registry, not a
+    # new persisted one.
     assert [workflow["id"] for workflow in body["workflows"]] == [
         "conductor", "validation", "triage", "align_language", "quickfix",
-        "promote_to_law", "knowledge_health", "steward", "verifier",
-        "builder"]
+        "promote_to_law", "knowledge_health", "worker_seat_blocks",
+        "steward", "verifier", "builder"]
     validation = body["workflows"][1]
     assert validation["name"] == "Build and test"
     assert validation["parent_id"] == "conductor", (
