@@ -389,6 +389,12 @@ class BrainService:
         chunk count match what is already indexed and the document rewrite
         was skipped. Caller-supplied ``entities`` and graph staging run on
         BOTH paths; only the document rewrite is skipped.
+
+        Returns "" (never a real doc_id) when ``content`` is blank/
+        whitespace-only -- task 4b15f4bc: a doc with no content can never
+        answer a query and only consumes a retrieval slot, so it is never
+        written. Any stale rows for this path are still purged, so a file
+        that went blank doesn't leave its old content behind.
         """
         from datetime import datetime, timezone
         import hashlib as _hashlib
@@ -398,6 +404,26 @@ class BrainService:
             return f"{path}::main"
 
         brain_conn = self._brain._brain
+
+        if not content or not content.strip():
+            stale = brain_conn.execute(
+                "SELECT id FROM docs WHERE source_file = ? OR id = ? OR id = ?",
+                (path, path, f"{path}::main"),
+            ).fetchall()
+            stale_ids = [r[0] for r in stale]
+            if stale_ids:
+                ph = ",".join("?" * len(stale_ids))
+                if getattr(self._brain, "vector_enabled", False):
+                    try:
+                        brain_conn.execute(
+                            f"DELETE FROM docs_vec WHERE doc_id IN ({ph})",
+                            stale_ids,
+                        )
+                    except Exception:
+                        pass
+                brain_conn.execute(f"DELETE FROM docs WHERE id IN ({ph})", stale_ids)
+                brain_conn.commit()
+            return ""
         now = datetime.now(timezone.utc).isoformat()
         vector_on = getattr(self._brain, "vector_enabled", False)
 

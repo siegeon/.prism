@@ -2336,6 +2336,11 @@ class Brain:
         for filepath in files:
             try:
                 content = Path(filepath).read_text(encoding="utf-8", errors="replace")
+                # task 4b15f4bc: a blank (or whitespace-only) file can
+                # never answer a query -- skip it rather than write an
+                # empty doc that only consumes a retrieval slot.
+                if not content.strip():
+                    continue
                 domain = Path(filepath).suffix.lstrip(".")
                 chunks = self._chunk_source_file(filepath, content)
                 for chunk in chunks:
