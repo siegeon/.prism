@@ -2528,6 +2528,34 @@ def _pinned_ids_for(project: str, task_id: str) -> list[str]:
 # caller below; this function never scores anything itself.
 # ----------------------------------------------------------------------
 
+def _bare_test_name(raw) -> str:
+    """`path/to/test_x.py::test_name` -> `test_name` (task bb3d1f6a: the
+    model copied the pinned pytest id verbatim into `name`). A bare name
+    passes through unchanged; anything else is "" so it counts as absent."""
+    name = str(raw or "").strip()
+    if "::" in name:
+        name = name.rsplit("::", 1)[-1].strip()
+    if name.endswith("()"):
+        name = name[:-2]
+    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) else ""
+
+
+def _strip_restated_def(name: str, body: str) -> str:
+    """Drop a leading `def <name>(...):` line the model restated despite the
+    prompt (task bb3d1f6a) and dedent what follows, so the assembler does
+    not nest a def inside the def it writes. A body that does not start
+    with that def line is returned unchanged."""
+    lines = body.strip("\n").splitlines()
+    idx = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if idx is None:
+        return body
+    if not re.match(rf"\s*(async\s+)?def\s+{re.escape(name)}\s*\(", lines[idx]):
+        return body
+    rest = lines[idx + 1:]
+    import textwrap
+    return textwrap.dedent("\n".join(rest))
+
+
 def _assemble_test_draft(project: str, task_id: str, fields: dict) -> dict:
     """{"ok": True, "test_code":..., "test_file_path":...} once assembled,
     {"ok": False, "reason": ...} naming exactly what is wrong, or
@@ -2541,11 +2569,25 @@ def _assemble_test_draft(project: str, task_id: str, fields: dict) -> dict:
     if raw_bodies is None:
         return {"ok": True}
 
+    # THE LIVE SHAPE (task bb3d1f6a, 2026-09-14, three passes in a row): the
+    # schema asked haiku for a JSON-ENCODED STRING, and every attempt came
+    # back with an unescaped docstring quote inside it (json.loads: Expecting
+    # ',' delimiter at char 306), a `name` carrying the file path and `::`,
+    # and a body that restated the fixed `def` line. The node schema is now
+    # a real array of {name, body} objects (write-failing-tests-loop.json
+    # v14) so the constrained decoder owns the shape; the string form stays
+    # accepted, and a refusal SAYS what arrived so refusal-recall can hand
+    # the model its own mistake instead of a bare "not a list".
     if isinstance(raw_bodies, str):
         try:
             parsed = json.loads(raw_bodies)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            parsed = None
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            head = raw_bodies.strip().replace("\n", " ")[:90]
+            return {"ok": False,
+                    "reason": ("test_drafted: test_bodies is a string that "
+                              f"is not valid JSON ({exc}); it starts with: "
+                              f"{head!r}. Return a JSON list of "
+                              "{name, body} objects, not an encoded string.")}
     else:
         parsed = raw_bodies
     # BE LIBERAL IN WHAT A SMALL MODEL MAY EMIT (live defect, 2026-09-14):
@@ -2574,8 +2616,10 @@ def _assemble_test_draft(project: str, task_id: str, fields: dict) -> dict:
     for entry in parsed:
         if not isinstance(entry, dict):
             continue
-        name = str(entry.get("name") or "").strip()
+        name = _bare_test_name(entry.get("name"))
         body_text = entry.get("body")
+        if name and isinstance(body_text, str):
+            body_text = _strip_restated_def(name, body_text)
         if name and isinstance(body_text, str) and body_text.strip():
             provided[name] = body_text
 
@@ -3683,11 +3727,12 @@ def _compose_red_prompt(task_hint: str = "", targets_block: str = "",
     parts.append("The file path and every `def` line below are already "
                 "fixed -- do not restate them. Write ONLY the body (the "
                 "statements that go inside each function) for every "
-                "pinned test named below. Return test_bodies as a JSON-"
-                "encoded string: [{\"name\": \"<pinned test name>\", "
-                "\"body\": \"<the statements>\"}, ...], one entry per "
-                "pinned name, plus why it fails -- JSON only, per the "
-                "schema.")
+                "pinned test named below. Return test_bodies as a JSON "
+                "list of objects: [{\"name\": \"<bare function name, no "
+                "path, no ::>\", \"body\": \"<the statements only, no def "
+                "line, no docstring quotes you cannot close>\"}, ...], one "
+                "entry per pinned name, plus why it fails -- per the "
+                "schema. Do not JSON-encode the list inside a string.")
     if targets_block:
         parts.append(targets_block)
     if refusal_block:
