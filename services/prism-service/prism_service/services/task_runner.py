@@ -459,6 +459,12 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_plan_refusal_recall(
             _wf.PlanRefusalRecallRequest(**body), project=project)
 
+    # THE BASE COLOUR (round 2, tasks 6bc3e6c2/83dcd479): the pinned suite
+    # measured at base, framed for a tool-less planner as ${baseColourBlock}.
+    def _plan_base_colour(project: str, body: dict):
+        return _wf.workflow_step_plan_base_colour(
+            _wf.PlanBaseColourRequest(**body), project=project)
+
     # THE PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14): three
     # deterministic, typed nodes that replace write-failing-tests-loop's
     # one giant static prompt -- see the module-level comment above
@@ -484,6 +490,7 @@ def _step_handlers() -> dict:
             "context-enrich": _context_enrich,
             "refusal-recall": _refusal_recall,
             "plan-refusal-recall": _plan_refusal_recall,
+            "plan-base-colour": _plan_base_colour,
             "test-scaffold": _test_scaffold,
             "red-targets-from-acs": _red_targets_from_acs,
             "red-context-pack": _red_context_pack,
@@ -938,6 +945,9 @@ def _build_step_variables(task, task_id: str, project: str) -> dict:
         # the FALLBACK prompt path (no chain) never hands the model the
         # literal "${refusalBlock}" and still tells it what was refused.
         "refusalBlock": _plan_refusal_block(task),
+        # Exported by verify-plan-loop's `colour` step (plan-base-colour);
+        # empty here so the no-chain fallback never ships the placeholder.
+        "baseColourBlock": "",
     }
 
 

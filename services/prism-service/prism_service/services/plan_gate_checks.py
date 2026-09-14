@@ -694,15 +694,20 @@ def already_shipped(task, project: str = "default", *,
         if not sha:
             return ""
         root = repo_root_for(task, project)
-        base = base_ref_for(task, root)
         do_measure = measurement_enabled() if measure is None else bool(measure)
-        if not (do_measure and root is not None and base):
+        if not (do_measure and root is not None):
             return ""
+        # MEASURE ON THE RELEASED TREE, NOT THE PLAN BASE (task 83dcd479,
+        # 2026-09-14): a hand-shipped ticket's workspace baseline predates
+        # its own ship, so its pinned suite is RED there -- which is the
+        # evidence the work exists, not evidence it is missing. a65c66e5
+        # only passed the base measure because its baseline happened to
+        # postdate the landing. origin/main is where "shipped" is true.
         run = runner or _run_at_rev
-        if run(root, base, targets) != 0:
+        if run(root, "origin/main", targets) != 0:
             return ""
         return (f"already shipped: {sha[:8]} on origin/main {how} and the "
-                f"pinned suite passes at {base[:8]} "
+                f"pinned suite passes on origin/main "
                 f"({', '.join(targets)}). Nothing is left to plan.")
     except Exception:
         return ""

@@ -52,7 +52,7 @@ def test_a_trailer_on_main_and_a_green_pinned_suite_is_a_finding(monkeypatch):
     runner = _wire(monkeypatch)
     finding = pgc.already_shipped(_task(), "prism", runner=runner)
     assert finding.startswith("already shipped: f547a892 on origin/main")
-    assert "01234567" in finding and _PINNED in finding
+    assert "passes on origin/main" in finding and _PINNED in finding
 
 
 def test_no_trailer_or_a_red_suite_or_no_pins_is_no_finding(monkeypatch):

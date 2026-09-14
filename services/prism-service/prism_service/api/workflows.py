@@ -3068,6 +3068,83 @@ def workflow_step_plan_refusal_recall(
 
 
 # ----------------------------------------------------------------------
+# The planner is told the pinned suite's COLOUR at base (round 2, tasks
+# 6bc3e6c2 / 83dcd479, 2026-09-14).
+# ----------------------------------------------------------------------
+# THE LOOP THIS CLOSES. plan_gate's already_green_ac tooth refuses a plan
+# in which no AC is shown RED at the base commit, and its refusal says
+# "measure it there". The planner is a tool-less narrow model: it cannot
+# run anything, so every rewind re-drafted guards, spent the budget and
+# parked for a person. This step measures ONCE, with the tooth's own
+# runner, and hands the planner the fact plus the exact declaration the
+# tooth accepts (`RED at base: <pytest id>`), or the honest alternative
+# when the suite is already green: the work is done, or a NEW red test.
+class PlanBaseColourRequest(BaseModel):
+    task_id: str = ""
+
+
+class PlanBaseColourResponse(BaseModel):
+    rc: Optional[int] = None
+    base: str = ""
+    targets: list[str] = Field(default_factory=list)
+    colour: str = ""            # "red" | "green" | "unmeasured"
+    base_colour_block: str = ""
+
+
+def plan_base_colour_block(rc: Optional[int], base: str, targets: list[str]) -> str:
+    """The framed ${baseColourBlock}, or "" when nothing is pinned."""
+    if not targets:
+        return ""
+    ids = ", ".join(targets)
+    b = (base or "")[:8] or "base"
+    if rc == 1:
+        return (f"MEASURED at base {b}: the pinned suite FAILS (rc=1): {ids}. "
+                "Write the acceptance criterion this suite proves with the "
+                f"words `RED at base: {targets[0]}` on its line, and make "
+                "its `- oracle:` name that pytest id. Every other AC is a "
+                "regression guard: say `stays green` on it.")
+    if rc == 0:
+        return (f"MEASURED at base {b}: the pinned suite already PASSES (rc=0): "
+                f"{ids}. No AC may claim it as red. Either the task is "
+                "already done (say so plainly in the plan), or name ONE NEW "
+                "test id under tests/ that fails before the fix, with the "
+                "words `RED at base:` on that AC line.")
+    return (f"NOT MEASURED at base {b} (pytest rc={rc}): {ids}. State the "
+            "colour of each AC explicitly: `RED at base: <pytest id>` on the "
+            "one the fix turns green, `stays green` on every guard.")
+
+
+@router.post("/steps/plan-base-colour")
+def workflow_step_plan_base_colour(
+    body: PlanBaseColourRequest, project: str = Query(...),
+) -> PlanBaseColourResponse:
+    """Measure task.verify at the plan's base commit with the gate's own
+    runner and frame the result for the planner. NEVER RAISES: any failure
+    reports colour=unmeasured with an honest block."""
+    targets: list[str] = []
+    base = ""
+    rc: Optional[int] = None
+    try:
+        if body.task_id:
+            ctx = get_project(project)
+            task = ctx.task_svc.get(body.task_id)
+            targets = [str(v).strip() for v in (getattr(task, "verify", None) or [])
+                       if str(v).strip()]
+            if targets:
+                from prism_service.services import plan_gate_checks as _pgc
+                root = _pgc.repo_root_for(task, project)
+                base = _pgc.base_ref_for(task, root) if root is not None else ""
+                if root is not None and base and _pgc.measurement_enabled():
+                    rc = _pgc._run_at_rev(root, base, targets)
+    except Exception:
+        rc = None
+    colour = "red" if rc == 1 else "green" if rc == 0 else "unmeasured"
+    return PlanBaseColourResponse(
+        rc=rc, base=base, targets=targets, colour=colour if targets else "",
+        base_colour_block=plan_base_colour_block(rc, base, targets))
+
+
+# ----------------------------------------------------------------------
 # A codified test scaffold (task 08e666ff / owner standing order: make
 # conductor nodes programmatic wherever the data already answers it).
 # ----------------------------------------------------------------------

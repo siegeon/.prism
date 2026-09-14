@@ -74,3 +74,32 @@ PLAN_REFUSAL_RECALL_BLOCK = Block(
         "blind prompt. Empty when the task carries no plan refusal."),
 )
 register_block(PLAN_REFUSAL_RECALL_BLOCK, _run_plan_refusal_recall)
+
+
+def _run_plan_base_colour(project: str, task_id: str = "") -> dict:
+    from prism_service.api import workflows as _wf
+    resp = _wf.workflow_step_plan_base_colour(
+        _wf.PlanBaseColourRequest(task_id=task_id), project=project)
+    return {"ok": True, "rc": resp.rc, "base": resp.base, "colour": resp.colour,
+            "base_colour_block": resp.base_colour_block}
+
+
+PLAN_BASE_COLOUR_BLOCK = Block(
+    id="plan.base_colour",
+    title="Measure the pinned suite at base for the planner",
+    kind="deterministic",
+    owner_seat="task_runner",
+    scope="task",
+    on_failure="continue",
+    inputs=["task.verify", "workspace.baseline"],
+    outputs=["rc", "base", "colour", "base_colour_block"],
+    description=(
+        "Runs task.verify at the plan's base commit with plan_gate_checks' "
+        "own runner and frames the colour for the tool-less planner as "
+        "${baseColourBlock}: RED gives it the `RED at base: <pytest id>` "
+        "declaration the already_green_ac tooth accepts; GREEN tells it the "
+        "work is done or a NEW red test is required. Closes the loop where "
+        "the tooth said `measure it there` to a model that cannot run "
+        "anything (tasks 6bc3e6c2 and 83dcd479)."),
+)
+register_block(PLAN_BASE_COLOUR_BLOCK, _run_plan_base_colour)

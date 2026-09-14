@@ -53,9 +53,12 @@ def test_the_plan_carries_its_declared_steps_in_file_order():
     routes = [s["route"] for s in plan["steps"]]
     # 7.13.365 (task a65c66e5): a codified plan-refusal-recall step now
     # runs FIRST so the planner is told what plan_gate refused.
-    assert routes == ["plan-refusal-recall", "reason-loop", "text-challenge"], (
-        "verify-plan-loop.json declares plan-refusal-recall, reason-loop, "
-        "THEN text-challenge; the runner must see all three, in that order")
+    # 7.13.374: plan-base-colour measures the pinned suite at base before
+    # the planner writes (round 2, tasks 6bc3e6c2/83dcd479).
+    assert routes == ["plan-refusal-recall", "plan-base-colour",
+                      "reason-loop", "text-challenge"], (
+        "verify-plan-loop.json declares recall, colour, reason-loop, THEN "
+        "text-challenge; the runner must see all four, in that order")
 
 
 def test_text_challenge_is_a_step_not_a_dropped_name():
@@ -98,12 +101,14 @@ def test_every_declared_step_is_dispatched_in_order():
         return _run
 
     handlers = {"plan-refusal-recall": _handler("plan-refusal-recall"),
+                "plan-base-colour": _handler("plan-base-colour"),
                 "reason-loop": _handler("reason-loop"),
                 "text-challenge": _handler("text-challenge")}
     results = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers)
 
-    expected = ["plan-refusal-recall", "reason-loop", "text-challenge"]
+    expected = ["plan-refusal-recall", "plan-base-colour", "reason-loop",
+                "text-challenge"]
     assert seen == expected
     assert [r["route"] for r in results] == expected
 
@@ -113,7 +118,7 @@ def test_an_undeclared_route_is_reported_never_silently_skipped():
     plan = task_runner._node_plan("prism", "verify_plan")
     results = task_runner._dispatch_declared_steps("prism", plan, handlers={})
 
-    assert len(results) == 3
+    assert len(results) == 4
     assert all(r["ok"] is False for r in results)
     assert all("no handler" in r["reason"] for r in results)
 
