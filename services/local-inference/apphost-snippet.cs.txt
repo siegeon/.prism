@@ -59,3 +59,29 @@ var inferenceProxy = builder.AddContainer("inference-proxy", "ghcr.io/berriai/li
 .WithEnvironment("PRISM_LOCAL_INFERENCE_BASE_URL", inferenceProxy.GetEndpoint("http"))
 // Deliberately NOT WaitFor(inferenceProxy): PRISM must still start when the
 // engine is down.
+
+// ---- PROPOSED, not yet added as of this commit (task 23b344d2) ----
+// Second engine dedicated to embeddings. llama.cpp cannot serve chat and
+// embeddings from one process; the existing 'inference' resource above
+// returns 501 on /v1/embeddings today. Model: bge-small-en-v1.5-q8_0.gguf,
+// 384 dimensions, ~37 MB, download command and rationale in launch-embed.sh
+// and README.md. Wire this in alongside 'inference', never in place of it.
+var inferenceEmbed = builder.AddContainer("inference-embed", "ghcr.io/ggml-org/llama.cpp", "server-cuda")
+    .WithImageSHA256("a292d888ae5051503309aa080ecdc08239c7a77ef8a2112e6dcbaf18c249c1d7")
+    .WithBindMount(Path.Combine(inferenceState, "models"), "/models", isReadOnly: true)
+    .WithBindMount(inferenceRoot, "/config", isReadOnly: true)
+    .WithEntrypoint("/bin/sh")
+    .WithArgs("/config/launch-embed.sh")
+    .WithBindMount("/usr/lib/wsl", "/usr/lib/wsl", isReadOnly: true)
+    .WithEnvironment("LD_LIBRARY_PATH", "/usr/lib/wsl/lib:/usr/local/cuda/lib64:/app")
+    // Far lighter than the chat model - no --memory/--cpus override needed;
+    // confirm against the tuned chat resource's own limits before shipping.
+    .WithHttpEndpoint(port: 8088, targetPort: 8080, name: "http")
+    .WithHttpHealthCheck("/health");
+
+// On the 'inferenceProxy' resource above, add:
+// .WithEnvironment("LOCAL_EMBED_ENGINE_URL", inferenceEmbed.GetEndpoint("http"))
+// and add .WaitFor(inferenceEmbed) if embeddings should block proxy startup
+// the same way chat does today - or leave it unwaited, matching the
+// 'prism' resource's deliberate non-blocking pattern above, so the proxy
+// still serves chat when only the embedding engine is down.

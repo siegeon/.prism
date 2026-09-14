@@ -78,6 +78,19 @@ model_list:
           # raise the budget, so the thinking is turned off here.
           enable_thinking: false
 
+  - model_name: prism-embeddings
+    litellm_params:
+      # Chat and embeddings cannot share one llama.cpp process, so this
+      # routes to a second engine (see launch-embed.sh), started with
+      # --embeddings and a dedicated small embedding model
+      # (bge-small-en-v1.5, 384 dimensions). The AppHost injects its
+      # address here the same way it injects LOCAL_ENGINE_URL for chat.
+      # Added for task 23b344d2 (get OpenAI out of Magic); not yet wired
+      # into the AppHost as of this commit.
+      model: openai/prism-embeddings
+      api_base: os.environ/LOCAL_EMBED_ENGINE_URL
+      api_key: not-used
+
 litellm_settings:
   # The harness sends parameters that a local engine does not implement.
   # Dropping them stops a request from failing on a parameter the model does
