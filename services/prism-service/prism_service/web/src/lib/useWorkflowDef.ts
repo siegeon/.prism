@@ -89,6 +89,20 @@ export type WorkflowStepDef = {
    * it has never run (task 1cdf1d70: a run total alone cannot say
    * whether it ended a month ago or a second ago). */
   last_run_at?: number | null;
+  /** Set exactly when this step IS a registered multiplier block
+   * (prism_service/blocks/) -- either its own route matches the block's
+   * slug, or the behaviour declares it by override (task b490fabc's
+   * lineage, owner 2026-09-13: "multiplier steps before the red that are
+   * pydantic" must be visible IN the flow, not only in the separate
+   * worker_seat_blocks group). Null on an ordinary step. */
+  block_id?: string | null;
+  /** "deterministic" | "agentic" | "http" -- the block's own kind, so a
+   * block sub-node can be coloured the same way worker_seat_blocks
+   * colours its own steps. Null exactly when block_id is null. */
+  block_kind?: string | null;
+  /** The block's short human title, shown on its sub-node badge. Null
+   * exactly when block_id is null. */
+  block_title?: string | null;
 };
 
 /** A bot: a role card that drives the conductor's FSM. */
