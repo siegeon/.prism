@@ -57,10 +57,32 @@ def test_the_step_measures_with_the_gates_runner(monkeypatch):
     monkeypatch.setattr(pgc, "base_ref_for", lambda t, r: "deadbeefcafe")
     monkeypatch.setattr(pgc, "measurement_enabled", lambda: True)
     monkeypatch.setattr(pgc, "_run_at_rev", lambda root, rev, targets, **kw: 1)
+    import prism_service.api.tasks as _tasks
+    monkeypatch.setattr(_tasks, "_git", lambda repo, *a: (0, ""))  # file present at base
     resp = wf.workflow_step_plan_base_colour(
         wf.PlanBaseColourRequest(task_id="83dcd479"), project="prism")
     assert resp.colour == "red" and resp.rc == 1 and resp.base == "deadbeefcafe"
     assert "RED at base" in resp.base_colour_block
+
+
+def test_a_pinned_file_absent_at_base_is_red_by_construction(monkeypatch):
+    """6bc3e6c2 live: the pinned test does not exist at base, pytest cannot
+    collect it (rc=4 -> None) and the step used to say only NOT MEASURED."""
+    task = SimpleNamespace(id="6bc3e6c2", verify=_T)
+    ctx = SimpleNamespace(task_svc=SimpleNamespace(get=lambda tid: task))
+    monkeypatch.setattr(wf, "get_project", lambda project: ctx)
+    monkeypatch.setattr(pgc, "repo_root_for", lambda t, p: Path("/tmp"))
+    monkeypatch.setattr(pgc, "base_ref_for", lambda t, r: "23f90490aaaa")
+    import prism_service.api.tasks as _tasks
+    monkeypatch.setattr(_tasks, "_git", lambda repo, *a: (128, ""))  # absent
+    ran = []
+    monkeypatch.setattr(pgc, "_run_at_rev", lambda *a, **kw: ran.append(1))
+    resp = wf.workflow_step_plan_base_colour(
+        wf.PlanBaseColourRequest(task_id="6bc3e6c2"), project="prism")
+    assert resp.colour == "absent" and resp.rc is None
+    assert ran == [], "an absent file is never run"
+    assert resp.base_colour_block.startswith("ABSENT at base 23f90490")
+    assert pgc._RED_RE.search(resp.base_colour_block)
 
 
 def test_the_step_never_raises(monkeypatch):

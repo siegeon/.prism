@@ -3091,12 +3091,24 @@ class PlanBaseColourResponse(BaseModel):
     base_colour_block: str = ""
 
 
-def plan_base_colour_block(rc: Optional[int], base: str, targets: list[str]) -> str:
+def plan_base_colour_block(rc: Optional[int], base: str, targets: list[str],
+                           absent: Optional[list[str]] = None) -> str:
     """The framed ${baseColourBlock}, or "" when nothing is pinned."""
     if not targets:
         return ""
     ids = ", ".join(targets)
     b = (base or "")[:8] or "base"
+    if absent:
+        # THE COMMON SHAPE FOR NEW WORK (task 6bc3e6c2, live): the pinned
+        # test file does not exist at base, so pytest cannot even collect
+        # it (rc=4 -> unmeasurable). That is red by construction: the task
+        # creates the file, and the AC it proves is honestly RED at base.
+        return (f"ABSENT at base {b}: the pinned test file does not exist "
+                f"there ({', '.join(absent)}), so this task creates it. Write "
+                f"the acceptance criterion it proves with the words `RED at "
+                f"base: {targets[0]}` on its line (the file is absent before "
+                "the fix), make its `- oracle:` name that pytest id, and mark "
+                "every other AC `stays green`.")
     if rc == 1:
         return (f"MEASURED at base {b}: the pinned suite FAILS (rc=1): {ids}. "
                 "Write the acceptance criterion this suite proves with the "
@@ -3122,6 +3134,7 @@ def workflow_step_plan_base_colour(
     runner and frame the result for the planner. NEVER RAISES: any failure
     reports colour=unmeasured with an honest block."""
     targets: list[str] = []
+    absent: list[str] = []
     base = ""
     rc: Optional[int] = None
     try:
@@ -3134,14 +3147,24 @@ def workflow_step_plan_base_colour(
                 from prism_service.services import plan_gate_checks as _pgc
                 root = _pgc.repo_root_for(task, project)
                 base = _pgc.base_ref_for(task, root) if root is not None else ""
-                if root is not None and base and _pgc.measurement_enabled():
+                if root is not None and base:
+                    from prism_service.api.tasks import _git
+                    for t in targets:
+                        path = t.split("::", 1)[0]
+                        code, _ = _git(str(root), "cat-file", "-e", f"{base}:{path}")
+                        if code != 0 and path not in absent:
+                            absent.append(path)
+                if root is not None and base and not absent and _pgc.measurement_enabled():
                     rc = _pgc._run_at_rev(root, base, targets)
     except Exception:
         rc = None
-    colour = "red" if rc == 1 else "green" if rc == 0 else "unmeasured"
+    if absent:
+        colour = "absent"
+    else:
+        colour = "red" if rc == 1 else "green" if rc == 0 else "unmeasured"
     return PlanBaseColourResponse(
         rc=rc, base=base, targets=targets, colour=colour if targets else "",
-        base_colour_block=plan_base_colour_block(rc, base, targets))
+        base_colour_block=plan_base_colour_block(rc, base, targets, absent))
 
 
 # ----------------------------------------------------------------------
