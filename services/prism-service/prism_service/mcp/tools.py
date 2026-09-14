@@ -3558,7 +3558,10 @@ async def handle_tool(
     result = await _aio.to_thread(
         _dispatch_tool, name, arguments, project_id=project_id,
     )
-    if name in _NO_AUGMENT_TOOLS or _is_automation_profile(tool_profile):
+    if _is_automation_profile(tool_profile):
+        return result
+    result = _bound_result_size(name, result)
+    if name in _NO_AUGMENT_TOOLS:
         return result
     try:
         return await _aio.to_thread(
@@ -3567,6 +3570,68 @@ async def handle_tool(
     except Exception:
         # Augmentation is strictly advisory — any failure here must not
         # affect the tool result the caller actually needs.
+        return result
+
+
+RESULT_MAX_CHARS_DEFAULT = 60_000
+
+
+def _result_max_chars() -> int:
+    """Upper bound on one interactive MCP result, in characters.
+
+    THE LIVE DEFECT (task bb3d1f6a, 2026-09-14): brain_understand(query=
+    "prism_service", limit=20, depth=1) returned 118,077 characters. The
+    Claude Code engine refuses a tool result over its token ceiling, writes
+    it to a tool-results file under its private HOME, and tells the model to
+    Read it back -- the model mistyped that path, wandered for 13 minutes on
+    the single engine slot, exited 1 with an empty think wrapper, and did
+    it again on the next dispatch (11 of 12). Every other task queued
+    behind it. 60,000 chars is about 15k tokens, under the engine's default
+    25k-token result limit with headroom for the reflection banner.
+    PRISM_MCP_RESULT_MAX_CHARS overrides; <= 0 disables the bound."""
+    import os as _os
+    raw = _os.environ.get("PRISM_MCP_RESULT_MAX_CHARS", "").strip()
+    if not raw:
+        return RESULT_MAX_CHARS_DEFAULT
+    try:
+        return int(raw)
+    except ValueError:
+        return RESULT_MAX_CHARS_DEFAULT
+
+
+def _bound_result_size(name: str, result: list[TextContent]) -> list[TextContent]:
+    """Keep an interactive MCP result inside what the engine carries inline.
+
+    An oversized result is replaced by ONE JSON envelope that stays
+    json.loads()-able and still hands the model the head of what it asked
+    for, plus the exact lever to pull (lower limit/depth, narrower query),
+    instead of a file path it cannot follow. Automation callers never pass
+    through here (handle_tool returns them the raw result). Never raises."""
+    try:
+        cap = _result_max_chars()
+        if cap <= 0 or not result:
+            return result
+        total = sum(len(getattr(part, "text", "") or "") for part in result)
+        if total <= cap:
+            return result
+        first_text = getattr(result[0], "text", "") or ""
+        head_budget = max(1_000, cap - 600)
+        hint = ("Result too large to carry inline; the engine would have "
+                "spilled it to a file. Narrow the call: lower `limit`/"
+                "`depth`, or ask about one entity instead of a package. "
+                "The head of the result follows.")
+        # JSON escaping grows the head (every quote becomes two chars), so
+        # the ENVELOPE is measured, not the head, and shrunk until it fits.
+        while True:
+            envelope = {"truncated": True, "tool": name, "chars": total,
+                        "limit": cap, "hint": hint,
+                        "head": first_text[:head_budget]}
+            dumped = json.dumps(envelope)
+            if len(dumped) <= cap or head_budget <= 500:
+                break
+            head_budget = int(head_budget * 0.9)
+        return [TextContent(type="text", text=dumped)]
+    except Exception:
         return result
 
 
