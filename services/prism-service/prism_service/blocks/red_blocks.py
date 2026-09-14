@@ -38,6 +38,18 @@ def _run_red_targets_from_acs(project: str, task_id: str = "",
         project=project)
 
 
+def _run_red_refusal_recall(project: str, task_id: str = ""):
+    from prism_service.api import workflows as _wf
+    return _wf.workflow_step_refusal_recall(
+        _wf.RefusalRecallRequest(task_id=task_id), project=project)
+
+
+def _run_red_test_scaffold(project: str, task_id: str = ""):
+    from prism_service.api import workflows as _wf
+    return _wf.workflow_step_test_scaffold(
+        _wf.TestScaffoldRequest(task_id=task_id), project=project)
+
+
 def _run_red_context_pack(project: str, task_id: str, verify: str = "",
                           budget_chars: int = 2000):
     from prism_service.api import workflows as _wf
@@ -107,6 +119,46 @@ RED_TARGETS_FROM_ACS_BLOCK = Block(
         "follow instead of re-deriving one from prose."),
 )
 register_block(RED_TARGETS_FROM_ACS_BLOCK, _run_red_targets_from_acs)
+
+RED_REFUSAL_RECALL_BLOCK = Block(
+    id="red.refusal_recall",
+    title="Tell the next draft why the last one was refused",
+    kind="deterministic",
+    owner_seat="workflows",
+    scope="task",
+    on_failure="continue",
+    inputs=["agent_runs.reason-loop"],
+    outputs=["refusal_reason", "refusal_block"],
+    description=(
+        "Zero-model-call recall of the most recent test_drafted refusal "
+        "for this task, and only when the newest reason-loop row is both "
+        "not-ok and carries a test_drafted reason -- so a later pass "
+        "self-clears it with no delete path. Without this the retry "
+        "re-ran an identical static prompt and could return the identical "
+        "bad draft."),
+)
+register_block(RED_REFUSAL_RECALL_BLOCK, _run_red_refusal_recall)
+
+RED_TEST_SCAFFOLD_BLOCK = Block(
+    id="red.test_scaffold",
+    title="Compute the pinned names, imports and real signatures",
+    kind="deterministic",
+    owner_seat="workflows",
+    scope="task",
+    on_failure="continue",
+    inputs=["task.verify", "brain.find_symbol", "worktree source"],
+    outputs=["pinned_file", "required_test_names", "resolved_imports",
+             "signatures", "scaffold_block"],
+    description=(
+        "Zero-model-call scaffold: the pinned file path and exact def "
+        "lines from task.verify, plus verified imports and REAL "
+        "signatures parsed with ast. Asks the code graph first and falls "
+        "back to reading the file from disk, because the index cannot be "
+        "trusted warm -- it held 8 of 249 service files when this was "
+        "built. Never emits an import it has not resolved, and admits "
+        "what it cannot confirm rather than inventing a signature."),
+)
+register_block(RED_TEST_SCAFFOLD_BLOCK, _run_red_test_scaffold)
 
 RED_CONTEXT_PACK_BLOCK = Block(
     id="red.context_pack",
