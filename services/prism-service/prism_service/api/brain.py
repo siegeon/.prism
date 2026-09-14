@@ -88,13 +88,29 @@ def search(
 
 @router.post("/reindex")
 def reindex(project: str = Query("default")) -> dict:
-    count = _svc(project).incremental_reindex()
+    """Full re-walk of the project's real source tree.
+
+    task 4b15f4bc: this used to call Brain.incremental_reindex(), which
+    only ever indexes files `git diff HEAD`/`git ls-files --others`
+    reports as changed or untracked since this project's Brain last saw
+    them -- correct and deliberately tested for the recurring drift
+    sweep (test_brain_incremental_reindex_scopes_to_repo_path.py), but
+    it means a file that predates this project's Brain and has never
+    been dirty since (measured live: services/arc_governance.py,
+    committed months before this project's brain.db existed) is
+    invisible no matter how many times this endpoint is called. Only
+    ss.ingest_source_to_brain's full walk -- previously run just once,
+    at project-configure time via bootstrap_after_clone -- actually
+    covers every real file the service ships, so this is the mechanism
+    an explicit "reindex" action should drive.
+    """
+    result = ss.ingest_source_to_brain(project)
     try:
         from prism_service.services import wakeups
         wakeups.signal("workspace_written", project)
     except Exception:
         pass
-    return {"reindexed": count}
+    return {"reindexed": result.get("ingested", 0), **result}
 
 
 class UnderstandBody(BaseModel):

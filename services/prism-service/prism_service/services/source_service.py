@@ -371,6 +371,13 @@ _INGEST_SKIP_DIRS = {
     # data dir (`E:\.prism\.dev-data\projects\<p>\…`) — same problem,
     # it carries `.venvs` and `projects/<p>/source/` from prior runs.
     ".venvs", ".dev-data",
+    # task 4b15f4bc, 2026-09-13 — `.playwright-mcp/page-*.yml` browser-
+    # page dumps got into Brain (83+ docs, some with empty content) via
+    # a direct `brain_index_doc` MCP call an agent made on a scratch
+    # file it had just read — that tool checks is_ingest_excluded() but
+    # this dir was never on the list. It is always scratch output from a
+    # QA/debug session, never source a person wrote.
+    ".playwright-mcp",
 }
 
 
