@@ -248,6 +248,22 @@ def test_a_refused_draft_never_reaches_write_or_commit():
         calls.append("scaffold")
         return {"scaffold_block": ""}
 
+    # THE PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14): three more
+    # read-only, codified lookups between scaffold and the loop -- same
+    # reasoning as gather/recall/scaffold above, never part of the build
+    # trio a refusal must block.
+    def _targets(project, body):
+        calls.append("targets")
+        return {"targets_block": ""}
+
+    def _pack(project, body):
+        calls.append("pack")
+        return {"context_block": ""}
+
+    def _compose(project, body):
+        calls.append("compose")
+        return {"prompt": "drafted"}
+
     def _draft(project, body):
         calls.append("reason-loop")
         return _Refused()
@@ -262,12 +278,16 @@ def test_a_refused_draft_never_reaches_write_or_commit():
     handlers["context-enrich"] = _gather
     handlers["refusal-recall"] = _recall
     handlers["test-scaffold"] = _scaffold
+    handlers["red-targets-from-acs"] = _targets
+    handlers["red-context-pack"] = _pack
+    handlers["red-prompt-compose"] = _compose
 
     rows = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers,
         variables={"taskHint": "h", "taskId": "abc123"})
 
-    assert calls == ["route-check", "gather", "recall", "scaffold", "reason-loop"], (
+    assert calls == ["route-check", "gather", "recall", "scaffold", "targets",
+                     "pack", "compose", "reason-loop"], (
         f"write-test-file/run-pinned-suite/commit-tests-only ran after a "
         f"refused verdict: {calls}")
     refused_row = next(r for r in rows if r.get("route") == "reason-loop")
@@ -316,6 +336,21 @@ def test_a_passing_draft_still_flows_through_the_whole_chain():
         calls.append("scaffold")
         return {"scaffold_block": ""}
 
+    # THE PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14): three more
+    # read-only, codified lookups between scaffold and the loop, also
+    # distinct from the build trio.
+    def _targets(project, body):
+        calls.append("targets")
+        return {"targets_block": ""}
+
+    def _pack(project, body):
+        calls.append("pack")
+        return {"context_block": ""}
+
+    def _compose(project, body):
+        calls.append("compose")
+        return {"prompt": "drafted"}
+
     def _draft(project, body):
         calls.append("reason-loop")
         return _Passing()
@@ -331,11 +366,15 @@ def test_a_passing_draft_still_flows_through_the_whole_chain():
     handlers["context-enrich"] = _gather
     handlers["refusal-recall"] = _recall
     handlers["test-scaffold"] = _scaffold
+    handlers["red-targets-from-acs"] = _targets
+    handlers["red-context-pack"] = _pack
+    handlers["red-prompt-compose"] = _compose
 
     rows = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers,
         variables={"taskHint": "h", "taskId": "abc123"})
 
-    assert calls == ["route-check", "gather", "recall", "scaffold",
-                     "reason-loop", "build", "build", "build"], (
+    assert calls == ["route-check", "gather", "recall", "scaffold", "targets",
+                     "pack", "compose", "reason-loop", "build", "build",
+                     "build"], (
         f"a passing draft must still run the full chain: {calls}")
