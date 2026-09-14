@@ -150,10 +150,15 @@ def test_a_seat_that_could_not_measure_is_not_a_refusal(ctx, monkeypatch):
     assert not any(u.get("workflow_step") for u in ctx.task_svc.updates)
 
 
-def test_a_spent_budget_parks_and_names_itself(ctx, monkeypatch):
-    """AC-3: the budget must bound the retry. Each red rewind re-runs a
-    step agent on a real USD budget, so an unbounded loop is expensive as
-    well as useless."""
+def test_a_spent_budget_escalates_once_then_truly_parks(ctx, monkeypatch):
+    """AC-3, UPDATED (owner 2026-09-13/14, live evidence task a65c66e5: 3
+    identical write_failing_tests rewinds against the same untestable ACs,
+    then parked with no path forward). red_gate's own budget being spent
+    no longer parks immediately -- it escalates ONCE more, past
+    write_failing_tests, to verify_plan, so the acceptance criteria
+    themselves get a chance to be revised. Only a SECOND red_gate budget
+    exhaustion (after that escalation) truly parks for a human, and the
+    escalation itself is bounded to fire at most once per task."""
     _wire_receipt(monkeypatch, osp.ST_FAILED, 0, _PASSED_REASON)
     monkeypatch.setattr(plan_rewind, "rewind_budget", lambda project: 2)
     task = _task()
@@ -162,10 +167,51 @@ def test_a_spent_budget_parks_and_names_itself(ctx, monkeypatch):
         got = plan_rewind.maybe_rewind(ctx, task, "prism")
         assert got["ok"] is True, (attempt, got)
 
+    escalated = plan_rewind.maybe_rewind(ctx, task, "prism")
+    assert escalated["ok"] is True, escalated
+    assert escalated.get("escalated") is True, escalated
+    assert escalated["to_step"] == "verify_plan", escalated
+    upd = ctx.task_svc.updates[-1]
+    assert upd["workflow_step"] == "verify_plan"
+    assert "not testable as written" in upd["gate_reason"].lower(), upd
+    row = ctx.task_svc.rows[-1]
+    assert "red_gate_escalated -> verify_plan" in row.details
+
+    # A SECOND budget exhaustion (the task came back around to red_gate
+    # and refused again even after the escalation) truly parks -- the
+    # escalation does not repeat forever.
     spent = plan_rewind.maybe_rewind(ctx, task, "prism")
     assert spent["ok"] is False and spent["parked"] is True, spent
     reason = ctx.task_svc.updates[-1]["gate_reason"]
     assert "budget" in reason.lower() and "2" in reason, reason
+
+
+def test_the_escalation_marker_is_scoped_apart_from_the_red_budget(
+        ctx, monkeypatch):
+    """The escalation's own bookkeeping ("red_gate_escalated ->") must
+    never be counted by rewind_count("red_gate", ...) -- that marker
+    check uses an f"{from_step} ->" prefix match, and "red_gate_escalated"
+    does not start with "red_gate ->", so this is a source-level pin
+    against a marker string that would silently double-count."""
+    assert not "red_gate_escalated".startswith("red_gate ->")
+
+
+def test_only_the_first_budget_exhaustion_escalates(ctx, monkeypatch):
+    """A task already carrying one red_gate_escalated row (a genuine
+    SECOND time this task's red_gate budget is spent) must park, not
+    escalate again -- otherwise a plan revision that still cannot
+    satisfy the ACs loops forever between verify_plan and red_gate."""
+    _wire_receipt(monkeypatch, osp.ST_FAILED, 0, _PASSED_REASON)
+    monkeypatch.setattr(plan_rewind, "rewind_budget", lambda project: 1)
+    ctx.task_svc.record_history(
+        "t-red", action=plan_rewind.REWIND_ACTION,
+        details="red_gate -> write_failing_tests; attempt=1/1")
+    ctx.task_svc.record_history(
+        "t-red", action=plan_rewind.REWIND_ACTION,
+        details="red_gate_escalated -> verify_plan; red_gate budget 1 spent")
+
+    out = plan_rewind.maybe_rewind(ctx, _task(), "prism")
+    assert out["ok"] is False and out["parked"] is True, out
 
 
 def test_the_red_budget_is_its_own(ctx, monkeypatch):

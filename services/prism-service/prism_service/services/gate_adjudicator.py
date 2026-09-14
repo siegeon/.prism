@@ -798,6 +798,39 @@ ADJUDICATOR_INCONCLUSIVE_REWIND_BACKOFF_BLOCK = Block(
 register_block(ADJUDICATOR_INCONCLUSIVE_REWIND_BACKOFF_BLOCK, _run_maybe_rewind)
 
 
+def _run_plan_rewind_maybe_rewind(*args, **kwargs):
+    """Resolves plan_rewind.maybe_rewind by MODULE-GLOBAL NAME at call
+    time (same reason as every other wrapper here)."""
+    from prism_service.services import plan_rewind
+    return plan_rewind.maybe_rewind(*args, **kwargs)
+
+
+RED_REWIND_ON_EXHAUSTED_BUDGET_BLOCK = Block(
+    id="red.rewind_on_exhausted_budget",
+    title="Rewind red_gate to write_failing_tests, or escalate to verify_plan",
+    kind="deterministic",
+    owner_seat="gate_adjudicator",
+    scope="task",
+    on_failure="stop",
+    cost_hint="zero",
+    inputs=["ctx", "task", "project"],
+    outputs=["rewound", "escalated", "parked"],
+    description=(
+        "A refused plan_gate/story_gate/red_gate rubric rewinds the task "
+        "to its producing agent step. red_gate's OWN rewind budget spent "
+        "(owner 2026-09-13/14, live evidence task a65c66e5: 3 identical "
+        "write_failing_tests rewinds against the same untestable ACs, "
+        "then parked) escalates ONCE more, past write_failing_tests to "
+        "verify_plan, with reason 'ACs are not testable as written' -- "
+        "so the acceptance criteria themselves get revised instead of "
+        "re-drafted unchanged. A SECOND red_gate budget exhaustion after "
+        "that escalation still parks for a human, exactly as before -- "
+        "the escalation is bounded to fire at most once per task."),
+)
+register_block(RED_REWIND_ON_EXHAUSTED_BUDGET_BLOCK,
+              _run_plan_rewind_maybe_rewind)
+
+
 def _loop(interval_s: int) -> None:
     from prism_service.services import wakeups
 

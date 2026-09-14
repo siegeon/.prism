@@ -157,6 +157,64 @@ def test_the_most_recent_refusal_is_recalled(_hermetic_scores_db):
     assert "fix" in resp.refusal_block.lower()
 
 
+def _seed_run_pinned_suite_row(db, task_id: str, *, ok: bool, summary: str,
+                               started_at: float) -> None:
+    from prism_service.services import agent_runs_data
+
+    agent_runs_data.upsert_agent_run(str(db), {
+        "run_id": f"run-{started_at}", "workflow_name": "implement",
+        "task_id": task_id, "agent_id": "conductor", "role": "sm",
+        "step": "run-pinned-suite", "model": "codified", "tokens": 0,
+        "cost_usd": 0.0, "ok": 1 if ok else 0,
+        "started_at": started_at, "ended_at": started_at,
+        "duration_ms": 0, "verdict_summary": summary[:500],
+    })
+
+
+def test_a_run_pinned_suite_refusal_is_also_recalled(_hermetic_scores_db):
+    """A draft can pass its OWN test_drafted rubric and still not be
+    genuinely red -- rc==1 with no FAILED line naming a pinned target is
+    caught one step later, by run-pinned-suite, not reason-loop (task
+    a65c66e5, 2026-09-14). The NEXT attempt must learn from that refusal
+    too, or it repeats the identical false-red draft blind."""
+    from prism_service.api import workflows as wf
+
+    reason = ("pytest exit code 1, but no pinned target id appears in a "
+              "FAILED line -- some other test in this run failed while "
+              "the pinned target(s) ['test_x.py::test_a'] did not: not "
+              "red demonstrated")
+    _seed_run_pinned_suite_row(
+        _hermetic_scores_db, "t-4", ok=False, summary=reason,
+        started_at=1000.0)
+
+    resp = wf.workflow_step_refusal_recall(
+        wf.RefusalRecallRequest(task_id="t-4"), project="prism")
+
+    assert resp.refusal_reason == reason
+    assert reason in resp.refusal_block
+
+
+def test_a_later_passing_run_self_clears_a_run_pinned_suite_refusal(
+        _hermetic_scores_db):
+    from prism_service.api import workflows as wf
+
+    _seed_run_pinned_suite_row(
+        _hermetic_scores_db, "t-5", ok=False,
+        summary="pytest exit code 1, but no pinned target id ... not red "
+                "demonstrated",
+        started_at=1000.0)
+    _seed_run_pinned_suite_row(
+        _hermetic_scores_db, "t-5", ok=True,
+        summary="pytest rc=1 over ['test_x.py::test_a']",
+        started_at=2000.0)
+
+    resp = wf.workflow_step_refusal_recall(
+        wf.RefusalRecallRequest(task_id="t-5"), project="prism")
+
+    assert resp.refusal_reason == "", (
+        "a later passing run must self-clear the earlier refusal")
+
+
 def test_a_later_passing_draft_self_clears_the_refusal(_hermetic_scores_db):
     """No manual clearing anywhere -- a later PASS is what retires it."""
     from prism_service.api import workflows as wf
