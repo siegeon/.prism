@@ -2663,13 +2663,31 @@ def workflow_step_refusal_recall(
             from prism_service.services import task_runner as _task_runner
 
             scores_db = _task_runner._scores_db_for(project)
+            # BOTH reason-loop AND run-pinned-suite rows are write_failing_
+            # tests attempts (task a65c66e5, 2026-09-14): a draft can pass
+            # its OWN test_drafted rubric and still not be genuinely red --
+            # rc==1 with no FAILED line naming a pinned target (see
+            # workflow_step_run_pinned_suite's stronger check) is exactly
+            # that case, caught one step later than reason-loop's own
+            # rubric. Reading the last few rows (not step-filtered, since
+            # get_agent_runs' step filter is single-valued) and taking the
+            # MOST RECENT refusal of either kind is what makes the next
+            # attempt learn from a run-pinned-suite refusal too, not just
+            # a reason-loop one.
             rows = agent_runs_data.get_agent_runs(
-                scores_db, limit=1, task_id=body.task_id, step="reason-loop")
-            if rows:
-                row = rows[0]
+                scores_db, limit=5, task_id=body.task_id)
+            for row in rows:
+                step = row.get("step")
+                if step not in ("reason-loop", "run-pinned-suite"):
+                    continue
+                if row.get("ok") is not False:
+                    break  # the most recent attempt of either kind passed
                 summary = str(row.get("verdict_summary") or "")
-                if row.get("ok") is False and summary.startswith("test_drafted:"):
+                if step == "reason-loop" and summary.startswith("test_drafted:"):
                     reason = summary
+                elif step == "run-pinned-suite" and "not red demonstrated" in summary:
+                    reason = summary
+                break
     except Exception:
         reason = ""
 
@@ -5144,6 +5162,33 @@ def workflow_step_run_pinned_suite(
                     f"pytest exit code {proc.returncode}, expected "
                     f"{body.expected_rc}: {means}")
                 return out
+            if body.expected_rc == 1 and proc.returncode == 1:
+                # STRONGER THAN A BARE rc==1 (live defect, task a65c66e5,
+                # 2026-09-14): pytest returns 1 when ANY collected test in
+                # this run fails, not necessarily one of THIS node's own
+                # pinned targets -- a draft that pads its target's file
+                # with an extra, unrelated failing assertion (or names a
+                # target that is already satisfied by the current tree,
+                # alongside a deliberately-broken dummy elsewhere in the
+                # same file) reads as "red demonstrated" on rc alone while
+                # the actual target is already green. red_gate caught
+                # this three rewinds later on task a65c66e5 ("NOT red:
+                # the spec's tests PASS at the red-step commit"), by
+                # which point the bad commit had already been made and a
+                # rewind spent on discovering it. Require at least one
+                # FAILED summary line naming one of the pinned targets --
+                # a substring check handles both a `file::test` target
+                # (exact node id) and a bare-file target (any test inside
+                # it failing counts, since "FAILED file.py" is already a
+                # substring of "FAILED file.py::test_name").
+                if not any(f"FAILED {p}" in combined for p in paths):
+                    out["stop_chain"] = True
+                    out["reason"] = (
+                        "pytest exit code 1, but no pinned target id "
+                        "appears in a FAILED line -- some other test in "
+                        f"this run failed while the pinned target(s) "
+                        f"{paths} did not: not red demonstrated")
+                    return out
             out["outcome"] = "ok"
             return out
     finally:

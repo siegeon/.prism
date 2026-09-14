@@ -184,6 +184,42 @@ def maybe_rewind(ctx, task, project: str) -> Optional[dict]:
     budget = rewind_budget(project)
     spent = rewind_count(task_svc, task.id, step)
     if spent >= budget:
+        if step == "red_gate":
+            # ESCALATE PAST THE STEP ITSELF (owner 2026-09-13/14, live
+            # evidence task a65c66e5: 3 rewind attempts all re-drafted
+            # the SAME untestable ACs and re-parked identically --
+            # "NOT red: the spec's tests PASS at the red-step commit").
+            # Repeatedly bouncing write_failing_tests against an AC the
+            # plan itself cannot satisfy just spends the budget on the
+            # wrong step -- escalate ONE level further, to verify_plan,
+            # so the acceptance criteria themselves get revised instead
+            # of re-drafted against unchanged. Tracked under its OWN
+            # marker ("red_gate_escalated ->", never "red_gate ->") so
+            # this fires at most ONCE per task -- a SECOND red_gate
+            # budget exhaustion after a genuine plan revision parks for
+            # a human exactly as before, rather than looping forever.
+            escalated_already = rewind_count(
+                task_svc, task.id, "red_gate_escalated")
+            if escalated_already < 1:
+                reason = (
+                    "ACs are not testable as written: red_gate's own "
+                    f"rewind budget ({budget}) is spent and the rubric "
+                    f"still refuses, {refusal}. Escalating past "
+                    "write_failing_tests to verify_plan so the "
+                    "acceptance criteria themselves get revised, rather "
+                    "than re-drafting the same untestable ACs again.")
+                task_svc.update(
+                    task.id, workflow_step="verify_plan", gate_state="none",
+                    gate_reason=reason, status="in_progress")
+                task_svc.record_history(
+                    task.id, action=REWIND_ACTION,
+                    details=(f"red_gate_escalated -> verify_plan; "
+                             f"red_gate budget {budget} spent; "
+                             f"refusal={refusal[:200]}"),
+                    actor=REWIND_ACTOR)
+                return {"ok": True, "task_id": task.id, "from_step": step,
+                        "to_step": "verify_plan", "escalated": True,
+                        "budget": budget, "refusal": refusal}
         reason = (f"Rewind budget {budget} spent at {step}, and the rubric "
                   f"still refuses, {refusal}")
         task_svc.update(task.id, gate_reason=reason)
