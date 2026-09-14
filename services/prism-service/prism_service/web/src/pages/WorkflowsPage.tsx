@@ -489,7 +489,18 @@ function workflowForGraph(workflow: WorkflowCatalogEntry): WorkflowCatalogEntry 
   const graphWorkflow = workflow;
   // Validation is a state machine; persona ownership is already disclosed on
   // each state card and must not become a competing second topology.
-  return graphWorkflow.id === "validation" ? { ...graphWorkflow, bots: [] } : graphWorkflow;
+  const base = graphWorkflow.id === "validation" ? { ...graphWorkflow, bots: [] } : graphWorkflow;
+  // task fix/blocksui: the worker-seat-blocks canvas lays its cards out in
+  // array order (the same default grid every other flat workflow uses), so
+  // sorting the step ids groups same-prefix blocks (adjudicator.*, red.*,
+  // certainty.*, resume.*, deploy.*, workspace.*) next to each other
+  // without a bespoke layout pass -- a block id's prefix IS its owner seat
+  // grouping (e.g. "red.targets_from_acs", "red.context_pack" sort
+  // adjacent). Every other catalog entry keeps the server's own step order.
+  if (base.id === "worker_seat_blocks") {
+    return { ...base, steps: [...base.steps].sort((a, b) => a.id.localeCompare(b.id)) };
+  }
+  return base;
 }
 
 /** Does this node hand its work to a model, or run a fixed command?
@@ -505,7 +516,7 @@ function stepExecutionKind(step: WorkflowStepDef): string {
 
 function connectWorkflowCatalog(catalog: WorkflowCatalogEntry[]): WorkflowCatalogEntry[] {
   const byId = new Map(catalog.map((workflow) => [workflow.id, workflow]));
-  return catalog.map((workflow) => ({
+  const connected = catalog.map((workflow) => ({
     ...workflow,
     steps: workflow.steps.map((step) => {
       // task 25b2a05c: no "validation" fallback -- linked_workflow_id is
@@ -518,6 +529,30 @@ function connectWorkflowCatalog(catalog: WorkflowCatalogEntry[]): WorkflowCatalo
       } : step;
     }),
   }));
+  return reorderWorkerSeatBlocksAfterConductor(connected);
+}
+
+/** Directory row order (task fix/blocksui, owner 2026-09-14: "make it
+ * visible on /workflows ... a 'WORKER SEAT BLOCKS' entry directly under
+ * CONDUCTOR, first screen"). The server's own array order (api/
+ * workflows.py) is a build order, not a display order -- catalog()
+ * appends worker_seat_blocks after triage/align_language/quickfix/
+ * promote_to_law/knowledge_health, five unrelated rows a viewer had to
+ * scroll past to find it. This splices ONE element by id on the already-
+ * connected array, so the directory's own generic
+ * `workflows.filter((workflow) => !workflow.parent_id).map(...)` render
+ * (which walks `workflows` in array order) reorders for free -- every
+ * other row, and every parent/child lookup (all id-based, never
+ * positional), is unaffected. */
+function reorderWorkerSeatBlocksAfterConductor(catalog: WorkflowCatalogEntry[]): WorkflowCatalogEntry[] {
+  const blocksIdx = catalog.findIndex((workflow) => workflow.id === "worker_seat_blocks");
+  const conductorIdx = catalog.findIndex((workflow) => workflow.id === "conductor");
+  if (blocksIdx === -1 || conductorIdx === -1 || blocksIdx === conductorIdx + 1) return catalog;
+  const reordered = catalog.slice();
+  const [blocksRow] = reordered.splice(blocksIdx, 1);
+  const insertAt = reordered.findIndex((workflow) => workflow.id === "conductor") + 1;
+  reordered.splice(insertAt, 0, blocksRow);
+  return reordered;
 }
 
 function historicalWorkflowForRun(workflow: WorkflowCatalogEntry, run: WorkflowRun): WorkflowCatalogEntry {
@@ -665,7 +700,11 @@ export default function WorkflowsPage() {
   // separate Roles section could render the persona cards; that section
   // is retired (owner 2026-09-10, roles are bots in the tree now), and
   // the setter still feeds `workflows` below, so only the value is unused.
-  const [, setData] = useState<WorkflowDef | null>(null);
+  // Read (not just set): the catalog-wide node_count/block_count live only
+  // on this response, and the banner below (task fix/blocksui) needs them
+  // to say "M nodes · K blocks" honestly instead of leaving the reader to
+  // guess what the worker-seat-blocks directory row's own count means.
+  const [data, setData] = useState<WorkflowDef | null>(null);
   const [selectedWorkflowId, setSelectedWorkflowId] = useState(
     () => searchParams.get("workflow") || "conductor",
   );
@@ -1532,20 +1571,30 @@ export default function WorkflowsPage() {
     return `No run in progress · last run ${relativeTime(lastOutcome.endedAtIso)} · ${lastOutcome.passed ? "passed" : "failed"}`;
   }, [tier, lastOutcome, liveEndedAt, workflowRun, conductorRailTasks, dataLoaded, loadingElapsedS, selectedWorkflow]);
 
-  // Live counts prefix (task fix/canvasplay, widened scope): "N tasks · M
-  // at gates · <existing statusLineText>" -- both numbers come straight off
-  // conductorManaged, the SAME SSE-pushed board useConductorState already
-  // maintains for this page (no new fetch, no polling of any kind).
-  // Deliberately computed OUTSIDE statusLineText's own useMemo and applied
-  // only at the render site below -- every existing branch/literal inside
-  // that memo (the exact "Driving ..."/"Waiting at ..."/"No run in
-  // progress" strings the pinned tests in test_workflows_live_run_banner_
-  // ui.py, test_workflows_page_live_tiers.py and test_workflows_canvas_
-  // loading_state_ui.py all assert byte-for-byte) is untouched. Held back
-  // until dataLoaded so the banner never reads "0 tasks · 0 at gates" while
-  // the first poll is still in flight.
+  // Live counts prefix (task fix/canvasplay, widened task fix/blocksui:
+  // owner 2026-09-14, "we spent all weekend on making it work so it's
+  // visible in the workflows view and now you're saying it's not visible").
+  // "N tasks · M nodes · K blocks · Q at gates · <existing statusLineText>".
+  // `N tasks` is conductorManaged.length -- this project's own non-done
+  // tasks currently bound to a conductor-family workflow row (the SSE-pushed
+  // board useConductorState already maintains for this page; NOT the
+  // catalog-wide task_count the /api/workflows response also carries, which
+  // counts every non-done task project-wide regardless of whether the
+  // conductor is engaged with it). `M nodes`/`K blocks` come straight off
+  // that same response's own node_count/block_count (data, set by the
+  // def+occupancy poll above) -- the worker-seat-blocks directory row's own
+  // count badge is `workflow.steps.length`, which equals block_count once
+  // that row is selected, so this prefix is what makes the number legible
+  // BEFORE a click. Deliberately computed OUTSIDE statusLineText's own
+  // useMemo and applied only at the render site below -- every existing
+  // branch/literal inside that memo (the exact "Driving ..."/"Waiting
+  // at ..."/"No run in progress" strings the pinned tests in
+  // test_workflows_live_run_banner_ui.py, test_workflows_page_live_tiers.py
+  // and test_workflows_canvas_loading_state_ui.py all assert byte-for-byte)
+  // is untouched. Held back until dataLoaded so the banner never reads
+  // "0 tasks · 0 nodes · 0 blocks" while the first poll is still in flight.
   const bannerText = dataLoaded
-    ? `${conductorManaged.length} tasks · ${conductorManaged.filter(conductorTaskWaitingAtGate).length} at gates · ${statusLineText}`
+    ? `${conductorManaged.length} tasks · ${data?.node_count ?? 0} nodes · ${data?.block_count ?? 0} blocks · ${conductorManaged.filter(conductorTaskWaitingAtGate).length} at gates · ${statusLineText}`
     : statusLineText;
 
   const refreshRunHistory = useCallback(() => {
