@@ -394,11 +394,33 @@ def end_dispatch(ticket: Optional[DispatchTicket]) -> None:
     with None (a refused dispatch never opened one). Frees the engine
     slot `try_begin` reserved for this ticket's task_id -- without this,
     `_OPEN_TICKETS` only ever grows and every dispatch after the first
-    `PRISM_DRIVE_CONCURRENCY` ones would refuse forever."""
+    `PRISM_DRIVE_CONCURRENCY` ones would refuse forever.
+
+    THE SIGNAL (task 8ddbba7f follow-up, 2026-09-13). Live incident: task
+    bb3d1f6a was skipped by task_runner's sweep for "engine slot busy",
+    the occupying drive later finished, and bb3d1f6a was never attempted
+    again -- freeing the slot here signalled nobody, and task_runner's
+    own `_wake_event` only fires from task_service.py's real task.changed
+    publish, which a freed slot never causes on its own. This is THE one
+    place every real dispatch, from every seat, actually ends (both the
+    success and `except Exception:` branches in task_runner.run_one_step
+    and resume_actuator.dispatch_once call this same function), so waking
+    here -- the same call task_service.py's own publish already makes --
+    fires on every exit path, including a dispatch that died: a ticket
+    that dies must still announce the slot it frees, or a crash silently
+    replaces one stall with a rarer one. Lazy import to avoid the cycle
+    both task_runner and resume_actuator already avoid (they import this
+    module, not the other way around); best-effort, since a wake is a
+    nudge, never a step this function's own contract depends on."""
     if ticket is not None:
         with _OPEN_LOCK:
             _OPEN_TICKETS.pop(ticket.task_id, None)
         ticket.stop()
+        try:
+            from prism_service.services import task_runner
+            task_runner.wake()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------

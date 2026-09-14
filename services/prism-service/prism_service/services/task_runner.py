@@ -1541,6 +1541,7 @@ def eligible_tasks(project: str, limit: int = 1) -> list[str]:
     THE one eligibility rule -- `eligible_task` is this function with
     limit=1, never a second copy that can drift away from it.
     """
+    global _last_engine_busy_skip
     from prism_service.project_context import get_project
     from prism_service.services.conductor_service import ConductorService
 
@@ -1578,6 +1579,20 @@ def eligible_tasks(project: str, limit: int = 1) -> list[str]:
         # task's occupancy should.
         busy = dispatch_guard.engine_slot_reason(project, exclude_task_id=t.id)
         if busy:
+            # THE BELT-AND-BRACES (task 8ddbba7f follow-up, 2026-09-13):
+            # this candidate WAS eligible, just not startable this
+            # instant -- record that a real busy-skip happened, not that
+            # nothing was eligible, so `_loop` bounds its next wait
+            # instead of blocking indefinitely on the chance
+            # dispatch_guard.end_dispatch's wake() is somehow missed. A
+            # module global, not a return-shape change, mirroring
+            # gate_adjudicator's `_last_eligible_count` -- nothing that
+            # already reads this function's plain task-id list needs to
+            # change. sweep_once() resets it every tick; this function
+            # only ever sets it, never clears it (a candidate served
+            # further down this same loop must not erase an earlier
+            # skip within the SAME tick).
+            _last_engine_busy_skip = True
             _log(f"skipping {t.id[:8]}: {busy}")
             continue
         if not t.workflow_step:
@@ -2572,6 +2587,13 @@ def sweep_once() -> Optional[dict]:
     """
     from prism_service.project_context import get_all_projects
 
+    # Reset FIRST, unconditionally -- a tick that finds nothing (no
+    # projects, every breaker tripped, no in_progress candidates at all)
+    # must never carry a stale True forward from an earlier tick into
+    # `_loop`'s wait-timeout decision (task 8ddbba7f follow-up).
+    global _last_engine_busy_skip
+    _last_engine_busy_skip = False
+
     if _spend_ceiling_crossed():
         return None
     if _system_overloaded():
@@ -2657,6 +2679,26 @@ def sweep_once() -> Optional[dict]:
 # recovery, etc.) -- never the primary trigger anymore.
 _wake_event = threading.Event()
 
+# THE BELT-AND-BRACES (task 8ddbba7f follow-up, 2026-09-13). Set by
+# eligible_tasks() when a candidate is otherwise-eligible but skipped
+# because dispatch_guard.engine_slot_reason says the one engine slot is
+# busy; reset to False at the top of every sweep_once() tick. `_loop`
+# reads this right after `sweep_once()` to bound its wait instead of
+# blocking indefinitely, in case dispatch_guard.end_dispatch's wake()
+# (the real signal) is ever missed -- a module global rather than a
+# return-shape change, mirroring gate_adjudicator's own
+# `_last_eligible_count` pattern for the identical reason: nothing that
+# already calls eligible_tasks()/sweep_once() for their plain return
+# value needs to change.
+_last_engine_busy_skip = False
+
+# Ceiling on the bounded retry above -- short enough that a task deferred
+# for a busy slot is not left waiting long even if the real signal is
+# missed, long enough not to become a second passive polling clock. Never
+# used to LENGTHEN a shorter operator-set PRISM_WORKER_FALLBACK_S; only
+# ever the smaller of the two.
+_ENGINE_BUSY_RETRY_S = 5.0
+
 
 def wake() -> None:
     """Nudge the runner loop to sweep now instead of waiting out its
@@ -2689,6 +2731,27 @@ def _fallback_timeout_s(interval_s: int,
     return interval_s
 
 
+def _wait_timeout_s(interval_s: int, stop_event: Optional[threading.Event],
+                    busy_skip: bool) -> Optional[float]:
+    """The actual `_wake_event.wait()` timeout for one loop iteration --
+    `_fallback_timeout_s`'s own contract (pinned by
+    test_task_runner_idle_no_fallback_tick.py) is left untouched by this
+    function; it is only ever NARROWED here, never lengthened. When
+    `busy_skip` is true (this tick's sweep deferred a real, eligible
+    candidate for a busy engine slot -- see `_last_engine_busy_skip`),
+    the wait is capped at `_ENGINE_BUSY_RETRY_S` so that task is retried
+    soon even if dispatch_guard.end_dispatch's wake() was somehow missed.
+    An explicit, shorter PRISM_WORKER_FALLBACK_S still wins -- this is a
+    ceiling, not a floor. `busy_skip=False` (the common, correct case:
+    nothing eligible, or everything eligible was actually served) returns
+    `_fallback_timeout_s` completely unchanged, preserving the reactive
+    guarantee that a quiet tick blocks indefinitely."""
+    timeout = _fallback_timeout_s(interval_s, stop_event)
+    if busy_skip and (timeout is None or timeout > _ENGINE_BUSY_RETRY_S):
+        return _ENGINE_BUSY_RETRY_S
+    return timeout
+
+
 def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None:
     """`stop_event` is test-only plumbing (never passed by
     `start_task_runner`): without it, a test that spins up this loop in a
@@ -2714,7 +2777,10 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
                 info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
-        if _wake_event.wait(timeout=_fallback_timeout_s(interval_s, stop_event)):
+        # Read fresh, right after sweep_once() set it for THIS tick --
+        # never stale (see _wait_timeout_s / _last_engine_busy_skip).
+        if _wake_event.wait(timeout=_wait_timeout_s(
+                interval_s, stop_event, _last_engine_busy_skip)):
             _wake_event.clear()
 
 

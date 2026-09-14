@@ -4682,6 +4682,26 @@ class RunPinnedSuiteRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
     timeout_s: float = Field(default=600.0, gt=0)
     expected_rc: Optional[int] = None
+    # RE-ASK ONCE (owner 2026-09-13/14, red.materialize onFailure policy,
+    # live evidence task a65c66e5): when `retry_prompt` is non-empty and
+    # the measurement is "not red demonstrated" specifically -- rc==0
+    # (the target already passes), or rc==1 with no FAILED line naming a
+    # pinned target -- this step makes ONE follow-up reason-loop call
+    # with the pytest output appended, writes the new draft over the old
+    # one, and re-measures once before refusing for real. A genuine
+    # collection error (rc not in (0, 1)) never retries -- that shape
+    # means the draft itself is broken (a missing import, an undefined
+    # pinned function), not that the target happens to already pass, and
+    # no amount of "these tests pass, try again" framing fixes it.
+    # Empty retry_prompt (the default) means no retry -- every existing
+    # caller's behaviour is unchanged.
+    retry_prompt: str = ""
+    retry_persona: str = "qa"
+    retry_model: str = "haiku"
+    retry_max_budget_usd: float = Field(default=0.5, gt=0)
+    retry_max_turns: int = Field(default=4, gt=0)
+    retry_json_schema: Optional[dict] = None
+    retry_rubric: str = "test_drafted"
 
 
 class CommitTestsOnlyRequest(BaseModel):
@@ -5089,6 +5109,122 @@ _PYTEST_RC_MEANING = {
 
 
 @router.post("/steps/run-pinned-suite")
+def _run_pytest_once(root, paths: list[str], timeout_s: float):
+    """(proc, "") on a completed run, or (None, reason) on a run that
+    never produced a measurement at all. Factored out so a retry
+    (_retry_not_red_once) can re-measure with the identical command."""
+    import subprocess
+
+    cmd = ["python3", "-m", "pytest", *paths, "-q",
+          "-o", "faulthandler_timeout=120"]
+    try:
+        proc = subprocess.run(cmd, cwd=str(root), capture_output=True,
+                              text=True, timeout=timeout_s)
+        return proc, ""
+    except subprocess.TimeoutExpired:
+        return None, f"suite exceeded {timeout_s}s"
+    except OSError as exc:
+        return None, f"could not run pytest: {exc}"
+
+
+def _not_red_reason(proc, paths: list[str], expected_rc: Optional[int]) -> str:
+    """"" when red is genuinely demonstrated against `expected_rc`, else
+    the refusal reason -- the SAME two checks workflow_step_run_pinned_
+    suite always applied, factored out so a retry can re-apply them to
+    its own re-measurement."""
+    if expected_rc is not None and proc.returncode != expected_rc:
+        means = _PYTEST_RC_MEANING.get(
+            proc.returncode, "an exit code pytest does not document")
+        return (f"pytest exit code {proc.returncode}, expected "
+               f"{expected_rc}: {means}")
+    if expected_rc == 1 and proc.returncode == 1:
+        # STRONGER THAN A BARE rc==1 (live defect, task a65c66e5,
+        # 2026-09-14): pytest returns 1 when ANY collected test in this
+        # run fails, not necessarily one of THIS node's own pinned
+        # targets -- a draft that pads its target's file with an extra,
+        # unrelated failing assertion (or names a target that is already
+        # satisfied by the current tree, alongside a deliberately-broken
+        # dummy elsewhere in the same file) reads as "red demonstrated"
+        # on rc alone while the actual target is already green. red_gate
+        # caught this three rewinds later on task a65c66e5 ("NOT red:
+        # the spec's tests PASS at the red-step commit"), by which point
+        # the bad commit had already been made and a rewind spent on
+        # discovering it. Require at least one FAILED summary line
+        # naming one of the pinned targets -- a substring check handles
+        # both a `file::test` target (exact node id) and a bare-file
+        # target (any test inside it failing counts, since "FAILED
+        # file.py" is already a substring of "FAILED file.py::test_name").
+        combined = (proc.stdout or "") + (proc.stderr or "")
+        if not any(f"FAILED {p}" in combined for p in paths):
+            return (
+                "pytest exit code 1, but no pinned target id appears in "
+                "a FAILED line -- some other test in this run failed "
+                f"while the pinned target(s) {paths} did not: not red "
+                "demonstrated")
+    return ""
+
+
+def _retry_eligible(proc, expected_rc: Optional[int]) -> bool:
+    """rc==0 (the target already passes) or rc==1-with-the-wrong-target
+    are both "not red demonstrated" rather than a broken draft -- worth
+    ONE re-ask. A genuine collection error (rc not in (0, 1): a missing
+    import, an undefined pinned function) never is -- no amount of
+    "these tests pass, try again" framing fixes a draft that cannot even
+    be collected."""
+    return expected_rc == 1 and proc.returncode in (0, 1)
+
+
+def _retry_not_red_once(body: "RunPinnedSuiteRequest", project: str, root,
+                        paths: list[str], prior_tail: str):
+    """ONE follow-up reason-loop call with the pytest output appended,
+    writing the new draft over the old one and re-measuring. Returns
+    (proc, reason) on a completed retry -- reason is "" when it is now
+    genuinely red -- or None on ANY failure along the way (a broken
+    retry degrades to the ORIGINAL refusal, never a worse or stranger
+    one; NEVER RAISES, same posture as refusal-recall/test-scaffold)."""
+    try:
+        retry_text = (
+            body.retry_prompt +
+            "\n\nIMPORTANT: this exact draft's pinned test(s) currently "
+            "PASS against the real tree -- not red. Pytest output from "
+            f"the attempt just made:\n{prior_tail}\n\nRewrite the "
+            "test(s) so each pinned target genuinely FAILS because the "
+            "behaviour the acceptance criteria describe is still "
+            "missing. Produce the exact same pytest ids.")
+        schema = body.retry_json_schema or {
+            "type": "object",
+            "properties": {
+                "test_code": {"type": "string"},
+                "test_file_path": {"type": "string"},
+                "expected_failure_reason": {"type": "string"},
+            },
+            "required": ["test_code", "test_file_path",
+                        "expected_failure_reason"],
+        }
+        resp = workflow_step_reason_loop(ReasonLoopRequest(
+            persona=body.retry_persona, prompt=retry_text,
+            json_schema=schema, rubric=body.retry_rubric,
+            model=body.retry_model, max_budget_usd=body.retry_max_budget_usd,
+            max_turns=body.retry_max_turns, task_id=body.task_id),
+            project=project)
+        fields = (resp.reason or {}).get("fields") or {}
+        test_code = str(fields.get("test_code") or "")
+        test_file_path = str(fields.get("test_file_path") or "")
+        if not test_code or not test_file_path:
+            return None
+        write_res = workflow_step_write_test_file(WriteTestFileRequest(
+            task_id=body.task_id, test_file_path=test_file_path,
+            test_code=test_code), project=project)
+        if write_res.get("outcome") != "ok":
+            return None
+        proc, err = _run_pytest_once(root, paths, body.timeout_s)
+        if proc is None:
+            return None
+        return proc, _not_red_reason(proc, paths, body.expected_rc)
+    except Exception:
+        return None
+
+
 def workflow_step_run_pinned_suite(
     body: RunPinnedSuiteRequest, project: str = Query(...),
 ) -> dict:
@@ -5111,9 +5247,13 @@ def workflow_step_run_pinned_suite(
 
     `expected_rc=None` keeps the old contract exactly: report the integer
     and let the gate decide.
-    """
-    import subprocess
 
+    ONE RE-ASK (owner 2026-09-13/14, red.materialize onFailure policy):
+    when the measurement is "not red demonstrated" (rc==0, or rc==1 with
+    no pinned target in a FAILED line) and `body.retry_prompt` is set,
+    this makes exactly one follow-up reason-loop call with the pytest
+    output appended before refusing for real -- see _retry_not_red_once.
+    """
     out = {"kind": "conductor.run_pinned_suite", "node_id": "run-pinned-suite",
            "task_id": body.task_id, "outcome": "refused", "rc": None,
            "paths": [], "tail": "", "reason": ""}
@@ -5136,59 +5276,35 @@ def workflow_step_run_pinned_suite(
                     "outside the worktree")
                 return out
             out["paths"] = paths
-            cmd = ["python3", "-m", "pytest", *paths, "-q",
-                   "-o", "faulthandler_timeout=120"]
-            try:
-                proc = subprocess.run(cmd, cwd=str(root), capture_output=True,
-                                      text=True, timeout=body.timeout_s)
-            except subprocess.TimeoutExpired:
-                out["reason"] = f"suite exceeded {body.timeout_s}s"
-                return out
-            except OSError as exc:
-                out["reason"] = f"could not run pytest: {exc}"
+            proc, err = _run_pytest_once(root, paths, body.timeout_s)
+            if proc is None:
+                out["reason"] = err
                 return out
             combined = (proc.stdout or "") + (proc.stderr or "")
             out.update(rc=proc.returncode,
                        tail="\n".join(combined.splitlines()[-30:]))
-            if (body.expected_rc is not None
-                    and proc.returncode != body.expected_rc):
+            reason = _not_red_reason(proc, paths, body.expected_rc)
+            if (reason and body.retry_prompt
+                    and _retry_eligible(proc, body.expected_rc)):
+                retried = _retry_not_red_once(
+                    body, project, root, paths, out["tail"])
+                if retried is not None:
+                    proc2, reason2 = retried
+                    combined2 = (proc2.stdout or "") + (proc2.stderr or "")
+                    out.update(rc=proc2.returncode,
+                              tail="\n".join(combined2.splitlines()[-30:]))
+                    out["retried"] = True
+                    if not reason2:
+                        out["outcome"] = "ok"
+                        return out
+                    reason = f"{reason2} (after one re-ask retry)"
+            if reason:
                 # THE MEASUREMENT IS NEVER DISCARDED: rc, tail and paths
-                # stay on the payload, and stop_chain keeps the rest of the
-                # node's chain from anchoring on a bad run.
+                # stay on the payload, and stop_chain keeps the rest of
+                # the node's chain from anchoring on a bad run.
                 out["stop_chain"] = True
-                means = _PYTEST_RC_MEANING.get(
-                    proc.returncode, "an exit code pytest does not document")
-                out["reason"] = (
-                    f"pytest exit code {proc.returncode}, expected "
-                    f"{body.expected_rc}: {means}")
+                out["reason"] = reason
                 return out
-            if body.expected_rc == 1 and proc.returncode == 1:
-                # STRONGER THAN A BARE rc==1 (live defect, task a65c66e5,
-                # 2026-09-14): pytest returns 1 when ANY collected test in
-                # this run fails, not necessarily one of THIS node's own
-                # pinned targets -- a draft that pads its target's file
-                # with an extra, unrelated failing assertion (or names a
-                # target that is already satisfied by the current tree,
-                # alongside a deliberately-broken dummy elsewhere in the
-                # same file) reads as "red demonstrated" on rc alone while
-                # the actual target is already green. red_gate caught
-                # this three rewinds later on task a65c66e5 ("NOT red:
-                # the spec's tests PASS at the red-step commit"), by
-                # which point the bad commit had already been made and a
-                # rewind spent on discovering it. Require at least one
-                # FAILED summary line naming one of the pinned targets --
-                # a substring check handles both a `file::test` target
-                # (exact node id) and a bare-file target (any test inside
-                # it failing counts, since "FAILED file.py" is already a
-                # substring of "FAILED file.py::test_name").
-                if not any(f"FAILED {p}" in combined for p in paths):
-                    out["stop_chain"] = True
-                    out["reason"] = (
-                        "pytest exit code 1, but no pinned target id "
-                        "appears in a FAILED line -- some other test in "
-                        f"this run failed while the pinned target(s) "
-                        f"{paths} did not: not red demonstrated")
-                    return out
             out["outcome"] = "ok"
             return out
     finally:

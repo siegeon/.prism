@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Write failing tests (Route-Observe-Reason-Write-Run-Commit)",
-  "version": 11,
+  "version": 12,
   "steps": [
     {
       "id": "route",
@@ -72,7 +72,7 @@
       "id": "run",
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/run-pinned-suite?project=${project}",
-      "body": "{\"task_id\": \"${taskId}\", \"expected_rc\": 1}",
+      "body": "{\"task_id\": \"${taskId}\", \"expected_rc\": 1, \"retry_prompt\": \"${prompt}\"}",
       "timeoutSeconds": 660
     },
     {
