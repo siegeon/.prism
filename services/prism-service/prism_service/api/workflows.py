@@ -2980,6 +2980,325 @@ def workflow_step_test_scaffold(
 
 
 # ----------------------------------------------------------------------
+# PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14, on task b490fabc's
+# lineage: "we should have multiplier steps before the red that are
+# pydantic to help speed up the inference by minimizing the ask of the
+# model... as we have our ontology, patterns and practices"). Three
+# deterministic, typed blocks that replace the write_failing_tests loop's
+# ONE giant free-form prompt with a short, structured one built from data
+# PRISM already holds -- see prism_service/blocks/red_blocks.py for the
+# registered Block declarations that wrap the functions below.
+# ----------------------------------------------------------------------
+
+
+class RedTarget(BaseModel):
+    test_id: str = ""
+    ac_id: str = ""
+    assertion_sentence: str = ""
+    file_path: str = ""
+
+
+class RedTargetsRequest(BaseModel):
+    task_id: str = ""
+    # PREFERRED inputs: the SAME ${verify}/${planDoc} variables
+    # _build_step_variables already threads to every declared step
+    # (newline-joined pinned ids; the raw plan_doc text) -- reading these
+    # means this route needs NO database access of its own. task_id stays
+    # as a fallback for a caller that has not threaded them (a direct
+    # task_id-only call, e.g. from a test or a future flow).
+    verify: str = ""
+    plan_doc: str = ""
+
+
+class RedTargetsResponse(BaseModel):
+    targets: list[RedTarget] = []
+    # THE FULLY-FRAMED BLOCK the compose step interpolates, same pattern as
+    # TestScaffoldResponse.scaffold_block -- one row per pinned test id,
+    # paired with the acceptance criterion it demonstrates, so the model
+    # is handed an exact checklist instead of re-deriving one from prose.
+    targets_block: str = ""
+
+
+@router.post("/steps/red-targets-from-acs")
+def workflow_step_red_targets_from_acs(
+    body: RedTargetsRequest, project: str = Query(...),
+) -> RedTargetsResponse:
+    """CODIFIED, zero model calls. Pairs each PINNED test id
+    (task.verify -- the red_gate anchor, never invented here) with the
+    acceptance criterion it demonstrates (arc_governance._ac_lines over
+    task.plan_doc, the same parser story_gate/plan_gate rubrics already
+    trust). More pinned ids than ACs: the extra ids get no AC citation
+    (still a real target). More ACs than ids: the extra ACs are informational
+    only -- a target needs a pinned id to be something write-test-file can
+    anchor a commit to. NEVER RAISES: any lookup failure degrades to an
+    empty result, same posture as refusal-recall/test-scaffold."""
+    from prism_service.services import arc_governance as gov
+
+    pinned_ids = [ln.strip() for ln in body.verify.splitlines() if ln.strip()]
+    plan_doc = body.plan_doc
+    if (not pinned_ids or not plan_doc) and body.task_id:
+        try:
+            task = get_project(project).task_svc.get(body.task_id)
+        except Exception:
+            task = None
+        if task is not None:
+            if not pinned_ids:
+                pinned_ids = [str(p) for p in
+                             (getattr(task, "verify", None) or []) if p]
+            if not plan_doc:
+                plan_doc = str(getattr(task, "plan_doc", "") or "")
+    acs = gov._ac_lines(plan_doc)
+
+    targets: list[RedTarget] = []
+    for i, test_id in enumerate(pinned_ids):
+        ac_id, line = acs[i] if i < len(acs) else ("", "")
+        file_path = gov._norm_test_path(test_id.split("::")[0])
+        targets.append(RedTarget(
+            test_id=test_id, ac_id=ac_id,
+            assertion_sentence=line[:240], file_path=file_path))
+
+    if targets:
+        rows = [f"- {t.test_id}"
+               + (f"  (demonstrates {t.ac_id}: {t.assertion_sentence})"
+                  if t.ac_id else "")
+               for t in targets]
+        block = ("RED TARGETS -- write exactly these pinned test ids, "
+                 "nothing else:\n" + "\n".join(rows))
+    else:
+        block = ""
+    return RedTargetsResponse(targets=targets, targets_block=block)
+
+
+class RedContextPackRequest(BaseModel):
+    task_id: str = ""
+    # PREFERRED: the ${verify} variable already threaded by
+    # _build_step_variables, so the pinned-file lookup below needs no
+    # extra task fetch beyond the one ContextBuilder itself requires.
+    verify: str = ""
+    budget_chars: int = 2000
+
+
+class RedContextPackResponse(BaseModel):
+    conventions: list[str] = []
+    fixtures: list[str] = []
+    example_test_header: str = ""
+    # THE TRIMMED, FRAMED BLOCK the compose step interpolates -- capped at
+    # budget_chars so a task with a heavy brain/memory hit cannot blow the
+    # prompt back up to the size this whole chain exists to shrink.
+    context_block: str = ""
+
+
+def _red_nearest_test_header(root: Optional[Path], pinned_file: str
+                             ) -> tuple[str, list[str]]:
+    """Up to 2 sibling test files' import lines + fixture names, so the
+    draft can match this repo's real conventions (the SPA-has-no-JS-
+    runner rule, source-reading pins, fixture reuse) instead of
+    inventing its own. Returns ("", []) on any lookup miss -- a missing
+    example must never block the draft."""
+    if root is None or not pinned_file:
+        return "", []
+    target = root / pinned_file
+    test_dir = target.parent
+    if not test_dir.is_dir():
+        return "", []
+    try:
+        candidates = sorted(
+            p for p in test_dir.glob("test_*.py") if p.name != target.name
+        )[:2]
+    except OSError:
+        return "", []
+    fixture_re = re.compile(r"^\s*@pytest\.fixture")
+    def_re = re.compile(r"^def (\w+)\(")
+    headers: list[str] = []
+    fixtures: list[str] = []
+    for p in candidates:
+        try:
+            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except OSError:
+            continue
+        imports = [ln for ln in lines
+                  if ln.startswith(("import ", "from "))][:12]
+        if imports:
+            headers.append(f"# {p.name}\n" + "\n".join(imports))
+        for i, ln in enumerate(lines):
+            if fixture_re.match(ln):
+                for j in range(i + 1, min(i + 3, len(lines))):
+                    m = def_re.match(lines[j].strip())
+                    if m:
+                        fixtures.append(m.group(1))
+                        break
+    return "\n\n".join(headers), fixtures[:8]
+
+
+@router.post("/steps/red-context-pack")
+def workflow_step_red_context_pack(
+    body: RedContextPackRequest, project: str = Query(...),
+) -> RedContextPackResponse:
+    """CODIFIED, zero model calls. Trims the SAME memory/convention
+    material context-enrich already computes (bundle.conventions,
+    dropped today because _exported_variables only ever exports scalar
+    fields -- a list never reaches a later step's ${...}) plus up to 2
+    sibling test files' imports/fixtures, into one block under
+    budget_chars. NEVER RAISES: degrades to an empty pack."""
+    if not body.task_id:
+        return RedContextPackResponse()
+    try:
+        ctx = get_project(project)
+        task = ctx.task_svc.get(body.task_id)
+    except Exception:
+        ctx = None
+        task = None
+    if ctx is None or task is None:
+        return RedContextPackResponse()
+
+    from prism_service.services import arc_governance as gov
+
+    def _convention_label(c) -> str:
+        # A convention entry from ContextBuilder is an ExpertiseEntry
+        # object (or a dict) whose full `description` can run thousands
+        # of chars -- dumping str(c) burns the ENTIRE budget on ONE
+        # memory's repr and defeats the point of this block (owner: the
+        # ask is to MINIMIZE what the model is asked, not relocate the
+        # bulk from the static template into here). A short label
+        # (memory name, or a one-line description snippet) is a real
+        # pointer at a fraction of the cost.
+        name = getattr(c, "name", None) or (
+            c.get("name") if isinstance(c, dict) else None)
+        if name:
+            return str(name)
+        desc = getattr(c, "description", None) or (
+            c.get("description") if isinstance(c, dict) else None) or str(c)
+        return str(desc).splitlines()[0][:100]
+
+    conventions: list[str] = []
+    try:
+        bundle = ContextBuilder(
+            project_id=project, brain_svc=ctx.brain_svc,
+            memory_svc=ctx.memory_svc, task_svc=ctx.task_svc,
+            workflow_svc=ctx.workflow_svc, governance=ctx.governance,
+            request_id=body.task_id,
+        ).build(persona="qa")
+        conventions = [_convention_label(c)
+                       for c in (bundle.get("conventions") or [])][:6]
+    except Exception:
+        conventions = []
+
+    pinned_ids = ([ln.strip() for ln in body.verify.splitlines() if ln.strip()]
+                 if body.verify else
+                 [str(p) for p in (getattr(task, "verify", None) or []) if p])
+    pinned_file = (gov._norm_test_path(pinned_ids[0].split("::")[0])
+                  if pinned_ids else "")
+    example_header, fixtures = "", []
+    if pinned_file:
+        try:
+            root = _scaffold_source_root(project, body.task_id)
+            example_header, fixtures = _red_nearest_test_header(
+                root, pinned_file)
+        except Exception:
+            example_header, fixtures = "", []
+
+    parts: list[str] = []
+    if conventions:
+        parts.append("Conventions:\n" + "\n".join(f"- {c}" for c in conventions))
+    if fixtures:
+        parts.append("Fixtures available nearby: " + ", ".join(fixtures))
+    if example_header:
+        parts.append("Nearest existing test file(s), imports only:\n"
+                     + example_header)
+    block = "\n\n".join(parts)
+    budget = body.budget_chars if body.budget_chars > 0 else 2000
+    if len(block) > budget:
+        block = block[:budget].rstrip() + "\n... (trimmed)"
+    return RedContextPackResponse(
+        conventions=conventions, fixtures=fixtures,
+        example_test_header=example_header, context_block=block)
+
+
+class RedPromptComposeRequest(BaseModel):
+    task_id: str = ""
+    task_hint: str = ""
+    # PREFERRED: the ${oracle} variable _build_step_variables already
+    # threads. task_id stays as a fallback DB fetch for a direct
+    # task_id-only call.
+    oracle: str = ""
+    targets_block: str = ""
+    context_block: str = ""
+    scaffold_block: str = ""
+    refusal_block: str = ""
+
+
+class RedPromptComposeResponse(BaseModel):
+    prompt: str = ""
+
+
+def _compose_red_prompt(task_hint: str = "", targets_block: str = "",
+                        context_block: str = "", scaffold_block: str = "",
+                        refusal_block: str = "", oracle: str = "") -> str:
+    """PURE. The actual prompt-building logic, factored out of the route
+    below so task_runner._declared_agentic_prompt's write_failing_tests
+    FALLBACK (used when the declared multi-step chain itself cannot run)
+    can build the same short prompt directly from a `task` object it
+    already holds, without a project/task_id round trip through
+    get_project. The route is a thin wrapper that resolves oracle/
+    task_hint from the task row and calls this.
+
+    Opening line keeps the exact "Draft a failing test" wording the
+    previous static template used -- test_write_failing_tests_prompt_
+    is_not_nested (tests/unit/test_write_failing_tests_runs_as_declared_
+    nodes.py) pins this substring appearing exactly once as its no-
+    double-substitution check."""
+    parts = [f"Draft a failing test for this task: {task_hint}"] if task_hint else []
+    parts.append("Write the pinned failing test(s) below. Return the test "
+                "code, its file path, and why it fails -- JSON only, per "
+                "the schema.")
+    if targets_block:
+        parts.append(targets_block)
+    if refusal_block:
+        parts.append(refusal_block)
+    if context_block:
+        parts.append(context_block)
+    if scaffold_block:
+        parts.append(scaffold_block)
+    if oracle:
+        parts.append(f"Oracle (the observable outcome that proves this "
+                     f"task is done): {oracle}")
+    parts.append(
+        "Rules: import only modules shown above (or the pinned target's "
+        "own path) -- if the capability doesn't exist yet, assert on the "
+        "parent module's current absence/shape instead of importing it. "
+        "Use `assert needle in haystack, \"reason\"`, never "
+        "`haystack.index(needle)` or a raw dict/attr lookup -- the "
+        "failure must be a genuine assertion failure (pytest rc==1), "
+        "never an ImportError or other uncaught exception (exit code "
+        "2 or 4).")
+    return "\n\n".join(parts)
+
+
+@router.post("/steps/red-prompt-compose")
+def workflow_step_red_prompt_compose(
+    body: RedPromptComposeRequest, project: str = Query(...),
+) -> RedPromptComposeResponse:
+    """CODIFIED, zero model calls. Builds the reason-loop step's prompt
+    from the three typed blocks above plus the task's own oracle --
+    replacing write-failing-tests-loop.json's previous static megaprompt
+    (which restated the whole red-gate rc==1 rule in prose every single
+    draft) with a short, structured one that leans on the pinned targets
+    list, the trimmed context pack, and the SAME json_schema/rubric that
+    already enforces rc==1 downstream instead of re-explaining it."""
+    oracle = body.oracle
+    if not oracle and body.task_id:
+        try:
+            task = get_project(project).task_svc.get(body.task_id)
+        except Exception:
+            task = None
+        oracle = str(getattr(task, "oracle", "") or "") if task else ""
+    return RedPromptComposeResponse(prompt=_compose_red_prompt(
+        task_hint=body.task_hint, targets_block=body.targets_block,
+        context_block=body.context_block, scaffold_block=body.scaffold_block,
+        refusal_block=body.refusal_block, oracle=oracle))
+
+
+# ----------------------------------------------------------------------
 # review_previous_notes, leveled up (task cd33263f)
 # ----------------------------------------------------------------------
 # Owner: "how can we level up more nodes moving faster programmatically,

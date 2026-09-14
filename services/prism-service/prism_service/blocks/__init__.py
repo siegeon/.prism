@@ -36,3 +36,12 @@ __all__ = [
     "register_block",
     "run_block",
 ]
+
+# Registers red.targets_from_acs / red.context_pack / red.prompt_compose /
+# red.materialize (owner 2026-09-13/14, second landing). Imported HERE,
+# after Block/register_block are already bound above, so `import
+# prism_service.blocks` anywhere -- api/workflows.py, task_runner.py, a
+# test -- is enough to register these four without a separate app-startup
+# wire. red_blocks.py itself only imports prism_service.api.workflows
+# LAZILY inside its functions, so this stays import-cycle-safe.
+from prism_service.blocks import red_blocks as _red_blocks  # noqa: E402,F401

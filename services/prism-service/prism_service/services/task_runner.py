@@ -451,6 +451,23 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_test_scaffold(
             _wf.TestScaffoldRequest(**body), project=project)
 
+    # THE PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14): three
+    # deterministic, typed nodes that replace write-failing-tests-loop's
+    # one giant static prompt -- see the module-level comment above
+    # workflow_step_red_targets_from_acs in api/workflows.py, and
+    # prism_service/blocks/red_blocks.py for their Block declarations.
+    def _red_targets_from_acs(project: str, body: dict):
+        return _wf.workflow_step_red_targets_from_acs(
+            _wf.RedTargetsRequest(**body), project=project)
+
+    def _red_context_pack(project: str, body: dict):
+        return _wf.workflow_step_red_context_pack(
+            _wf.RedContextPackRequest(**body), project=project)
+
+    def _red_prompt_compose(project: str, body: dict):
+        return _wf.workflow_step_red_prompt_compose(
+            _wf.RedPromptComposeRequest(**body), project=project)
+
     return {"reason-loop": _reason_loop, "text-challenge": _text_challenge,
             "write-test-file": _write_test_file,
             "run-pinned-suite": _run_pinned_suite,
@@ -458,7 +475,10 @@ def _step_handlers() -> dict:
             "oracle-route-check": _oracle_route_check,
             "context-enrich": _context_enrich,
             "refusal-recall": _refusal_recall,
-            "test-scaffold": _test_scaffold}
+            "test-scaffold": _test_scaffold,
+            "red-targets-from-acs": _red_targets_from_acs,
+            "red-context-pack": _red_context_pack,
+            "red-prompt-compose": _red_prompt_compose}
 
 
 def _subst(value, variables: dict):
@@ -975,7 +995,7 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
             "carry an id like AC-1 and end with an oracle marker, e.g. "
             "'\u2014 oracle: <observable check>'."
         )
-    if step_id in ("verify_plan", "write_failing_tests"):
+    if step_id == "verify_plan":
         declared = str((plan or {}).get("prompt") or "")
         task_hint = _build_task_hint(task)
         if not declared or not task_hint:
@@ -989,6 +1009,37 @@ def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:
         # placeholder, which is still strictly better than leaving it raw.
         return _subst(declared,
                       _build_step_variables(task, getattr(task, "id", "") or "", ""))
+    if step_id == "write_failing_tests":
+        # write-failing-tests-loop.json's own loop step now declares just
+        # the ${prompt} placeholder (owner 2026-09-13/14, pre-red
+        # multiplier blocks) -- the real content is built by the chain's
+        # own "compose" step, which needs `project` for memory/brain
+        # services this function does not have in scope. The placeholder
+        # still non-empty means "this node declares a narrow prompt", so
+        # the gate below is unchanged; the CONTENT is rebuilt directly off
+        # the `task` object (same targets-from-ACs shape
+        # workflow_step_red_targets_from_acs uses) instead of _subst-ing
+        # the now-uninformative "${prompt}" string.
+        declared = str((plan or {}).get("prompt") or "")
+        task_hint = _build_task_hint(task)
+        if not declared or not task_hint:
+            return ""
+        from prism_service.services import arc_governance as gov
+        from prism_service.api.workflows import _compose_red_prompt
+        plan_doc = str(getattr(task, "plan_doc", "") or "")
+        acs = gov._ac_lines(plan_doc)
+        pinned_ids = [str(p) for p in (getattr(task, "verify", None) or []) if p]
+        rows = []
+        for i, tid in enumerate(pinned_ids):
+            ac_id, line = acs[i] if i < len(acs) else ("", "")
+            rows.append(f"- {tid}" + (f"  (demonstrates {ac_id}: {line[:240]})"
+                                     if ac_id else ""))
+        targets_block = (
+            "RED TARGETS -- write exactly these pinned test ids, nothing "
+            "else:\n" + "\n".join(rows)) if rows else ""
+        oracle = str(getattr(task, "oracle", "") or "")
+        return _compose_red_prompt(
+            task_hint=task_hint, targets_block=targets_block, oracle=oracle)
     return ""
 
 

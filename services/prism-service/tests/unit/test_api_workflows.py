@@ -1706,10 +1706,23 @@ def test_write_failing_tests_loop_forbids_uncaught_exception_red():
     # "oracle-route-check" (a browser-adapter demo task branches away
     # before ever reaching the drafting prompt this test pins), so the
     # reason-loop step is located by its URL rather than by position.
+    #
+    # SUPERSEDED AGAIN 2026-09-13/14 (owner, pre-red multiplier blocks):
+    # the reason-loop step's own body no longer carries this text -- it
+    # interpolates ${prompt}, built by the new "compose" node
+    # (red-prompt-compose) a step earlier via
+    # api.workflows._compose_red_prompt, which is where this rule now
+    # lives. Call that function directly (its ACTUAL output, not source
+    # text) rather than reading the retired static template.
     reason_loop_step = next(
         s for s in data["steps"] if "reason-loop" in s.get("url", ""))
     body = json.loads(reason_loop_step["body"])
-    prompt = body["prompt"]
+    assert body["prompt"] == "${prompt}", (
+        "the loop step must interpolate the composed prompt, not carry "
+        f"its own static template: {body['prompt']!r}")
+
+    from prism_service.api.workflows import _compose_red_prompt
+    prompt = _compose_red_prompt()
 
     assert "genuine assertion failure" in prompt.lower() or "assertion failure" in prompt, (
         "prompt must explicitly require a real assert, not just 'must fail'")

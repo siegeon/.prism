@@ -83,18 +83,33 @@ def test_every_inner_body_still_parses_as_json():
 
 
 def test_loop_prompt_interpolates_the_scaffold_block_and_keeps_the_rest():
+    """UPDATED (owner 2026-09-13/14, pre-red multiplier blocks): the loop
+    step's own body no longer carries a static prompt that directly
+    interpolates each node's block -- it interpolates ${prompt} instead,
+    filled by the new "compose" node (red-prompt-compose) one step
+    earlier. scaffoldBlock/refusalBlock now flow INTO that compose step
+    (asserted below); ${verify} is superseded by targetsBlock (built from
+    task.verify by red-targets-from-acs, not templated raw); ${oracle} is
+    now read directly off the task inside the compose route handler,
+    never templated; ${brainContext} is DROPPED on purpose -- the
+    scaffold node's verified imports/signatures already ground the draft
+    more precisely than the old generic semantic-search block did, and
+    keeping both would defeat the point of this shrink."""
     doc = _node()
-    step = next(s for s in doc["steps"] if "reason-loop" in (s.get("url") or ""))
-    body = json.loads(step["body"])
-    prompt = body.get("prompt") or ""
-    assert "${scaffoldBlock}" in prompt, (
-        "the loop prompt must interpolate the scaffold node's block, or "
-        f"the draft is never given the real signatures:\n{prompt}")
-    # Every pre-existing instruction must survive -- this is additive.
-    assert "${refusalBlock}" in prompt
-    assert "${verify}" in prompt
-    assert "${oracle}" in prompt
-    assert "${brainContext}" in prompt
+    loop_step = next(s for s in doc["steps"] if "reason-loop" in (s.get("url") or ""))
+    loop_body = json.loads(loop_step["body"])
+    assert loop_body.get("prompt") == "${prompt}", (
+        "the loop step must interpolate the composed prompt, not carry "
+        f"its own static template: {loop_body.get('prompt')!r}")
+
+    compose_step = next(
+        s for s in doc["steps"] if "red-prompt-compose" in (s.get("url") or ""))
+    compose_body = json.loads(compose_step["body"])
+    for key in ("scaffold_block", "refusal_block", "targets_block",
+               "context_block", "task_hint"):
+        assert compose_body.get(key, "").startswith("${"), (
+            f"compose step must thread {key!r} from an earlier node: "
+            f"{compose_body!r}")
 
 
 # ----------------------------------------------------------------------

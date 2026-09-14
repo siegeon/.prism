@@ -78,19 +78,28 @@ def test_every_inner_body_parses_as_json():
 
 
 def test_loop_prompt_interpolates_the_refusal_block():
+    """UPDATED (owner 2026-09-13/14, pre-red multiplier blocks): the loop
+    step's own body no longer carries a static prompt -- it interpolates
+    ${prompt}, filled by the new "compose" node (red-prompt-compose) a
+    step earlier. refusalBlock now flows INTO that compose step (asserted
+    below), same as scaffoldBlock -- see
+    test_scaffold_grounds_the_draft_in_real_signatures.py's matching
+    update. ${verify}/${brainContext} are superseded (by targetsBlock,
+    and dropped respectively -- see that same test's docstring); ${oracle}
+    is now threaded into compose directly rather than into the loop step."""
     doc = _node()
-    step = next(s for s in doc["steps"]
-                if "reason-loop" in (s.get("url") or ""))
-    body = json.loads(step["body"])
-    prompt = body.get("prompt") or ""
-    assert "${refusalBlock}" in prompt, (
-        "the loop prompt must interpolate the recall node's block, or a "
-        f"refused draft is never told what to fix:\n{prompt}")
-    # Every pre-existing instruction must survive -- this is additive.
-    assert "${verify}" in prompt
-    assert "${oracle}" in prompt
-    assert "${brainContext}" in prompt
-    assert "rc==1" not in prompt or "pytest exit code 1" in prompt
+    loop_step = next(s for s in doc["steps"]
+                     if "reason-loop" in (s.get("url") or ""))
+    loop_body = json.loads(loop_step["body"])
+    assert loop_body.get("prompt") == "${prompt}"
+
+    compose_step = next(s for s in doc["steps"]
+                        if "red-prompt-compose" in (s.get("url") or ""))
+    compose_body = json.loads(compose_step["body"])
+    assert compose_body.get("refusal_block", "").startswith("${"), (
+        "compose step must thread refusal_block from recall: "
+        f"{compose_body!r}")
+    assert compose_body.get("oracle", "").startswith("${")
 
 
 # ----------------------------------------------------------------------

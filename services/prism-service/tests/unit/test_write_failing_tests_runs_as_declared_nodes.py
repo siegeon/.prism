@@ -263,6 +263,15 @@ def test_write_failing_tests_prompt_is_not_nested():
     where the prompt nested inside its own placeholder. This test verifies
     the fix: pass the raw task material to the dispatcher, not the
     already-substituted prompt, so ${taskHint} is substituted exactly once.
+
+    UPDATED (owner 2026-09-13/14, pre-red multiplier blocks): the loop
+    step's own declared body no longer carries a static prompt template --
+    it interpolates ${prompt}, filled by the new "compose" node
+    (red-prompt-compose) a step earlier. So THIS test now routes that one
+    route to its REAL handler (everything else -- targets/pack/scaffold/
+    recall -- stays mocked via _capture) to prove the same no-double-
+    substitution/title-reaches-the-model property against the real
+    architecture, not the retired one.
     """
     class _Task:
         title = "My Test Task"
@@ -282,9 +291,15 @@ def test_write_failing_tests_prompt_is_not_nested():
         # Capture other handlers' bodies (not needed for this test)
         return {"outcome": "ok", "written": True}
 
+    def _real_compose(project, body):
+        from prism_service.api import workflows as _wf
+        return _wf.workflow_step_red_prompt_compose(
+            _wf.RedPromptComposeRequest(**body), project=project)
+
     plan = _plan()
     handlers = {s["route"]: _capture for s in plan["steps"]}
     handlers["reason-loop"] = _draft
+    handlers["red-prompt-compose"] = _real_compose
 
     # Build the variables as the fixed code does: pass raw task hint,
     # not the already-substituted narrow_prompt

@@ -94,10 +94,27 @@ def test_write_failing_tests_prompt_shows_the_exact_pytest_ids():
     def _capture(project, body):
         return {"outcome": "ok", "written": True}
 
+    def _real_targets(project, body):
+        from prism_service.api import workflows as _wf
+        return _wf.workflow_step_red_targets_from_acs(
+            _wf.RedTargetsRequest(**body), project=project)
+
+    def _real_compose(project, body):
+        from prism_service.api import workflows as _wf
+        return _wf.workflow_step_red_prompt_compose(
+            _wf.RedPromptComposeRequest(**body), project=project)
+
     plan = task_runner._node_plan("prism", "write_failing_tests")
     assert plan is not None
     handlers = {s["route"]: _capture for s in plan["steps"]}
     handlers["reason-loop"] = _draft
+    # These two are REAL (not _capture) because the pinned test ids and
+    # oracle reach the loop's prompt only through them now -- targets/
+    # compose thread ${verify}/${planDoc}/${oracle} directly (no DB
+    # fetch needed, per RedTargetsRequest/RedPromptComposeRequest's own
+    # docstrings), so this test needs no task_id-backed project fixture.
+    handlers["red-targets-from-acs"] = _real_targets
+    handlers["red-prompt-compose"] = _real_compose
 
     variables = task_runner._build_step_variables(_Task(), "abc123", "prism")
     task_runner._dispatch_declared_steps(
