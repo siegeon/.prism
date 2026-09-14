@@ -71,3 +71,4 @@ from prism_service.services import gate_adjudicator as _gate_adjudicator  # noqa
 from prism_service.services import resume_actuator as _resume_actuator  # noqa: E402,F401
 from prism_service.services import task_workspace as _task_workspace  # noqa: E402,F401
 from prism_service.blocks import red_blocks as _red_blocks  # noqa: E402,F401
+from prism_service.blocks import plan_blocks as _plan_blocks  # noqa: E402,F401

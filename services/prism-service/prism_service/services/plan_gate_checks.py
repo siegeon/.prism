@@ -38,7 +38,7 @@ from typing import Any, Callable, Optional
 
 CHECKS: tuple[str, ...] = (
     "absent_file_claim", "stop_if_pinned", "already_green_ac",
-    "manual_reject_stands", "plan_diagram_parses")
+    "manual_reject_stands", "plan_diagram_parses", "form_complete")
 
 LABELS: dict[str, str] = {
     "absent_file_claim":
@@ -52,6 +52,9 @@ LABELS: dict[str, str] = {
     "plan_diagram_parses":
         "plan_diagram is structurally valid mermaid, not just a known "
         "diagram-type keyword",
+    "form_complete":
+        "Every AC carries an `oracle:` line and plan_diagram has at "
+        "least two edges",
 }
 
 _TRUE = {"1", "true", "yes", "on"}
@@ -576,6 +579,72 @@ def plan_diagram_parses(plan_diagram: str) -> str:
 
 
 # ----------------------------------------------------------------------
+# 6. form_complete
+# ----------------------------------------------------------------------
+# Task a65c66e5, 2026-09-13/14 live round: a machine rewind to verify_plan
+# produced a plan_doc with 3 AC(s) and ZERO `oracle:` lines, plus a
+# plan_diagram with fewer than two edges. Neither defect was mechanically
+# checkable by any of the five teeth above, so the certainty seat
+# (design_packet.adjudicate_root_plan_gate) fell straight through to
+# "escalating to you" -- exactly the shape the owner's standing rule
+# forbids: no gate parks for a person when the machine can act, and a
+# FORM failure is the planner's to fix, not a human's to read. This tooth
+# names the same two defects as a refusal, which gate_adjudicator.py's
+# `_hold` short-circuit already reads BEFORE calling the certainty seat
+# at all (a truthy plan_gate_checks.refusal() skips
+# design_packet.adjudicate_root_plan_gate for the pass entirely) and
+# which plan_rewind.maybe_rewind already reads for every rubric gate --
+# so a form failure now rewinds to verify_plan through the EXISTING
+# wiring, bounded by the same rewind budget every other plan_gate refusal
+# respects, instead of ever reaching the certainty seat's escalation.
+_EDGE_RE = re.compile(r"[-=.]{2,}>")
+# An entry only counts as a REAL acceptance criterion when it follows the
+# documented "AC-<n>: <sentence>" convention (id, then a colon) -- the
+# same shape every plan/story template in this repo writes. Task
+# fb997b1d's own manual-reject fixture revises plan_doc with the prose
+# "AC-1/AC-2 replace the invented ids.", which `_ac_lines` (no colon
+# requirement, built for the looser story rubric) happily parses as an
+# AC-shaped entry -- this tooth would otherwise refuse a fixture that was
+# never claiming to BE an acceptance-criteria block, and would do so
+# before conductor_flow's certainty seat is even reached (this tooth's
+# refusal short-circuits ahead of it). Requiring the colon is the same
+# discipline arc_governance's own rubric enforces via its oracle_marker
+# convention, just applied one step earlier to what counts as an AC at
+# all.
+_AC_COLON_RE = re.compile(r"^(?:[-*]\s*)?AC-\d+\s*:")
+
+
+def form_complete(plan_doc: str, plan_diagram: str) -> str:
+    """Refusal string when an AC carries no `oracle:` line, or a NON-EMPTY
+    plan_diagram has fewer than two edges. Degrades to PASS when there
+    are no AC entries to check at all (arc_governance's own rubric teeth
+    own the "no ACs" shape) and on an EMPTY diagram (arc_governance's
+    require_plan_diagram tooth owns "missing", the same degrade rule
+    plan_diagram_parses above already follows -- a clean plan with no
+    diagram at all must not double-refuse here)."""
+    entries = [(ac_id, line) for ac_id, line in _ac_entries(plan_doc)
+              if _AC_COLON_RE.match(line.strip())]
+    if not entries:
+        return ""
+    missing_oracle = [ac_id for ac_id, line in entries
+                      if not _ORACLE_RE.search(line)]
+    problems: list[str] = []
+    if missing_oracle:
+        problems.append(
+            f"{len(missing_oracle)} of {len(entries)} AC(s) carry no "
+            "`oracle:` line: " + ", ".join(missing_oracle))
+    diagram = str(plan_diagram or "").strip()
+    if diagram:
+        edges = len(_EDGE_RE.findall(diagram))
+        if edges < 2:
+            problems.append(
+                f"plan_diagram carries fewer than two edges ({edges} found)")
+    if not problems:
+        return ""
+    return "plan_checks: " + "; ".join(problems)
+
+
+# ----------------------------------------------------------------------
 # Task-facing surface
 # ----------------------------------------------------------------------
 def repo_root_for(task, project: str) -> Optional[Path]:
@@ -678,6 +747,9 @@ def run_all(task, project: str = "default", *,
             elif check_id == "plan_diagram_parses":
                 reason = plan_diagram_parses(
                     getattr(task, "plan_diagram", "") or "")
+            elif check_id == "form_complete":
+                reason = form_complete(
+                    plan, getattr(task, "plan_diagram", "") or "")
             else:
                 reason = manual_reject_stands(task, project)
         except Exception:

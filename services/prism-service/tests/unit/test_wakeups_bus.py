@@ -98,9 +98,13 @@ def test_last_signal_at_reports_zero_when_never_signalled() -> None:
 # after a restart, CPU sat at 150%, and ordinary HTTP routes took 10-25s).
 # ---------------------------------------------------------------------------
 
-def test_worker_warmup_s_defaults_to_120(monkeypatch) -> None:
+def test_worker_warmup_s_defaults_to_20(monkeypatch) -> None:
+    # Was 120s; task a65c66e5 lineage (owner 2026-09-13/14, "it should be
+    # minutes"): every deploy restarts the host, so a 20s debounce keeps
+    # the post-restart pile-up this test class guards against without a
+    # 2-minute blind window that reads as a stall.
     monkeypatch.delenv("PRISM_WORKER_WARMUP_S", raising=False)
-    assert wakeups.worker_warmup_s() == 120.0
+    assert wakeups.worker_warmup_s() == 20.0
 
 
 def test_worker_warmup_s_honors_the_env_override(monkeypatch) -> None:
@@ -110,7 +114,7 @@ def test_worker_warmup_s_honors_the_env_override(monkeypatch) -> None:
 
 def test_worker_warmup_s_falls_back_on_a_bad_value(monkeypatch) -> None:
     monkeypatch.setenv("PRISM_WORKER_WARMUP_S", "not-a-number")
-    assert wakeups.worker_warmup_s() == 120.0
+    assert wakeups.worker_warmup_s() == 20.0
 
 
 def test_wait_out_startup_warmup_returns_immediately_once_elapsed(monkeypatch) -> None:
