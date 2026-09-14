@@ -61,7 +61,19 @@ def _run_red_prompt_compose(project: str, task_id: str = "", task_hint: str = ""
 
 
 def _run_red_materialize(project: str, task_id: str, test_file_path: str,
-                         test_code: str) -> dict:
+                         test_code: str, retry_prompt: str = "") -> dict:
+    """write -> run (rc==1, named-target required, ONE re-ask on "not red
+    demonstrated" when retry_prompt is given) -> commit. onFAILURE
+    (owner 2026-09-13/14, live evidence task a65c66e5): a run that is
+    still not red after the re-ask never commits -- run-pinned-suite's
+    own stop_chain refuses it, and this function returns that refusal
+    verbatim rather than committing on a bad measurement. Budget-spent
+    escalation (red_gate rewinds to verify_plan with "ACs are not
+    testable as written" instead of parking, bounded to fire once) is a
+    SEPARATE policy at the gate seat -- see red.rewind_on_exhausted_
+    budget in gate_adjudicator.py -- because it only makes sense once
+    red_gate itself has judged the committed result, which this function
+    is upstream of."""
     from prism_service.api import workflows as _wf
     write_res = _wf.workflow_step_write_test_file(
         _wf.WriteTestFileRequest(
@@ -69,8 +81,11 @@ def _run_red_materialize(project: str, task_id: str, test_file_path: str,
             test_code=test_code),
         project=project)
     run_res = _wf.workflow_step_run_pinned_suite(
-        _wf.RunPinnedSuiteRequest(task_id=task_id, expected_rc=1),
+        _wf.RunPinnedSuiteRequest(task_id=task_id, expected_rc=1,
+                                  retry_prompt=retry_prompt),
         project=project)
+    if run_res.get("stop_chain"):
+        return {"write": write_res, "run": run_res, "commit": None}
     commit_res = _wf.workflow_step_commit_tests_only(
         _wf.CommitTestsOnlyRequest(task_id=task_id), project=project)
     return {"write": write_res, "run": run_res, "commit": commit_res}
@@ -134,19 +149,27 @@ register_block(RED_PROMPT_COMPOSE_BLOCK, _run_red_prompt_compose)
 
 RED_MATERIALIZE_BLOCK = Block(
     id="red.materialize",
-    title="Write, run (rc==1), and commit the drafted test",
+    title="Write, run (rc==1, named target, one re-ask), and commit",
     kind="deterministic",
     owner_seat="workflows",
     scope="task",
     on_failure="stop",
-    inputs=["test_file_path", "test_code"],
+    inputs=["test_file_path", "test_code", "retry_prompt"],
     outputs=["write", "run", "commit"],
     description=(
         "Groups the three already-codified write-test-file / "
-        "run-pinned-suite (expected rc=1) / commit-tests-only routes "
-        "into one typed call -- the same trio write-failing-tests-"
-        "loop.json already dispatches as three separate declared steps; "
-        "this block wraps them for visibility and future consolidation "
-        "without changing the live pipeline's step shape."),
+        "run-pinned-suite / commit-tests-only routes into one typed "
+        "call -- the same trio write-failing-tests-loop.json dispatches "
+        "as three separate declared steps, run-pinned-suite carrying "
+        "the real onFailure policy (owner 2026-09-13/14, live evidence "
+        "task a65c66e5): a measurement that is not red -- rc==0, or "
+        "rc==1 with no pinned target in a FAILED line -- makes ONE "
+        "follow-up reason-loop call with the pytest output appended "
+        "before refusing for real (never for a genuine collection "
+        "error, which no re-ask framing fixes); STILL not red after "
+        "that re-ask means commit-tests-only never runs at all. A "
+        "SEPARATE policy at the gate seat (red.rewind_on_exhausted_"
+        "budget) escalates red_gate's own spent rewind budget to "
+        "verify_plan instead of parking, bounded to fire once per task."),
 )
 register_block(RED_MATERIALIZE_BLOCK, _run_red_materialize)

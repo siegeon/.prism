@@ -37,11 +37,37 @@ __all__ = [
     "run_block",
 ]
 
-# Registers red.targets_from_acs / red.context_pack / red.prompt_compose /
-# red.materialize (owner 2026-09-13/14, second landing). Imported HERE,
-# after Block/register_block are already bound above, so `import
-# prism_service.blocks` anywhere -- api/workflows.py, task_runner.py, a
-# test -- is enough to register these four without a separate app-startup
-# wire. red_blocks.py itself only imports prism_service.api.workflows
-# LAZILY inside its functions, so this stays import-cycle-safe.
+# REGISTERS EVERY BLOCK THIS REPO DECLARES. Live defect (owner
+# 2026-09-13/14, task b490fabc): GET /api/workflows reported block_count
+# 7, not 12 -- 5 blocks (certainty.derive_oracle, resume.clear_stale_
+# park [it DID show, from a worker-host run row, but was still absent
+# from the count before this fix in the API process itself],
+# adjudicator.drain, adjudicator.unconditional_first_sweep,
+# adjudicator.fair_cursor, adjudicator.inconclusive_rewind_backoff,
+# red.rewind_on_exhausted_budget) live in seat modules (design_packet,
+# resume_actuator, gate_adjudicator) that each call register_block at
+# THEIR OWN import time -- so registration only happens if something
+# else in that process already imports them for an unrelated reason.
+# The worker-host process does (task_runner drives them); the API
+# process serving /api/workflows does not necessarily.
+#
+# FIX: the DEPENDENCY RUNS THIS DIRECTION ONLY -- blocks/__init__.py
+# imports every seat module that declares a block, never the reverse
+# for registration purposes. `import prism_service.blocks` anywhere (the
+# API process's own workflows.py included) is now enough on its own to
+# register everything, in ANY process, with no separate app-startup wire
+# and no dependency on what else that process happens to import. Each
+# import below is safe against the circular Block/register_block import
+# those seat modules make back INTO this package, because Block/
+# register_block/run_block are already bound above by the time these
+# lines run (the same pattern red_blocks already used, extended to
+# every block-declaring module). Every seat module's own references to
+# prism_service.api.workflows are LAZY (inside functions), confirmed
+# before adding these -- so none of this drags api/workflows.py's own
+# (much heavier) import chain in at blocks-import time.
+from prism_service.services import deploy_worker as _deploy_worker  # noqa: E402,F401
+from prism_service.services import design_packet as _design_packet  # noqa: E402,F401
+from prism_service.services import gate_adjudicator as _gate_adjudicator  # noqa: E402,F401
+from prism_service.services import resume_actuator as _resume_actuator  # noqa: E402,F401
+from prism_service.services import task_workspace as _task_workspace  # noqa: E402,F401
 from prism_service.blocks import red_blocks as _red_blocks  # noqa: E402,F401

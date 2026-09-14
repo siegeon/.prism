@@ -145,4 +145,148 @@ def test_the_stronger_check_only_applies_when_expected_rc_is_one(
     out = _run(monkeypatch, stdout, 1,
               paths=["test_target.py::test_the_target"])
     assert out["outcome"] == "ok", out
+
+
+# ----------------------------------------------------------------------
+# THE RE-ASK (owner 2026-09-13/14, red.materialize onFailure policy):
+# a "not red demonstrated" refusal with a retry_prompt set makes ONE
+# follow-up reason-loop call before refusing for real.
+# ----------------------------------------------------------------------
+
+_WRONG_TARGET_STDOUT = (
+    ".F\n=== short test summary info ===\n"
+    "FAILED test_target.py::test_an_unrelated_dummy - AssertionError: "
+    "padding\n1 failed, 1 passed in 0.01s\n")
+
+_NOW_RED_STDOUT = (
+    "F\n=== short test summary info ===\n"
+    "FAILED test_target.py::test_the_target - AssertionError: not "
+    "implemented\n1 failed in 0.01s\n")
+
+
+def _stub_reason_loop(monkeypatch, test_code: str, test_file_path: str):
+    """Fakes the retry's model call -- returns a canned draft instead of
+    a real claude_cli.invoke."""
+    class _Resp:
+        reason = {"fields": {"test_code": test_code,
+                             "test_file_path": test_file_path}}
+    monkeypatch.setattr(wf, "workflow_step_reason_loop",
+                        lambda req, project: _Resp())
+
+
+def test_a_wrong_target_refusal_retries_once_and_succeeds(
+        monkeypatch, worktree):
+    calls = {"n": 0}
+
+    def _fake_run(*a, **kw):
+        calls["n"] += 1
+        stdout = _WRONG_TARGET_STDOUT if calls["n"] == 1 else _NOW_RED_STDOUT
+        return _fake_completed(stdout, 1)
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    _stub_reason_loop(monkeypatch, "def test_the_target():\n    assert False\n",
+                      "test_target.py")
+    monkeypatch.setattr(
+        wf, "workflow_step_write_test_file",
+        lambda req, project: {"outcome": "ok", "written": True})
+
+    body = wf.RunPinnedSuiteRequest(
+        task_id="t-1", paths=["test_target.py::test_the_target"],
+        expected_rc=1, retry_prompt="Draft a failing test for this task.")
+    out = wf.workflow_step_run_pinned_suite(body, project="p")
+
+    assert calls["n"] == 2, "must re-measure exactly once after the retry"
+    assert out["outcome"] == "ok", out
+    assert out.get("retried") is True, out
     assert not out.get("stop_chain"), out
+
+
+def test_a_retry_that_still_fails_refuses_with_a_note(monkeypatch, worktree):
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **kw: _fake_completed(
+                            _WRONG_TARGET_STDOUT, 1))
+    _stub_reason_loop(monkeypatch, "def test_the_target():\n    assert True\n",
+                      "test_target.py")
+    monkeypatch.setattr(
+        wf, "workflow_step_write_test_file",
+        lambda req, project: {"outcome": "ok", "written": True})
+
+    body = wf.RunPinnedSuiteRequest(
+        task_id="t-1", paths=["test_target.py::test_the_target"],
+        expected_rc=1, retry_prompt="Draft a failing test for this task.")
+    out = wf.workflow_step_run_pinned_suite(body, project="p")
+
+    assert out["outcome"] == "refused", out
+    assert out["stop_chain"] is True, out
+    assert "after one re-ask retry" in out["reason"], out
+
+
+def test_no_retry_prompt_means_no_retry_at_all(monkeypatch, worktree):
+    """Empty retry_prompt (the default) is every existing caller's
+    contract, unchanged -- the retry machinery must never fire on it."""
+    called = {"reason_loop": False}
+
+    def _boom(req, project):
+        called["reason_loop"] = True
+        raise AssertionError("must not retry with no retry_prompt")
+    monkeypatch.setattr(wf, "workflow_step_reason_loop", _boom)
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **kw: _fake_completed(
+                            _WRONG_TARGET_STDOUT, 1))
+
+    body = wf.RunPinnedSuiteRequest(
+        task_id="t-1", paths=["test_target.py::test_the_target"],
+        expected_rc=1)
+    out = wf.workflow_step_run_pinned_suite(body, project="p")
+
+    assert called["reason_loop"] is False
+    assert out["outcome"] == "refused", out
+    assert "after one re-ask retry" not in out["reason"], out
+
+
+def test_a_collection_error_never_retries(monkeypatch, worktree):
+    """rc not in (0, 1) means the draft itself is broken (an unresolved
+    import, an undefined pinned function) -- no re-ask framing fixes
+    that, so this must refuse immediately without ever calling the
+    model."""
+    called = {"reason_loop": False}
+
+    def _boom(req, project):
+        called["reason_loop"] = True
+        raise AssertionError("must not retry a collection error")
+    monkeypatch.setattr(wf, "workflow_step_reason_loop", _boom)
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *a, **kw: _fake_completed(
+            "ImportError: No module named 'prism_service.lexicon'\n", 4))
+
+    body = wf.RunPinnedSuiteRequest(
+        task_id="t-1", paths=["test_target.py::test_the_target"],
+        expected_rc=1, retry_prompt="Draft a failing test for this task.")
+    out = wf.workflow_step_run_pinned_suite(body, project="p")
+
+    assert called["reason_loop"] is False
+    assert out["outcome"] == "refused", out
+    assert out["rc"] == 4, out
+
+
+def test_a_broken_retry_degrades_to_the_original_refusal(
+        monkeypatch, worktree):
+    """NEVER RAISES: a broken retry (the model call blows up) must fall
+    back to the ORIGINAL refusal, same posture as refusal-recall/test-
+    scaffold, never crash the step."""
+    monkeypatch.setattr(subprocess, "run",
+                        lambda *a, **kw: _fake_completed(
+                            _WRONG_TARGET_STDOUT, 1))
+
+    def _raises(req, project):
+        raise RuntimeError("the engine is unreachable")
+    monkeypatch.setattr(wf, "workflow_step_reason_loop", _raises)
+
+    body = wf.RunPinnedSuiteRequest(
+        task_id="t-1", paths=["test_target.py::test_the_target"],
+        expected_rc=1, retry_prompt="Draft a failing test for this task.")
+    out = wf.workflow_step_run_pinned_suite(body, project="p")
+
+    assert out["outcome"] == "refused", out
+    assert out["stop_chain"] is True, out
+    assert "not red demonstrated" in out["reason"], out

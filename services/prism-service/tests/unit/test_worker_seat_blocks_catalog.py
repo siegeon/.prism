@@ -99,12 +99,13 @@ def test_the_banner_counts_are_present_and_sane(monkeypatch):
         "task_count must be the WHOLE project's task count, done/"
         f"cancelled included -- got {body['task_count']}")
     assert body["block_count"] == len(list_blocks())
-    assert body["block_count"] >= 12, (
+    assert body["block_count"] >= 13, (
         "at least the 3 landing-1 blocks, the 4 landing-2 red.* blocks, "
-        "and the 5 landing-2b blocks (deploy.on_signal, "
-        "workspace.recreate, adjudicator.unconditional_first_sweep, "
-        "adjudicator.fair_cursor, adjudicator.inconclusive_rewind_"
-        f"backoff) must be registered, got {body['block_count']}")
+        "the 5 landing-2b blocks (deploy.on_signal, workspace.recreate, "
+        "adjudicator.unconditional_first_sweep, adjudicator.fair_cursor, "
+        "adjudicator.inconclusive_rewind_backoff), and "
+        "red.rewind_on_exhausted_budget must be registered, got "
+        f"{body['block_count']}")
     assert body["node_count"] >= body["block_count"], (
         "node_count sums every declared step across the whole catalog, "
         "which must be at least as many as the blocks alone")
@@ -121,9 +122,43 @@ def test_every_landing_block_id_is_a_route_on_the_catalog_entry(monkeypatch):
         "red.prompt_compose", "red.materialize", "deploy.on_signal",
         "workspace.recreate", "adjudicator.unconditional_first_sweep",
         "adjudicator.fair_cursor", "adjudicator.inconclusive_rewind_backoff",
+        "red.rewind_on_exhausted_budget",
     }
     body = _get_workflows(monkeypatch)
     by_id = {w["id"]: w for w in body["workflows"]}
     routes = {s["route"] for s in by_id["worker_seat_blocks"]["steps"]}
     missing = EXPECTED - routes
     assert not missing, f"blocks missing from the catalog: {missing}"
+
+
+def test_the_api_process_alone_registers_every_block():
+    """THE LIVE DEFECT (owner 2026-09-13/14): GET /api/workflows on a
+    freshly-started API process reported block_count 7, not 12+ --
+    registration only happened for blocks whose seat module something
+    ELSE in that process had already imported for an unrelated reason.
+    The worker-host process imports design_packet/resume_actuator/
+    gate_adjudicator/deploy_worker/task_workspace anyway (it drives
+    them), so it never showed the bug; the API process serving this
+    endpoint does not necessarily import any of them on its own.
+
+    Proven in a FRESH subprocess that imports ONLY
+    prism_service.api.workflows -- never the seat modules directly --
+    so this cannot pass by accident from another test file's imports
+    still being warm in the SAME process (import caching would hide
+    exactly this defect)."""
+    import subprocess
+    import sys
+
+    script = (
+        "from prism_service.api import workflows as wf\n"
+        "from prism_service.blocks import list_blocks\n"
+        "print(len(list_blocks()))\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", script],
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    count = int(proc.stdout.strip())
+    assert count >= 13, (
+        f"the API process alone (no worker module explicitly imported) "
+        f"registered only {count} blocks -- importing "
+        f"prism_service.api.workflows must be enough on its own")
