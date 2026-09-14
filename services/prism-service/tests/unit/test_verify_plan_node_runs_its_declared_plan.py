@@ -100,7 +100,7 @@ def test_verify_plan_sends_the_declared_narrow_prompt():
         "verify_plan", _Task(), [], plan=plan)
 
     assert prompt, "verify_plan must have a narrow prompt, not the step brief"
-    assert "implementation plan" in prompt
+    assert "Fill the plan" in prompt  # v9: typed slots, PRISM renders the plan
     assert "plan_diagram" in prompt, "the diagram is half the deliverable"
     assert "AC-" in prompt, "the plan must reference the story's AC ids"
     assert _Task.title in prompt, "the task material is substituted in"

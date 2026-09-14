@@ -24,6 +24,24 @@ o:denotes a rdf:Property ; rdfs:domain o:Term ; rdfs:range rdfs:Class ;
     rdfs:label "denotes" ;
     rdfs:comment "The class the term names." .
 
+# Planning vocabulary (explicit planning, owner 2026-09-14): the terms the
+# verify_plan step's typed slots carry and the plan_gate teeth parse. The
+# colour enum in verify-plan-loop.json is exactly {red_at_base, guard}.
+<urn:prism:onto:term/oracle> a o:Term ;
+    rdfs:label "Oracle" ;
+    rdfs:comment "The command a person can run, or the screen a person reads, that proves an acceptance criterion." ;
+    o:altLabel "proof command" .
+
+<urn:prism:onto:term/red-at-base> a o:Term ;
+    rdfs:label "RedAtBase" ;
+    rdfs:comment "An acceptance criterion the pinned test proves: it fails before the fix and passes after. The plan slot colour red_at_base names it." ;
+    o:altLabel "red at base", "fails at base", "red before the fix" .
+
+<urn:prism:onto:term/regression-guard> a o:Term ;
+    rdfs:label "RegressionGuard" ;
+    rdfs:comment "An acceptance criterion already true today that the change must keep true. The plan slot colour guard names it." ;
+    o:altLabel "regression guard", "stays green", "keeps passing" .
+
 <urn:prism:onto:term/task> a o:Term ;
     rdfs:label "Task" ;
     rdfs:comment "A tracked unit of work with an owner and a status." ;

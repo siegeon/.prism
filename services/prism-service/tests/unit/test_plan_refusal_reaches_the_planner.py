@@ -83,7 +83,8 @@ def test_the_planner_prompt_carries_the_refusal_and_demands_an_oracle():
         loop["body"].replace("${refusalBlock}", "R")
         .replace("${taskHint}", "T").replace("${taskId}", "I"))["prompt"]
     assert prompt.startswith("R"), "the refusal block leads the prompt"
-    assert "- oracle:" in prompt, "the per-AC oracle shape is demanded"
+    # v9: the oracle is a typed slot per AC; PRISM renders the `- oracle:` line.
+    assert "oracle" in prompt, "each AC carries an oracle slot"
     assert "${refusalBlock}" in loop["body"]
 
 

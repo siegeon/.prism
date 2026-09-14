@@ -214,6 +214,10 @@ _PLANNED_STEPS = frozenset({"review_previous_notes", "draft_story",
 # such a prompt inline returns prose with exit 0, which advances the step on
 # nothing. Membership here costs nothing while the chain works.
 _DRAFT_ONLY_WITHOUT_CHAIN = frozenset({"write_failing_tests"})
+# Steps whose declared chain validates its own draft at the step: a refusal
+# there ends the attempt with that reason and never falls back to the
+# inline prompt (explicit planning, 2026-09-14).
+_NO_INLINE_FALLBACK_AFTER_REFUSAL = frozenset({"verify_plan"})
 
 # The routes a build step must declare before it may run as declared steps.
 # A step that cannot write, run and commit has no business leaving the
@@ -465,6 +469,12 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_plan_base_colour(
             _wf.PlanBaseColourRequest(**body), project=project)
 
+    # THE EXPLICIT FRAME (explicit planning, 2026-09-14): PRISM states the
+    # facts it holds and the AC it writes itself; the model fills typed slots.
+    def _plan_compose(project: str, body: dict):
+        return _wf.workflow_step_plan_compose(
+            _wf.PlanComposeRequest(**body), project=project)
+
     # THE PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14): three
     # deterministic, typed nodes that replace write-failing-tests-loop's
     # one giant static prompt -- see the module-level comment above
@@ -491,6 +501,7 @@ def _step_handlers() -> dict:
             "refusal-recall": _refusal_recall,
             "plan-refusal-recall": _plan_refusal_recall,
             "plan-base-colour": _plan_base_colour,
+            "plan-compose": _plan_compose,
             "test-scaffold": _test_scaffold,
             "red-targets-from-acs": _red_targets_from_acs,
             "red-context-pack": _red_context_pack,
@@ -828,14 +839,19 @@ class _CodifiedResult:
     it cost nothing: exit 0, no usage, and the rendered text as its
     output."""
 
-    __slots__ = ("_text", "exit_code", "usage", "run_id", "structured_output")
+    __slots__ = ("_text", "exit_code", "usage", "run_id", "structured_output",
+                 "refusal")
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, refusal: str = "") -> None:
         self._text = text
-        self.exit_code = 0
+        self.exit_code = 0 if not refusal else 1
         self.usage = None            # genuinely zero tokens, not "unknown"
         self.run_id = ""
         self.structured_output = None
+        # A declared chain that REFUSED its own draft (the step's rubric
+        # said no): the attempt fails with this exact reason, and the
+        # runner never falls back to the inline prompt the chain replaced.
+        self.refusal = refusal
 
     def final_text(self) -> str:
         return self._text
@@ -948,6 +964,8 @@ def _build_step_variables(task, task_id: str, project: str) -> dict:
         # Exported by verify-plan-loop's `colour` step (plan-base-colour);
         # empty here so the no-chain fallback never ships the placeholder.
         "baseColourBlock": "",
+        # Exported by verify-plan-loop's `compose` step (plan-compose).
+        "planFrame": "",
     }
 
 
@@ -2418,6 +2436,20 @@ def _run_one_step(project: str, task_id: str) -> dict:
                     bool(row.get("ok")),
                     row.get("reason") or "ran as a declared step")
             result = _result_from_dispatch(dispatched)
+            if result is None and job["step"] in _NO_INLINE_FALLBACK_AFTER_REFUSAL:
+                # THE CHAIN SAID NO; THAT IS THE ATTEMPT'S RESULT (explicit
+                # planning, 2026-09-14). verify_plan's declared rubric
+                # refused the typed draft with a reason the recall step
+                # will hand to the next attempt. Falling back to the inline
+                # prompt here would re-run the old prose contract with
+                # none of the composed frame -- the exact blind retry the
+                # chain exists to end.
+                refused = next(
+                    (str(r.get("reason") or "") for r in dispatched
+                     if r.get("route") == "reason-loop" and not r.get("ok")
+                     and r.get("reason")), "")
+                if refused:
+                    result = _CodifiedResult("", refusal=refused)
             if result is None:
                 dispatched = None
         # A DRAFT IS NOT A SUBSTITUTE FOR THE STEP (task ab9166d5). The
@@ -2574,11 +2606,11 @@ def _run_one_step(project: str, task_id: str) -> dict:
         # carrying the model's empty `<think></think>` wrapper was reported as
         # a crash -- see _failure_reason.
         outcome = {"ok": False,
-                   "reason": _failure_reason(
+                   "reason": (getattr(result, "refusal", "") or _failure_reason(
                        result,
                        float(budget.get("timeout_s")
                              or _step_timeout_s(step_id)),
-                       proof=proof)}
+                       proof=proof))}
 
     if claim is not None:
         claim.release(claim_id)

@@ -2,8 +2,8 @@
   "id": "verify-plan-loop",
   "fsmId": "pipeline",
   "botId": "conductor",
-  "name": "Verify plan (Observe-Reason-Validate)",
-  "version": 8,
+  "name": "Verify plan (compose, fill typed slots, render, validate)",
+  "version": 9,
   "steps": [
     {
       "id": "recall",
@@ -20,10 +20,17 @@
       "timeoutSeconds": 240
     },
     {
+      "id": "compose",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-compose?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"colour\": \"${colour}\", \"base\": \"${base}\"}",
+      "timeoutSeconds": 60
+    },
+    {
       "id": "loop",
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
-      "body": "{\"persona\": \"sm\", \"prompt\": \"${refusalBlock}\\n\\n${baseColourBlock}\\n\\nWrite an implementation plan in markdown for this task: ${taskHint}\\n\\nThe plan_doc MUST reference every AC-<n> id from the story so coverage can be diffed automatically. Separately, produce a plan_diagram: a mermaid flowchart (starting with 'flowchart TD' or similar) showing the plan's architectural layers/edges.\\n\\nSEVEN RULES THE PLAN GATE ENFORCES. Each one rejected a real plan (1-5 on task 72ccaf94, 6-7 on task b490fabc).\\n1. Do not assert that a file or a test DOES NOT EXIST until you have looked. A false absence claim argues the reader out of looking.\\n2. Every test named in the task stop_if must appear in task.verify. The slice's own named risk must be pinned by its own gate.\\n3. An acceptance criterion offered as the observation for an oracle clause must FAIL at the base commit. Run it there. If it is green before the fix it observes nothing. Say plainly which criteria are regression guards; those are allowed to be green.\\n4. State the number you measured, and the command that measured it. Do not report a row count as a segment count.\\n5. A mechanism claim needs a runnable repro that you ran. If the repro does not clear the condition, the mechanism does not work.\\n6. Every AC-<n> id in the plan MUST be an id the story carries. Do not invent one. Task b490fabc reached plan_gate carrying AC-123, AC-456 and AC-789, which no story had, and coverage did not catch it because it only checks the other direction.\\n7. Every file path you name MUST exist in the task worktree, unless this slice creates it and the same line says so. A plan that names no file at all cannot be implemented from.\\n8. plan_diagram must be a MERMAID DIAGRAM THAT ACTUALLY PARSES, not just start with a keyword. Every '[', '(' or '{' you open MUST close on the same node before you start the next one -- count them before you submit. If a node label needs a comma, parenthesis, pipe '|', semicolon or a literal quote, wrap the WHOLE label in double quotes, e.g. A[\\\"Reference all AC ids (n of them) from the story\\\"]. Never write a placeholder token like <n> inside a label. Task a65c66e5 reached plan_gate with an unclosed '[' and the owner could not even see the plan (PlanView showed 'Diagram failed to render'); plan_gate now runs a real structural check and will bounce this back to you, so get it right the first time.\\n9. Under EVERY AC-<n> entry write an indented sub-bullet `- oracle: <the exact command or observation that proves the AC>`. plan_gate's form tooth rewinds a plan whose AC has no oracle: line, and task a65c66e5 was rewound twice for exactly this shape. Shape to copy:\\n- AC-1: <what must be true>\\n  - oracle: <pytest id, curl, or the screen a person reads>\\nWhen gate feedback directs a technique you have measured and found wrong, REFUSE IT and show the measurement. Correctness outranks compliance.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"plan_doc\": {\"type\": \"string\"}, \"plan_diagram\": {\"type\": \"string\"}}, \"required\": [\"plan_doc\", \"plan_diagram\"]}, \"rubric\": \"plan_coverage\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "body": "{\"persona\": \"sm\", \"prompt\": \"${refusalBlock}\\n\\n${planFrame}\\n\\nFill the plan for this task: ${taskHint}\\n\\nReturn ONLY the typed fields the schema names. `acs` is a list of acceptance criteria objects {id, text, colour, oracle, pytest_id}: copy the FIXED AC-1 from the frame first, unchanged; then add the criteria that must stay true, each with colour `guard` and an `oracle` that is a command a person can run or a screen a person reads. `files_to_change` names only files listed in the frame or files this task creates. `goal` is one paragraph. Do not write markdown, headings or a diagram: PRISM renders the document. Do not invent AC ids: AC-1 is fixed, the rest are numbered by PRISM in the order you return them.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"goal\": {\"type\": \"string\"}, \"acs\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}, \"text\": {\"type\": \"string\"}, \"colour\": {\"type\": \"string\", \"enum\": [\"red_at_base\", \"guard\"]}, \"oracle\": {\"type\": \"string\"}, \"pytest_id\": {\"type\": \"string\"}}, \"required\": [\"text\", \"colour\", \"oracle\"]}}, \"files_to_change\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"implementation_notes\": {\"type\": \"string\"}}, \"required\": [\"goal\", \"acs\", \"files_to_change\"]}, \"rubric\": \"plan_structured\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 850
     },
     {

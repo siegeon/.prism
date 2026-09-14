@@ -55,10 +55,11 @@ def test_the_plan_carries_its_declared_steps_in_file_order():
     # runs FIRST so the planner is told what plan_gate refused.
     # 7.13.374: plan-base-colour measures the pinned suite at base before
     # the planner writes (round 2, tasks 6bc3e6c2/83dcd479).
-    assert routes == ["plan-refusal-recall", "plan-base-colour",
+    # 7.13.376 (v9): plan-compose builds the explicit frame before the loop.
+    assert routes == ["plan-refusal-recall", "plan-base-colour", "plan-compose",
                       "reason-loop", "text-challenge"], (
-        "verify-plan-loop.json declares recall, colour, reason-loop, THEN "
-        "text-challenge; the runner must see all four, in that order")
+        "verify-plan-loop.json declares recall, colour, compose, reason-loop, "
+        "THEN text-challenge; the runner must see all five, in that order")
 
 
 def test_text_challenge_is_a_step_not_a_dropped_name():
@@ -78,12 +79,14 @@ def test_the_declared_schema_reaches_the_runner():
     plan = task_runner._node_plan("prism", "verify_plan")
     schema = plan["json_schema"]
     assert schema["type"] == "object"
-    assert set(schema["properties"]) == {"plan_doc", "plan_diagram"}
+    # v9: typed slots; PRISM renders plan_doc/plan_diagram in the rubric.
+    assert set(schema["properties"]) == {"goal", "acs", "files_to_change",
+                                         "implementation_notes"}
 
 
 def test_the_declared_rubric_reaches_the_runner():
     plan = task_runner._node_plan("prism", "verify_plan")
-    assert plan["rubric"] == "plan_coverage"
+    assert plan["rubric"] == "plan_structured"  # v9: render + validate at the step
 
 
 # ----------------------------------------------------------------------
@@ -102,13 +105,14 @@ def test_every_declared_step_is_dispatched_in_order():
 
     handlers = {"plan-refusal-recall": _handler("plan-refusal-recall"),
                 "plan-base-colour": _handler("plan-base-colour"),
+                "plan-compose": _handler("plan-compose"),
                 "reason-loop": _handler("reason-loop"),
                 "text-challenge": _handler("text-challenge")}
     results = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers)
 
-    expected = ["plan-refusal-recall", "plan-base-colour", "reason-loop",
-                "text-challenge"]
+    expected = ["plan-refusal-recall", "plan-base-colour", "plan-compose",
+                "reason-loop", "text-challenge"]
     assert seen == expected
     assert [r["route"] for r in results] == expected
 
@@ -118,7 +122,7 @@ def test_an_undeclared_route_is_reported_never_silently_skipped():
     plan = task_runner._node_plan("prism", "verify_plan")
     results = task_runner._dispatch_declared_steps("prism", plan, handlers={})
 
-    assert len(results) == 4
+    assert len(results) == 5
     assert all(r["ok"] is False for r in results)
     assert all("no handler" in r["reason"] for r in results)
 

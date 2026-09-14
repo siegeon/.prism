@@ -103,3 +103,60 @@ PLAN_BASE_COLOUR_BLOCK = Block(
         "anything (tasks 6bc3e6c2 and 83dcd479)."),
 )
 register_block(PLAN_BASE_COLOUR_BLOCK, _run_plan_base_colour)
+
+
+def _run_plan_compose(project: str, task_id: str = "", colour: str = "",
+                      base: str = "") -> dict:
+    from prism_service.api import workflows as _wf
+    resp = _wf.workflow_step_plan_compose(
+        _wf.PlanComposeRequest(task_id=task_id, colour=colour, base=base),
+        project=project)
+    return {"ok": True, "plan_frame": resp.plan_frame,
+            "pinned_test": resp.pinned_test, "pinned_colour": resp.pinned_colour}
+
+
+PLAN_COMPOSE_BLOCK = Block(
+    id="plan.compose",
+    title="Compose the explicit plan frame",
+    kind="deterministic",
+    owner_seat="task_runner",
+    scope="task",
+    on_failure="continue",
+    inputs=["task.title", "task.verify", "task.allowed_files", "task.oracle",
+            "plan.base_colour"],
+    outputs=["plan_frame", "pinned_test", "pinned_colour"],
+    description=(
+        "Zero-model-call frame the planner fills: the pinned test and its "
+        "colour at base, the AC PRISM writes itself (red_at_base on the "
+        "pinned test), the files in scope, the task oracle, and the "
+        "lexicon's terms (red_at_base, guard, oracle). Owner 2026-09-14: "
+        "be explicit about what is supposed to happen; the explicit comes "
+        "from the planning steps."),
+)
+register_block(PLAN_COMPOSE_BLOCK, _run_plan_compose)
+
+
+def _run_plan_render(project: str, task_id: str = "", fields: dict | None = None) -> dict:
+    from prism_service.api import workflows as _wf
+    fields = dict(fields or {})
+    return _wf._score_rubric("plan_structured", fields, project, task_id=task_id)
+
+
+PLAN_RENDER_BLOCK = Block(
+    id="plan.render",
+    title="Render typed plan slots and validate with the gate's teeth",
+    kind="deterministic",
+    owner_seat="reason-loop",
+    scope="task",
+    on_failure="stop",
+    inputs=["reason-loop.acs", "reason-loop.goal", "reason-loop.files_to_change"],
+    outputs=["plan_doc", "plan_diagram", "ok", "reason"],
+    description=(
+        "The plan_structured rubric of verify-plan-loop's reason-loop: "
+        "renders plan_doc and plan_diagram from typed slots in the exact "
+        "shape plan_gate parses, inserts the pinned red_at_base AC when "
+        "the model omitted it, then runs form_complete, plan_diagram_parses "
+        "and plan_coverage at the STEP so a bad draft retries here instead "
+        "of spending a plan_gate rewind."),
+)
+register_block(PLAN_RENDER_BLOCK, _run_plan_render)

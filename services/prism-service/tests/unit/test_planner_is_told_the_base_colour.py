@@ -102,7 +102,10 @@ def test_the_node_measures_between_recall_and_loop():
     colour = next(s for s in node["steps"] if s["id"] == "colour")
     assert "/api/workflows/steps/plan-base-colour" in colour["url"]
     loop = next(s for s in node["steps"] if s["id"] == "loop")
-    assert "${baseColourBlock}" in loop["body"]
+    # v9: the colour reaches the planner through the compose step's frame
+    # (${planFrame}), not as a bare block in the prompt.
+    compose = next(s for s in node["steps"] if s["id"] == "compose")
+    assert "${colour}" in compose["body"] and "${planFrame}" in loop["body"]
     assert node["version"] >= 8
 
 

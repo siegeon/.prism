@@ -2706,6 +2706,70 @@ def _score_rubric(rubric_name: str, fields: dict, project: str,
             "plan_diagram": fields.get("plan_diagram", ""),
         }
         return gov.score_plan_coverage(evidence, rubric, principles)
+    if rubric_name == "plan_structured":
+        # RENDER, INSERT THE KNOWN RED AC, THEN SCORE WITH THE GATE'S OWN
+        # TEETH (explicit planning, 2026-09-14). The model returned typed
+        # slots; PRISM writes the markdown the teeth parse, so "RED at
+        # base" can never be missing by phrasing, and a defect that would
+        # have parked plan_gate is refused HERE, where the retry is cheap.
+        ctx = get_project(project)
+        task = ctx.task_svc.get(task_id) if task_id else None
+        pinned = ""
+        colour = "unmeasured"
+        if task is not None:
+            verify = [str(v).strip() for v in (getattr(task, "verify", None) or [])
+                      if str(v).strip()]
+            pinned = verify[0] if verify else ""
+            # The cheap half of plan-base-colour, recomputed here so the
+            # rubric needs no extra field from the model: a pinned file
+            # absent at base is red by construction; a present one keeps
+            # "unmeasured" and the gate's own measure has the last word.
+            try:
+                from prism_service.services import plan_gate_checks as _pgc0
+                from prism_service.api.tasks import _git as _git0
+                root0 = _pgc0.repo_root_for(task, project)
+                base0 = _pgc0.base_ref_for(task, root0) if root0 is not None else ""
+                if pinned and root0 is not None and base0:
+                    code0, _ = _git0(str(root0), "cat-file", "-e",
+                                     f"{base0}:{pinned.split('::', 1)[0]}")
+                    colour = "absent" if code0 != 0 else "unmeasured"
+            except Exception:
+                colour = "unmeasured"
+        rendered = _render_structured_plan(fields, task, pinned, colour)
+        fields["plan_doc"] = rendered["plan_doc"]
+        fields["plan_diagram"] = rendered["plan_diagram"]
+        problems: list[str] = []
+        if not rendered["acs"]:
+            problems.append("no acceptance criteria were returned")
+        from prism_service.services import plan_gate_checks as _pgc
+        form = _pgc.form_complete(fields["plan_doc"], fields["plan_diagram"])
+        if form:
+            problems.append(form)
+        diag = _pgc.plan_diagram_parses(fields["plan_diagram"])
+        if diag:
+            problems.append(diag)
+        if pinned and colour in ("absent", "red", "unmeasured", "") and not any(
+                a["colour"] == "red_at_base" for a in rendered["acs"]):
+            problems.append("no red_at_base criterion names the pinned test")
+        principles = gov.load_principles(ctx.memory_svc) if ctx.memory_svc is not None else []
+        cov = gov.score_plan_coverage(
+            {"story_md": fields["plan_doc"], "plan_doc": fields["plan_doc"],
+             "plan_diagram": fields["plan_diagram"]}, rubric or gov.load_rubrics().get("plan_coverage") or {},
+            principles)
+        if cov.get("ok") is False:
+            # Coverage and diagram conformance are this step's business;
+            # an UNSEEDED principles store is the project's, and plan_gate
+            # scores it on its own -- refusing the draft for it here would
+            # loop a planner over something no plan can change.
+            reason = str(cov.get("reason") or "plan_coverage refused")
+            parts = [p for p in reason.split("; ")
+                     if "no architecture principles seeded" not in p]
+            if parts and any(p.strip() for p in parts):
+                problems.append("; ".join(parts))
+        if problems:
+            return {"ok": False, "reason": "plan_structured: " + "; ".join(problems)}
+        return {"ok": True, "reason": "plan_structured: rendered "
+                f"{len(rendered['acs'])} AC(s), teeth green at the step"}
     if rubric_name == "test_drafted":
         # ASSEMBLE BEFORE SCORING (task 08e666ff, output half): when the
         # model returned per-name bodies (`test_bodies`) rather than a
@@ -3019,7 +3083,7 @@ class PlanRefusalRecallResponse(BaseModel):
 
 
 _PLAN_REFUSAL_MARKERS = ("plan_checks:", "plan_gate rubric refused",
-                         "plan_gate: ")
+                         "plan_gate: ", "plan_structured:")
 
 
 def plan_refusal_reason(gate_reason: str) -> str:
@@ -3057,10 +3121,32 @@ def workflow_step_plan_refusal_recall(
     reason = ""
     try:
         if body.task_id:
-            ctx = get_project(project)
-            task = ctx.task_svc.get(body.task_id)
-            reason = plan_refusal_reason(
-                getattr(task, "gate_reason", "") if task else "")
+            # THE STEP'S OWN REFUSAL FIRST (explicit planning): the
+            # plan_structured rubric refuses at verify_plan and records a
+            # not-ok reason-loop row; the newest such row beats the stored
+            # gate_reason, which may describe an older plan_gate park.
+            try:
+                from prism_service.services import agent_runs_data
+                from prism_service.services import task_runner as _task_runner
+                rows = agent_runs_data.get_agent_runs(
+                    _task_runner._scores_db_for(project), limit=5,
+                    task_id=body.task_id)
+                for row in rows:
+                    if row.get("step") != "reason-loop":
+                        continue
+                    if row.get("ok") is not False:
+                        break
+                    summary = str(row.get("verdict_summary") or "")
+                    if summary.startswith("plan_structured:"):
+                        reason = summary
+                    break
+            except Exception:
+                reason = ""
+            if not reason:
+                ctx = get_project(project)
+                task = ctx.task_svc.get(body.task_id)
+                reason = plan_refusal_reason(
+                    getattr(task, "gate_reason", "") if task else "")
     except Exception:
         reason = ""
     return PlanRefusalRecallResponse(
@@ -3124,6 +3210,177 @@ def plan_base_colour_block(rc: Optional[int], base: str, targets: list[str],
     return (f"NOT MEASURED at base {b} (pytest rc={rc}): {ids}. State the "
             "colour of each AC explicitly: `RED at base: <pytest id>` on the "
             "one the fix turns green, `stays green` on every guard.")
+
+
+# ----------------------------------------------------------------------
+# EXPLICIT PLANNING (owner 2026-09-14: "we keep leaving this up to the
+# model ... we need to be very explicit about what is supposed to happen;
+# that explicit comes from the planning steps").
+# ----------------------------------------------------------------------
+# Three codified pieces replace the prose contract:
+#   plan-compose  -> ${planFrame}: PRISM states the facts it already holds
+#                    (the pinned test and its colour at base, the files in
+#                    scope, the ontology's terms) and the ONE acceptance
+#                    criterion it can write itself.
+#   plan_structured (reason-loop rubric) -> the model returns TYPED slots
+#                    (acs[] with colour as an enum of the lexicon's terms),
+#                    PRISM renders plan_doc/plan_diagram in the exact shape
+#                    the gate teeth parse, inserts the pinned red AC
+#                    deterministically, and validates with the SAME teeth
+#                    at the step, so a bad draft retries here instead of
+#                    spending a plan_gate rewind.
+# The lexicon (ontology/model-lexicon.ttl) declares the terms the enum
+# carries: Oracle, RedAtBase, RegressionGuard.
+PLAN_COLOURS = ("red_at_base", "guard")
+
+
+class PlanComposeRequest(BaseModel):
+    task_id: str = ""
+    colour: str = ""          # from plan-base-colour: absent|red|green|unmeasured
+    base: str = ""
+
+
+class PlanComposeResponse(BaseModel):
+    plan_frame: str = ""
+    pinned_test: str = ""
+    pinned_colour: str = ""
+    files_in_scope: list[str] = Field(default_factory=list)
+
+
+def plan_frame_text(title: str, pinned: str, colour: str, base: str,
+                    files: list[str], oracle: str) -> str:
+    b = (base or "")[:8] or "base"
+    lines = [f"TASK: {title}".strip()]
+    if pinned:
+        state = {"absent": "does not exist at base (the task creates it)",
+                 "red": "FAILS at base (rc=1)",
+                 "green": "already PASSES at base",
+                 }.get(colour, "colour not measured at base")
+        lines.append(f"PINNED TEST: {pinned} -- {state} {b}.")
+        if colour in ("absent", "red", "unmeasured", ""):
+            lines.append("AC-1 IS FIXED BY PRISM: colour red_at_base, pytest_id "
+                         f"{pinned}. Return it as the first entry unchanged, "
+                         "then add the other criteria as guards.")
+        else:
+            lines.append("The pinned suite is already green, so no AC may "
+                         "claim it red. Name ONE new test id under tests/ "
+                         "with colour red_at_base, or state that the task "
+                         "is already done.")
+    if oracle:
+        lines.append(f"ORACLE OF THE TASK: {oracle.strip()[:600]}")
+    if files:
+        lines.append("FILES IN SCOPE (name only these, they exist): "
+                     + ", ".join(files))
+    else:
+        lines.append("FILES IN SCOPE: none pinned; name only files that exist "
+                     "in the worktree, or say `new:` before a file this task "
+                     "creates.")
+    lines.append(
+        "TERMS (from the PRISM lexicon): red_at_base = the criterion the "
+        "pinned test proves; it fails before the fix and passes after. "
+        "guard = a criterion already true today that must stay green. "
+        "oracle = the command or the screen a person reads that proves the "
+        "criterion. Use exactly these colours: red_at_base, guard.")
+    return "\n".join(lines)
+
+
+@router.post("/steps/plan-compose")
+def workflow_step_plan_compose(
+    body: PlanComposeRequest, project: str = Query(...),
+) -> PlanComposeResponse:
+    """Compose the explicit frame the planner fills. Zero model calls.
+    NEVER RAISES: on any failure the frame degrades to the task title."""
+    title = ""
+    pinned = ""
+    files: list[str] = []
+    oracle = ""
+    try:
+        if body.task_id:
+            ctx = get_project(project)
+            task = ctx.task_svc.get(body.task_id)
+            title = str(getattr(task, "title", "") or "")
+            verify = [str(v).strip() for v in (getattr(task, "verify", None) or [])
+                      if str(v).strip()]
+            pinned = verify[0] if verify else ""
+            files = [str(f).strip() for f in (getattr(task, "allowed_files", None) or [])
+                     if str(f).strip()]
+            oracle = str(getattr(task, "oracle", "") or "")
+    except Exception:
+        pass
+    return PlanComposeResponse(
+        plan_frame=plan_frame_text(title, pinned, body.colour, body.base, files, oracle),
+        pinned_test=pinned, pinned_colour=body.colour, files_in_scope=files)
+
+
+def _render_structured_plan(fields: dict, task, pinned: str, colour: str) -> dict:
+    """Turn typed slots into plan_doc + plan_diagram in the exact shape the
+    gate teeth parse. Deterministic. Inserts the pinned red AC itself when
+    the model did not return it (compose what PRISM already knows)."""
+    title = str(getattr(task, "title", "") or fields.get("title") or "")
+    goal = str(fields.get("goal") or "").strip()
+    raw_acs = fields.get("acs") or []
+    if isinstance(raw_acs, str):
+        try:
+            raw_acs = json.loads(raw_acs)
+        except Exception:
+            raw_acs = []
+    acs: list[dict] = []
+    for entry in raw_acs if isinstance(raw_acs, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        col = str(entry.get("colour") or "").strip().lower()
+        if col not in PLAN_COLOURS:
+            col = "guard"
+        acs.append({"text": text, "colour": col,
+                    "oracle": str(entry.get("oracle") or "").strip(),
+                    "pytest_id": str(entry.get("pytest_id") or "").strip()})
+    if pinned and colour in ("absent", "red", "unmeasured", ""):
+        has_red = any(a["colour"] == "red_at_base" and a["pytest_id"] == pinned
+                      for a in acs)
+        if not has_red:
+            acs = [a for a in acs if a["pytest_id"] != pinned]
+            acs.insert(0, {
+                "text": (f"The pinned suite {pinned} exists and passes after "
+                         "the fix"),
+                "colour": "red_at_base", "oracle": f"pytest {pinned}",
+                "pytest_id": pinned})
+    files = fields.get("files_to_change") or []
+    if isinstance(files, str):
+        files = [f.strip() for f in files.split(",") if f.strip()]
+    lines = [f"## Implementation Plan: {title}".rstrip(), ""]
+    if goal:
+        lines += ["### Goal", goal, ""]
+    lines.append("### Acceptance Criteria")
+    for i, a in enumerate(acs, 1):
+        if a["colour"] == "red_at_base":
+            tag = f" (RED at base: {a['pytest_id'] or a['oracle']})"
+        else:
+            tag = " (regression guard, stays green)"
+        lines.append(f"- AC-{i}: {a['text']}{tag}")
+        oracle = a["oracle"] or (f"pytest {a['pytest_id']}" if a["pytest_id"] else "")
+        if oracle:
+            lines.append(f"  - oracle: {oracle}")
+    if files:
+        lines += ["", "### Files"] + [f"- {f}" for f in files]
+    notes = str(fields.get("implementation_notes") or "").strip()
+    if notes:
+        lines += ["", "### Approach", notes]
+    plan_doc = "\n".join(lines).rstrip() + "\n"
+    # Diagram: one node per AC feeding the gate, plus files feeding the AC
+    # they prove; always >= 2 edges so the form tooth's edge count holds.
+    dl = ["flowchart TD"]
+    for i, a in enumerate(acs, 1):
+        label = a["text"].replace('"', "'")[:60]
+        dl.append(f'  AC{i}["AC-{i}: {label}"] --> GATE["plan_gate / red_gate"]')
+    for j, f in enumerate(files[:6], 1):
+        dl.append(f'  F{j}["{str(f).replace(chr(34), chr(39))[:60]}"] --> AC1')
+    if len(dl) < 3:
+        dl.append('  START["task"] --> AC1')
+    plan_diagram = "\n".join(dl) + "\n"
+    return {"plan_doc": plan_doc, "plan_diagram": plan_diagram, "acs": acs}
 
 
 @router.post("/steps/plan-base-colour")
