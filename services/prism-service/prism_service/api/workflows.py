@@ -1261,6 +1261,77 @@ def _attach_node_trend_batch(scores_db, entries: list[dict]) -> None:
         step["token_indeterminate"] = t.get("indeterminate", True)
 
 
+def _block_slug(block_id: str) -> str:
+    """The URL-slug an ordinary http-callback step's route would carry
+    for a registered block's dotted id -- "red.targets_from_acs" ->
+    "red-targets-from-acs" (each "." segment, its own "_" also turned to
+    "-", dash-joined). A behaviour step that dispatches straight to that
+    block's own route (write-failing-tests-loop.json's targets/pack/
+    compose steps call /api/workflows/steps/red-targets-from-acs etc,
+    unchanged since before blocks existed) is recognized this way with
+    no edit to the live-dispatched behaviour JSON at all."""
+    return "-".join(part.replace("_", "-") for part in block_id.split("."))
+
+
+def _block_index_by_route() -> dict[str, "Block"]:
+    """Every registered block, keyed by the slug _block_slug computes for
+    it -- so a behaviour step's own `route` can be looked up directly."""
+    from prism_service.blocks import list_blocks
+    return {_block_slug(b.id): b for b in list_blocks()}
+
+
+# A behaviour step whose route does not literally match a block's own
+# slug (the block is called from INSIDE a Python branch the step's http
+# handler reaches, not at the handler's own url) declares the block it
+# stands for here instead -- never by editing the live-dispatched
+# behaviour JSON, which would add a real extra engine step. Keyed by
+# behaviour id -> list of (existing step id to render the block AFTER,
+# block id). owner 2026-09-13: "we should have multiplier steps before
+# the red that are pydantic" made the red.* ones visible by route alone;
+# certainty.derive_oracle is the one block this landing's route-matching
+# cannot reach, since plan-gate-check.json's "infer" step calls
+# gate-adjudication, which only reaches design_packet.adjudicate_root_
+# plan_gate's own conditional run_block("certainty.derive_oracle", ...)
+# call for SOME tasks, never as a url of its own.
+_STEP_BLOCK_OVERRIDES: dict[str, list[tuple[str, str]]] = {
+    "plan-gate-check": [("infer", "certainty.derive_oracle")],
+}
+
+
+def _synthetic_block_step(after_step_id: str, block) -> dict:
+    """A DISPLAY-ONLY sub-node for a block _STEP_BLOCK_OVERRIDES names --
+    never dispatched itself (`execution` stays "connected", same as
+    every other non-"scripted" step here; nothing posts a run to it).
+    `route` is the block's own id, so `_attach_node_trend`/`_attach_node_
+    trend_batch` finds its REAL run count under the exact key `run_block`
+    already records every call under -- the same mechanism worker_seat_
+    blocks' own steps use."""
+    return {
+        "id": f"{after_step_id}__{block.id}",
+        "agent": "conductor",
+        "type": "block",
+        "agentic": block.kind == "agentic",
+        "route": block.id,
+        "block_id": block.id,
+        "block_kind": block.kind,
+        "block_title": block.title,
+        "validation": None,
+        "persona": "conductor",
+        "persona_label": "Conductor",
+        "purpose": block.title,
+        "input": ", ".join(block.inputs),
+        "action": block.description,
+        "output": ", ".join(block.outputs),
+        "linked_workflow_id": None,
+        "execution": "connected",
+        "runner": "block",
+        "command": "",
+        "working_directory": "",
+        "timeout_seconds": 300,
+        "depends_on": [after_step_id],
+    }
+
+
 def _conductor_behavior_workflows(project: str) -> list[dict]:
     return _cached_engine_structure(
         "conductor_behaviors", project,
@@ -1316,6 +1387,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
     except HTTPException:
         return []
 
+    block_by_route = _block_index_by_route()
     entries = []
     for fsm in bot.get("fsms") or bot.get("Fsms") or []:
         fsm_id = fsm.get("fsmId") or fsm.get("FsmId")
@@ -1334,6 +1406,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
                 url = step.get("url") or step.get("Url") or ""
                 route = (url.split("/steps/")[-1].split("?")[0]
                          if "/steps/" in url else "")
+                matched_block = block_by_route.get(route)
                 steps.append({
                     "id": step_id,
                     "agent": "conductor",
@@ -1357,11 +1430,22 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
                     "validation": "exit_code == 0",
                     "persona": "conductor",
                     "persona_label": "Conductor",
-                    "purpose": step_id.replace("-", " ").replace("_", " ").capitalize(),
-                    "input": "Previous step's result" if i else "The conductor bot's own repo checkout",
-                    "action": command or url,
-                    "output": "Captured stdout, stderr, and exit code" if kind == "shell"
-                        else "HTTP response body and status",
+                    # A matched step's purpose/input/action/output mirror the
+                    # SAME fields worker_seat_blocks builds for this exact
+                    # block (title/inputs/description/outputs) -- clicking
+                    # this sub-node must read identically to clicking the
+                    # block's own card in the group view, never a second,
+                    # drifting description of the same unit of work.
+                    "purpose": (matched_block.title if matched_block
+                               else step_id.replace("-", " ").replace("_", " ").capitalize()),
+                    "input": (", ".join(matched_block.inputs) if matched_block
+                             else "Previous step's result" if i
+                             else "The conductor bot's own repo checkout"),
+                    "action": (matched_block.description if matched_block
+                              else command or url),
+                    "output": (", ".join(matched_block.outputs) if matched_block
+                              else "Captured stdout, stderr, and exit code" if kind == "shell"
+                              else "HTTP response body and status"),
                     # DEPTH IS NOT TWO LEVELS. A behaviour's own step may
                     # itself call a deeper behaviour, which may call another,
                     # as far down as the work actually decomposes (owner
@@ -1396,7 +1480,27 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
                     "working_directory": step.get("workingDirectory") or step.get("WorkingDirectory") or "",
                     "timeout_seconds": step.get("timeoutSeconds") or step.get("TimeoutSeconds") or 300,
                     "depends_on": [raw_steps[i - 1].get("id") or raw_steps[i - 1].get("Id")] if i else [],
+                    # A step whose own route is a registered block's slug
+                    # (task b490fabc's lineage, owner 2026-09-13: "we
+                    # should have multiplier steps before the red that
+                    # are pydantic... help speed up the inference") IS
+                    # that block, not merely calling it -- so the canvas
+                    # can render it as a block-styled sub-node in the
+                    # SAME declared position, never as a second node.
+                    "block_id": matched_block.id if matched_block else None,
+                    "block_kind": matched_block.kind if matched_block else None,
+                    "block_title": matched_block.title if matched_block else None,
                 })
+            for after_id, block_id in _STEP_BLOCK_OVERRIDES.get(behavior_id, []):
+                try:
+                    from prism_service.blocks import get_block
+                    block = get_block(block_id)
+                except KeyError:
+                    continue
+                idx = next((i for i, s in enumerate(steps)
+                           if s["id"] == after_id), None)
+                if idx is not None:
+                    steps.insert(idx + 1, _synthetic_block_step(after_id, block))
             trigger = _BEHAVIOR_TRIGGER.get(behavior_id, _DEFAULT_BEHAVIOR_TRIGGER)
             entries.append({
                 "id": behavior_id,

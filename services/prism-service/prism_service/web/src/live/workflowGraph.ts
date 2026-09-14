@@ -78,6 +78,19 @@ export type WfNode = {
    * WAITING (a seat's pre-check beat), never RUNNING. Null/absent when the
    * server has nothing to report (older service, or the node is idle). */
   live?: NonNullable<WorkflowDef["live"]>[string] | null;
+  /** Set exactly when this step IS a registered multiplier block, so its
+   * card draws the block glyph/colour instead of the plain persona dot
+   * (owner 2026-09-13/14: "multiplier steps before the red that are
+   * pydantic" must be visible IN the flow, not only in the separate
+   * worker_seat_blocks group). */
+  blockId?: string | null;
+  /** "deterministic" | "agentic" | "http" -- drives the glyph colour:
+   * deterministic reuses teal (this canvas's locked "data flow" hue, the
+   * closest fit for a zero-model-call read/write); agentic/http reuse
+   * orange (the locked "compute" hue -- a block that reaches a model or
+   * the network is doing real compute, same family as a step's progress
+   * fill). */
+  blockKind?: string | null;
 };
 
 /** A node's own measured token economics — GET /api/workflows'
@@ -328,7 +341,11 @@ export class WorkflowGraph {
         id: s.id,
         kind: "step",
         label: linkedWorkflowLabel ?? title(s.id),
-        sub: gate ? `${s.persona_label} decides` : s.action || s.persona_label,
+        // "· block" is the distinct text badge a block-styled sub-node
+        // carries in addition to its own glyph/colour -- so it reads as a
+        // block even before a viewer learns the glyph vocabulary.
+        sub: (gate ? `${s.persona_label} decides` : s.action || s.persona_label)
+          + (s.block_id ? " · block" : ""),
         summary: linkedWorkflowLabel
           ? `${linkedWorkflowLabel} workflow`
           : i + 1 < steps.length
@@ -336,7 +353,13 @@ export class WorkflowGraph {
             : "Next · Complete",
         actionLabel: linkedWorkflowLabel ? "⌄" : "↗",
         childCount: s.linked_workflow_step_count,
-        glyph: gate ? "◆" : glyphFor("session", s.persona),
+        // A block sub-node gets its own glyph -- ⚙ for a deterministic
+        // (zero-model-call) block, ✦ for one that reaches a model or the
+        // network -- distinct from the persona dot every ordinary step
+        // draws, so a block reads as a block at a glance, not just from
+        // its "· block" sub-line.
+        glyph: gate ? "◆" : s.block_id ? (s.block_kind === "agentic" || s.block_kind === "http" ? "✦" : "⚙")
+          : glyphFor("session", s.persona),
         gate,
         count: def.occupancy[s.id] ?? 0,
         slot: this.place(s.id, (i + 1) * (STEP_W + STEP_GAP), STEP_Y, STEP_W, STEP_H),
@@ -352,6 +375,8 @@ export class WorkflowGraph {
         },
         runningSince,
         live: def.live?.[s.id] ?? null,
+        blockId: s.block_id ?? null,
+        blockKind: s.block_kind ?? null,
       });
     });
 
@@ -950,7 +975,13 @@ function drawNode(ctx: CanvasRenderingContext2D, n: WfNode, selected = false, ac
     ctx.fillStyle = activeStroke;
     ctx.fillText(AGENT_AT_WORK_GLYPH, x + 7, y + 10);
   } else {
-    ctx.fillStyle = PALETTE.textLabel;
+    // A block sub-node's glyph carries its kind's colour even while idle
+    // -- deterministic (teal, this canvas's "data flow" hue) vs agentic/
+    // http (orange, "compute") -- so the distinction survives independent
+    // of whatever else is happening on the card.
+    ctx.fillStyle = n.blockId
+      ? (n.blockKind === "agentic" || n.blockKind === "http" ? PALETTE.orange : PALETTE.teal)
+      : PALETTE.textLabel;
     ctx.fillText(n.glyph, x + 8, y + 10);
   }
 
