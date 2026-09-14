@@ -645,6 +645,62 @@ def form_complete(plan_doc: str, plan_diagram: str) -> str:
 
 
 # ----------------------------------------------------------------------
+# A closer, not a refusal: the task is ALREADY SHIPPED.
+# ----------------------------------------------------------------------
+# THE LIVE ROUND (task a65c66e5, 2026-09-14). The ticket's fix had been
+# landed by hand (commit f547a892 on origin/main carries its `[task:`
+# trailer; tag shipped-direct-f547a89), so its pinned suite was green at
+# base and NO acceptance criterion could ever be red. The machine drove it
+# anyway: two form rewinds, a red-at-base rewind, the whole rewind budget,
+# an hour of the single engine slot, and then a park for a person with
+# "no acceptance criterion is shown to FAIL at the base commit". Every
+# tooth was right and the round was wasted, because nothing asked the one
+# question that decides it: is this ticket's work already on main?
+CLOSERS: tuple[str, ...] = ("already_shipped",)
+LABELS["already_shipped"] = (
+    "This task's own commit trailer is on origin/main and its pinned "
+    "suite passes there: nothing left to plan")
+
+
+def already_shipped(task, project: str = "default", *,
+                    measure: Optional[bool] = None,
+                    runner: Optional[Callable[..., Optional[int]]] = None
+                    ) -> str:
+    """A positive finding when the task's work is already delivered, or "".
+
+    Two facts, both required: (1) a commit on origin/main carries this
+    task's `[task:<id8>` trailer (the same squash-safe reader the green
+    gate's shipped-ness tooth uses), and (2) the task's pinned suite
+    (task.verify) runs GREEN at the plan's base commit. A task with no
+    pinned suite, an unmeasurable run, or no trailer is never closed here.
+    Never raises: any error answers "" (fail closed, the round continues)."""
+    try:
+        tid = str(getattr(task, "id", "") or "")
+        targets = [str(v).strip() for v in (getattr(task, "verify", None) or [])
+                   if str(v).strip()]
+        if not tid or not targets:
+            return ""
+        from prism_service.api.tasks import _shipped_sha_on_main
+        from prism_service.services.task_workspace import _prism_repo_root
+        sha = _shipped_sha_on_main(str(_prism_repo_root()), tid) or ""
+        if not sha:
+            return ""
+        root = repo_root_for(task, project)
+        base = base_ref_for(task, root)
+        do_measure = measurement_enabled() if measure is None else bool(measure)
+        if not (do_measure and root is not None and base):
+            return ""
+        run = runner or _run_at_rev
+        if run(root, base, targets) != 0:
+            return ""
+        return (f"already shipped: {sha[:8]} on origin/main carries this "
+                f"task's trailer and the pinned suite passes at {base[:8]} "
+                f"({', '.join(targets)}). Nothing is left to plan.")
+    except Exception:
+        return ""
+
+
+# ----------------------------------------------------------------------
 # Task-facing surface
 # ----------------------------------------------------------------------
 def repo_root_for(task, project: str) -> Optional[Path]:
@@ -764,6 +820,13 @@ def run_all(task, project: str = "default", *,
 def run_check(check_id: str, task, project: str = "default", **kw) -> dict:
     """One named tooth, same shape as run_all's entries. An unknown id
     reports ok=True (a name this build does not know is not a refusal)."""
+    if check_id in CLOSERS:
+        # A closer never refuses: ok stays True, `reason` carries the
+        # positive finding (empty when the task is not already shipped) and
+        # `close` says whether the adjudicator may conclude the task.
+        finding = already_shipped(task, project, **kw) if task is not None else ""
+        return {"id": check_id, "label": LABELS[check_id], "ok": True,
+                "reason": finding, "close": bool(finding)}
     if check_id not in CHECKS:
         return {"id": check_id, "label": f"unknown check {check_id!r}",
                 "ok": True, "reason": ""}

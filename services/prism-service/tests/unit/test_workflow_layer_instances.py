@@ -194,7 +194,8 @@ def test_the_response_names_the_definitions_current_version(monkeypatch):
     # the behaviour files live in the repo, not in the test data dir
     _pin_repo_source(monkeypatch)
     out = wf.workflow_instances("plan-gate-check", project="prism", task_id="", version=None)
-    assert out["current_version"] == 5, out
+    # 7.13.372: plan-gate-check.json v6 added the already_shipped closer step.
+    assert out["current_version"] == 6, out
 
 
 def test_the_inference_seat_stamps_the_version_it_ran(monkeypatch):
@@ -206,7 +207,7 @@ def test_the_inference_seat_stamps_the_version_it_ran(monkeypatch):
     test_the_response_names_the_definitions_current_version above)."""
     from prism_service.services import gate_agent as ga
     _pin_repo_source(monkeypatch)
-    assert ga._flow_version("prism", "plan_gate") == 5
+    assert ga._flow_version("prism", "plan_gate") == 6  # v6: already_shipped step
     assert ga._flow_version("prism", "not_a_gate") is None
     src = (Path(__file__).resolve().parent.parent.parent
            / "prism_service/services/gate_agent.py").read_text(encoding="utf-8")

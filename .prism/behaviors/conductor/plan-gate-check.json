@@ -3,8 +3,15 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Check plan coverage",
-  "version": 5,
+  "version": 6,
   "steps": [
+    {
+      "id": "already_shipped",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/plan-gate-check-one?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"check\": \"already_shipped\"}",
+      "timeoutSeconds": 300
+    },
     {
       "id": "rubric",
       "kind": "http-callback",

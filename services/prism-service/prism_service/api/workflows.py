@@ -2347,6 +2347,10 @@ class GateCheckStatus(BaseModel):
     label: str
     ok: bool
     reason: str
+    # A CLOSER (plan_gate_checks.CLOSERS, e.g. already_shipped) reports
+    # ok=True with a positive finding in `reason` and close=True; a
+    # refusing tooth never sets it.
+    close: bool = False
 
 
 class PlanGateCheckRequest(BaseModel):

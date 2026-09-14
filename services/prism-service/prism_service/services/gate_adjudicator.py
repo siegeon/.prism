@@ -511,11 +511,22 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
                     # refusal onto gate_reason for the driver to act on.
                     _hold = ""
                     _pt = None
+                    _closed = None
                     if step == "plan_gate":
                         from prism_service.services import plan_gate_checks as _pgc
                         _pt = ctx.task_svc.get(tid)
-                        _hold = _pgc.refusal(_pt, pid) if _pt is not None else ""
-                    if _hold:
+                        # THE CLOSER RUNS BEFORE ANY REFUSAL (task a65c66e5):
+                        # a ticket whose trailer is on origin/main and whose
+                        # pinned suite is green at base has nothing left to
+                        # plan; refusing its plan, rewinding it, and parking
+                        # it for a person is exactly the wasted round the
+                        # owner watched. Same seat, same audit row.
+                        _closed = close_if_already_shipped(ctx, tid, pid, _pt)
+                        if _closed is None:
+                            _hold = _pgc.refusal(_pt, pid) if _pt is not None else ""
+                    if _closed is not None:
+                        res = _closed
+                    elif _hold:
                         res = None
                     elif step == "plan_gate" and _pt is not None:
                         # task 594f9a58: the certainty seat decides a ROOT
@@ -999,6 +1010,39 @@ def _loop(interval_s: int) -> None:
         baseline = time.time()
         wakeups.wait(["task_changed", "shipped", "deployed"],
                      timeout=wakeups.worker_fallback_s())
+
+
+def close_if_already_shipped(ctx, task_id: str, project: str, task):
+    """Conclude a plan_gate task whose work is already on origin/main.
+
+    Returns the decision dict when it closed the task, None when the closer
+    found nothing (the normal path continues untouched). The closer is
+    plan_gate_checks.already_shipped: a `[task:<id8>` trailer on
+    origin/main AND the pinned suite green at the plan's base commit. The
+    task goes to green_gate/passed/done in one write with the finding on
+    gate_reason, and a gate_decide history row names this seat, so the
+    Trace reads as a machine decision, never as a silent status flip.
+    Never raises into the sweep."""
+    try:
+        if task is None:
+            return None
+        from prism_service.services import plan_gate_checks as _pgc
+        finding = _pgc.already_shipped(task, project)
+        if not finding:
+            return None
+        ctx.task_svc.update(
+            task_id, workflow_step="green_gate", gate_state="passed",
+            gate_reason=finding, status="done", blocked_reason="")
+        ctx.task_svc.record_history(
+            task_id, action="gate_decide",
+            details=(f"plan_gate -> done; already shipped; {finding[:220]}"),
+            actor="conductor-adjudicator")
+        _log(f"{project}/{task_id[:8]}: closed as already shipped")
+        return {"ok": True, "task_id": task_id, "step": "plan_gate",
+                "closed": True, "reason": finding}
+    except Exception as exc:  # noqa: BLE001 - a closer never kills the sweep
+        _log(f"{project}/{task_id[:8]}: already-shipped closer raised ({exc})")
+        return None
 
 
 def start_gate_adjudicator() -> threading.Thread | None:
