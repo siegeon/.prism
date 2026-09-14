@@ -427,6 +427,41 @@ def _clear_stale_park_text(project: str) -> list[str]:
     return cleared
 
 
+# Multiplier block (owner 2026-09-13, task b490fabc): the deployed-signal
+# stale-park clear above, declared as a registered, typed, run-counted
+# unit -- see prism_service/blocks/__init__.py. Body unchanged
+# (_clear_stale_park_text); registering it only names and records it.
+# Project-scoped: this sweeps every in_progress task in one project pass,
+# it is not about any single task.
+from prism_service.blocks import Block, register_block, run_block  # noqa: E402
+
+RESUME_CLEAR_STALE_PARK_BLOCK = Block(
+    id="resume.clear_stale_park",
+    title="Clear this seat's stale park text",
+    kind="deterministic",
+    owner_seat="resume_actuator",
+    scope="project",
+    on_failure="stop",
+    inputs=["task.status", "task.blocked_reason"],
+    outputs=["task.blocked_reason"],
+    description=(
+        "On a deployed signal, clear this seat's own park text off any "
+        "task whose status already moved past blocked without going "
+        "through release() -- a cosmetic-only field left reading 'still "
+        "parked' on a task that is genuinely driving again."),
+)
+def _run_clear_stale_park_text(*args, **kwargs):
+    """Resolves `_clear_stale_park_text` by MODULE-GLOBAL NAME at call
+    time rather than the registry closing over the function object at
+    import time -- a test that monkeypatches this module's own name must
+    still be honoured (see gate_adjudicator._run_sweep_once for the same
+    fix, found live by test_gate_adjudicator_deploy_forces_resweep.py)."""
+    return _clear_stale_park_text(*args, **kwargs)
+
+
+register_block(RESUME_CLEAR_STALE_PARK_BLOCK, _run_clear_stale_park_text)
+
+
 def _total_dispatches(project: str, task_id: str) -> int:
     """Dispatches this seat has made SINCE THE LAST HUMAN RELEASE, from
     durable history. Survives a daemon restart, and no automatic budget
@@ -764,7 +799,11 @@ def sweep_once_for(project: str, force: bool = False) -> Optional[dict]:
     from prism_service.services import task_runner as _runner
 
     if force:
-        cleared = _clear_stale_park_text(project)
+        # Routed through the registered resume.clear_stale_park BLOCK
+        # (not a bare call) so this pass is a recorded, typed unit a
+        # catalog entry can show a run count for. Body unchanged.
+        cleared = run_block("resume.clear_stale_park", project=project,
+                            args=(project,)) or []
         if cleared:
             _log(f"{project}: cleared stale park text on {cleared}")
 
