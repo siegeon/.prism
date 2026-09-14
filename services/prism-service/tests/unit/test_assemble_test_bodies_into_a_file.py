@@ -177,6 +177,13 @@ def test_malformed_test_bodies_json_refuses(monkeypatch):
 
 
 def test_a_non_list_test_bodies_refuses(monkeypatch):
+    """SUPERSEDED IN PART (2026-09-14): a name -> body OBJECT is now a
+    legitimate container shape and is normalised, so this no longer
+    refuses for being a non-list. `{"not": "a list"}` still refuses --
+    because "not" is not one of the pinned names. A shape that is neither
+    a list nor an object (a bare string, a number) is covered by
+    test_a_shape_that_is_neither_list_nor_object_says_what_it_got.
+    """
     wf = _wf_with_project(_mk_task(), monkeypatch)
     fields = {"test_bodies": json.dumps({"not": "a list"}),
               "expected_failure_reason": "x"}
@@ -184,6 +191,7 @@ def test_a_non_list_test_bodies_refuses(monkeypatch):
     result = wf._assemble_test_draft("prism", _TASK_ID, fields)
 
     assert result["ok"] is False
+    assert "not" in result["reason"], result
 
 
 # ----------------------------------------------------------------------
@@ -332,3 +340,45 @@ def test_reason_loop_exports_the_assembled_code_for_the_write_step(
     assert f"def {_NAME_A}():" in exported.get("testCode", "")
     assert f"def {_NAME_B}():" in exported.get("testCode", "")
     assert "${" not in exported.get("testCode", "")
+
+
+# ----------------------------------------------------------------------
+# Liberal in the CONTAINER shape (live defect, 2026-09-14)
+# ----------------------------------------------------------------------
+
+def test_a_name_to_body_object_assembles_the_same_file(monkeypatch):
+    """THE MEASURED DEFECT. The schema types test_bodies as a STRING
+    holding JSON, so a compliant answer is JSON nested inside JSON. Haiku
+    answered twice with a shape the assembler rejected, and the drive
+    stalled with "test_bodies is not a JSON list". A name -> body mapping
+    carries the same information, so it must assemble identically."""
+    wf = _wf_with_project(_mk_task(), monkeypatch, {"align": [_ALIGN_ROW]})
+    monkeypatch.setattr(
+        "prism_service.services.arc_governance._submodule_path_resolvable",
+        lambda d: True if d == "prism_service.services.lexicon" else None)
+
+    fields = {"test_bodies": json.dumps({
+        _NAME_A: "text, marks = align('a and b')\nassert marks == [], marks",
+        _NAME_B: "text, marks = align('a; b')\nassert marks, 'expected'",
+    }), "expected_failure_reason": "align() does not exist yet"}
+
+    result = wf._assemble_test_draft("prism", _TASK_ID, fields)
+
+    assert result["ok"] is True, result
+    assert f"def {_NAME_A}():" in result["test_code"]
+    assert f"def {_NAME_B}():" in result["test_code"]
+    ast.parse(result["test_code"])
+
+
+def test_a_shape_that_is_neither_list_nor_object_says_what_it_got(monkeypatch):
+    """A refusal that does not name the received shape tells the model
+    nothing to change, and the recall block hands that text straight to
+    the next attempt."""
+    wf = _wf_with_project(_mk_task(), monkeypatch)
+    fields = {"test_bodies": "just a sentence, not JSON at all",
+              "expected_failure_reason": "x"}
+
+    result = wf._assemble_test_draft("prism", _TASK_ID, fields)
+
+    assert result["ok"] is False
+    assert "just a sentence" in result["reason"], result

@@ -2548,10 +2548,24 @@ def _assemble_test_draft(project: str, task_id: str, fields: dict) -> dict:
             parsed = None
     else:
         parsed = raw_bodies
+    # BE LIBERAL IN WHAT A SMALL MODEL MAY EMIT (live defect, 2026-09-14):
+    # the declared schema types test_bodies as a STRING holding JSON, so a
+    # compliant answer is JSON nested inside JSON. Haiku answered twice with
+    # a shape this rejected, and the refusal said only "is not a JSON list",
+    # which tells the model nothing about what to change. A name -> body
+    # MAPPING is the most natural thing to emit and carries exactly the same
+    # information, so accept it and normalise. Strict in what we ASSEMBLE
+    # (every pinned name must still appear, unpinned names still refuse) --
+    # liberal only in the container shape.
+    if isinstance(parsed, dict):
+        parsed = [{"name": k, "body": v} for k, v in parsed.items()]
     if not isinstance(parsed, list):
+        got = type(parsed).__name__ if parsed is not None else "nothing"
+        preview = str(raw_bodies)[:120]
         return {"ok": False,
-                "reason": ("test_drafted: test_bodies is not a JSON list "
-                          "of {name, body} entries")}
+                "reason": ("test_drafted: test_bodies must be a list of "
+                          "{name, body} entries or a name -> body object; "
+                          f"got {got}: {preview}")}
 
     # A blank/whitespace-only body is treated the same as an ABSENT one --
     # an empty function is not a legitimate draft of a pinned test, it is
