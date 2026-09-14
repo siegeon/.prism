@@ -946,3 +946,42 @@ def run_red_oracle(spec: OracleSpec, task: Any, red_sha: str,
     if persist:
         append_receipt(project, receipt)
     return receipt
+
+
+# task bb3d1f6a: red_gate had a machine rewind (plan_rewind.maybe_rewind,
+# task 1bcb2b24) for the "the pinned suite PASSES at the anchor" verdict,
+# but a defective DRAFT — pytest never collected a single pinned id, e.g.
+# rc=4 "file or directory not found" from a missing test id or an import
+# error at module scope — reads identically to that same verdict once it is
+# on a receipt: run_red_oracle funnels BOTH into status=ST_FAILED (see
+# _red_worktree_run's final "else" branch, which discards the sub-runner's
+# own honest ST_ERROR classification because a red demonstration cares only
+# about rc==1). Neither `status` nor a bare string match on "NOT red" can
+# tell them apart; only the `pytest_pass` observation's rc can.
+def red_refusal_kind(receipt: Optional["EvidenceReceipt"]) -> str:
+    """Classify a NON-RED red-oracle receipt for the machine rewind seat.
+
+    "passed"            the suite runs and rc==0 at the red-step commit —
+                         the draft proves nothing about the change.
+    "collection_error"  pytest never reached a single assertion (rc not in
+                         (0, 1)) — the DRAFT itself is defective.
+    "inconclusive"       the runner could not judge at all (status=ST_ERROR:
+                         a git worktree/subprocess failure, an unrunnable
+                         environment, no receipt, or no pytest_pass
+                         observation on file) — NEVER a verdict on the
+                         draft, so a caller must never rewind on this.
+
+    Both "passed" and "collection_error" mean the same thing to a rewind
+    seat: this anchor can never produce a red receipt without new tests."""
+    if receipt is None or getattr(receipt, "status", "") != ST_FAILED:
+        return "inconclusive"
+    rc = None
+    for o in (getattr(receipt, "observations", None) or []):
+        if isinstance(o, dict) and o.get("name") == "pytest_pass":
+            rc = o.get("observed")
+            break
+    if rc == 0:
+        return "passed"
+    if isinstance(rc, int) and rc != 1:
+        return "collection_error"
+    return "inconclusive"

@@ -118,17 +118,35 @@ def _refusal_for(ctx, task, step: str, project: str) -> str:
             from prism_service.services import plan_gate_checks
             return str(plan_gate_checks.refusal(task, project) or "")
         if step == "red_gate":
-            # The red seat has ALREADY measured the pinned suite and written
-            # its verdict to gate_reason ("NOT red: the spec's tests PASS at
-            # the red-step commit ..."). Re-running it here would spend a
-            # second test run to learn what the row already says.
+            # The red seat has ALREADY measured the pinned suite and left
+            # its verdict as an EvidenceReceipt (task a5e8d877). Read THAT
+            # directly rather than the stored gate_reason string.
             #
-            # Only a REFUSAL rewinds. "NOT red" means the seat measured and
-            # judged. A reason that merely reports it could not measure is
-            # NOT a refusal, and treating the two alike is the bug
-            # green_rewind shipped in 7.13.190.
-            reason = str(getattr(task, "gate_reason", "") or "")
-            return reason if reason.lstrip().startswith("NOT red") else ""
+            # SUPERSEDES the original "NOT red" prefix match (task
+            # 1bcb2b24): gate_reason is a snapshot that is not even stamped
+            # yet on the FIRST sweep pass a new refusal appears (this check
+            # runs BEFORE gate_adjudicator's own _write_pending_reason), and
+            # a bare "NOT red" prefix only ever recognised the suite-PASSES
+            # shape ("NOT red: the spec's tests PASS at ..."), never a
+            # COLLECTION ERROR (rc not in (0, 1) — a missing pinned test id,
+            # an import error at module scope in the draft), whose reason
+            # reads "red not demonstrated at ... (rc=4, wanted rc==1 test
+            # failures): ...". That exact shape dead-ended task bb3d1f6a at
+            # red_gate forever: the seat's own `tried` guard abstains once
+            # ANY non-red receipt is on file, so nothing ever re-swept it.
+            #
+            # Only a genuine verdict rewinds. "inconclusive" (the runner
+            # could not judge at all — a git worktree/subprocess failure)
+            # is NOT a refusal, the same distinction green_rewind already
+            # draws for green_gate (oracle_spec.red_refusal_kind mirrors
+            # green_rewind's ST_FAILED-vs-everything-else split).
+            from prism_service.services import oracle_spec
+            receipt = oracle_spec.latest_receipt(project, task.id)
+            kind = oracle_spec.red_refusal_kind(receipt)
+            if kind not in ("passed", "collection_error"):
+                return ""
+            return str(getattr(receipt, "reason", "") or "") or (
+                "red_gate: the pinned suite did not demonstrate red")
     except Exception:  # noqa: BLE001 - a rewind never breaks the sweep
         return ""
     return ""
