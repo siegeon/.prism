@@ -1,0 +1,48 @@
+"""plan_gate multiplier blocks (task a65c66e5 lineage, owner 2026-09-13/14:
+"a FORM failure is the planner's to fix" -- no gate parks for a person when
+the machine can act).
+
+One typed block today: `plan.form_check` wraps
+`plan_gate_checks.form_complete` so the deterministic tooth that used to
+be invisible Python is a registered, run-counted unit like every other
+CHECKS entry could become. It is not a NEW behaviour -- `form_complete`
+already runs on every `plan_gate_checks.run_all`/`refusal()` call (the
+path `gate_adjudicator`'s `_hold` short-circuit and `plan_rewind.
+maybe_rewind` both already take); this block gives that same call a
+route id a future catalog entry can point a node at.
+
+The full pre-plan multiplier chain the owner asked for (targets_from_
+story / context_pack / prompt_compose / materialize, mirroring
+red_blocks.py's red.* quartet) needs new workflow_step_* endpoints in
+api/workflows.py plus a verify-plan-loop.json rewrite -- out of scope for
+this landing; tracked as follow-up so the drop is not silently narrowed.
+"""
+from prism_service.blocks import Block, register_block
+
+
+def _run_plan_form_check(project: str, task_id: str = "", plan_doc: str = "",
+                         plan_diagram: str = "") -> dict:
+    from prism_service.services import plan_gate_checks as _pgc
+    reason = _pgc.form_complete(plan_doc, plan_diagram)
+    return {"ok": not reason, "reason": reason}
+
+
+PLAN_FORM_CHECK_BLOCK = Block(
+    id="plan.form_check",
+    title="Score the plan packet's form (oracle lines, diagram edges)",
+    kind="deterministic",
+    owner_seat="plan_gate_checks",
+    scope="task",
+    on_failure="continue",
+    inputs=["task.plan_doc", "task.plan_diagram"],
+    outputs=["ok", "reason"],
+    description=(
+        "Zero-model-call form scoring of a plan packet: every AC must "
+        "carry an `oracle:` line, and plan_diagram must parse with at "
+        "least two edges. A non-empty reason is what "
+        "gate_adjudicator.py's `_hold` short-circuit reads to skip the "
+        "certainty seat and what plan_rewind.maybe_rewind reads to "
+        "rewind the task to verify_plan instead of escalating a form "
+        "defect to the owner."),
+)
+register_block(PLAN_FORM_CHECK_BLOCK, _run_plan_form_check)

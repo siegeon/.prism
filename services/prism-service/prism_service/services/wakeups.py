@@ -393,7 +393,13 @@ def _reset_for_tests() -> None:
 # and safer than threading an actual start timestamp through every caller.
 _PROCESS_START = time.time()
 
-DEFAULT_WARMUP_S = 120.0
+# Was 120.0. Task a65c66e5 lineage (owner 2026-09-13/14, "it should be
+# minutes"): every deploy restarts the host, and a 120s blind window read
+# as a stall to the owner watching the board right after a landing. A
+# startup pass is cheap now (the same reason the deploy seat re-sweeps
+# immediately post-restart), so 20s is enough of a debounce without
+# reading as dead time.
+DEFAULT_WARMUP_S = 20.0
 
 
 def worker_warmup_s() -> float:
@@ -405,7 +411,7 @@ def worker_warmup_s() -> float:
 
 
 def wait_out_startup_warmup() -> None:
-    """Block until PRISM_WORKER_WARMUP_S (default 120s) have elapsed since
+    """Block until PRISM_WORKER_WARMUP_S (default 20s) have elapsed since
     this module was first imported. Called ONCE by each worker before its
     very first tick, unconditionally -- a wakeup signal arriving during
     the window does not shorten it (the first tick waits for the LATER of
