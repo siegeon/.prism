@@ -125,6 +125,18 @@ export type WorkflowDef = {
   workflows?: WorkflowCatalogEntry[];
   /** The SDLC roles (Steward, Verifier, Builder) and their cards. */
   roles?: WorkflowRole[];
+  /** This project's own non-done task count (api/workflows.py's own
+   * catalog-wide tally, the same number the banner's "N tasks" prefix
+   * used to show with no explanation of what it counted). Absent only
+   * for an older service. */
+  task_count?: number;
+  /** Total FSM/behaviour node ids across every catalog entry. Absent only
+   * for an older service. */
+  node_count?: number;
+  /** Registered typed multiplier blocks (prism_service/blocks/) -- the
+   * count the "worker_seat_blocks" catalog entry's own steps carry.
+   * Absent only for an older service. */
+  block_count?: number;
 };
 
 /** One ingestion path's hit count in services.language_alignment's
