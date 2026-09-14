@@ -708,10 +708,19 @@ def _deploy_after_land(task_svc, task_id: str, project: str) -> None:
     """Best-effort toward the SHIP itself, same as reap/brain-health/
     refresh-maps: a deploy attempt never fails or re-runs an already-
     successful ship. Imported lazily so an environment without
-    deploy_worker's own module import chain never breaks shipping."""
+    deploy_worker's own module import chain never breaks shipping.
+    Routed through the registered deploy.on_signal BLOCK (not a bare
+    call) so this hook is a recorded, typed unit a catalog entry can
+    show a run count for -- on_failure="continue" on that block matches
+    this try/except's own swallow-and-move-on posture exactly."""
     try:
-        from prism_service.services import deploy_worker
-        deploy_worker.deploy_after_land(task_svc, task_id, project)
+        # Importing deploy_worker is what registers deploy.on_signal --
+        # required here (not just a docs import) since nothing else on
+        # this path guarantees that module has loaded yet.
+        from prism_service.services import deploy_worker  # noqa: F401
+        from prism_service.blocks import run_block
+        run_block("deploy.on_signal", project=project, task_id=task_id,
+                  args=(task_svc, task_id, project))
     except Exception:  # noqa: BLE001 - a deploy attempt never fails a ship
         pass
 

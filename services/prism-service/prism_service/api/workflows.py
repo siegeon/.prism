@@ -1636,6 +1636,66 @@ def _knowledge_health_workflow(project: str) -> dict:
     }
 
 
+def _worker_seat_blocks_workflow(project: str) -> dict:
+    """The registered multiplier blocks (prism_service/blocks/) surfaced
+    as their own catalog entry, so a block declared with `register_block`
+    shows up as a REAL node on /workflows instead of living only as a
+    Python branch inside a seat module (owner 2026-09-13/14, task
+    b490fabc: "you have not got the hang of creating the multiplier
+    blocks that are pydantic" / "im not seeing how many tasks, and how
+    few workflow nodes"). A ninth root workflow, same posture as
+    knowledge_health above -- no parent_id, because these blocks are
+    called from INSIDE several different seats (design_packet,
+    resume_actuator, gate_adjudicator, the write_failing_tests pipeline),
+    not from one FSM of their own.
+
+    Each step's `route` is the block's OWN id -- the exact key
+    `run_block` already records every call under via
+    task_runner._record_codified_run -- so `_attach_node_trend`/
+    `_attach_node_trend_batch` (the caller wires this entry through the
+    SAME batched call conductor_behaviors uses) picks up a real measured
+    run count with no new counting code at all."""
+    from prism_service.blocks import list_blocks
+
+    steps = []
+    for b in list_blocks():
+        steps.append({
+            "id": b.id,
+            "route": b.id,
+            "agent": None,
+            "type": "codified" if b.kind == "deterministic" else b.kind,
+            "validation": None,
+            "persona": "",
+            "persona_label": "",
+            "purpose": b.title,
+            "input": ", ".join(b.inputs),
+            "action": b.description,
+            "output": ", ".join(b.outputs),
+            "authority": "",
+            "owner_seat": b.owner_seat,
+            "scope": b.scope,
+            "on_failure": b.on_failure,
+            "cost_hint": b.cost_hint,
+            "execution": "connected",
+            "linked_workflow_id": None,
+        })
+    return {
+        "id": "worker_seat_blocks",
+        "name": "Worker seat blocks",
+        "description": (
+            "Typed, registered multiplier blocks (prism_service/blocks/) "
+            "called from inside design_packet, resume_actuator, "
+            "gate_adjudicator, and the write_failing_tests pipeline -- "
+            "each block's run is recorded the same way a conductor "
+            "codified sub-step is, so its node here shows a real "
+            "measured run count."
+        ),
+        "steps": steps,
+        "bots": [],
+        "occupancy": {},
+    }
+
+
 @router.get("")
 def get_workflows(project: str = Query("default")) -> dict:
     """The conductor FSM, the bots that drive it, and who is standing where."""
@@ -1771,7 +1831,14 @@ def get_workflows(project: str = Query("default")) -> dict:
     # minutes of shipping it. Both loops now run exactly once, before the
     # per-entry pass, however many behaviour entries there are.
     _active_task_steps: dict[str, str] = {}
+    # THE BANNER'S TASK COUNT (owner 2026-09-13/14: "N tasks · M nodes ·
+    # K blocks") is counted off this SAME already-fetched list, never a
+    # second _svc.list() -- this exact function has already been bitten
+    # once by a double-listing mistake costing >90s under write
+    # contention (see the ONE batch of sqlite reads comment just below).
+    _total_task_count = 0
     for _t in _svc.list():
+        _total_task_count += 1
         if getattr(_t, "status", "") in ("done", "cancelled", "deleted"):
             continue
         _tid = getattr(_t, "id", "")
@@ -1908,6 +1975,18 @@ def get_workflows(project: str = Query("default")) -> dict:
     # knowledge_health (task b1971944): an eighth root workflow, same
     # posture -- no parent_id.
     knowledge_health = _knowledge_health_workflow(project)
+    # worker_seat_blocks (owner 2026-09-13/14): a ninth root workflow --
+    # the registered multiplier blocks, same posture as knowledge_health.
+    # Node trend/run-count is attached via the SAME batched call
+    # conductor_behaviors uses just below (one more sqlite round trip,
+    # not one per block) -- see _worker_seat_blocks_workflow's docstring.
+    worker_seat_blocks = _worker_seat_blocks_workflow(project)
+    _attach_node_trend_batch(
+        (_scores_db / "scores.db") if _scores_db is not None else None,
+        [worker_seat_blocks])
+    worker_seat_blocks["occupancy"] = {
+        s["id"]: (1 if s.get("running_now") else 0)
+        for s in worker_seat_blocks["steps"]}
     # Role bots (owner 2026-09-10): the Steward/Verifier/Builder sit
     # BETWEEN the conductor and the behaviours its steps call, so the
     # tree shows a bot calling a bot. Built and re-parented before the
@@ -1915,8 +1994,8 @@ def get_workflows(project: str = Query("default")) -> dict:
     role_bots = _role_bot_workflows(conductor, project, svc=_svc)
     _reparent_behaviours_under_role_bots(conductor, conductor_behaviors)
     catalog = [conductor, validation, triage, align_language, quickfix,
-              promote_to_law, knowledge_health, *role_bots,
-              *conductor_behaviors]
+              promote_to_law, knowledge_health, worker_seat_blocks,
+              *role_bots, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
@@ -1926,12 +2005,29 @@ def get_workflows(project: str = Query("default")) -> dict:
     # it -- see _apply_bot_tiers.
     _apply_bot_tiers(catalog)
 
+    # THE BANNER (owner 2026-09-13/14: "im not seeing how many tasks, and
+    # how few workflow nodes... you have not got the hang of creating the
+    # multiplier blocks"): the same three numbers the owner asked to be
+    # able to compare at a glance. task_count is the WHOLE project's task
+    # count (counted above off the one _svc.list() this view already
+    # pays for); node_count is every declared step across the entire
+    # catalog, root workflows and nested behaviours alike; block_count is
+    # the registered multiplier-block registry (prism_service/blocks/) --
+    # a number that only grows as more seat behaviour gets codified
+    # rather than left as a bare Python branch.
+    from prism_service.blocks import list_blocks as _list_blocks
+    _node_count = sum(len(entry.get("steps") or []) for entry in catalog)
+    _block_count = len(_list_blocks())
+
     return {
         "steps": steps,
         "bots": bots,
         "roles": role_cards,
         "occupancy": occupancy,
         "workflows": catalog,
+        "task_count": _total_task_count,
+        "node_count": _node_count,
+        "block_count": _block_count,
     }
 
 

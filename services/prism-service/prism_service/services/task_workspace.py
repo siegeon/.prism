@@ -491,6 +491,37 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
     return rec
 
 
+# Multiplier block (owner 2026-09-13/14, task b490fabc): declares
+# ensure_workspace -- create-or-recover a task's git worktree, including
+# the branch-recovery path a missing directory needs -- as a registered,
+# typed unit. Body unchanged; registering it only names and records it.
+# NOT yet routed through run_block: this function has many call sites
+# across the codebase (flow_start, task_runner, resume_actuator, tests),
+# and this landing does not audit/rewire all of them -- registered here
+# for catalog visibility only, same posture as gate_adjudicator's three
+# in-loop blocks.
+from prism_service.blocks import Block, register_block  # noqa: E402
+
+WORKSPACE_RECREATE_BLOCK = Block(
+    id="workspace.recreate",
+    title="Create or recover a task's git worktree",
+    kind="deterministic",
+    owner_seat="task_workspace",
+    scope="task",
+    on_failure="stop",
+    cost_hint="low",
+    inputs=["task_id", "repo_root", "base_ref"],
+    outputs=["path", "baseline", "branch", "repo_root"],
+    description=(
+        "Idempotently creates a task's git worktree, or recovers it "
+        "when the recorded path is missing on disk but the task's own "
+        "prism/ws/<task_id> branch still exists (locally or on origin) "
+        "-- fails closed on any git error rather than falling back to a "
+        "shared branch."),
+)
+register_block(WORKSPACE_RECREATE_BLOCK, ensure_workspace)
+
+
 def remove_workspace(task_id: str) -> dict:
     """Unregister and delete a task's worktree + its branch (best effort).
     Used on task teardown and by tests so the PRISM repo's worktree list
