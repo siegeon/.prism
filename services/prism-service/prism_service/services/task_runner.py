@@ -2752,6 +2752,28 @@ def _wait_timeout_s(interval_s: int, stop_event: Optional[threading.Event],
     return timeout
 
 
+def _wait_out_warmup_visibly() -> None:
+    """`wakeups.wait_out_startup_warmup()`, wrapped in the SAME
+    `system_activity.pass_` every real sweep tick below uses (live
+    incident, task a65c66e5, 2026-09-14). The bare call left NOTHING in
+    `/api/system/activity`'s "running" list for up to PRISM_WORKER_WARMUP_S
+    (default 120s) after every worker_host start -- indistinguishable from
+    task_runner being dead. `_PROCESS_START` (wakeups.py) is stamped at
+    THIS process's own import time, so a worker_host that restarts
+    repeatedly (e.g. a deploy landing mid-warmup, or a crash loop) re-enters
+    this blind window on every single restart; a rewound task can sit
+    genuinely eligible the whole time with a live `wake()` already fired,
+    and a check of system activity during it showed nothing running --
+    reading as a silent dispatch refusal rather than the truth (still
+    warming up, will sweep the instant it clears). `info["active"]=False`
+    keeps a warmup pass out of the "N sweeps happened" idle-collapse count
+    it is not -- it is a distinct, nameable state, not a quiet sweep."""
+    from prism_service.services import wakeups
+    with system_activity.pass_("task_runner", "*", "warmup") as info:
+        info["active"] = False
+        wakeups.wait_out_startup_warmup()
+
+
 def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None:
     """`stop_event` is test-only plumbing (never passed by
     `start_task_runner`): without it, a test that spins up this loop in a
@@ -2765,7 +2787,7 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
          "periodic fallback unless PRISM_WORKER_FALLBACK_S is set)")
     from prism_service.services import wakeups
     wakeups.lower_thread_priority()
-    wakeups.wait_out_startup_warmup()
+    _wait_out_warmup_visibly()
     while stop_event is None or not stop_event.is_set():
         try:
             # `info["active"]` left False when the sweep found nothing
