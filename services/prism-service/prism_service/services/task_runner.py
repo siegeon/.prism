@@ -451,6 +451,14 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_test_scaffold(
             _wf.TestScaffoldRequest(**body), project=project)
 
+    # THE PLAN-SIDE RECALL (task a65c66e5): the plan_gate refusal that
+    # rewound the task reaches the planner as ${refusalBlock}, so a second
+    # attempt is not the identical blind prompt. See verify-plan-loop.json's
+    # "recall" step and workflow_step_plan_refusal_recall.
+    def _plan_refusal_recall(project: str, body: dict):
+        return _wf.workflow_step_plan_refusal_recall(
+            _wf.PlanRefusalRecallRequest(**body), project=project)
+
     # THE PRE-RED MULTIPLIER BLOCKS (owner 2026-09-13/14): three
     # deterministic, typed nodes that replace write-failing-tests-loop's
     # one giant static prompt -- see the module-level comment above
@@ -475,6 +483,7 @@ def _step_handlers() -> dict:
             "oracle-route-check": _oracle_route_check,
             "context-enrich": _context_enrich,
             "refusal-recall": _refusal_recall,
+            "plan-refusal-recall": _plan_refusal_recall,
             "test-scaffold": _test_scaffold,
             "red-targets-from-acs": _red_targets_from_acs,
             "red-context-pack": _red_context_pack,
@@ -924,7 +933,20 @@ def _build_step_variables(task, task_id: str, project: str) -> dict:
         "stopIf": _list_field(task, "stop_if"),
         "planDoc": _text_field(task, "plan_doc"),
         "title": _text_field(task, "title"),
+        # The plan_gate refusal, framed. The declared "recall" step exports
+        # the same name and wins by merge order; this base value makes sure
+        # the FALLBACK prompt path (no chain) never hands the model the
+        # literal "${refusalBlock}" and still tells it what was refused.
+        "refusalBlock": _plan_refusal_block(task),
     }
+
+
+def _plan_refusal_block(task) -> str:
+    try:
+        from prism_service.api import workflows as _wf
+        return _wf.plan_refusal_block(_text_field(task, "gate_reason"))
+    except Exception:
+        return ""
 
 
 def _declared_agentic_prompt(step_id: str, task, facts, plan=None) -> str:

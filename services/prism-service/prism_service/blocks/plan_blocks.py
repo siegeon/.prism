@@ -46,3 +46,31 @@ PLAN_FORM_CHECK_BLOCK = Block(
         "defect to the owner."),
 )
 register_block(PLAN_FORM_CHECK_BLOCK, _run_plan_form_check)
+
+
+def _run_plan_refusal_recall(project: str, task_id: str = "") -> dict:
+    from prism_service.api import workflows as _wf
+    resp = _wf.workflow_step_plan_refusal_recall(
+        _wf.PlanRefusalRecallRequest(task_id=task_id), project=project)
+    return {"ok": True, "refusal_reason": resp.refusal_reason,
+            "refusal_block": resp.refusal_block}
+
+
+PLAN_REFUSAL_RECALL_BLOCK = Block(
+    id="plan.refusal_recall",
+    title="Recall the plan_gate refusal for the planner",
+    kind="deterministic",
+    owner_seat="task_runner",
+    scope="task",
+    on_failure="continue",
+    inputs=["task.gate_reason"],
+    outputs=["refusal_reason", "refusal_block"],
+    description=(
+        "Zero-model-call recall of the plan_gate refusal that rewound the "
+        "task to verify_plan (plan_rewind writes it to task.gate_reason). "
+        "verify-plan-loop.json's `recall` step runs it before the planner "
+        "call and the prompt interpolates ${refusalBlock}, so a second "
+        "attempt fixes the named defect instead of repeating the identical "
+        "blind prompt. Empty when the task carries no plan refusal."),
+)
+register_block(PLAN_REFUSAL_RECALL_BLOCK, _run_plan_refusal_recall)

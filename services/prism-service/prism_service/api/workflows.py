@@ -2931,6 +2931,81 @@ def workflow_step_refusal_recall(
 
 
 # ----------------------------------------------------------------------
+# The plan_gate refusal reaches the planner (task a65c66e5, 2026-09-14).
+# ----------------------------------------------------------------------
+# THE DEFECT. plan_gate's form tooth (plan_gate_checks.form_complete) now
+# rewinds a plan with no `oracle:` lines back to verify_plan instead of
+# parking it for a person -- and verify-plan-loop.json then re-ran the
+# IDENTICAL static prompt, which never asked for an oracle line and never
+# carried the refusal. Observed live: rewind 1 and rewind 2 of the 3-attempt
+# budget produced the same 3-AC / 0-oracle plan_doc; rewind 3 would have
+# escalated a form defect to the owner after all. This step is the plan-
+# side twin of /steps/refusal-recall: zero model calls, reads the task's
+# own gate_reason (plan_rewind writes "Rewind n/3: plan_gate rubric
+# refused, <refusal>" there on every rewind), and hands the planner a framed
+# block naming exactly what to fix. Self-clearing: a plan that passes the
+# gate never rewinds, so gate_reason stops carrying a plan refusal.
+class PlanRefusalRecallRequest(BaseModel):
+    task_id: str = ""
+
+
+class PlanRefusalRecallResponse(BaseModel):
+    refusal_reason: str = ""
+    # Framed here, not in the node prompt, so an empty recall leaves no
+    # dangling sentence (same rule as RefusalRecallResponse).
+    refusal_block: str = ""
+
+
+_PLAN_REFUSAL_MARKERS = ("plan_checks:", "plan_gate rubric refused",
+                         "plan_gate: ")
+
+
+def plan_refusal_reason(gate_reason: str) -> str:
+    """The plan_gate refusal text carried by a task's gate_reason, or ""."""
+    text = str(gate_reason or "").strip()
+    if not text:
+        return ""
+    if not any(marker in text for marker in _PLAN_REFUSAL_MARKERS):
+        return ""
+    return text
+
+
+def plan_refusal_block(gate_reason: str) -> str:
+    """The framed block the planner prompt interpolates as ${refusalBlock}."""
+    reason = plan_refusal_reason(gate_reason)
+    if not reason:
+        return ""
+    return (
+        "THE PREVIOUS PLAN FOR THIS TASK WAS REFUSED BY plan_gate. Here is "
+        f"the exact refusal:\n{reason}\n\nFix EXACTLY that defect. Keep "
+        "every part of the previous plan that was already correct. If the "
+        "refusal names AC ids with no `oracle:` line, write an indented "
+        "`- oracle: <command or observation>` sub-bullet under each one.")
+
+
+@router.post("/steps/plan-refusal-recall")
+def workflow_step_plan_refusal_recall(
+    body: PlanRefusalRecallRequest, project: str = Query(...),
+) -> PlanRefusalRecallResponse:
+    """Read back the plan_gate refusal that rewound this task to verify_plan.
+
+    NEVER RAISES: a broken recall degrades to "no refusal" and lets the
+    plan proceed, the same posture as /steps/refusal-recall.
+    """
+    reason = ""
+    try:
+        if body.task_id:
+            ctx = get_project(project)
+            task = ctx.task_svc.get(body.task_id)
+            reason = plan_refusal_reason(
+                getattr(task, "gate_reason", "") if task else "")
+    except Exception:
+        reason = ""
+    return PlanRefusalRecallResponse(
+        refusal_reason=reason, refusal_block=plan_refusal_block(reason))
+
+
+# ----------------------------------------------------------------------
 # A codified test scaffold (task 08e666ff / owner standing order: make
 # conductor nodes programmatic wherever the data already answers it).
 # ----------------------------------------------------------------------
