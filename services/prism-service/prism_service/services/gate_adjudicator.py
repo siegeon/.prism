@@ -670,6 +670,47 @@ def sweep_once(force: bool = False, force_backoff: Optional[bool] = None
     return approved
 
 
+# Multiplier block (owner 2026-09-13, task b490fabc): one drain pass over
+# every project's pending gates, declared as a registered, typed,
+# run-counted unit -- see prism_service/blocks/__init__.py. Body
+# unchanged (sweep_once, cursor-rotated per project via
+# _rotate_from_cursor, wall-clock capped by _SWEEP_BUDGET_S internally);
+# registering it only names and records the OUTER pass boundary that
+# `_loop` already calls once per interval. The finer-grained
+# adjudicator.fair_cursor / adjudicator.inconclusive_rewind_backoff /
+# adjudicator.unconditional_first_sweep blocks named in the same brief
+# are deferred to the next landing -- they live INSIDE this pass's hot
+# per-task loop, which this landing does not touch.
+from prism_service.blocks import Block, register_block, run_block  # noqa: E402
+
+ADJUDICATOR_DRAIN_BLOCK = Block(
+    id="adjudicator.drain",
+    title="Drain one gate-adjudication pass",
+    kind="deterministic",
+    owner_seat="gate_adjudicator",
+    scope="project",
+    on_failure="stop",
+    cost_hint="low",
+    inputs=["task.workflow_step", "task.gate_state"],
+    outputs=["task.gate_state"],
+    description=(
+        "One cursor-rotated, wall-clock-capped pass adjudicating every "
+        "project's pending green_gate rows -- approves what a fresh "
+        "receipt already supports, backs off what it does not."),
+)
+def _run_sweep_once(*args, **kwargs):
+    """Resolves `sweep_once` by MODULE-GLOBAL NAME at call time rather than
+    the registry closing over the function object at import time --
+    tests monkeypatch `gate_adjudicator.sweep_once` (e.g.
+    test_gate_adjudicator_deploy_forces_resweep.py), and a captured
+    object reference would silently keep calling the pre-patch original.
+    Same fix applied to every block wrapper in this landing."""
+    return sweep_once(*args, **kwargs)
+
+
+register_block(ADJUDICATOR_DRAIN_BLOCK, _run_sweep_once)
+
+
 def _loop(interval_s: int) -> None:
     from prism_service.services import wakeups
 
@@ -714,7 +755,16 @@ def _loop(interval_s: int) -> None:
         force_backoff = deployed_since or boot_drain_passes == 0
         try:
             with system_activity.pass_("gate_adjudicator", "*", "sweep_once") as info:
-                approved = sweep_once(force=force, force_backoff=force_backoff)
+                # Routed through the registered adjudicator.drain BLOCK
+                # (not a bare call) so this pass is a recorded, typed
+                # unit a catalog entry can show a run count for. "*"
+                # matches system_activity.pass_'s own all-projects marker
+                # just above -- sweep_once fans out over every project
+                # internally, there is no single project to attribute
+                # this outer call to.
+                approved = run_block(
+                    "adjudicator.drain", project="*",
+                    kwargs={"force": force, "force_backoff": force_backoff})
                 # "active" means real work happened -- a changed key was
                 # actually adjudicated, or something was decided. A
                 # backlog of unchanged pending gates (the common case once

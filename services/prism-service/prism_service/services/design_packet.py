@@ -608,6 +608,45 @@ def _derive_oracle_checkability(cond, task_id: str, task) -> bool:
     return True
 
 
+# Multiplier block (owner 2026-09-13, task b490fabc's "creating the
+# multiplier blocks that are pydantic"): declares the self-heal above as a
+# registered, typed, run-counted unit instead of a bare Python branch --
+# see prism_service/blocks/__init__.py. The block's body IS
+# `_derive_oracle_checkability`, unchanged; registering it does not fork
+# the logic, it only names and records it so a catalog entry can show its
+# run count the same way a conductor codified sub-step already does.
+from prism_service.blocks import Block, register_block, run_block  # noqa: E402
+
+CERTAINTY_DERIVE_ORACLE_BLOCK = Block(
+    id="certainty.derive_oracle",
+    title="Derive a checkable oracle citation",
+    kind="deterministic",
+    owner_seat="design_packet",
+    scope="task",
+    on_failure="stop",
+    inputs=["task.oracle", "task.likely_misfire", "task.verify",
+            "task.allowed_files", "task.plan_doc"],
+    outputs=["task.oracle", "task.likely_misfire"],
+    description=(
+        "When plan_gate certainty is short specifically because oracle/"
+        "likely_misfire name nothing checkable, and the task row already "
+        "carries a checkable reference (verify, allowed_files, or a "
+        "plan_doc citation), write that reference onto oracle/"
+        "likely_misfire once rather than parking for a human to retype "
+        "what the row already says."),
+)
+def _run_derive_oracle_checkability(*args, **kwargs):
+    """Resolves `_derive_oracle_checkability` by MODULE-GLOBAL NAME at
+    call time rather than the registry closing over the function object
+    at import time -- a test that monkeypatches this module's own name
+    must still be honoured (see gate_adjudicator._run_sweep_once for the
+    same fix, found live by test_gate_adjudicator_deploy_forces_resweep.py)."""
+    return _derive_oracle_checkability(*args, **kwargs)
+
+
+register_block(CERTAINTY_DERIVE_ORACLE_BLOCK, _run_derive_oracle_checkability)
+
+
 def root_plan_gate_escalation_reason(project: str, task_id: str, task,
                                      status: dict) -> str:
     """The ONE string both the certainty seat (adjudicate_root_plan_gate)
@@ -740,11 +779,16 @@ def adjudicate_root_plan_gate(cond, task_id: str, task, project: str
     # uncheckable oracle and the row already carries a checkable
     # reference (task.verify, allowed_files, or a plan_doc citation), fix
     # the oracle rather than ask a human to type what the row already
-    # says. Re-fetch and re-score against the derivation.
+    # says. Re-fetch and re-score against the derivation. Routed through
+    # the registered certainty.derive_oracle BLOCK (not a bare call) so
+    # the self-heal is a recorded, typed unit a catalog entry can show a
+    # run count for -- same body as before, see design_packet's own
+    # register_block call just above root_plan_gate_escalation_reason.
     if (certainty["score"] < threshold
             and any("name nothing checkable" in r
                    for r in (certainty.get("reasons") or []))
-            and _derive_oracle_checkability(cond, task_id, task)):
+            and run_block("certainty.derive_oracle", project=project,
+                          task_id=task_id, args=(cond, task_id, task))):
         task = cond._task_svc.get(task_id) or task
         certainty = plan_gate_certainty(project, task_id, task)
 
