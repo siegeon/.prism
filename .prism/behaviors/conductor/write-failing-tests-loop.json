@@ -3,7 +3,7 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Write failing tests (Route-Observe-Reason-Write-Run-Commit)",
-  "version": 12,
+  "version": 13,
   "steps": [
     {
       "id": "route",
@@ -58,7 +58,7 @@
       "id": "loop",
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
-      "body": "{\"persona\": \"qa\", \"prompt\": \"${prompt}\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"test_code\": {\"type\": \"string\"}, \"test_file_path\": {\"type\": \"string\"}, \"expected_failure_reason\": {\"type\": \"string\"}}, \"required\": [\"test_code\", \"test_file_path\", \"expected_failure_reason\"]}, \"rubric\": \"test_drafted\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "body": "{\"persona\": \"qa\", \"prompt\": \"${prompt}\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"test_bodies\": {\"type\": \"string\"}, \"expected_failure_reason\": {\"type\": \"string\"}}, \"required\": [\"test_bodies\", \"expected_failure_reason\"]}, \"rubric\": \"test_drafted\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
       "timeoutSeconds": 120
     },
     {

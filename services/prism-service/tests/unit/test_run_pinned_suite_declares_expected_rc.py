@@ -251,3 +251,44 @@ def test_a_stopped_run_leaves_no_report_for_the_step_to_advance_on():
     assert task_runner._result_from_build_chain(rows) is None, (
         "the chain stopped before commit-tests-only, so there is no red "
         "anchor and the step must not advance on this chain's say-so")
+
+
+# ----------------------------------------------------------------------
+# AC-6 -- the named-target check survives COLOURED pytest output
+# ----------------------------------------------------------------------
+
+class _FakeProc:
+    """Just enough of subprocess.CompletedProcess for _not_red_reason."""
+
+    def __init__(self, returncode: int, stdout: str):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def test_a_coloured_failed_line_still_counts_as_the_pinned_target():
+    """LIVE DEFECT 2026-09-14. This environment's pytest emits ANSI even
+    under capture_output, so the real line reads
+    "FAILED\x1b[0m test_red.py::test_red". The named-target check matches
+    "FAILED <target>" literally, and the reset sequence sits between the
+    two words -- so every honestly red suite was refused with "no pinned
+    target id appears in a FAILED line" and red_gate became unsatisfiable.
+    """
+    coloured = ("\x1b[31mFAILED\x1b[0m test_red.py::\x1b[1mtest_red\x1b[0m"
+                " - AssertionError: not implemented yet\n"
+                "\x1b[31m1 failed\x1b[0m in 0.03s\n")
+    proc = _FakeProc(1, coloured)
+    assert wf._not_red_reason(proc, ["test_red.py::test_red"], 1) == "", (
+        "a coloured FAILED line naming the pinned target IS red "
+        "demonstrated; the check must not depend on colour being off")
+    assert wf._not_red_reason(proc, ["test_red.py"], 1) == "", (
+        "a bare-file target must match the same coloured line")
+
+
+def test_an_unrelated_failure_is_still_refused_even_uncoloured():
+    """The NEGATIVE control for the fix above: stripping colour must not
+    turn the check into one that passes anything with rc==1."""
+    other = "FAILED test_other.py::test_other - AssertionError: nope\n"
+    proc = _FakeProc(1, other)
+    reason = wf._not_red_reason(proc, ["test_red.py::test_red"], 1)
+    assert "no pinned target id appears" in reason, reason

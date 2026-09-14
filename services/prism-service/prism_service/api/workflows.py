@@ -2504,6 +2504,115 @@ def _pinned_ids_for(project: str, task_id: str) -> list[str]:
         return []
 
 
+# ----------------------------------------------------------------------
+# THE OUTPUT-SIDE FIX (task 08e666ff, output half). write-failing-tests-
+# loop's one inference call used to be asked for an ENTIRE test FILE
+# inside JSON (test_code + test_file_path) -- a small model reliably
+# breaks on exactly that ask, live, on task bb3d1f6a: an unparseable
+# file, an import of a module that does not exist, a draft that defines
+# only 1 of 2 pinned test functions (pytest then exits 4, and red_gate's
+# rc==1 requirement can never pass). Every one of those is an OUTPUT-
+# SHAPE failure, not a reasoning failure.
+#
+# THE FIX. The model is asked for ONLY the per-test assertion body, keyed
+# by the pinned name it belongs to (`test_bodies`, a JSON-encoded list of
+# {"name", "body"}). This function assembles the real file from the
+# test-scaffold's AUTHORITATIVE parts (`workflow_step_test_scaffold` --
+# the SAME computation the scaffold node already ran earlier in this
+# chain, called again here rather than threaded through `${}` templating
+# because _exported_variables only carries SCALAR fields and
+# required_test_names/resolved_imports are lists) plus those bodies. A
+# missing or unpinned name is a REFUSAL naming the name -- never a
+# silent drop or a fabricated function. The assembled file is then
+# handed to the EXISTING, unmodified score_test_drafted rubric by the
+# caller below; this function never scores anything itself.
+# ----------------------------------------------------------------------
+
+def _assemble_test_draft(project: str, task_id: str, fields: dict) -> dict:
+    """{"ok": True, "test_code":..., "test_file_path":...} once assembled,
+    {"ok": False, "reason": ...} naming exactly what is wrong, or
+    {"ok": True} with neither key when `fields` carries no `test_bodies`
+    at all -- BACKWARD COMPATIBLE pass-through for a caller (an old
+    cached prompt, or a non-write_failing_tests rubric) that still sends
+    a whole `test_code`/`test_file_path` pair directly; the caller then
+    keeps using its own `fields["test_code"]`/`["test_file_path"]`
+    unchanged."""
+    raw_bodies = fields.get("test_bodies")
+    if raw_bodies is None:
+        return {"ok": True}
+
+    if isinstance(raw_bodies, str):
+        try:
+            parsed = json.loads(raw_bodies)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            parsed = None
+    else:
+        parsed = raw_bodies
+    if not isinstance(parsed, list):
+        return {"ok": False,
+                "reason": ("test_drafted: test_bodies is not a JSON list "
+                          "of {name, body} entries")}
+
+    # A blank/whitespace-only body is treated the same as an ABSENT one --
+    # an empty function is not a legitimate draft of a pinned test, it is
+    # a missing one wearing a name (task 08e666ff).
+    provided: dict[str, str] = {}
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        body_text = entry.get("body")
+        if name and isinstance(body_text, str) and body_text.strip():
+            provided[name] = body_text
+
+    try:
+        scaffold = workflow_step_test_scaffold(
+            TestScaffoldRequest(task_id=task_id), project=project)
+    except Exception:
+        scaffold = TestScaffoldResponse()
+
+    # THE PATH IS THE SCAFFOLD'S, NEVER THE MODEL'S (task bb3d1f6a): this
+    # is the one change that makes "test_file_path is empty" structurally
+    # impossible for a task whose task.verify resolves a file at all.
+    pinned_file = scaffold.pinned_file
+    if not pinned_file:
+        return {"ok": False,
+                "reason": ("test_drafted: no pinned test file could be "
+                          "resolved from task.verify for this task")}
+
+    required_names = list(scaffold.required_test_names)
+    if required_names:
+        missing = [n for n in required_names if n not in provided]
+        if missing:
+            return {"ok": False,
+                    "reason": ("test_drafted: draft does not define "
+                              "pinned test id(s): " + ", ".join(missing))}
+        unpinned = [n for n in provided if n not in required_names]
+        if unpinned:
+            return {"ok": False,
+                    "reason": ("test_drafted: test_bodies names a "
+                              "function PRISM did not pin: "
+                              + ", ".join(sorted(unpinned)))}
+        names_in_order = required_names
+    else:
+        # No pinned id names a function in this file -- nothing is
+        # required, but assembling nothing is not a draft either.
+        if not provided:
+            return {"ok": False, "reason": "test_drafted: test_bodies is empty"}
+        names_in_order = list(provided.keys())
+
+    header_lines = ["import pytest", *scaffold.resolved_imports]
+    body_lines: list[str] = []
+    for name in names_in_order:
+        body_lines.append(f"def {name}():")
+        for stmt in provided[name].strip("\n").splitlines():
+            body_lines.append(f"    {stmt}" if stmt.strip() else "")
+        body_lines.extend(["", ""])
+    test_code = "\n".join([*header_lines, "", "", *body_lines]).rstrip() + "\n"
+
+    return {"ok": True, "test_code": test_code, "test_file_path": pinned_file}
+
+
 def _score_rubric(rubric_name: str, fields: dict, project: str,
                   task_id: str = "") -> dict:
     """Dispatch to the right existing PURE scorer by rubric name, mapping
@@ -2536,6 +2645,22 @@ def _score_rubric(rubric_name: str, fields: dict, project: str,
         }
         return gov.score_plan_coverage(evidence, rubric, principles)
     if rubric_name == "test_drafted":
+        # ASSEMBLE BEFORE SCORING (task 08e666ff, output half): when the
+        # model returned per-name bodies (`test_bodies`) rather than a
+        # whole file, build the real test_code/test_file_path from the
+        # scaffold's authoritative parts first. Mutates `fields` IN PLACE
+        # on success -- `fields` is the SAME dict object reason-loop's
+        # `reason["fields"]` holds, so the assembled code reaches
+        # _exported_variables (and from there ${testCode}/${testFilePath})
+        # with no other change anywhere in the chain. An assembler
+        # refusal is returned exactly like a rubric refusal always has
+        # been, before score_test_drafted ever runs.
+        assembled = _assemble_test_draft(project, task_id, fields)
+        if not assembled.get("ok", True):
+            return {"ok": False, "reason": assembled.get("reason", "")}
+        if "test_code" in assembled:
+            fields["test_code"] = assembled["test_code"]
+            fields["test_file_path"] = assembled["test_file_path"]
         # PINNED IDS COME FROM THE TASK ROW, not from the model's own output
         # (task bb3d1f6a): the draft must define every function the red gate
         # is going to run, and only task.verify knows which those are.
@@ -3466,9 +3591,14 @@ def _compose_red_prompt(task_hint: str = "", targets_block: str = "",
     nodes.py) pins this substring appearing exactly once as its no-
     double-substitution check."""
     parts = [f"Draft a failing test for this task: {task_hint}"] if task_hint else []
-    parts.append("Write the pinned failing test(s) below. Return the test "
-                "code, its file path, and why it fails -- JSON only, per "
-                "the schema.")
+    parts.append("The file path and every `def` line below are already "
+                "fixed -- do not restate them. Write ONLY the body (the "
+                "statements that go inside each function) for every "
+                "pinned test named below. Return test_bodies as a JSON-"
+                "encoded string: [{\"name\": \"<pinned test name>\", "
+                "\"body\": \"<the statements>\"}, ...], one entry per "
+                "pinned name, plus why it fails -- JSON only, per the "
+                "schema.")
     if targets_block:
         parts.append(targets_block)
     if refusal_block:
@@ -5219,7 +5349,15 @@ def _run_pytest_once(root, paths: list[str], timeout_s: float):
     (_retry_not_red_once) can re-measure with the identical command."""
     import subprocess
 
-    cmd = ["python3", "-m", "pytest", *paths, "-q",
+    # --color=no IS LOAD-BEARING, not cosmetic (live defect, 2026-09-14):
+    # this environment's pytest emits ANSI even under capture_output, so a
+    # FAILED line reads "FAILED\x1b[0m test_red.py::test_red". The
+    # named-target check below matches "FAILED <target>" literally, and
+    # that reset sequence sits between the two words -- so every honestly
+    # red suite was refused as "no pinned target id appears in a FAILED
+    # line". Colourless output also makes the `tail` we store as evidence
+    # readable instead of escape-littered.
+    cmd = ["python3", "-m", "pytest", *paths, "-q", "--color=no",
           "-o", "faulthandler_timeout=120"]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True,
@@ -5229,6 +5367,21 @@ def _run_pytest_once(root, paths: list[str], timeout_s: float):
         return None, f"suite exceeded {timeout_s}s"
     except OSError as exc:
         return None, f"could not run pytest: {exc}"
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    """Pytest output with the colour codes removed.
+
+    BELT AND BRACES to the `--color=no` flag the runner passes: a check
+    that matches "FAILED <target>" literally must never depend on a flag
+    staying present, because the failure mode is silent -- a genuinely
+    red suite reads as "no pinned target id appears in a FAILED line"
+    and the red gate becomes unsatisfiable.
+    """
+    return _ANSI_RE.sub("", text or "")
 
 
 def _not_red_reason(proc, paths: list[str], expected_rc: Optional[int]) -> str:
@@ -5258,7 +5411,7 @@ def _not_red_reason(proc, paths: list[str], expected_rc: Optional[int]) -> str:
         # both a `file::test` target (exact node id) and a bare-file
         # target (any test inside it failing counts, since "FAILED
         # file.py" is already a substring of "FAILED file.py::test_name").
-        combined = (proc.stdout or "") + (proc.stderr or "")
+        combined = _strip_ansi((proc.stdout or "") + (proc.stderr or ""))
         if not any(f"FAILED {p}" in combined for p in paths):
             return (
                 "pytest exit code 1, but no pinned target id appears in "
