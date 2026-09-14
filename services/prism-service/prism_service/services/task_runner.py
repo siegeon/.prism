@@ -434,12 +434,31 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_context_enrich(
             _wf.StepEnrichRequest(**body), project=project)
 
+    # THE RECALL NODE (task 08e666ff): a read-only agent_runs lookup (no
+    # model call, no tools) so the loop's reason-loop prompt can be told
+    # WHY its last draft was refused instead of retrying blind. See
+    # write-failing-tests-loop.json's "recall" step.
+    def _refusal_recall(project: str, body: dict):
+        return _wf.workflow_step_refusal_recall(
+            _wf.RefusalRecallRequest(**body), project=project)
+
+    # THE SCAFFOLD NODE (task 08e666ff): computes the pinned test file's
+    # required function names, verified imports and real signatures with
+    # zero model calls, so the loop's reason-loop prompt is handed the
+    # authoritative material instead of guessing it. See
+    # write-failing-tests-loop.json's "test-scaffold" step.
+    def _test_scaffold(project: str, body: dict):
+        return _wf.workflow_step_test_scaffold(
+            _wf.TestScaffoldRequest(**body), project=project)
+
     return {"reason-loop": _reason_loop, "text-challenge": _text_challenge,
             "write-test-file": _write_test_file,
             "run-pinned-suite": _run_pinned_suite,
             "commit-tests-only": _commit_tests_only,
             "oracle-route-check": _oracle_route_check,
-            "context-enrich": _context_enrich}
+            "context-enrich": _context_enrich,
+            "refusal-recall": _refusal_recall,
+            "test-scaffold": _test_scaffold}
 
 
 def _subst(value, variables: dict):

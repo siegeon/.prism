@@ -2511,6 +2511,474 @@ def workflow_step_reason_loop(
                                   stop_chain=stop_chain)
 
 
+class RefusalRecallRequest(BaseModel):
+    task_id: str = ""
+
+
+class RefusalRecallResponse(BaseModel):
+    # The rubric's own text, verbatim -- empty when there is nothing to
+    # recall. Kept separate from refusal_block so a caller that wants the
+    # raw reason (logging, a future rubric) never has to strip the framing.
+    refusal_reason: str = ""
+    # THE FULLY-FRAMED BLOCK, or the empty string. Framed HERE, not in the
+    # node's static prompt, because a bare ${refusalReason} placeholder
+    # dropped into static prose leaves a dangling sentence the moment
+    # there is nothing to report ("A previous draft was refused: ." with
+    # nothing after the colon). The node interpolates this field alone.
+    refusal_block: str = ""
+
+
+@router.post("/steps/refusal-recall")
+def workflow_step_refusal_recall(
+    body: RefusalRecallRequest, project: str = Query(...),
+) -> RefusalRecallResponse:
+    """Read back the most recent `test_drafted` refusal for this task, so
+    the next write_failing_tests attempt can be told exactly what to fix
+    instead of repeating the identical bad draft blind (task 08e666ff,
+    observed live on task bb3d1f6a -- a draft refused for missing a pinned
+    test id and for importing a module that does not exist kept coming
+    back unchanged).
+
+    THE ROW. `_dispatch_declared_steps` already records a `reason-loop`
+    agent_runs row for every write_failing_tests attempt (via
+    task_runner._record_codified_run): ok=0 and verdict_summary carrying
+    the rubric's own "test_drafted: ..." text on a refusal, ok=1 and the
+    generic "ran as a declared step" on a pass. The single most recent
+    such row for this task IS the answer -- a task's own FSM step only
+    moves forward (review_previous_notes -> draft_story -> verify_plan ->
+    write_failing_tests -> ...), so every reason-loop row recorded since
+    write_failing_tests was last entered is a write_failing_tests attempt;
+    an ok=True row (whatever produced it) means there is nothing live to
+    recall right now.
+
+    SELF-CLEARING BY CONSTRUCTION: no route here ever deletes or marks a
+    row read. A later PASSING draft simply becomes the new most-recent row,
+    and its ok=True retires the refusal on its own -- there is no manual
+    clearing path to forget to call.
+
+    NEVER RAISES: a broken recall degrades to "no refusal" and lets the
+    draft proceed, the same rule _record_node_run already keeps for a
+    broken recorder.
+    """
+    reason = ""
+    try:
+        if body.task_id:
+            from prism_service.services import agent_runs_data
+            from prism_service.services import task_runner as _task_runner
+
+            scores_db = _task_runner._scores_db_for(project)
+            rows = agent_runs_data.get_agent_runs(
+                scores_db, limit=1, task_id=body.task_id, step="reason-loop")
+            if rows:
+                row = rows[0]
+                summary = str(row.get("verdict_summary") or "")
+                if row.get("ok") is False and summary.startswith("test_drafted:"):
+                    reason = summary
+    except Exception:
+        reason = ""
+
+    block = ""
+    if reason:
+        block = (
+            "A PREVIOUS DRAFT FOR THIS TASK WAS REFUSED. Here is the exact "
+            f"refusal:\n{reason}\n\nFix EXACTLY that defect and change "
+            "nothing else that was already correct.")
+
+    return RefusalRecallResponse(refusal_reason=reason, refusal_block=block)
+
+
+# ----------------------------------------------------------------------
+# A codified test scaffold (task 08e666ff / owner standing order: make
+# conductor nodes programmatic wherever the data already answers it).
+# ----------------------------------------------------------------------
+# THE DEFECT. write-failing-tests-loop's one inference call (reason-loop)
+# has repeatedly got three FULLY-DETERMINED things wrong, live, on task
+# bb3d1f6a: it defined 1 of 2 pinned test functions (pytest then exits 4,
+# a collection error, and red_gate's rc==1 requirement can never pass); it
+# imported `prism_service.lexicon`, a module that does not exist (the real
+# one is `prism_service.services.lexicon`); and it invented the wrong
+# arity/return type for the real entry point. `gather` (context-enrich)
+# feeds the model an 8-result, 600-char-truncated semantic search with no
+# notion of "the one symbol this test targets" -- it can omit the real
+# entry point entirely, or truncate mid-signature.
+#
+# THIS STEP computes, with ZERO model calls:
+#   - the pinned test file and the exact function names red_gate will run
+#     (from task.verify, via arc_governance's OWN parser -- the same one
+#     the test_drafted rubric uses, so scaffold and rubric can never
+#     disagree about what is required);
+#   - candidate symbols named in the task's own text (title/description/
+#     oracle/stop_if). A backtick-quoted span is this repo's own writing
+#     convention for "this is a code identifier" -- see this very task's
+#     description: `load_lexicon()`, `lexicon.align`, `services/
+#     lexicon.py`;
+#   - for each candidate, its REAL signature and import path, read
+#     straight off brain_svc.find_symbol's own source chunk (there is no
+#     structured signature column -- the chunk's first def/class line IS
+#     the signature) and verified resolvable via arc_governance's
+#     _submodule_path_resolvable (never executes anything new; an
+#     indeterminate/absent ancestor means "do not claim this resolves",
+#     never "resolves").
+#
+# An unresolved candidate is reported as a plain statement in the block,
+# never a guessed signature -- "cannot confirm a signature for X" beats a
+# fabricated one. NEVER RAISES: any failure degrades to an empty/honest
+# result, the same rule every other codified step in this file keeps.
+
+_SCAFFOLD_BACKTICK_RE = re.compile(r"`([^`]+)`")
+_SCAFFOLD_IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Non-Python file extensions observed, live, to masquerade as a symbol name
+# once a dotted span's last segment is taken (task 08e666ff follow-up):
+# 'ontology/model-lexicon.ttl' -> 'ttl', 'UnderstandPage.tsx' -> 'tsx'. A
+# real Python identifier is never one of these, so drop the candidate
+# outright rather than reporting dead noise as "unresolved".
+_SCAFFOLD_NON_SYMBOL_EXTENSIONS = {
+    "ttl", "tsx", "ts", "js", "jsx", "json", "yaml", "yml", "md", "txt",
+    "csv", "sql", "css", "html", "htm", "toml", "ini", "cfg", "rst", "xml",
+}
+
+
+def _scaffold_candidates(text: str) -> tuple[list[str], set[str]]:
+    """Backtick-quoted spans in the task's own text -> (symbol names in
+    first-seen order, file basename hints). A span ending in '.py' is a
+    file hint only; '()' is stripped; a dotted form ('lexicon.align',
+    'entity_linker._index()') keeps only the last segment as the symbol
+    name -- unless that segment is a known non-Python file extension
+    ('ontology/model-lexicon.ttl' -> 'ttl'), which is never a symbol and
+    is dropped. Pure text scanning -- never touches the filesystem or the
+    code graph itself."""
+    names: list[str] = []
+    file_hints: set[str] = set()
+    for raw in _SCAFFOLD_BACKTICK_RE.findall(text or ""):
+        span = raw.strip()
+        if not span:
+            continue
+        if span.endswith(".py"):
+            file_hints.add(span.replace("\\", "/").rsplit("/", 1)[-1])
+            continue
+        core = span[:-2] if span.endswith("()") else span
+        if "." in core:
+            core = core.rsplit(".", 1)[-1]
+        if core.lower() in _SCAFFOLD_NON_SYMBOL_EXTENSIONS:
+            continue
+        if _SCAFFOLD_IDENT_RE.match(core) and core not in names:
+            names.append(core)
+    return names, file_hints
+
+
+def _scaffold_signature_text(content: str, name: str) -> str:
+    """The real `def`/`class` header for `name`, read from its own source
+    chunk by matching parentheses on the definition line rather than
+    ast.parse -- a chunk pulled out of its parent file is not always
+    valid to parse standalone (decorators/indentation), while the
+    definition line and its closing paren need no execution to find.
+    Returns "" when the chunk does not actually define `name` -- the
+    caller must treat that as unresolved, never guess a signature."""
+    lines = (content or "").splitlines()
+    pattern = re.compile(rf"^\s*(async\s+def|def|class)\s+{re.escape(name)}\b")
+    start = None
+    for i, line in enumerate(lines):
+        if pattern.match(line):
+            start = i
+            break
+    if start is None:
+        return ""
+    first = lines[start].strip()
+    if first.startswith("class"):
+        return first[:-1] if first.endswith(":") else first
+    collected = []
+    depth = 0
+    opened = False
+    for line in lines[start:]:
+        collected.append(line.strip())
+        depth += line.count("(") - line.count(")")
+        if "(" in line:
+            opened = True
+        if opened and depth <= 0:
+            break
+    header = " ".join(collected)
+    return header[:-1] if header.endswith(":") else header
+
+
+def _scaffold_dotted_module(source_file: str) -> str:
+    """The importable dotted path for an indexed `source_file`, anchored
+    at the `prism_service/` package root regardless of whether the indexed
+    path is absolute or repo-relative. "" when the marker is not present
+    (nothing to import from a path outside the package)."""
+    norm = str(source_file or "").replace("\\", "/")
+    marker = "prism_service/"
+    idx = norm.find(marker)
+    if idx == -1:
+        return ""
+    tail = norm[idx:]
+    if tail.endswith(".py"):
+        tail = tail[:-3]
+    tail = tail.strip("/")
+    if tail.endswith("/__init__"):
+        tail = tail[: -len("/__init__")]
+    return tail.replace("/", ".")
+
+
+def _scaffold_resolve_symbol(brain_svc, name: str, file_hints: set) -> Optional[dict]:
+    """The first find_symbol row for `name`, preferring one whose file
+    matches a hint from the task's own text (so a common name like
+    `_index` or `align` does not silently resolve against an unrelated
+    module elsewhere in the codebase). None when brain_svc has nothing."""
+    if brain_svc is None:
+        return None
+    rows = brain_svc.find_symbol(name, limit=10) or []
+    if not rows:
+        return None
+    if file_hints:
+        preferred = [
+            r for r in rows
+            if str(r.get("source_file", "")).replace("\\", "/").rsplit("/", 1)[-1]
+            in file_hints
+        ]
+        rows = preferred or rows
+    row = rows[0]
+    return {"source_file": str(row.get("source_file", "") or ""),
+            "signature": _scaffold_signature_text(row.get("content", "") or "", name)}
+
+
+def _scaffold_source_root(project: str, task_id: str):
+    """The best real checkout to search ON DISK when the brain index has
+    nothing (live evidence, task 08e666ff follow-up: find_symbol("align")
+    and find_symbol("load_lexicon") both return [] even though the real
+    functions exist on disk -- the index covers some files of a service
+    and not others, and a reindex only fixes today's symptom, not the
+    class of bug). The task's OWN worktree (`_task_worktree`, already used
+    by the write/run/commit trio) wins when it exists -- that is the tree
+    the drive is actually working in; the project's configured source path
+    is the fallback, same chain /steps/premise-judge already uses. None
+    when neither resolves -- the caller must then degrade honestly."""
+    ws, _reason = _task_worktree(task_id)
+    if ws is not None:
+        return ws
+    try:
+        from prism_service.services.claude_transcripts import _project_source_path
+        configured = Path(_project_source_path(project))
+        if configured.is_absolute() and configured.exists():
+            return configured
+    except Exception:
+        pass
+    fallback = Path.home() / "projects" / project
+    return fallback if fallback.exists() else None
+
+
+def _scaffold_ast_signature(node) -> str:
+    """The real header for a parsed def/class node, via `ast.unparse` --
+    Python's own unparser -- so parameter names, annotations, defaults and
+    the return annotation all come straight from the parsed source, never
+    a hand-rolled guess."""
+    import ast
+
+    try:
+        if isinstance(node, ast.ClassDef):
+            bases = ", ".join(ast.unparse(b) for b in node.bases)
+            return f"class {node.name}({bases})" if bases else f"class {node.name}"
+        prefix = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+        header = f"{prefix} {node.name}({ast.unparse(node.args)})"
+        if node.returns is not None:
+            header += f" -> {ast.unparse(node.returns)}"
+        return header
+    except Exception:
+        return ""
+
+
+def _scaffold_disk_search(root, name: str, file_hints: set) -> Optional[dict]:
+    """Bounded, deterministic on-disk fallback for when the brain index has
+    nothing for `name`. Only files whose basename is a hint the task's own
+    text actually named (e.g. `services/lexicon.py` in backticks) are
+    opened -- never an unbounded repo walk. Parses each candidate with
+    `ast` (never a regex over source) and returns the first top-level def/
+    class named `name`, or None when nothing on disk answers either --
+    the caller must then degrade honestly, same as a cold index."""
+    if root is None or not file_hints:
+        return None
+    import ast
+
+    try:
+        candidates = sorted(
+            p for hint in file_hints for p in root.rglob(hint) if p.is_file())
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            source = candidate.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(source, filename=str(candidate))
+        except (OSError, SyntaxError, ValueError, UnicodeError):
+            continue
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                    and node.name == name):
+                sig = _scaffold_ast_signature(node)
+                if not sig:
+                    continue
+                try:
+                    rel = str(candidate.relative_to(root))
+                except ValueError:
+                    rel = str(candidate)
+                return {"source_file": rel, "signature": sig}
+    return None
+
+
+_SCAFFOLD_UNRESOLVED_DISPLAY_CAP = 5
+
+
+def _format_scaffold_block(pinned_file: str, required_names: list[str],
+                           resolved_imports: list[str], signatures: list[str],
+                           unresolved: list[str]) -> str:
+    if not (pinned_file or required_names or resolved_imports or signatures
+            or unresolved):
+        return ""
+    lines = [
+        "AUTHORITATIVE TEST SCAFFOLD -- computed from the real repo, not "
+        "guessed. Reproduce the file path, function names, and imports "
+        "below EXACTLY; write only the assertion bodies.",
+    ]
+    if pinned_file:
+        lines.append(f"\nTest file (must match exactly): {pinned_file}")
+    if required_names:
+        lines.append("Test functions you MUST define, one per line:")
+        lines.extend(f"  def {n}():" for n in required_names)
+    if resolved_imports:
+        lines.append(
+            "\nVerified imports (every module below actually resolves in "
+            "this repo -- import ONLY these, never a guessed path):")
+        lines.extend(f"  {imp}" for imp in resolved_imports)
+    if signatures:
+        lines.append("\nReal signatures of the symbols under test:")
+        lines.extend(f"  {s}" for s in signatures)
+    if unresolved:
+        # CAPPED, never the full list (task 08e666ff follow-up): a task
+        # description can name a dozen incidental words in backticks (an
+        # enumeration of ontology classes, e.g.), and every one that never
+        # resolves is dead prompt weight that teaches the model nothing.
+        # The full list still lives on the response's own `unresolved`
+        # field -- this cap is a display concern for the block only.
+        shown = unresolved[:_SCAFFOLD_UNRESOLVED_DISPLAY_CAP]
+        remaining = len(unresolved) - len(shown)
+        lines.append(
+            "\nCould NOT confirm the following from the code graph -- do "
+            "not invent a signature or import for these; assert on "
+            "absence/current shape instead if the test needs them:")
+        lines.extend(f"  {u}" for u in shown)
+        if remaining > 0:
+            lines.append(f"  (...and {remaining} more not shown)")
+    return "\n".join(lines)
+
+
+class TestScaffoldRequest(BaseModel):
+    task_id: str = ""
+
+
+class TestScaffoldResponse(BaseModel):
+    pinned_file: str = ""
+    required_test_names: list[str] = []
+    resolved_imports: list[str] = []
+    signatures: list[str] = []
+    unresolved: list[str] = []
+    # THE FULLY-FRAMED BLOCK the loop prompt interpolates directly, same
+    # pattern as RefusalRecallResponse.refusal_block -- framed HERE, never
+    # in the node's static prompt, so an empty scaffold leaves nothing
+    # dangling in the prompt text.
+    scaffold_block: str = ""
+
+
+@router.post("/steps/test-scaffold")
+def workflow_step_test_scaffold(
+    body: TestScaffoldRequest, project: str = Query(...),
+) -> TestScaffoldResponse:
+    """CODIFIED. See the module-level comment above this route for the
+    full defect/fix writeup. NEVER RAISES: any lookup failure (unknown
+    project, unknown task, a broken brain_svc) degrades to an empty
+    result and lets the draft proceed, same as /steps/refusal-recall."""
+    task_id = body.task_id
+    if not task_id:
+        return TestScaffoldResponse()
+
+    from prism_service.services import arc_governance as gov
+
+    ctx = None
+    task = None
+    try:
+        ctx = get_project(project)
+        task = ctx.task_svc.get(task_id)
+    except Exception:
+        ctx = None
+        task = None
+    if task is None:
+        return TestScaffoldResponse()
+
+    pinned_ids = [str(p) for p in (getattr(task, "verify", None) or [])]
+    pinned_file = ""
+    required_names: list[str] = []
+    if pinned_ids:
+        pinned_file = gov._norm_test_path(pinned_ids[0].split("::")[0])
+        _matched, required_names = gov._pinned_test_names_for_file(
+            pinned_ids, pinned_file)
+
+    text_blob = "\n".join([
+        str(getattr(task, "title", "") or ""),
+        str(getattr(task, "description", "") or ""),
+        str(getattr(task, "oracle", "") or ""),
+        "\n".join(str(s) for s in (getattr(task, "stop_if", None) or [])),
+    ])
+    symbol_candidates, file_hints = _scaffold_candidates(text_blob)
+    if pinned_file:
+        file_hints.add(pinned_file.rsplit("/", 1)[-1])
+
+    brain_svc = getattr(ctx, "brain_svc", None) if ctx is not None else None
+    # THE ON-DISK FALLBACK'S ROOT (task 08e666ff follow-up), resolved ONCE:
+    # the brain index has been observed live to cover some files of a
+    # service and not others (a reindex fixes today's symptom, not the
+    # class of bug) -- so a candidate the index misses still gets a real
+    # answer from the actual checkout, never a fabricated one.
+    disk_root = _scaffold_source_root(project, task_id)
+    resolved_imports: list[str] = []
+    signatures: list[str] = []
+    unresolved: list[str] = []
+    for name in symbol_candidates:
+        try:
+            info = _scaffold_resolve_symbol(brain_svc, name, file_hints)
+        except Exception:
+            info = None
+        if info is None:
+            try:
+                info = _scaffold_disk_search(disk_root, name, file_hints)
+            except Exception:
+                info = None
+        if info is None:
+            unresolved.append(name)
+            continue
+        source_file = info.get("source_file", "")
+        sig = info.get("signature", "")
+        module_path = _scaffold_dotted_module(source_file)
+        resolvable = False
+        if module_path:
+            try:
+                resolvable = gov._submodule_path_resolvable(module_path) is True
+            except Exception:
+                resolvable = False
+        if resolvable:
+            import_line = f"from {module_path} import {name}"
+            if import_line not in resolved_imports:
+                resolved_imports.append(import_line)
+        if sig:
+            where = source_file or "unindexed location"
+            signatures.append(f"{sig}    (in {where})")
+        else:
+            unresolved.append(name)
+
+    block = _format_scaffold_block(
+        pinned_file, required_names, resolved_imports, signatures, unresolved)
+    return TestScaffoldResponse(
+        pinned_file=pinned_file, required_test_names=required_names,
+        resolved_imports=resolved_imports, signatures=signatures,
+        unresolved=unresolved, scaffold_block=block)
+
+
 # ----------------------------------------------------------------------
 # review_previous_notes, leveled up (task cd33263f)
 # ----------------------------------------------------------------------
