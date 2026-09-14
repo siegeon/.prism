@@ -278,7 +278,10 @@ def test_loop_uses_the_bounded_retry_when_a_sweep_defers_for_a_busy_slot(
     sweeps = []
     swept = threading.Event()
 
-    def _fake_sweep_once():
+    # 7.13.370: _loop hands sweep_once the live activity entry so the
+    # running row can be renamed to "driving <task> <step>"; the fake
+    # accepts it and ignores it.
+    def _fake_sweep_once(info=None):
         tr._last_engine_busy_skip = True
         sweeps.append(time.monotonic())
         swept.set()

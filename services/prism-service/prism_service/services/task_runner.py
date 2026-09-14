@@ -2589,7 +2589,18 @@ def _run_one_step(project: str, task_id: str) -> dict:
             "report": report}
 
 
-def sweep_once() -> Optional[dict]:
+def _step_label(project: str, task_id: str) -> str:
+    """The task's current FSM step for the activity label, or "" -- a
+    label must never fail a drive, so every error degrades to no step."""
+    try:
+        from prism_service.project_context import get_project
+        task = get_project(project).task_svc.get(task_id)
+        return str(getattr(task, "workflow_step", "") or "")
+    except Exception:
+        return ""
+
+
+def sweep_once(info: Optional[dict] = None) -> Optional[dict]:
     """One pass over every project, starting from a ROTATING offset: drive
     up to `_concurrency()` eligible tasks AT THE SAME TIME, then stop.
 
@@ -2649,6 +2660,17 @@ def sweep_once() -> Optional[dict]:
 
     if not picked:
         return None
+
+    # NAME THE DRIVE ON THE FEED (owner 2026-09-14: "it's a REACTIVE
+    # system, what sweeping is there really"). This pass is the reaction
+    # to a wake, and from here on it IS the drive: run_one_step blocks for
+    # minutes inside the inference call. The running row used to read
+    # "sweep_once" for all of it, so a 480 s pass looked like a clock tick
+    # that did nothing. `info` is the live pass_() entry, exported to the
+    # panel every 0.5 s, so the label flips the moment the pick is made.
+    if info is not None:
+        info["detail"] = "driving " + ", ".join(
+            f"{tid[:8]} {_step_label(pid, tid)}".rstrip() for pid, tid in picked)
 
     with _RR_LOCK:
         # Next tick starts AFTER the LAST project this sweep served, so the
@@ -2816,8 +2838,14 @@ def _loop(interval_s: int, stop_event: Optional[threading.Event] = None) -> None
             # eligible: the System Activity panel collapses a run of quiet
             # ticks into one throttled "idle" entry instead of climbing on
             # a clock that did nothing (owner 2026-09-13).
-            with system_activity.pass_("task_runner", "*", "sweep_once") as info:
-                res = sweep_once()
+            # The label is "woke" -- this loop has no clock; it reacts to a
+            # task change or a freed engine slot, checks who is eligible,
+            # and sweep_once renames the row to "driving <task> <step>" the
+            # moment it picks one (owner 2026-09-14: a reactive system does
+            # not "sweep").
+            with system_activity.pass_(
+                    "task_runner", "*", "woke: checking eligible tasks") as info:
+                res = sweep_once(info)
                 info["active"] = res is not None
         except Exception as exc:
             _log(f"sweep error: {exc}")
