@@ -3,8 +3,15 @@
   "fsmId": "pipeline",
   "botId": "conductor",
   "name": "Verify plan (compose, fill typed slots, render, validate)",
-  "version": 9,
+  "version": 10,
   "steps": [
+    {
+      "id": "resolve",
+      "kind": "http-callback",
+      "url": "${prismBackendUrl}/api/workflows/steps/planning-resolve?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\", \"stage\": \"verify_plan\"}",
+      "timeoutSeconds": 30
+    },
     {
       "id": "recall",
       "kind": "http-callback",
@@ -30,7 +37,7 @@
       "id": "loop",
       "kind": "http-callback",
       "url": "${prismBackendUrl}/api/workflows/steps/reason-loop?project=${project}",
-      "body": "{\"persona\": \"sm\", \"prompt\": \"${refusalBlock}\\n\\n${planFrame}\\n\\nFill the plan for this task: ${taskHint}\\n\\nReturn ONLY the typed fields the schema names. `acs` is a list of acceptance criteria objects {id, text, colour, oracle, pytest_id}: copy the FIXED AC-1 from the frame first, unchanged; then add the criteria that must stay true, each with colour `guard` and an `oracle` that is a command a person can run or a screen a person reads. `files_to_change` names only files listed in the frame or files this task creates. `goal` is one paragraph. Do not write markdown, headings or a diagram: PRISM renders the document. Do not invent AC ids: AC-1 is fixed, the rest are numbered by PRISM in the order you return them.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"goal\": {\"type\": \"string\"}, \"acs\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}, \"text\": {\"type\": \"string\"}, \"colour\": {\"type\": \"string\", \"enum\": [\"red_at_base\", \"guard\"]}, \"oracle\": {\"type\": \"string\"}, \"pytest_id\": {\"type\": \"string\"}}, \"required\": [\"text\", \"colour\", \"oracle\"]}}, \"files_to_change\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"implementation_notes\": {\"type\": \"string\"}}, \"required\": [\"goal\", \"acs\", \"files_to_change\"]}, \"rubric\": \"plan_structured\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\"}",
+      "body": "{\"persona\": \"sm\", \"prompt\": \"${refusalBlock}\\n\\n${planFrame}\\n\\nFill the plan for this task: ${taskHint}\\n\\nReturn ONLY the typed fields the schema names. `acs` is a list of acceptance criteria objects {id, text, colour, oracle, pytest_id}: copy the FIXED AC-1 from the frame first, unchanged; then add the criteria that must stay true, each with colour `guard` and an `oracle` that is a command a person can run or a screen a person reads. `files_to_change` names only files listed in the frame or files this task creates. `goal` is one paragraph. Do not write markdown, headings or a diagram: PRISM renders the document. Do not invent AC ids: AC-1 is fixed, the rest are numbered by PRISM in the order you return them. PRISM renders plan_doc and plan_diagram.\", \"json_schema\": {\"type\": \"object\", \"properties\": {\"goal\": {\"type\": \"string\"}, \"acs\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"id\": {\"type\": \"string\"}, \"text\": {\"type\": \"string\"}, \"colour\": {\"type\": \"string\", \"enum\": [\"red_at_base\", \"guard\"]}, \"oracle\": {\"type\": \"string\"}, \"pytest_id\": {\"type\": \"string\"}}, \"required\": [\"text\", \"colour\", \"oracle\"]}}, \"files_to_change\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"implementation_notes\": {\"type\": \"string\"}}, \"required\": [\"goal\", \"acs\", \"files_to_change\"]}, \"rubric\": \"plan_structured\", \"model\": \"haiku\", \"max_budget_usd\": 0.5, \"max_turns\": 4, \"task_id\": \"${taskId}\", \"resolution_json\": \"${resolutionJson}\"}",
       "timeoutSeconds": 850
     },
     {

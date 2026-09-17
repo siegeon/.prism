@@ -372,7 +372,7 @@ def test_verify_plan_prompt_is_not_nested():
 
         # Count occurrences to ensure it appears exactly once
         # Use a distinctive substring from the plan's declared prompt
-        declared_prompt_start = "Write an implementation plan"
+        declared_prompt_start = "Fill the plan for this task:"
         count = body_prompt.count(declared_prompt_start)
         assert count == 1, (
             f"declared prompt appears {count} times; expected 1 (not nested). "

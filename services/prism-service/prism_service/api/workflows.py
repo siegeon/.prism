@@ -279,7 +279,7 @@ GATE_AUTHORITY = {
 # that isn't real).
 MACHINE_ONLY_GATES = {"red_gate"}
 
-AOS_WORKFLOWS_URL = os.environ.get("AOS_WORKFLOWS_URL", "http://127.0.0.1:5273").rstrip("/")
+MAGIC_WORKFLOWS_URL = os.environ.get("MAGIC_WORKFLOWS_URL", "http://127.0.0.1:5000").rstrip("/") + "/magic"
 
 
 class ScriptedStep(BaseModel):
@@ -368,12 +368,15 @@ def _workflow_engine_json(
 ) -> dict:
     encoded = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Content-Type": "application/json"} if encoded else {}
+    key = os.environ.get("MAGIC_WORKFLOW_KEY", "")
+    if key:
+        headers["X-Magic-Workflow-Key"] = key
     request = Request(
-        f"{AOS_WORKFLOWS_URL}{path}", data=encoded,
+        f"{MAGIC_WORKFLOWS_URL}{path}", data=encoded,
         headers=headers, method=method,
     )
     try:
-        with urlopen(request, timeout=2.0) as response:  # noqa: S310 - fixed local AOS service
+        with urlopen(request, timeout=2.0) as response:  # noqa: S310 - configured Magic service
             return json.loads(response.read())
     except HTTPError as exc:
         raise HTTPException(exc.code, f"workflow engine refused request: {exc.reason}") from exc
@@ -385,7 +388,7 @@ def _workflow_engine_json(
 # GET /api/workflows measured 14.2s (up to 21-52s under load, per
 # services/workflow_live.py's own docstring) while idle it answers in 0.3s
 # -- the difference is not algorithmic cost, it is this route making ~20+
-# synchronous HTTP round trips to the separate AosWorkflows engine (one for
+# synchronous HTTP round trips to the separate Magic engine (one for
 # the scripted "validation" definition, one for the conductor bot, and one
 # MORE per behavior id the bot names) every single request, each queued
 # behind whatever else is holding the GIL/CPU at that moment (a live
@@ -406,6 +409,9 @@ CATALOG_STRUCTURE_CACHE_TTL_S = 30.0
 
 
 def _behaviors_dir_for(project: str) -> Path:
+    native = os.environ.get("MAGIC_WORKFLOW_DEFINITIONS")
+    if native:
+        return Path(native) / project
     from prism_service.services.claude_transcripts import _project_source_path
     configured = Path(_project_source_path(project))
     fallback = Path.home() / "projects" / project
@@ -466,7 +472,7 @@ def _project_validation_workflow(project: str) -> dict:
 
 def _project_validation_workflow_uncached(project: str) -> dict:
     # THE ENGINE IS OPTIONAL INFRASTRUCTURE, NOT A DEPENDENCY OF THE PAGE.
-    # This entry is sourced from the AosWorkflows engine, and every other
+    # This entry is sourced from the Magic engine, and every other
     # workflow on the page is built from local constants. Letting the
     # engine's absence raise took the WHOLE endpoint down with a 503, so a
     # machine with no engine could not read the conductor at all -- and
@@ -524,7 +530,7 @@ def _project_validation_workflow_uncached(project: str) -> dict:
             "average_duration_seconds": scripted.average_duration_seconds,
             "duration_sample_count": scripted.duration_sample_count,
         })
-    # task 408138e8 (epic 61821448): the AosWorkflows engine owns
+    # task 408138e8 (epic 61821448): the Magic engine owns
     # definition.description's own text -- append the real trigger so the
     # skill-description-says-when SHACL rule reads a true "when" clause no
     # matter what the engine's own text says. UPDATED task 25b2a05c:
@@ -546,6 +552,9 @@ def _project_validation_workflow_uncached(project: str) -> dict:
 
 
 def _behavior_file(project: str, workflow_id: str) -> Path:
+    native = os.environ.get("MAGIC_WORKFLOW_DEFINITIONS")
+    if native:
+        return Path(native) / project / f"{workflow_id}.json"
     from prism_service.services.claude_transcripts import _project_source_path
     configured = Path(_project_source_path(project))
     fallback = Path.home() / "projects" / project
@@ -953,7 +962,7 @@ def _task_count_by_workflow(project: str, catalog_ids: list[str], svc=None) -> d
 
 
 # task 408138e8 (epic 61821448): the real trigger for each conductor
-# behavior, keyed by its AosWorkflows behavior_id -- matches
+# behavior, keyed by its Magic behavior_id -- matches
 # get_workflows' own linked_workflow_id map (a conductor FSM state calls
 # most of these) plus land (green_gate's ship step) and ci-local-dev (no
 # FSM state calls it; a person runs it by hand). Read by
@@ -1339,10 +1348,10 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
 
 
 def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
-    """Each of the conductor bot's AosWorkflows Behaviors, as its OWN
+    """Each of the conductor bot's Magic Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
     just the behavior ids. Bot [1] uses FSM [1..*], FSM [1] has Behavior
-    [0..*] (see the same ontology comment in AosWorkflows' Program.cs); a
+    [0..*] (see the same ontology comment in Magic' Program.cs); a
     behavior IS a flow, so it gets a real catalog entry disclosing its OWN
     real steps (e.g. land's push/open-pr), not a fake single node standing
     in for the whole thing.
@@ -1363,13 +1372,12 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
     FSM's terminal step (see _CONDUCTOR_LINKED_BEHAVIOR_IDS below) -- it is
     what a person reads to understand "what ships the code", even though
     the seat that actually executes it today is ship_worker.py's Python
-    pipeline, not (yet) this JSON behavior fired by the AosWorkflows engine
+    pipeline, not (yet) this JSON behavior fired by the Magic engine
     itself; wiring THAT dispatch through is the larger FSM-migration
     follow-up this docstring is not scoping. `ci-local-dev` has no
     corresponding conductor-state trigger and stays unparented.
 
-    These run OUTSIDE this process entirely -- AosWorkflows (WorkflowCore,
-    separate service) owns their state, never prism-service. A missing bot
+    These run OUTSIDE this process entirely -- Magic (the same service and execution slots as the IDE) owns their state, never prism-service. A missing bot
     definition, an unreachable engine, or a stale build without the /bots
     route are all the same case here: nothing to show yet, not an error the
     whole page should break on.
@@ -1383,7 +1391,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
         return []
     encoded_root = quote(str(root))
     try:
-        bot = _workflow_engine_json(f"/workflows/bots/conductor?repoPath={encoded_root}")
+        bot = _workflow_engine_json(f"/workflows/bots/conductor?project={quote(project, safe='')}&repoPath={encoded_root}")
     except HTTPException:
         return []
 
@@ -1394,7 +1402,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
         for behavior_id in fsm.get("behaviorIds") or fsm.get("BehaviorIds") or []:
             try:
                 behavior = _workflow_engine_json(
-                    f"/workflows/bots/conductor/behaviors/{behavior_id}?repoPath={encoded_root}")
+                    f"/workflows/bots/conductor/behaviors/{behavior_id}?project={quote(project, safe='')}&repoPath={encoded_root}")
             except HTTPException:
                 continue
             raw_steps = behavior.get("steps") or behavior.get("Steps") or []
@@ -1471,7 +1479,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
                     # arms the canvas's "Run workflow" button, which posts to
                     # /{workflow_id}/runs -- a route hardcoded to the
                     # validation workflow only. Wiring that dispatch through
-                    # to AosWorkflows' POST /workflows/bots/... is real,
+                    # to Magic' POST /workflows/bots/... is real,
                     # separate follow-up work, not implied by fixing the
                     # directory hierarchy.
                     "execution": "connected",
@@ -1505,7 +1513,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
             entries.append({
                 "id": behavior_id,
                 "name": behavior.get("name") or behavior.get("Name") or behavior_id.replace("-", " ").title(),
-                "description": f"Runs on the '{fsm_id}' fsm, executed by AosWorkflows. {trigger}",
+                "description": f"Runs on the '{fsm_id}' fsm, executed by Magic. {trigger}",
                 "steps": steps,
                 "bots": [],
                 "occupancy": {step["id"]: 0 for step in steps},
@@ -1924,7 +1932,7 @@ def get_workflows(project: str = Query("default")) -> dict:
     # trusts -- so light a behaviour's entry node whenever a live,
     # non-stale task is parked at the FSM step that behaviour answers for
     # (_STEP_FOR_BEHAVIOUR), the same fallback the canvas itself already
-    # documents: on a drilled layer with no per-step WorkflowCore run
+    # documents: on a drilled layer with no per-step Magic workflow run
     # behind it, occupancy is the only answer to "where is the work"
     # (workflowGraph.ts). FIRST VERSION of this called drive_heartbeat.
     # latest() and svc.list() inside the entry loop -- one sqlite connect
@@ -2211,10 +2219,10 @@ def request_workflow_fix(
 
 # ---------------------------------------------------------------------------
 # Phase 0 of the Bot/Behavior FSM migration (see [[project_prism_workflow_engine_migration]]):
-# the FIRST typed callback an AosWorkflows step can make into prism-service
+# the FIRST typed callback an Magic step can make into prism-service
 # for real work. Wraps ContextBuilder.build() — already real, already used
 # by the interactive MCP path (mcp/tools.py's context_bundle tool) — behind
-# a Pydantic contract an AosWorkflows AgentStep can call directly. Read-only,
+# a Pydantic contract an Magic AgentStep can call directly. Read-only,
 # no side effects: the safest possible first slice to prove the callback
 # shape, typed both ways, traced end-to-end.
 # ---------------------------------------------------------------------------
@@ -2797,7 +2805,32 @@ def _score_rubric(rubric_name: str, fields: dict, project: str,
     return {"ok": False, "reason": f"unknown rubric: {rubric_name!r}"}
 
 
+class PlanningResolveRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    stage: Literal["draft_story", "verify_plan"]
+
+
+class PlanningResolveResponse(BaseModel):
+    ok: bool
+    resolution_json: str
+    reason: str
+    stop_chain: bool = False
+
+
+@router.post("/steps/planning-resolve")
+def workflow_step_planning_resolve(body: PlanningResolveRequest, project: str = Query(...)) -> PlanningResolveResponse:
+    from prism_service.models.planning_resolution import PlanningResolution, resolve_planning
+    try:
+        result = resolve_planning(get_project(project).task_svc.get(body.task_id), body.stage)
+    except Exception as exc:
+        result = PlanningResolution(state="error", reason=f"Cannot load planning context: {exc}")
+    refused = result.state in {"error", "violated"}
+    return PlanningResolveResponse(ok=not refused, resolution_json=result.model_dump_json(),
+                                   reason=result.reason, stop_chain=refused)
+
+
 class ReasonLoopRequest(BaseModel):
+    resolution_json: str = ""
     persona: str = "sm"
     prompt: str = Field(min_length=1)
     json_schema: dict
@@ -2854,6 +2887,24 @@ def workflow_step_reason_loop(
     Validate, inert, no writes to any real task, no gate decided for
     real. Authorize+Act require explicit owner sign-off before any real
     state gets wired to this (agreed: inert proof only, this round)."""
+    if body.resolution_json:
+        from prism_service.models.planning_resolution import PlanningResolution, resolve_planning
+        supplied = PlanningResolution.model_validate_json(body.resolution_json)
+        stage = {"story_complete": "draft_story", "plan_structured": "verify_plan"}.get(body.rubric)
+        current = resolve_planning(get_project(project).task_svc.get(body.task_id), stage)
+        if supplied.input_hash != current.input_hash or current.state in {"error", "violated"}:
+            return ReasonLoopResponse(observe={"ok": False}, reason={},
+                validation={"ok": False, "reason": current.reason or "Planning inputs changed; resolve again"}, stop_chain=True)
+        if current.state == "complete":
+            fields = dict(current.fields)
+            verdict = _score_rubric(body.rubric, fields, project, task_id=body.task_id)
+            if "story_md" in fields:
+                fields["plan_doc"] = fields["story_md"]
+            fields["planning_provenance"] = current.model_dump(exclude={"fields"})
+            return ReasonLoopResponse(observe={"ok": True, "template_id": current.template_id},
+                reason={"ok": True, "fields": fields, "cost_usd": 0, "run_id": "", "inference_used": False},
+                validation=verdict, stop_chain=not verdict.get("ok", False))
+        body = body.model_copy(update={"prompt": body.prompt + "\nUnresolved planning questions: " + "; ".join(current.unresolved)})
     with _tracer.start_as_current_span("workflow.loop.reason") as span:
         span.set_attribute("workflow.project", project)
         span.set_attribute("workflow.loop.persona", body.persona)
@@ -3241,6 +3292,9 @@ class PlanComposeRequest(BaseModel):
 
 
 class PlanComposeResponse(BaseModel):
+    ok: bool = True
+    stop_chain: bool = False
+    reason: str = ""
     plan_frame: str = ""
     pinned_test: str = ""
     pinned_colour: str = ""
@@ -3298,6 +3352,8 @@ def workflow_step_plan_compose(
         if body.task_id:
             ctx = get_project(project)
             task = ctx.task_svc.get(body.task_id)
+            if task is None:
+                return PlanComposeResponse(ok=False, stop_chain=True, reason="Task context is unavailable")
             title = str(getattr(task, "title", "") or "")
             verify = [str(v).strip() for v in (getattr(task, "verify", None) or [])
                       if str(v).strip()]
@@ -3305,8 +3361,8 @@ def workflow_step_plan_compose(
             files = [str(f).strip() for f in (getattr(task, "allowed_files", None) or [])
                      if str(f).strip()]
             oracle = str(getattr(task, "oracle", "") or "")
-    except Exception:
-        pass
+    except Exception as exc:
+        return PlanComposeResponse(ok=False, stop_chain=True, reason=f"Cannot load planning context: {exc}")
     return PlanComposeResponse(
         plan_frame=plan_frame_text(title, pinned, body.colour, body.base, files, oracle),
         pinned_test=pinned, pinned_colour=body.colour, files_in_scope=files)
@@ -5164,9 +5220,8 @@ def _behaviour_version(project: str, workflow_id: str) -> Optional[int]:
     """The version of the behaviour definition as it stands NOW."""
     from prism_service.services.claude_transcripts import _project_source_path
     try:
-        root = Path(_project_source_path(project))
         doc = json.loads(
-            (root / ".prism" / "behaviors" / "conductor"
+            (_behaviors_dir_for(project) / "conductor"
              / f"{workflow_id}.json").read_text(encoding="utf-8"))
         return int(doc.get("version"))
     except Exception:
@@ -5186,7 +5241,7 @@ def workflow_instances(
     the bot's layer we are looking at, each time we click into the next
     layer, then it should move to that historical view for that instance."
 
-    A declarative FSM behaviour has no WorkflowCore run behind it --
+    A declarative FSM behaviour has no Magic workflow run behind it --
     /runs/history 404s for anything but `validation`, which is why every
     bot-family entry showed an empty rail forever. But the executions DID
     happen and ARE recorded: a gate's runs are its `gate_decide` rows and a
@@ -5270,7 +5325,7 @@ def workflow_node_status(
     steps in what you are showing me with their progress bar like from
     conductor ... there is no indication anywhere what the hell is going
     on." Correct: WorkflowsPage only ever derives node state from
-    `workflowRun.runtime`, and no WorkflowCore run backs a declarative FSM
+    `workflowRun.runtime`, and no Magic workflow run backs a declarative FSM
     behaviour, so `activeProgress` is null on every drilled layer and the
     canvas draws a dead diagram.
 

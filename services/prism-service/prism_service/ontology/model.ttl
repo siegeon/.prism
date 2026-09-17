@@ -320,3 +320,13 @@ o:callsWorkflow a rdf:Property ; rdfs:domain o:Workflow ; rdfs:range o:Workflow 
     rdfs:label "callsWorkflow" ; rdfs:comment "A Workflow that this Workflow calls. A Bot calls a Bot through this edge." .
 o:tier a rdf:Property ; rdfs:range xsd:integer ;
     rdfs:label "tier" ; rdfs:comment "The depth of a Workflow in its tree. 0 for a Bot at the top. 1 for a Workflow that a Bot calls. The API stamps the same numbers (api/workflows.py _apply_bot_tiers)." .
+
+# Typed execution sits below the existing Bot/FSM/Behavior hierarchy.
+o:StepResult a rdfs:Class ; rdfs:label "Step result" ;
+    rdfs:comment "Versioned Pydantic execution result: passed, skipped, failed, error or unknown. Only passed or skipped without stop_chain permit a dependent step." .
+o:PlanningResolution a rdfs:Class ; rdfs:label "Planning resolution" ;
+    rdfs:comment "A template binding with input hash, version, fields and unresolved questions. Complete bindings use deterministic controls; unknown bindings may request inference; errors and violations stop execution." .
+o:producesResult a rdf:Property ; rdfs:domain o:Step ; rdfs:range o:StepResult ;
+    rdfs:label "producesResult" .
+o:hasPlanningResolution a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:PlanningResolution ;
+    rdfs:label "hasPlanningResolution" .

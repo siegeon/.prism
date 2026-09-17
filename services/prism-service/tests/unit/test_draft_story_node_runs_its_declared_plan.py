@@ -389,7 +389,13 @@ def test_the_live_path_loads_task_for_draft_story(monkeypatch, tmp_path):
         seen.update(kwargs)
         return FakeResult()
 
-    monkeypatch.setattr(claude_cli, "invoke", fake_invoke)
+    monkeypatch.setattr(claude_cli, "invoke", lambda *a, **k: pytest.fail("Story bypassed its declared execution chain"))
+    def dispatch(project, plan, **kwargs):
+        seen["prompt"] = kwargs["variables"]["taskHint"]
+        assert plan["behavior"] == "draft-story-loop"
+        return [{"route": "reason-loop", "ok": True, "result": types.SimpleNamespace(
+            reason={"ok": True, "fields": {"story_md": "## Summary\nFake story"}})}]
+    monkeypatch.setattr(tr, "_dispatch_declared_steps", dispatch)
 
     # Drive the step.
     tr._run_one_step("prism", "task-id")

@@ -23,7 +23,8 @@
         "land",
         "brain-health",
         "refresh-maps",
-        "reap"
+        "reap",
+        "deploy"
       ]
     }
   ]

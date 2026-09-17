@@ -110,19 +110,19 @@ def test_the_rubric_passes_a_filled_draft_and_renders_the_fields(monkeypatch):
 # AC-4 ------------------------------------------------------------------
 def test_the_node_is_v9_with_compose_and_the_typed_schema():
     node = json.loads(_NODE.read_text(encoding="utf-8"))
-    assert [s["id"] for s in node["steps"]] == ["recall", "colour", "compose", "loop", "text-challenge"]
+    assert [s["id"] for s in node["steps"]] == ["resolve", "recall", "colour", "compose", "loop", "text-challenge"]
     assert node["version"] >= 9
-    compose = node["steps"][2]
+    compose = node["steps"][3]
     assert "/api/workflows/steps/plan-compose" in compose["url"]
     assert "${colour}" in compose["body"] and "${base}" in compose["body"]
-    loop = json.loads(node["steps"][3]["body"].replace("${refusalBlock}", "R")
+    loop = json.loads(node["steps"][4]["body"].replace("${refusalBlock}", "R")
                       .replace("${planFrame}", "F").replace("${taskHint}", "T")
                       .replace("${taskId}", "I"))
     assert loop["rubric"] == "plan_structured"
     acs = loop["json_schema"]["properties"]["acs"]
     assert acs["items"]["properties"]["colour"]["enum"] == ["red_at_base", "guard"]
     assert "plan_doc" not in loop["json_schema"]["properties"], "PRISM renders the document"
-    assert "${planFrame}" in node["steps"][3]["body"]
+    assert "${planFrame}" in node["steps"][4]["body"]
 
 
 # AC-5 ------------------------------------------------------------------

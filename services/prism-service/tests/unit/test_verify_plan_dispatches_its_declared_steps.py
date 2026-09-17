@@ -56,7 +56,7 @@ def test_the_plan_carries_its_declared_steps_in_file_order():
     # 7.13.374: plan-base-colour measures the pinned suite at base before
     # the planner writes (round 2, tasks 6bc3e6c2/83dcd479).
     # 7.13.376 (v9): plan-compose builds the explicit frame before the loop.
-    assert routes == ["plan-refusal-recall", "plan-base-colour", "plan-compose",
+    assert routes == ["planning-resolve", "plan-refusal-recall", "plan-base-colour", "plan-compose",
                       "reason-loop", "text-challenge"], (
         "verify-plan-loop.json declares recall, colour, compose, reason-loop, "
         "THEN text-challenge; the runner must see all five, in that order")
@@ -103,7 +103,7 @@ def test_every_declared_step_is_dispatched_in_order():
             return {"ok": True, "route": route}
         return _run
 
-    handlers = {"plan-refusal-recall": _handler("plan-refusal-recall"),
+    handlers = {"planning-resolve": _handler("planning-resolve"), "plan-refusal-recall": _handler("plan-refusal-recall"),
                 "plan-base-colour": _handler("plan-base-colour"),
                 "plan-compose": _handler("plan-compose"),
                 "reason-loop": _handler("reason-loop"),
@@ -111,7 +111,7 @@ def test_every_declared_step_is_dispatched_in_order():
     results = task_runner._dispatch_declared_steps(
         "prism", plan, handlers=handlers)
 
-    expected = ["plan-refusal-recall", "plan-base-colour", "plan-compose",
+    expected = ["planning-resolve", "plan-refusal-recall", "plan-base-colour", "plan-compose",
                 "reason-loop", "text-challenge"]
     assert seen == expected
     assert [r["route"] for r in results] == expected
@@ -122,7 +122,7 @@ def test_an_undeclared_route_is_reported_never_silently_skipped():
     plan = task_runner._node_plan("prism", "verify_plan")
     results = task_runner._dispatch_declared_steps("prism", plan, handlers={})
 
-    assert len(results) == 5
+    assert len(results) == 1  # Missing executor prevents dependent actions.
     assert all(r["ok"] is False for r in results)
     assert all("no handler" in r["reason"] for r in results)
 
@@ -137,7 +137,11 @@ def test_the_template_is_filled_before_the_step_runs():
         return {"ok": True}
 
     task_runner._dispatch_declared_steps(
-        "prism", plan, handlers={"reason-loop": _capture,
+        "prism", plan, handlers={"planning-resolve": lambda *_: {"ok": True},
+                                 "plan-refusal-recall": lambda *_: {"ok": True},
+                                 "plan-base-colour": lambda *_: {"ok": True},
+                                 "plan-compose": lambda *_: {"ok": True},
+                                 "reason-loop": _capture,
                                  "text-challenge": _capture},
         variables={"taskHint": "REAP THE WORKTREE", "taskId": "abc123"})
 

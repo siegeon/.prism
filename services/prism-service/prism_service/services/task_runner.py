@@ -294,6 +294,10 @@ def _behavior_dir(project: str):
     from pathlib import Path
     from prism_service.services.claude_transcripts import _project_source_path
 
+    native = os.environ.get("MAGIC_WORKFLOW_DEFINITIONS")
+    if native:
+        return Path(native) / project / "conductor"
+
     configured = Path(_project_source_path(project))
     fallback = Path.home() / "projects" / project
     root = configured if configured.is_absolute() and configured.exists() \
@@ -377,7 +381,7 @@ def _node_plan(project: str, step_id: str) -> Optional[dict]:
             max_turns = body["max_turns"]
         if isinstance(body.get("max_budget_usd"), (int, float)):
             budget = float(body["max_budget_usd"])
-    return {"model": model, "max_turns": max_turns,
+    return {"behavior": behavior, "model": model, "max_turns": max_turns,
             "max_budget_usd": budget, "timeout_s": timeout_s,
             "prompt": prompt, "codified": codified, "agentic": agentic,
             "steps": steps, "json_schema": json_schema, "rubric": rubric}
@@ -492,7 +496,9 @@ def _step_handlers() -> dict:
         return _wf.workflow_step_red_prompt_compose(
             _wf.RedPromptComposeRequest(**body), project=project)
 
-    return {"reason-loop": _reason_loop, "text-challenge": _text_challenge,
+    return {"planning-resolve": lambda project, body: _wf.workflow_step_planning_resolve(
+                _wf.PlanningResolveRequest(**body), project=project),
+            "reason-loop": _reason_loop, "text-challenge": _text_challenge,
             "write-test-file": _write_test_file,
             "run-pinned-suite": _run_pinned_suite,
             "commit-tests-only": _commit_tests_only,
@@ -565,6 +571,8 @@ def _exported_variables(result) -> dict:
             fields.update(result.dict() or {})
         elif hasattr(result, "__dict__"):
             fields.update(vars(result) or {})
+    if fields.get("kind") == "workflow.step_result":
+        fields = fields.get("outputs") or {}
     out: dict = {}
     for key, val in fields.items():
         if not isinstance(key, str) or not isinstance(
@@ -589,11 +597,70 @@ def _step_field(result, name: str, default=None):
     return getattr(result, name, default)
 
 
+def _dispatch_magic_steps(project, plan, variables, task_id, step, request_key):
+    """The production conductor submits to the IDE's durable Magic engine.
+
+    Local injected handlers remain useful for isolated contract tests. A failed
+    Magic submission never falls back to a second executor or fresh inference.
+    """
+    import json
+    import time
+    from types import SimpleNamespace
+    from urllib.parse import quote
+    from prism_service.api.workflows import _workflow_engine_json
+    from prism_service.models.step_result import normalize_step_result
+    from prism_service.services import drive_heartbeat
+
+    scores_db = _scores_db_for(project) if task_id else None
+    try:
+        behavior = plan.get("behavior")
+        if not behavior:
+            raise ValueError("Declared plan has no Magic behavior identity")
+        started = _workflow_engine_json(
+            f"/workflows/bots/{quote(project, safe='')}/conductor/pipeline/{quote(behavior, safe='')}",
+            method="POST", body={"vars": variables, "requestKey": request_key})
+        instance = started["instanceId"]
+        deadline = time.monotonic() + sum(float(d.get("timeout_s") or 300) for d in plan["steps"]) + 60
+        while True:
+            run = _workflow_engine_json(f"/workflows/instances/{instance}")
+            if scores_db is not None:
+                drive_heartbeat.beat_node(scores_db, task_id, step or "",
+                    run.get("runtime", {}).get("currentStep", ""), driver=RUNNER_DRIVER)
+            if run["status"] not in {"Runnable", "Running"}:
+                break
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Magic run {instance} is still active; inspect it before retrying")
+            time.sleep(1)
+        definitions = {d["id"]: d for d in run["data"]["definition"]["steps"]}
+        rows = []
+        for result in run["data"].get("results", []):
+            declaration = definitions[result["step"]]
+            url = declaration.get("url", "")
+            route = url.split("/steps/")[-1].split("?")[0] if "/steps/" in url else result["step"]
+            try:
+                output = json.loads(result.get("output") or "{}")
+                contract = normalize_step_result(output)
+            except (ValueError, TypeError):
+                output = {}; contract = normalize_step_result({"ok": False, "reason": result.get("output", "Invalid output")})
+            rows.append({"route": route, "ok": result.get("exitCode") == 0 and contract.permits_next,
+                         "reason": contract.reason, "result": SimpleNamespace(**output)})
+        if run["status"] != "Complete" and not any(not row["ok"] for row in rows):
+            rows.append({"route": behavior, "ok": False, "reason": f"Magic run {instance}: {run['status']}"})
+        return rows
+    except Exception as exc:
+        return [{"route": plan.get("behavior", "magic"), "ok": False,
+                 "reason": f"Magic execution refused: {exc}"}]
+    finally:
+        if scores_db is not None:
+            drive_heartbeat.beat_node(scores_db, task_id, step or "", "", driver=RUNNER_DRIVER)
+
+
 def _dispatch_declared_steps(project: str, plan: Optional[dict],
                              *, handlers: Optional[dict] = None,
                              variables: Optional[dict] = None,
                              task_id: Optional[str] = None,
-                             step: Optional[str] = None) -> list[dict]:
+                             step: Optional[str] = None,
+                             request_key: str = "") -> list[dict]:
     """Run every step the node declares, in file order.
 
     A route with no handler is REPORTED, never skipped. Silence is what let
@@ -617,7 +684,9 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
     """
     if not plan:
         return []
-    table = _step_handlers() if handlers is None else handlers
+    if handlers is None:
+        return _dispatch_magic_steps(project, plan, variables or {}, task_id, step, request_key)
+    table = handlers
     live = dict(variables or {})
     out: list[dict] = []
     scores_db = _scores_db_for(project) if task_id else None
@@ -631,7 +700,7 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
         if fn is None:
             out.append({"ok": False, "route": route,
                         "reason": f"no handler for declared route {route!r}"})
-            continue
+            break
         body = _subst(decl.get("body") or {}, live)
         # BIND THE DECLARED WALL CLOCK (task bb3d1f6a): the node file's own
         # timeoutSeconds is parsed into decl["timeout_s"] by _node_plan but
@@ -650,7 +719,7 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
         except Exception as exc:
             out.append({"ok": False, "route": route,
                         "reason": f"{route} raised {type(exc).__name__}: {exc}"})
-            continue
+            break
         # A DICT RESULT MUST BE ABLE TO STOP THE CHAIN TOO (task bb3d1f6a,
         # second pass). This read was `getattr(result, "stop_chain", False)`
         # alone, and getattr on a dict reads an ATTRIBUTE, never a KEY --
@@ -659,7 +728,14 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
         # reported. run-pinned-suite refuses an rc that does not match the
         # rc its node declares, and that refusal has to reach here or
         # commit-tests-only anchors red on the bad run anyway.
-        stopped = bool(_step_field(result, "stop_chain", False))
+        from prism_service.models.step_result import normalize_step_result
+        try:
+            contract = normalize_step_result(result)
+        except Exception as exc:
+            out.append({"ok": False, "route": route,
+                        "reason": f"Invalid step result: {exc}"})
+            break
+        stopped = not contract.permits_next
         # A STOPPED STEP IS A FAILED ATTEMPT, NOT A QUIET SKIP. reason-loop
         # reports stop_chain when its own declared rubric refused the draft
         # (e.g. test_drafted's unresolvable-import check) -- record that row
@@ -674,10 +750,11 @@ def _dispatch_declared_steps(project: str, plan: Optional[dict],
             if isinstance(validation, dict):
                 row_reason = str(validation.get("reason") or "")
             if not row_reason:
-                row_reason = str(_step_field(result, "reason", "") or "")
+                row_reason = contract.reason
         out.append({"ok": not stopped, "route": route,
                     "reason": row_reason, "result": result})
-        live.update(_exported_variables(result))
+        if not stopped:
+            live.update(_exported_variables(result))
         # GENERIC EARLY-EXIT (task d0b392b3): a declared step's own typed
         # result may say the rest of THIS node's chain does not apply --
         # e.g. oracle-route-check routing a browser-adapter demo task away
@@ -714,7 +791,7 @@ def _runs_as_declared_steps(step_id: str, plan: Optional[dict]) -> bool:
     if not plan:
         return False
     routes = [s.get("route") for s in plan.get("steps") or []]
-    if step_id == "verify_plan":
+    if step_id in {"draft_story", "verify_plan"}:
         return "reason-loop" in routes and bool(plan.get("json_schema"))
     # write_failing_tests joins ONLY on the strength of its declaration
     # (task ab9166d5). The 7.13.292 attempt admitted it while the file
@@ -807,6 +884,9 @@ def _result_from_dispatch(rows: list) -> Optional["_CodifiedResult"]:
     falls back -- a declared flow that misfires must never advance a step
     on nothing.
     """
+    failure = next((row for row in rows or [] if not row.get("ok")), None)
+    if failure is not None:
+        return _CodifiedResult("", refusal=str(failure.get("reason") or "Declared step refused"))
     demo = _result_from_demo_route(rows)
     if demo is not None:
         return demo
@@ -818,7 +898,7 @@ def _result_from_dispatch(rows: list) -> Optional["_CodifiedResult"]:
             continue
         reason = getattr(row.get("result"), "reason", None) or {}
         fields = reason.get("fields") or {}
-        doc = (fields.get("plan_doc") or "").strip()
+        doc = (fields.get("plan_doc") or fields.get("story_md") or "").strip()
         if not doc:
             return None
         diagram = (fields.get("plan_diagram") or "").strip()
@@ -2426,7 +2506,7 @@ def _run_one_step(project: str, task_id: str) -> dict:
             dispatched = _dispatch_declared_steps(
                 project, plan,
                 variables=_build_step_variables(task, task_id, project),
-                task_id=task_id, step=job["step"])
+                task_id=task_id, step=job["step"], request_key=f"{run_id}:{job['step']}")
             for row in dispatched:
                 route = row.get("route") or "?"
                 if route in _SELF_RECORDING_ROUTES:

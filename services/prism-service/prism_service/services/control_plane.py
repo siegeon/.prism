@@ -133,6 +133,14 @@ POLICY_FILES: tuple[str, ...] = (
     "services/prism-service/prism_service/services/oracle_spec.py",
     "services/prism-service/prism_service/services/conductor_service.py",
     "services/prism-service/prism_service/services/control_plane.py",
+    "services/prism-service/prism_service/services/plan_gate_checks.py",
+    "services/prism-service/prism_service/services/task_runner.py",
+    "services/prism-service/prism_service/models/step_result.py",
+    "services/prism-service/prism_service/models/planning_resolution.py",
+    "services/prism-service/prism_service/api/workflows.py",
+    ".prism/behaviors/conductor/draft-story-loop.json",
+    ".prism/behaviors/conductor/verify-plan-loop.json",
+    "services/prism-service/prism_service/ontology/model.ttl",
 )
 
 # Tags that mark a task as an AUTHORIZED policy change (routed through the

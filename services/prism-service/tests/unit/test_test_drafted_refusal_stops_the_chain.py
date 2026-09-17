@@ -298,9 +298,9 @@ def test_a_refused_draft_never_reaches_write_or_commit():
         f"the refusal text must name the unresolvable module: {refused_row!r}")
 
     result = task_runner._result_from_dispatch(rows)
-    assert result is None, (
-        "a refused draft must never advance the step -- no red anchor "
-        "was ever written or committed")
+    assert result is not None and result.refusal, (
+        "a refused draft must propagate refusal, preventing fallback inference "
+        "or advancement without a red anchor")
 
 
 def test_a_passing_draft_still_flows_through_the_whole_chain():
