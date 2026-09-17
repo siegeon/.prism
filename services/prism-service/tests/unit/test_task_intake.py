@@ -205,3 +205,24 @@ def test_source_ids_are_not_file_scope(environment):
     intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":value})
     with pytest.raises(ValueError,match="project-relative"):
         intake.check(ctx,task.id)
+
+
+def test_schema_limits_citations_to_retrieved_sources(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    def infer(prompt,schema):
+        props=schema["$defs"]["AcceptanceCriterion"]["properties"]
+        assert "code:api.py" in props["evidence_refs"]["items"]["enum"]
+        assert "made-up" not in props["evidence_refs"]["items"]["enum"]
+        return {"contract":candidate()}
+    intake.propose(ctx,"fixture",task.id,infer)
+
+
+def test_changed_sources_do_not_reuse_a_validated_contract(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":candidate()})
+    intake.check(ctx,task.id)
+    (ctx._data_dir.parent/"api.py").write_text("def changed_endpoint(): pass")
+    packet=gathered(environment)
+    assert "contract" not in packet

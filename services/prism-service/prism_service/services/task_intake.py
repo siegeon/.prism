@@ -101,7 +101,8 @@ def gather(ctx, project, task_id, engine):
               "state": "gathered", "unresolved_questions": [], "inference_used": False}
     try:
         previous = load(ctx, task_id)
-        if previous.get("input_hash") == packet["input_hash"] and previous.get("state") == "validated":
+        if (previous.get("input_hash") == packet["input_hash"] and previous.get("state") == "validated"
+                and digest(previous.get("sources")) == digest(packet["sources"])):
             packet["contract"] = previous["contract"]
     except FileNotFoundError:
         pass
@@ -175,6 +176,11 @@ def propose(ctx, project, task_id, infer):
         shape = schema["$defs"]["TaskContract"]
         shape["properties"].pop("verify")
         shape["required"].remove("verify")
+        criterion = schema["$defs"]["AcceptanceCriterion"]["properties"]
+        criterion["evidence_refs"]["items"]["enum"] = [s["id"] for s in packet["sources"]]
+        shape["properties"]["allowed_files"]["items"]["pattern"] = r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^:*?\[]+$"
+        shape["properties"]["allowed_files"]["description"] = (
+            "Exact project-relative file paths. Source ids and ontology rule ids are not paths.")
         fields = infer(prompt, schema)
         packet["raw_proposal"] = fields
         save(ctx, task_id, packet)
