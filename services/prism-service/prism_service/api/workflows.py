@@ -1396,7 +1396,7 @@ def _conductor_behavior_workflows_uncached(project: str, bot_id: str = "conducto
     except HTTPException:
         return []
 
-    if (bot.get("id") or bot.get("Id")) != bot_id:
+    if (bot.get("id") or bot.get("Id")) not in (None, bot_id):
         return []
     block_by_route = _block_index_by_route()
     entries = []
@@ -1798,6 +1798,7 @@ def _worker_seat_blocks_workflow(project: str) -> dict:
         "id": "worker_seat_blocks",
         "name": "Worker seat blocks",
         "description": (
+            "Runs when a workflow needs a typed validation or recovery check. "
             "Typed, registered multiplier blocks (prism_service/blocks/) "
             "called from inside design_packet, resume_actuator, "
             "gate_adjudicator, and the write_failing_tests pipeline -- "

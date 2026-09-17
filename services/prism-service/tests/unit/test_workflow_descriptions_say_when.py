@@ -99,6 +99,8 @@ def _fake_engine_factory(behavior_ids):
         if path.startswith("/workflows/bots/conductor?"):
             return {"id": "conductor", "name": "Conductor",
                     "fsms": [{"fsmId": "pipeline", "behaviorIds": list(behavior_ids)}]}
+        if path.startswith("/workflows/bots/architect?"):
+            return {"id": "architect", "fsms": []}
         raise AssertionError(f"unexpected workflow engine path: {path}")
     return _fake_engine
 

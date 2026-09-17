@@ -47,11 +47,12 @@ def gather(ctx, project, task_id, engine):
     root = Path(_project_source_path(project)).resolve()
     if not root.is_dir():
         raise ValueError("Project source is unavailable")
-    query = (task.title + " " + task.description)[:1800]
+    query = (task.title + " " + task.description.split(".", 1)[0])[:500]
     sources = [{"id": "request", "kind": "request", "content": request}]
     source_hashes = {}
     # Indexed hits are pointers. Read current source before citing code.
-    for hit in ctx.brain_svc.search(query, limit=5, task_id=task_id):
+    seen = set()
+    for hit in ctx.brain_svc.search(query, limit=8, task_id=task_id):
         path = Path(hit.get("source_file") or "")
         if not path.is_absolute():
             path = root / path
@@ -60,6 +61,9 @@ def gather(ctx, project, task_id, engine):
             continue
         content = path.read_text(encoding="utf-8", errors="replace")
         relative = str(path.relative_to(root))
+        if relative in seen or path.name == "__version__.py":
+            continue
+        seen.add(relative)
         source_hashes[relative] = digest(content)
         start = max(0, int(hit.get("line_start") or 1) - 1)
         sources.append({"id": "code:" + relative, "kind": "brain", "path": relative,
@@ -137,11 +141,22 @@ def propose(ctx, project, task_id, infer):
     else:
         prompt = ("Act as the architect for task intake. Propose a task contract, not implementation or completion proof. "
             "Use only the request and cited project sources below. Each criterion must state given, when, then, a verification target, "
-            "and evidence_refs from source ids. Name a user-reachable result. Include the production wiring in file scope. "
+            "and evidence_refs copied exactly from source ids. Name a user-reachable result. Include the production wiring in file scope. "
+            "For proof_type=test, each verification must be one pytest file or node id, not a shell command or prose. "
+            "Do not return a separate verify list. The system derives verify from the criteria. "
             "Preserve all existing task constraints. Do not claim a test ran or a feature exists. "
             "If intent or evidence is insufficient, return contract=null and precise unresolved_questions. "
             "Do not invent owner intent to fill a form.\n" + json.dumps({"request": packet["request"], "sources": packet["sources"]}))
-        fields = infer(prompt, IntakeProposal.model_json_schema())
+        schema = IntakeProposal.model_json_schema()
+        shape = schema["$defs"]["TaskContract"]
+        shape["properties"].pop("verify")
+        shape["required"].remove("verify")
+        fields = infer(prompt, schema)
+        packet["raw_proposal"] = fields
+        save(ctx, task_id, packet)
+        if isinstance(fields.get("contract"), dict):
+            fields["contract"]["verify"] = list(dict.fromkeys(
+                ac.get("verification", "") for ac in fields["contract"].get("acceptance_criteria", [])))
         proposal = IntakeProposal.model_validate(fields)
         packet["inference_used"] = True
     packet["unresolved_questions"] = proposal.unresolved_questions

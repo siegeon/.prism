@@ -66,7 +66,7 @@ def test_bad_contract_cannot_mutate_task(environment,change):
         task.oracle="Keep the existing public API unchanged"
         gathered(environment)
     if change=="missing_check":
-        with pytest.raises(ValidationError): intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":value})
+        with pytest.raises(ValidationError): TaskContract.model_validate(value)
         return
     intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":value})
     if change=="stale_task": task.description="Different intent"
@@ -165,3 +165,22 @@ def test_architect_and_behavior_have_distinct_fsm_tiers():
         {"id":"create-task","parent_id":"architect","steps":[]}]
     _apply_bot_tiers(catalog)
     assert [c["tier"] for c in catalog]==[0,1]
+
+
+def test_verification_targets_are_derived_once_from_criteria(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    def infer(prompt,schema):
+        assert "verify" not in schema["$defs"]["TaskContract"]["properties"]
+        value=candidate(); value.pop("verify")
+        return {"contract":value}
+    packet=intake.propose(ctx,"fixture",task.id,infer)
+    assert packet["contract"]["verify"]==["tests/test_api.py::test_criteria"]
+
+
+def test_invalid_proposal_is_saved_for_diagnosis(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    with pytest.raises(ValidationError):
+        intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":{"oracle":"Incomplete"}})
+    assert intake.load(ctx,task.id)["raw_proposal"]["contract"]["oracle"]=="Incomplete"
