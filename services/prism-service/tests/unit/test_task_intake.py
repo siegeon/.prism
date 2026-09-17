@@ -184,3 +184,24 @@ def test_invalid_proposal_is_saved_for_diagnosis(environment):
     with pytest.raises(ValidationError):
         intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":{"oracle":"Incomplete"}})
     assert intake.load(ctx,task.id)["raw_proposal"]["contract"]["oracle"]=="Incomplete"
+
+
+def test_gather_includes_verification_surfaces_for_retrieved_modules(environment):
+    ctx,task,_=environment
+    root=ctx._data_dir.parent
+    tests=root/"tests"
+    tests.mkdir()
+    (tests/"test_api.py").write_text("def test_criteria(): pass\n")
+    packet=gathered(environment)
+    source=next(s for s in packet["sources"] if s["id"]=="code:tests/test_api.py")
+    assert "test_criteria" in source["content"]
+    assert "tests/test_api.py" in packet["source_hashes"]
+
+
+def test_source_ids_are_not_file_scope(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    value=candidate(); value["allowed_files"]=["code:api.py"]
+    intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":value})
+    with pytest.raises(ValueError,match="project-relative"):
+        intake.check(ctx,task.id)

@@ -68,6 +68,22 @@ def gather(ctx, project, task_id, engine):
         start = max(0, int(hit.get("line_start") or 1) - 1)
         sources.append({"id": "code:" + relative, "kind": "brain", "path": relative,
                         "content": "\n".join(content.splitlines()[start:start + 45])[:2500]})
+    # Include existing verification surfaces for retrieved modules, without inference.
+    stems = {Path(path).stem for path in seen if path.endswith(".py")}
+    for path in sorted(root.glob("**/tests/**/test_*.py")):
+        if len(sources) >= 18:
+            break
+        if path.stem.removeprefix("test_") not in stems or not path.resolve().is_relative_to(root):
+            continue
+        relative = str(path.relative_to(root))
+        if relative in seen:
+            continue
+        content = path.read_text(encoding="utf-8", errors="replace")
+        source_hashes[relative] = digest(content)
+        seen.add(relative)
+        targets = [line for line in content.splitlines() if line.startswith("def test_")]
+        sources.append({"id": "code:" + relative, "kind": "brain", "path": relative,
+                        "content": "\n".join(targets)[:4000]})
     for entry in ctx.memory_svc.recall(query, limit=5):
         sources.append({"id": entry.id, "kind": "concept_memory", "name": entry.name,
                         "content": entry.description[:2000]})
@@ -115,7 +131,7 @@ def validate(ctx, task_id, packet, contract):
             raise ValueError("Acceptance criterion needs project evidence: " + ac.id)
     for relative in contract.allowed_files:
         path = Path(relative)
-        if path.is_absolute() or ".." in path.parts or any(c in relative for c in "*?["):
+        if relative.startswith("code:") or path.is_absolute() or ".." in path.parts or any(c in relative for c in "*?["):
             raise ValueError("File scope must name exact project-relative files")
         if not (Path(packet["root"]) / path).resolve().is_relative_to(Path(packet["root"])):
             raise ValueError("File scope leaves the project")
@@ -145,6 +161,14 @@ def propose(ctx, project, task_id, infer):
             "For proof_type=test, each verification must be one pytest file or node id, not a shell command or prose. "
             "Do not return a separate verify list. The system derives verify from the criteria. "
             "Preserve all existing task constraints. Do not claim a test ran or a feature exists. "
+            "Resolve routine implementation choices from these sources; do not ask the owner to choose file scope or rules. "
+            "allowed_files contains exact project-relative paths, never source ids or a code: prefix. "
+            "Select the smallest production and test scope supported by the retrieved paths. New paths may be proposed within this project. "
+            "For a code change with pytest targets available, prefer proof_type=test and name those targets. "
+            "Existing controls are fixed: pending tasks only; current inputs and sources; known source citations; "
+            "preserved owner constraints; exact file scope inside this project; existing oracle authoring validation. "
+            "Use the supplied ontology rules for relevant concepts, not as a request to design new rules. "
+            "Changes outside this project require a stop_if condition, not a question about unspecified future work. "
             "If intent or evidence is insufficient, return contract=null and precise unresolved_questions. "
             "Do not invent owner intent to fill a form.\n" + json.dumps({"request": packet["request"], "sources": packet["sources"]}))
         schema = IntakeProposal.model_json_schema()
