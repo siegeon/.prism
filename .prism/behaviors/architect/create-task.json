@@ -1,0 +1,45 @@
+{
+  "id": "create-task",
+  "fsmId": "pipeline",
+  "botId": "architect",
+  "name": "Enrich a task and validate its acceptance criteria",
+  "version": 1,
+  "steps": [
+    {
+      "id": "gather",
+      "kind": "http-callback",
+      "persona": "architect",
+      "agentic": false,
+      "url": "${prismBackendUrl}/api/workflows/steps/task-intake-gather?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "propose",
+      "kind": "http-callback",
+      "persona": "architect",
+      "agentic": true,
+      "url": "${prismBackendUrl}/api/workflows/steps/task-intake-propose?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 300
+    },
+    {
+      "id": "validate",
+      "kind": "http-callback",
+      "persona": "architect",
+      "agentic": false,
+      "url": "${prismBackendUrl}/api/workflows/steps/task-intake-validate?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 60
+    },
+    {
+      "id": "apply",
+      "kind": "http-callback",
+      "persona": "architect",
+      "agentic": false,
+      "url": "${prismBackendUrl}/api/workflows/steps/task-intake-apply?project=${project}",
+      "body": "{\"task_id\": \"${taskId}\"}",
+      "timeoutSeconds": 60
+    }
+  ]
+}

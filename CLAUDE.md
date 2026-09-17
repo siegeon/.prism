@@ -33,6 +33,8 @@ When I correct you, or you catch yourself making a mistake: before continuing, a
 
 ## Lessons
 
+- Missing acceptance criteria are an architect intake behavior gap. Enrich the request through the brain, memory, ontology and Magic before asking the owner to write the task contract. Ask only about intent that those sources cannot establish.
+
 - Substrate repairs that make PRISM task execution trustworthy are performed externally by Codex, never driven as PRISM tasks; PRISM may resume internal work only after the repaired boundary is independently verified.
 - A conductor step validation result is a typed PRISM ontology object (identity, outcome, failures, summary, evidence reference); raw command output is supporting evidence, never the caller-facing result contract.
 - Workflow orchestration belongs IN the daemon, not hand-cranked from a session (owner 2026-08-16/17, twice): the standing direction is mx-d5275d / epic 3baadd19 "PRISM drives its own tasks end to end" — task_runner.py already holds the drive worker (off by default, gap list in mx-bd3bd9). When the owner sees me driving lanes from without, the move is to advance that epic, never to defend the lanes; until it ships, external drives are the stopgap and must pass session_id in args.

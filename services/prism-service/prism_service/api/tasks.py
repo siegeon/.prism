@@ -476,7 +476,11 @@ def create_task(body: TaskCreate, project: str = Query("default")) -> dict:
     if sid:
         ctx.task_svc.link_session(task.id, sid)
         out["sessions"] = ctx.task_svc.sessions_for_task(task.id)
-    if body.enter_conductor:
+    from prism_service.services.task_intake import after_create
+    intake = after_create(project, task)
+    if intake is not None:
+        out["intake"] = intake
+    if body.enter_conductor and intake is None:
         cond = getattr(ctx, "conductor_svc", None)
         if cond is not None:
             out["advanced"] = cond.advance_task(

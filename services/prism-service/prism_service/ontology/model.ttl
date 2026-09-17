@@ -330,3 +330,13 @@ o:producesResult a rdf:Property ; rdfs:domain o:Step ; rdfs:range o:StepResult ;
     rdfs:label "producesResult" .
 o:hasPlanningResolution a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:PlanningResolution ;
     rdfs:label "hasPlanningResolution" .
+
+# Task intake declares proof obligations before the implementation begins.
+o:AcceptanceCriterion a rdfs:Class ; rdfs:label "Acceptance criterion" ;
+    rdfs:comment "A task requirement with a starting condition, action, observable result, verification target and cited source evidence. It is not completion evidence." .
+o:TaskContract a rdfs:Class ; rdfs:label "Task contract" ;
+    rdfs:comment "The validated output of architect intake. It binds acceptance criteria to the oracle, verification targets, file scope and stop conditions." .
+o:hasAcceptanceCriterion a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:AcceptanceCriterion ;
+    rdfs:label "hasAcceptanceCriterion" .
+o:hasTaskContract a rdf:Property ; rdfs:domain o:Task ; rdfs:range o:TaskContract ;
+    rdfs:label "hasTaskContract" .

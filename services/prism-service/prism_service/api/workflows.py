@@ -1048,6 +1048,7 @@ def _apply_bot_tiers(catalog: list[dict]) -> None:
     steward(1) -> plan-gate-check(2). model.ttl's o:tier carries the same
     definition so the ontology and this stamp cannot drift."""
     fsm_ids = _fsm_entry_ids()
+    fsm_ids.update({e["id"]: e["fsm_id"] for e in catalog if e.get("kind") == "bot" and e.get("fsm_id")})
     by_id = {entry.get("id"): entry for entry in catalog}
     for entry in catalog:
         fsm_id = fsm_ids.get(entry.get("id"))
@@ -1347,7 +1348,7 @@ def _conductor_behavior_workflows(project: str) -> list[dict]:
         lambda: _conductor_behavior_workflows_uncached(project))
 
 
-def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
+def _conductor_behavior_workflows_uncached(project: str, bot_id: str = "conductor") -> list[dict]:
     """Each of the conductor bot's Magic Behaviors, as its OWN
     catalog entry -- not one synthetic wrapper node whose fake "steps" were
     just the behavior ids. Bot [1] uses FSM [1..*], FSM [1] has Behavior
@@ -1391,10 +1392,12 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
         return []
     encoded_root = quote(str(root))
     try:
-        bot = _workflow_engine_json(f"/workflows/bots/conductor?project={quote(project, safe='')}&repoPath={encoded_root}")
+        bot = _workflow_engine_json(f"/workflows/bots/{bot_id}?project={quote(project, safe='')}&repoPath={encoded_root}")
     except HTTPException:
         return []
 
+    if (bot.get("id") or bot.get("Id")) != bot_id:
+        return []
     block_by_route = _block_index_by_route()
     entries = []
     for fsm in bot.get("fsms") or bot.get("Fsms") or []:
@@ -1402,7 +1405,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
         for behavior_id in fsm.get("behaviorIds") or fsm.get("BehaviorIds") or []:
             try:
                 behavior = _workflow_engine_json(
-                    f"/workflows/bots/conductor/behaviors/{behavior_id}?project={quote(project, safe='')}&repoPath={encoded_root}")
+                    f"/workflows/bots/{bot_id}/behaviors/{behavior_id}?project={quote(project, safe='')}&repoPath={encoded_root}")
             except HTTPException:
                 continue
             raw_steps = behavior.get("steps") or behavior.get("Steps") or []
@@ -1425,7 +1428,7 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
                     # hands the work to a model. "run-tests" reaching the
                     # reason loop is agentic; "call-llm" running a shell
                     # command is not.
-                    "agentic": _step_is_agentic(kind, url),
+                    "agentic": bool(step.get("agentic")) or _step_is_agentic(kind, url),
                     # The PRISM route this step calls. A behaviour step is
                     # named for its position in the flow ("gather"), while
                     # its runs are recorded under the route ("premise
@@ -1436,8 +1439,8 @@ def _conductor_behavior_workflows_uncached(project: str) -> list[dict]:
                     # read zero.
                     "route": route,
                     "validation": "exit_code == 0",
-                    "persona": "conductor",
-                    "persona_label": "Conductor",
+                    "persona": step.get("persona") or bot_id,
+                    "persona_label": (step.get("persona") or bot_id).title(),
                     # A matched step's purpose/input/action/output mirror the
                     # SAME fields worker_seat_blocks builds for this exact
                     # block (title/inputs/description/outputs) -- clicking
@@ -1910,6 +1913,11 @@ def get_workflows(project: str = Query("default")) -> dict:
     # the step that lights up when a task is standing at verify_green_state.
     validation["parent_id"] = "conductor"
     conductor_behaviors = _conductor_behavior_workflows(project)
+    architect_behaviors = _cached_engine_structure("architect_behaviors", project,
+        lambda: _conductor_behavior_workflows_uncached(project, "architect"))
+    for behavior in architect_behaviors:
+        behavior["parent_id"] = "architect"
+    conductor_behaviors += architect_behaviors
     from prism_service.services import drive_heartbeat
     # A BEHAVIOUR'S SUB-STEPS CARRY THEIR OWN MEASURED TREND. The trend
     # above is computed for the conductor's ten FSM steps only, so every
@@ -2105,9 +2113,14 @@ def get_workflows(project: str = Query("default")) -> dict:
     # catalog is tiered, because _apply_bot_tiers reads parent_id.
     role_bots = _role_bot_workflows(conductor, project, svc=_svc)
     _reparent_behaviours_under_role_bots(conductor, conductor_behaviors)
+    architect_bots = [{"id": "architect", "name": "Architect", "kind": "bot", "fsm_id": "pipeline",
+        "description": "Runs when a new task needs source context and demonstrable acceptance criteria.",
+        "steps": [{"id": b["id"], "type": "behavior", "agent": "architect", "persona": "architect",
+                   "purpose": b["name"], "linked_workflow_id": b["id"]} for b in architect_behaviors],
+        "bots": [], "occupancy": {b["id"]: 0 for b in architect_behaviors}}] if architect_behaviors else []
     catalog = [conductor, validation, triage, align_language, quickfix,
               promote_to_law, knowledge_health, worker_seat_blocks,
-              *role_bots, *conductor_behaviors]
+              *role_bots, *architect_bots, *conductor_behaviors]
     # task_count (task af396b2c): the queue standing behind each catalog
     # entry -- see _task_count_by_workflow's docstring for the alias join.
     _counts = _task_count_by_workflow(project, [entry["id"] for entry in catalog], svc=_svc)
@@ -2974,7 +2987,7 @@ def workflow_step_reason_loop(
         reason = {
             "ok": bool(fields),
             "fields": fields,
-            "cost_usd": result.usage.get("cost_usd", 0.0),
+            "cost_usd": (result.usage or {}).get("cost_usd", 0.0),
             "run_id": result.run_id,
         }
 
@@ -4338,7 +4351,7 @@ def workflow_step_premise_judge(
         )
         fields = result.structured_output or {}
         reason = {"ok": bool(fields), "fields": fields,
-                  "cost_usd": result.usage.get("cost_usd", 0.0),
+                  "cost_usd": (result.usage or {}).get("cost_usd", 0.0),
                   "run_id": result.run_id}
 
         from prism_service.services import arc_governance as gov
@@ -6207,3 +6220,78 @@ def workflow_step_commit_tests_only(
             project, out["task_id"], "commit-tests-only",
             out["outcome"] == "ok",
             out["reason"] or f"committed {out['sha'][:12]}: {', '.join(out['files'])}")
+
+
+class TaskIntakeRequest(BaseModel):
+    task_id: str = Field(min_length=1)
+    timeout_s: float = Field(default=300, ge=1, le=900)
+
+
+def _intake_step(body, project, stage):
+    from prism_service.models.step_result import StepResult
+    from prism_service.services import task_intake
+    ctx = get_project(project)
+    try:
+        if stage == "gather":
+            packet = task_intake.gather(ctx, project, body.task_id, _workflow_engine_json)
+        elif stage == "propose":
+            def infer(prompt, schema):
+                result = workflow_step_reason_loop(ReasonLoopRequest(
+                    persona="architect", prompt=prompt, json_schema=schema,
+                    task_id=body.task_id, timeout_s=body.timeout_s, max_turns=2,
+                    max_budget_usd=0.5, narrow=True), project=project)
+                if result.stop_chain or not result.reason.get("ok"):
+                    raise ValueError("Architect could not produce a typed intake proposal")
+                return result.reason["fields"]
+            packet = task_intake.propose(ctx, project, body.task_id, infer)
+        elif stage == "validate":
+            packet = task_intake.check(ctx, body.task_id)
+        else:
+            packet = task_intake.apply(ctx, body.task_id)
+        _record_node_run(project, body.task_id, "task-intake-" + stage, packet["state"] != "unresolved", packet["state"])
+        if packet["state"] == "unresolved":
+            return StepResult(outcome="unknown", reason="; ".join(packet["unresolved_questions"] or ["No task contract"]),
+                outputs={"task_id": body.task_id, "intake_state": "unresolved"}, stop_chain=True)
+        return StepResult(outcome="passed", outputs={"task_id": body.task_id,
+            "intake_state": packet["state"], "inference_used": packet["inference_used"]})
+    except Exception as exc:
+        _record_node_run(project, body.task_id, "task-intake-" + stage, False, str(exc))
+        ctx.task_svc.record_history(body.task_id, action="intake_refused", actor="architect",
+            details=f"{stage}: {exc}")
+        return StepResult(outcome="error", reason=str(exc), stop_chain=True)
+
+
+@router.post("/steps/task-intake-gather")
+def workflow_step_task_intake_gather(body: TaskIntakeRequest, project: str = Query(...)):
+    return _intake_step(body, project, "gather")
+
+
+@router.post("/steps/task-intake-propose")
+def workflow_step_task_intake_propose(body: TaskIntakeRequest, project: str = Query(...)):
+    return _intake_step(body, project, "propose")
+
+
+@router.post("/steps/task-intake-validate")
+def workflow_step_task_intake_validate(body: TaskIntakeRequest, project: str = Query(...)):
+    return _intake_step(body, project, "validate")
+
+
+@router.post("/steps/task-intake-apply")
+def workflow_step_task_intake_apply(body: TaskIntakeRequest, project: str = Query(...)):
+    return _intake_step(body, project, "apply")
+
+
+@router.post("/tasks/{task_id}/intake")
+def start_task_intake(task_id: str, project: str = Query(...), retry: bool = False):
+    from prism_service.services import task_intake
+    task_intake.task_for_intake(get_project(project), task_id)
+    return task_intake.start(project, task_id, _workflow_engine_json, retry=retry)
+
+
+@router.get("/tasks/{task_id}/intake")
+def get_task_intake(task_id: str, project: str = Query(...)):
+    from prism_service.services import task_intake
+    try:
+        return task_intake.load(get_project(project), task_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "No intake result exists for this task")

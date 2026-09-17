@@ -1,0 +1,12 @@
+{
+  "id": "architect",
+  "name": "Architect",
+  "fsms": [
+    {
+      "fsmId": "pipeline",
+      "behaviorIds": [
+        "create-task"
+      ]
+    }
+  ]
+}

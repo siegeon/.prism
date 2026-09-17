@@ -155,6 +155,10 @@ def test_create_with_session_id_and_enter_conductor(project):
     r = client.post(
         f"/api/tasks?project={project}",
         json={"title": "atomic entry", "session_id": "S-atomic",
+              "oracle": "The /api/tasks response includes the linked session.",
+              "proof_type": "test", "verify": ["tests/unit/test_conductor_session_gate.py"],
+              "allowed_files": ["services/prism-service/prism_service/api/tasks.py"],
+              "stop_if": ["The change needs another API module"],
               "enter_conductor": True})
     assert r.status_code == 200
     body = r.json()

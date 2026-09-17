@@ -4814,6 +4814,10 @@ BEGIN NOW with Step 0. Do not ask the user for permission — execute the steps.
             # THIS create call — task_svc.create ran just above.
             _out = _serialise(task)
             _out["style"] = task_svc.last_style
+            from prism_service.services.task_intake import after_create
+            _intake = after_create(project_id, task)
+            if _intake is not None:
+                _out["intake"] = _intake
             if _spec_summary is not None:
                 _out["oracle_spec"] = _spec_summary
             return [TextContent(type="text", text=_json(_out))]

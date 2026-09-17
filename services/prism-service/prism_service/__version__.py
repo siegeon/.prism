@@ -13,7 +13,7 @@ live. Bump MINOR for backward-compatible feature work, MAJOR for
 distribution-shape changes like the docker→native pivot v6 marks.
 """
 
-PRISM_VERSION = "7.13.377"
+PRISM_VERSION = "7.13.378"
 
 # Changelog-ish notes (free-form; keep short)
 PRISM_VERSION_NOTES = (
@@ -9437,3 +9437,7 @@ PRISM_VERSION_NOTES += (
 )
 
 PRISM_VERSION_NOTES += " 7.13.377: Magic owns workflow execution. Typed step refusals stop dependent actions; explicit planning templates resolve without inference; missing context stops planning."
+
+PRISM_VERSION_NOTES += (
+    '7.13.378: Architect task intake runs as a declared Magic behavior. It retrieves current code, concepts and memory, ontology rules and Magic contracts. Pydantic acceptance criteria bind observable results to verification and source evidence. Controls reject missing criteria, stale inputs, unknown citations and changed owner constraints before saving the task contract. Incomplete new tasks enter intake from REST and MCP and remain pending for the conductor. '
+)
