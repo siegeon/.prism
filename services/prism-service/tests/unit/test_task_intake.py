@@ -226,3 +226,41 @@ def test_changed_sources_do_not_reuse_a_validated_contract(environment):
     (ctx._data_dir.parent/"api.py").write_text("def changed_endpoint(): pass")
     packet=gathered(environment)
     assert "contract" not in packet
+
+
+def test_test_filenames_bind_to_exact_scoped_paths(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    value=candidate()
+    value["acceptance_criteria"][0]["verification"]="test_api.py::test_criteria"
+    intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":value})
+    packet=intake.check(ctx,task.id)
+    assert packet["contract"]["verify"]==["tests/test_api.py::test_criteria"]
+
+
+def test_unknown_test_filename_cannot_be_applied(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    value=candidate()
+    value["acceptance_criteria"][0]["verification"]="test_missing.py"
+    intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":value})
+    with pytest.raises(ValueError,match="exact project path"):
+        intake.check(ctx,task.id)
+
+
+def test_reintake_replaces_only_its_own_generated_plan(environment):
+    ctx,task,_=environment
+    gathered(environment)
+    intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":candidate()})
+    intake.check(ctx,task.id)
+    intake.apply(ctx,task.id)
+    before=task.description
+    packet=gathered(environment)
+    assert packet["owned_plan"]==task.plan_doc
+    intake.propose(ctx,"fixture",task.id,lambda *a:{"contract":candidate()})
+    intake.check(ctx,task.id)
+    intake.apply(ctx,task.id)
+    assert task.description==before
+    task.description += " Owner change"
+    with pytest.raises(ValueError,match="owner changed"):
+        gathered(environment)

@@ -39,11 +39,55 @@ def task_for_intake(ctx, task_id):
         raise ValueError("Intake can change only a pending task before its first SDLC step")
     return task
 
+def criteria_text(contract):
+    lines = ["## Intake acceptance criteria", "These are proposed requirements, not completion evidence."]
+    for ac in contract.acceptance_criteria:
+        lines.extend([f"### {ac.id}", f"Given: {ac.given}", f"When: {ac.when}", f"Then: {ac.then}",
+                      f"Verification: {ac.verification}", "Sources: " + ", ".join(ac.evidence_refs)])
+    return "\n\n".join(lines)
+
+def applied_facts(packet):
+    contract = TaskContract.model_validate(packet["contract"])
+    result = dict(packet["request"])
+    result.update(contract.model_dump(exclude={"schema_version", "acceptance_criteria"}))
+    result["plan_doc"] = criteria_text(contract)
+    result["description"] = packet["request"]["description"] + "\n\n" + result["plan_doc"]
+    return result
+
+def bind_verification(packet, contract):
+    if contract.proof_type != "test":
+        return contract
+    paths = set(contract.allowed_files) | {s["path"] for s in packet["sources"] if s.get("path")}
+    for ac in contract.acceptance_criteria:
+        file, separator, node = ac.verification.partition("::")
+        if "/" not in file:
+            matches = sorted(p for p in paths if Path(p).name == file)
+            if len(matches) != 1:
+                raise ValueError("Verification target needs one exact project path: " + file)
+            file = matches[0]
+        path = Path(file)
+        if (path.is_absolute() or ".." in path.parts or not file.endswith(".py")
+                or any(c in file for c in " :*?[") or file not in paths):
+            raise ValueError("Verification target must name a retrieved or scoped test file")
+        ac.verification = file + (separator + node if separator else "")
+    contract.verify = list(dict.fromkeys(ac.verification for ac in contract.acceptance_criteria))
+    return contract
+
 def gather(ctx, project, task_id, engine):
     from prism_service.services.claude_transcripts import _project_source_path
     from prism_service.services.ontology_rules import rule_catalog
     task = task_for_intake(ctx, task_id)
     request = facts(task)
+    owned_plan = ""
+    try:
+        previous = load(ctx, task_id)
+        if previous.get("state") == "applied":
+            if digest(request) != digest(applied_facts(previous)):
+                raise ValueError("The owner changed an intake-authored task. Preserve the changes before retry")
+            owned_plan = task.plan_doc
+            request = previous["request"]
+    except FileNotFoundError:
+        pass
     root = Path(_project_source_path(project)).resolve()
     if not root.is_dir():
         raise ValueError("Project source is unavailable")
@@ -96,7 +140,7 @@ def gather(ctx, project, task_id, engine):
                     "content": [b for b in model_text.split("\n\n") if any("o:" + name + " " in b for name in ("Task", "Bot", "FSM", "Behavior", "Step", "StepResult", "AcceptanceCriterion"))]})
     backend = engine("/workflows/bots/conductor?project=" + quote(project, safe=""))
     sources.append({"id": "magic:conductor", "kind": "magic", "content": backend})
-    packet = {"task_id": task_id, "input_hash": digest(request), "request": request,
+    packet = {"task_id": task_id, "input_hash": digest(facts(task)), "request": request, "owned_plan": owned_plan,
               "root": str(root), "sources": sources, "source_hashes": source_hashes,
               "state": "gathered", "unresolved_questions": [], "inference_used": False}
     try:
@@ -136,9 +180,10 @@ def validate(ctx, task_id, packet, contract):
             raise ValueError("File scope must name exact project-relative files")
         if not (Path(packet["root"]) / path).resolve().is_relative_to(Path(packet["root"])):
             raise ValueError("File scope leaves the project")
+    contract = bind_verification(packet, contract)
     # Existing owner constraints are inputs, never overwritten by inference.
     for key in ("oracle", "proof_type", "allowed_files", "verify", "stop_if", "likely_misfire"):
-        current = getattr(task, key, None)
+        current = packet["request"].get(key) if packet.get("owned_plan") else getattr(task, key, None)
         if current and current != getattr(contract, key):
             raise ValueError("The proposal changes an existing task constraint: " + key)
     _, errors = validate_for_authoring(oracle=contract.oracle, proof_type=contract.proof_type,
@@ -199,7 +244,8 @@ def check(ctx, task_id):
     packet = load(ctx, task_id)
     if packet.get("unresolved_questions") or not packet.get("contract"):
         raise ValueError("Unresolved intake: " + "; ".join(packet.get("unresolved_questions") or ["No task contract"]))
-    validate(ctx, task_id, packet, TaskContract.model_validate(packet["contract"]))
+    contract = validate(ctx, task_id, packet, TaskContract.model_validate(packet["contract"]))
+    packet["contract"] = contract.model_dump()
     packet["state"] = "validated"
     save(ctx, task_id, packet)
     return packet
@@ -212,16 +258,12 @@ def apply(ctx, task_id):
         raise ValueError("The task contract has not passed intake controls")
     contract = validate(ctx, task_id, packet, TaskContract.model_validate(packet["contract"]))
     task = ctx.task_svc.get(task_id)
-    if task.plan_doc:
+    if task.plan_doc and task.plan_doc != packet.get("owned_plan"):
         raise ValueError("Intake must not overwrite an existing plan")
-    lines = ["## Intake acceptance criteria", "These are proposed requirements, not completion evidence."]
-    for ac in contract.acceptance_criteria:
-        lines.extend([f"### {ac.id}", f"Given: {ac.given}", f"When: {ac.when}", f"Then: {ac.then}",
-                      f"Verification: {ac.verification}", "Sources: " + ", ".join(ac.evidence_refs)])
     fields = contract.model_dump(exclude={"schema_version", "acceptance_criteria"})
-    criteria = "\n\n".join(lines)
+    criteria = criteria_text(contract)
     ctx.task_svc.update(task_id, **fields, plan_doc=criteria,
-        description=task.description + "\n\n" + criteria)
+        description=packet["request"]["description"] + "\n\n" + criteria)
     packet["state"] = "applied"
     save(ctx, task_id, packet)
     ctx.task_svc.record_history(task_id, action="intake_apply", actor="architect",
