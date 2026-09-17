@@ -459,8 +459,16 @@ def ensure_workspace(task_id: str, repo_root: Optional[str] = None,
         # failure here raises straight out of _git_out (fail closed).
         _git_out(root, "worktree", "add", "-b", branch, str(ws), base)
 
-    _git_out(ws, "config", "user.email", "worker@prism")
-    _git_out(ws, "config", "user.name", "prism-worker")
+    # A linked worktree SHARES `.git/config` with its parent checkout. So a
+    # plain `git config` here writes the worker identity for the whole
+    # repository, including a product repo passed as `repo_root`. That repo
+    # then authors its own commits as `prism-worker <worker@prism>`.
+    # `--worktree` writes `config.worktree`, which only this worktree reads.
+    # `extensions.worktreeConfig` turns that file on. It sets no identity,
+    # and it belongs in the shared config by design.
+    _git_out(root, "config", "extensions.worktreeConfig", "true")
+    _git_out(ws, "config", "--worktree", "user.email", "worker@prism")
+    _git_out(ws, "config", "--worktree", "user.name", "prism-worker")
     # JS deps are gitignored, so the fresh checkout has none; link them in
     # so a UI slice's real typecheck (`npm run build`) works unaided.
     _link_web_node_modules(ws, root)
