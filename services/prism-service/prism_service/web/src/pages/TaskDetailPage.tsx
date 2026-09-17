@@ -1928,15 +1928,13 @@ export default function TaskDetailPage() {
           <span className="opacity-50">/</span>
           <span className="font-mono text-[color:var(--text-secondary)]">{shortId}</span>
         </div>
-        {conductorOn && (
-          <Link
-            to={`/workflows?task=${task.id}`}
-            aria-label="Open this task's conductor flow"
-            className="text-xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
-          >
-            ↗ Flow
-          </Link>
-        )}
+        <a
+          href={`${(import.meta as unknown as { env?: Record<string, string> }).env?.VITE_WORKSPACE_URL || `${window.location.protocol}//${window.location.hostname}:5280`}/workspace/prism/workflows?project=${encodeURIComponent(project || "prism")}&task=${encodeURIComponent(task.id || id || "")}`}
+          aria-label="Open this task's workflow instances"
+          className="text-xs uppercase tracking-wider text-[color:var(--text-secondary)] hover:text-[color:var(--text-primary)]"
+        >
+          ↗ Workflow instances
+        </a>
       </div>
 
       <AnimatePresence>

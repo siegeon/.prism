@@ -2984,11 +2984,13 @@ def workflow_step_reason_loop(
             project=project, purpose="reason-loop",
             json_schema=body.json_schema, timeout_s=body.timeout_s, **invoke_kwargs,
         )
+        from prism_service.services.task_execution import reported_usage
         fields = result.structured_output or {}
         reason = {
             "ok": bool(fields),
             "fields": fields,
-            "cost_usd": (result.usage or {}).get("cost_usd", 0.0),
+            "cost_usd": (result.usage or {}).get("cost_usd"),
+            "usage": reported_usage(getattr(result, "parsed_events", [])),
             "run_id": result.run_id,
         }
 
@@ -4350,6 +4352,7 @@ def workflow_step_premise_judge(
                         "properties": {"notes_md": {"type": "string"}},
                         "required": ["notes_md"]},
         )
+        from prism_service.services.task_execution import reported_usage
         fields = result.structured_output or {}
         reason = {"ok": bool(fields), "fields": fields,
                   "cost_usd": (result.usage or {}).get("cost_usd", 0.0),
@@ -6232,6 +6235,7 @@ def _intake_step(body, project, stage):
     from prism_service.models.step_result import StepResult
     from prism_service.services import task_intake
     ctx = get_project(project)
+    inference_receipt = {}
     try:
         if stage == "gather":
             packet = task_intake.gather(ctx, project, body.task_id, _workflow_engine_json)
@@ -6241,6 +6245,7 @@ def _intake_step(body, project, stage):
                     persona="architect", prompt=prompt, json_schema=schema,
                     task_id=body.task_id, timeout_s=body.timeout_s, max_turns=2,
                     max_budget_usd=0.5, narrow=True), project=project)
+                inference_receipt.update({k: result.reason.get(k) for k in ("run_id", "usage", "cost_usd")})
                 if result.stop_chain or not result.reason.get("ok"):
                     raise ValueError("Architect could not produce a typed intake proposal")
                 return result.reason["fields"]
@@ -6252,14 +6257,14 @@ def _intake_step(body, project, stage):
         _record_node_run(project, body.task_id, "task-intake-" + stage, packet["state"] != "unresolved", packet["state"])
         if packet["state"] == "unresolved":
             return StepResult(outcome="unknown", reason="; ".join(packet["unresolved_questions"] or ["No task contract"]),
-                outputs={"task_id": body.task_id, "intake_state": "unresolved"}, stop_chain=True)
+                outputs={"task_id": body.task_id, "intake_state": "unresolved", "inference": inference_receipt}, stop_chain=True)
         return StepResult(outcome="passed", outputs={"task_id": body.task_id,
-            "intake_state": packet["state"], "inference_used": packet["inference_used"]})
+            "intake_state": packet["state"], "inference_used": packet["inference_used"], "inference": inference_receipt})
     except Exception as exc:
         _record_node_run(project, body.task_id, "task-intake-" + stage, False, str(exc))
         ctx.task_svc.record_history(body.task_id, action="intake_refused", actor="architect",
             details=f"{stage}: {exc}")
-        return StepResult(outcome="error", reason=str(exc), stop_chain=True)
+        return StepResult(outcome="error", reason=str(exc), outputs={"inference": inference_receipt}, stop_chain=True)
 
 
 @router.post("/steps/task-intake-gather")
@@ -6296,3 +6301,15 @@ def get_task_intake(task_id: str, project: str = Query(...)):
         return task_intake.load(get_project(project), task_id)
     except FileNotFoundError:
         raise HTTPException(404, "No intake result exists for this task")
+
+
+@router.get("/tasks/{task_id}/executions")
+def task_execution_receipts(task_id: str, project: str = Query(...)):
+    from prism_service.services.task_execution import project_task_runs
+    task = get_project(project).task_svc.get(task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found")
+    result = project_task_runs(project, task_id, _workflow_engine_json)
+    result["task"] = {key: getattr(task, key, "") for key in
+        ("id", "title", "status", "workflow_step", "gate_state", "gate_reason", "blocked_reason")}
+    return result
