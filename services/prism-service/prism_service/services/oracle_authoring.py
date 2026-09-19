@@ -10,7 +10,7 @@ way the gate does, just earlier), not part of the judge itself — it never
 runs during a gate decision. Living outside the policy surface lets feature
 tasks like this one add/evolve authoring checks without ever touching the
 judge, so the tooth never has to fire for legitimate, additive work. Only
-READS from ``oracle_spec`` (``OracleSpec``, ``_pytest_ids_from_task``); it
+READS from ``oracle_spec`` (``OracleSpec``); it
 must never import anything that requires editing that module.
 """
 
@@ -21,7 +21,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional
 
-from prism_service.services.oracle_spec import OracleSpec, _pytest_ids_from_task
+from prism_service.services.oracle_spec import OracleSpec
 
 
 # Repo root: this file is <root>/services/prism-service/prism_service/services/
@@ -107,8 +107,10 @@ def validate_for_authoring(oracle: str = "", proof_type: str = "",
         it is today.
       - ``domain_errors``: human strings, each naming exactly how to
         repair. The ONLY hard contradiction: ``proof_type=="test"``,
-        ``oracle`` non-empty, and ``verify[]`` yields zero runnable pytest
-        node ids. Oracle-less tasks and manual-evidence proof_types
+        ``oracle`` non-empty, and ``verify[]`` names nothing runnable at
+        all. The test MECHANISM is deliberately not judged here — that is
+        the ontology's rule and the validator's call against the project
+        being built. Oracle-less tasks and manual-evidence proof_types
         (demo/browser/review/decision/artifact/metric/unset) never
         populate this — their honest browser/manual fallback is a
         legitimate spec, not an error.
@@ -130,11 +132,24 @@ def validate_for_authoring(oracle: str = "", proof_type: str = "",
                            proof_type=proof_type_l, verify=verify_l)
     spec = OracleSpec.from_task(duck)
     domain_errors: list = list(structural)
-    if proof_type_l == "test" and not _pytest_ids_from_task(duck):
+    # THE MECHANISM IS THE PROJECT'S, NOT THIS FUNCTION'S (owner, 2026-09-18).
+    # This check used to demand a runnable PYTEST node id, which silently made
+    # pytest the only expressible proof in the whole tracker: a task targeting
+    # Hyperlambda modules, a C# xUnit suite or a browser demo could not be
+    # written down at all, because `verify[]` had to look like Python. That is
+    # a static rule pretending to be a judgement. Whether an entry is a valid
+    # test is a question about the project BEING BUILT, and it belongs to the
+    # agentic validator that can read that project's own test convention --
+    # not to a substring match here. So authoring keeps only the structural
+    # claim it can honestly make: a task that promises a test proof must name
+    # SOMETHING runnable. What that something is, the validator decides.
+    if proof_type_l == "test" and not [
+            v for v in verify_l if str(v or "").strip()]:
         domain_errors.append(
-            "proof_type=test but verify[] contains no runnable pytest node "
-            "ids — add e.g. "
-            "services/prism-service/tests/unit/test_x.py::test_y to "
-            "verify[] (a bare path with '::' or a pytest invocation)."
+            "proof_type=test but verify[] is empty — name at least one "
+            "runnable target for this project's own test mechanism "
+            "(a pytest node id, a `dotnet test` suite, a Hyperlambda "
+            "endpoint test, ...). The mechanism is not required to be "
+            "pytest; the validator checks it against the project."
         )
     return spec.as_dict(), domain_errors

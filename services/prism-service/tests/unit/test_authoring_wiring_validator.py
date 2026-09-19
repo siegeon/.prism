@@ -111,14 +111,33 @@ def test_omitting_allowed_files_entirely_still_works():
     assert errors == []
 
 
-# ── AC-7: the pre-existing check survives ─────────────────────────────
+# ── AC-7: a test proof must name something runnable ───────────────────
+#
+# This check used to demand a PYTEST node id, which made pytest the only
+# expressible proof in the tracker (owner, 2026-09-18). A task targeting
+# Hyperlambda modules or a C# xUnit suite could not be written down at
+# all. Authoring now makes only the structural claim it can honestly
+# make; WHICH mechanism is valid is the ontology's rule and the agentic
+# validator's call against the project being built.
 
-def test_the_existing_pytest_ids_check_still_fires():
+def test_a_test_proof_naming_nothing_is_still_refused():
     _spec, errors = _validate(
-        oracle=GOOD_ORACLE, proof_type="test", verify=["echo nope"],
+        oracle=GOOD_ORACLE, proof_type="test", verify=[],
         allowed_files=[EXISTING_SERVICE])
-    assert any("pytest node" in e for e in errors), (
-        f"the original proof_type=test check must still reject; got {errors}")
+    assert any("verify[] is empty" in e for e in errors), (
+        f"proof_type=test with no target at all must reject; got {errors}")
+
+
+def test_a_non_pytest_mechanism_is_no_longer_refused_at_authoring():
+    """The mechanism is the project's, not this validator's."""
+    for target in ("dotnet test Magic.Tests",
+                   "magic/modules/bots/steps/run-pinned-suite.post.hl"):
+        _spec, errors = _validate(
+            oracle=GOOD_ORACLE, proof_type="test", verify=[target],
+            allowed_files=[EXISTING_SERVICE])
+        assert not any("verify[]" in e for e in errors), (
+            f"{target!r} names a runnable target; authoring must not "
+            f"demand pytest; got {errors}")
 
 
 # ── AC-6: BOTH authoring paths enforce it ─────────────────────────────
