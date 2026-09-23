@@ -55,8 +55,15 @@ SHIPPED_NODE = "land"
 # cannot drift apart.
 from prism_service.services.task_reaper import REAP_NODE  # noqa: E402
 
+# The node BETWEEN land and reap (task 4c9b39e5): a landed play indexes the
+# memories it wrote, and reap then deletes the workspace it wrote them from.
+# Imported from the service that owns the behaviour, the same shape REAP_NODE
+# uses above, so the drawn node and the recorded run cannot drift apart.
+from prism_service.services.brain_health import HEALTH_NODE  # noqa: E402
+
 CONDUCTOR_NODES: tuple[str, ...] = tuple(
-    [str(s["id"]) for s in WORKFLOW_STEPS] + [SHIPPED_NODE, REAP_NODE])
+    [str(s["id"]) for s in WORKFLOW_STEPS]
+    + [SHIPPED_NODE, HEALTH_NODE, REAP_NODE])
 
 # A walk that reached EITHER terminal node is finished. `land` alone stays
 # finished: a task whose worktree was already cleaned by hand, or whose reap
